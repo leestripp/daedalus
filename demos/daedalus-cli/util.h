@@ -15,6 +15,12 @@
 #include <string>
 #include <vector>
 
+// §Demo fix 2026-07-14: util.h now references daedalus::Agent for
+// the SIGINT → cancel() wiring. Tests that include util.h (notably
+// tests/test_cli_system_prompt.cpp) get the public Agent header
+// transitively from here.
+#include <daedalus.h>
+
 namespace fs = std::filesystem;
 
 // =============================================================================
@@ -22,6 +28,16 @@ namespace fs = std::filesystem;
 // =============================================================================
 
 static std::atomic<bool> g_shutting_down{false};
+
+namespace {
+// §Demo fix 2026-07-14: SIGINT must cancel any in-flight agent turn
+// (the LLMClient's stop_source_). Holding a raw pointer in an atomic
+// is OK because main() pins the lifetime: the pointer is set after
+// `Agent agent(...)` and cleared before `agent.shutdown()`. The
+// signal handler reads it with acquire ordering; the writer uses
+// release.
+std::atomic<daedalus::Agent*> g_agent_for_signal{nullptr};
+} // namespace
 
 extern "C" void daedalus_signal_handler(int /*sig*/) {
     // §Demo fix 2026-07-14: the ThinkingSpinner hides the cursor
@@ -38,6 +54,17 @@ extern "C" void daedalus_signal_handler(int /*sig*/) {
     // is restored on a normal exit path too.
     extern void daedalus_cli_restore_terminal_state() noexcept;
     daedalus_cli_restore_terminal_state();
+
+    // §Demo fix 2026-07-14: cancel any in-flight turn so the loop
+    // returns promptly. Agent::cancel() is noexcept and just fires
+    // internal stop_sources (atomic ops), so it's safe-ish to call
+    // from a signal handler in practice (the C++ standard is strict
+    // about async-signal-safety; in practice this is what every
+    // production agent does).
+    if (auto* p = g_agent_for_signal.load(std::memory_order_acquire)) {
+        p->cancel();
+    }
+
     g_shutting_down.store(true, std::memory_order_release);
 }
 

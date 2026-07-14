@@ -21,6 +21,7 @@
 #include <string>
 #include <filesystem>
 #include <memory>
+#include <atomic>
 
 #include <daedalus.h>
 #include <daedalus/default_paths.h>
@@ -28,6 +29,7 @@
 
 #include "ConsoleAgentSink.h"
 #include "util.h"
+#include "RawStdin.h"
 #include "banner.h"
 #include "migrate.h"
 
@@ -99,6 +101,12 @@ int main(int argc, char* argv[]) {
     auto sink  = std::make_shared<daedalus::ConsoleAgentSink>();
     daedalus::Agent agent(std::move(cfg), sink);
 
+    // §Demo fix 2026-07-14: register the agent with the SIGINT
+    // handler so Ctrl+C (and SIGTERM) cancel any in-flight turn.
+    // Cleared again before `agent.shutdown()` below so the handler
+    // can't fire on a destroyed agent.
+    g_agent_for_signal.store(&agent, std::memory_order_release);
+
     try {
         agent.initialize();
 
@@ -127,10 +135,36 @@ int main(int argc, char* argv[]) {
                      args.agent_name,
                      data_dir.string());
 
-        while (!g_shutting_down.load()) {
-            std::cout << "\n> " << std::flush;
-            std::string line;
-            if (!std::getline(std::cin, line)) break;
+        // §Demo fix 2026-07-14: raw-mode stdin watcher.
+        //
+        // Replaces the old `std::getline` loop. Two improvements:
+        //   1. Reads in raw mode, so bare ESC is delivered to us
+        //      (std::getline in cooked mode can't see lone ESC).
+        //      On ESC we cancel the current turn and break the
+        //      loop — "ESC exits the Agent Loop".
+        //   2. Reads from a separate thread, so even mid-turn ESC
+        //      is detected. While `agent.run_one_turn()` is
+        //      blocking on the network, the watcher thread is
+        //      reading stdin; pressing ESC fires `agent.cancel()`
+        //      from that thread (LLMClient::cancel() is async-
+        //      signal-safe in practice — see LLMClient.h:80).
+        //
+        // The watcher is RAII: its destructor restores terminal
+        // mode and joins the thread.
+        daedalus_cli::RawStdinWatcher watcher(agent, "> ");
+
+        while (!g_shutting_down.load() && !watcher.esc_seen()) {
+            auto line_opt = watcher.next_line();
+            if (!line_opt) break;          // EOF / Ctrl+D / shutdown
+
+            // §Demo fix 2026-07-14: a bare ESC arrived while we were
+            // blocked in next_line(). esc_seen() is set BEFORE the
+            // sentinel is pushed, so by the time we get here the
+            // outer loop guard will also fire on the next iteration —
+            // but we exit now to honour the user's intent immediately.
+            if (watcher.esc_seen()) break;
+
+            std::string line = std::move(*line_opt);
 
             while (!line.empty() && std::isspace((unsigned char)line.front())) line.erase(line.begin());
             while (!line.empty() && std::isspace((unsigned char)line.back()))  line.pop_back();
@@ -189,6 +223,18 @@ int main(int argc, char* argv[]) {
             // Actual user input — drive one agent turn.
             agent.submit_user_message(std::move(line));
             agent.run_one_turn();
+
+            // After each turn, re-print the prompt so the user knows
+            // we're ready for input again (the watcher continues
+            // printing "> " but we re-assert it for clarity after
+            // a turn that ended via cancel/timeout).
+            std::cout << "> " << std::flush;
+        }
+
+        // Distinguish "user pressed ESC" from "user typed /quit" so
+        // we can show a friendlier goodbye in the ESC case.
+        if (watcher.esc_seen()) {
+            std::cout << "Cancelled. Goodbye!\n";
         }
     } catch (const std::exception& e) {
         // §Demo fix 2026-07-14: restore cursor + SGR before printing
@@ -199,9 +245,13 @@ int main(int argc, char* argv[]) {
         std::cerr << "\x1b[?25h\x1b[0m" << std::flush;
         daedalus_cli_restore_terminal_state();
         std::cerr << "\n[FATAL] " << e.what() << "\n";
+        g_agent_for_signal.store(nullptr, std::memory_order_release);
         return 1;
     }
 
+    // Clear the signal-handler's pointer before tearing down the
+    // agent so it can't fire cancel() on a half-destroyed object.
+    g_agent_for_signal.store(nullptr, std::memory_order_release);
     agent.shutdown();
     return 0;
 }
