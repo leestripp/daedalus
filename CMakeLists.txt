@@ -421,73 +421,11 @@ endif()
 # exercise the library from outside its own sources.
 add_subdirectory(demos)
 
-# ============================================================================
-# cppcheck static analysis
-#
-# OmniNet (fetched above) already adds its own `cppcheck` target when cppcheck
-# is on PATH. To avoid a target-name collision, we prefix ours with `daedalus_`
-# so users get both targets side-by-side.
-# ============================================================================
-find_program(CPPCHECK cppcheck)
-if(CPPCHECK)
-    message(STATUS "cppcheck found: ${CPPCHECK}")
-
-    # cppcheck settings
-    set(CPPCHECK_FLAGS
-        "--enable=all"
-        "--std=c++23"
-        "--platform=unix64"
-        "--quiet"
-        "--inline-suppr"
-        "--suppress=missingIncludeSystem"
-        "--template=message"
-    )
-
-    # Add daedalus-prefixed cppcheck target (OmniNet may have added `cppcheck`)
-    add_custom_target(daedalus_cppcheck
-        COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
-            --output-file=${CMAKE_BINARY_DIR}/cppcheck_results.txt
-            --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
-            ${CORE_SOURCES}
-            ${API_SOURCES}
-            ${TOOLS_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running cppcheck static analysis on daedalus..."
-        VERBATIM
-    )
-
-    # Also add a quick cppcheck target that only checks src/ (no tests)
-    add_custom_target(daedalus_cppcheck_quick
-        COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
-            ${CORE_SOURCES}
-            ${API_SOURCES}
-            ${TOOLS_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running cppcheck on daedalus (quick mode)..."
-        VERBATIM
-    )
-
-    # Add cppcheck.xml target for CI/CD integration
-    add_custom_target(daedalus_cppcheck_xml
-        COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
-            --xml --output-file=${CMAKE_BINARY_DIR}/cppcheck.xml
-            ${CORE_SOURCES}
-            ${API_SOURCES}
-            ${TOOLS_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        COMMENT "Running cppcheck on daedalus with XML output..."
-        VERBATIM
-    )
-
-    message(STATUS "cppcheck targets available:")
-    message(STATUS "  make daedalus_cppcheck        - Full analysis (codemax sources)")
-    message(STATUS "  make daedalus_cppcheck_quick  - Quick check (src/ only)")
-    message(STATUS "  make daedalus_cppcheck_xml    - XML output for CI/CD")
-else()
-    message(STATUS "cppcheck not found - static analysis skipped")
-    message(STATUS "Install with: apt install cppcheck (Debian/Ubuntu)")
-    message(STATUS "                brew install cppcheck (macOS)")
-endif()
+# Static analysis is provided by clang-tidy via the daedalus_clang_tidy_*
+# targets further down in this file. cppcheck used to live here; it was
+# removed in 2026-07 because the project standardised on clang-tidy
+# (which consumes compile_commands.json and so reuses the exact flags
+# the TUs were built with, unlike cppcheck's heuristic parser).
 
 # ============================================================================
 # §Phase 9.9: clang-tidy static analysis.
