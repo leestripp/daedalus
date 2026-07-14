@@ -679,13 +679,17 @@ std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::strin
             }
         } else {
             if (sink_) {
-                std::ostringstream cerr;
-                cerr << "cURL error on attempt " << attempt
-                     << ": " << curl_easy_strerror(res);
+                // §No-stdio rule: this is a std::ostringstream buffer
+                // (NOT std::cerr), routed through the sink. Renamed
+                // from `cerr` to `msg` so the next person reading
+                // this code doesn't mistake it for console output.
+                std::ostringstream msg;
+                msg << "cURL error on attempt " << attempt
+                    << ": " << curl_easy_strerror(res);
                 if (server_error_settings.enabled) {
-                    cerr << " (retrying in " << wait_time << "s)";
+                    msg << " (retrying in " << wait_time << "s)";
                 }
-                sink_->on_log(daedalus::LogLevel::Error, cerr.str());
+                sink_->on_log(daedalus::LogLevel::Error, msg.str());
             } else {
                 std::ostringstream msg;
                 msg << "cURL error on attempt " << attempt
