@@ -511,6 +511,15 @@ if(CLANG_TIDY_EXECUTABLE)
     # at configure time so the actual file list is passed — passing the
     # raw "${DIR}/*.cpp" glob would not work because CMake does not
     # invoke a shell to expand globs in custom_target commands.
+    #
+    # VERBATIM is required: without it the generated Makefile recipe
+    # passes arguments unescaped to /bin/sh, and the trailing `$` in
+    # HEADER_FILTER_REGEX combined with shell quoting (the previous
+    # implementation wrapped it in single quotes) produced `$'` —
+    # which dash interprets as the start of an ANSI-C quoted string
+    # and fails with "Unterminated quoted string". VERBATIM lets
+    # CMake shell-escape each argument correctly, so we can pass
+    # the regex as a plain bare argument instead of quoting it.
     macro(add_clang_tidy_target TARGET_NAME DIR)
         file(GLOB_RECURSE _CT_SOURCES CONFIGURE_DEPENDS
             "${CMAKE_SOURCE_DIR}/${DIR}/*.cpp"
@@ -519,10 +528,11 @@ if(CLANG_TIDY_EXECUTABLE)
             COMMAND ${CLANG_TIDY_EXECUTABLE}
                 -p ${CMAKE_BINARY_DIR}
                 --quiet
-                -header-filter='${HEADER_FILTER_REGEX}'
+                -header-filter=${HEADER_FILTER_REGEX}
                 ${_CT_SOURCES}
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             COMMENT "Running clang-tidy for ${TARGET_NAME}"
+            VERBATIM
         )
     endmacro()
 
