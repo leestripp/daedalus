@@ -16,6 +16,29 @@ cmake_minimum_required(VERSION 3.28)
 include_directories(${CMAKE_SOURCE_DIR}/include)
 
 # ============================================================================
+# doctest — fetched via CMake (matches the OmniNet pattern in the parent
+# CMakeLists.txt) so the build is self-contained. The Readme still says
+# "no doctest dependency" because doctest is the test framework, not a
+# runtime dep; we fetch it into build/_deps/ like every other dep.
+#
+# Pinned to v2.4.12 to match the GCC 15 / -W#warnings caveat noted above;
+# bump to 2.4.13+ once we're happy to drop the ciso646 comment.
+# ============================================================================
+include(FetchContent)
+FetchContent_Declare(
+    doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest.git
+    GIT_TAG        v2.4.12
+)
+FetchContent_MakeAvailable(doctest)
+
+# Header-only — make it available to every test target defined below.
+# `link_libraries` (directory property) appends doctest::doctest to all
+# subsequent target_link_libraries() calls in this CMakeLists.txt, so
+# tests that `#include <doctest/doctest.h>` Just Work.
+link_libraries(doctest::doctest)
+
+# ============================================================================
 # Skill auto-discovery tests (C++23)
 # ============================================================================
 
