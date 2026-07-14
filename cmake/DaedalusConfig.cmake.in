@@ -1,0 +1,102 @@
+# cmake/DaedalusConfig.cmake.in
+#
+# Config file for `find_package(daedalus CONFIG)`.
+# Installed to <prefix>/lib/cmake/daedalus/daedalusConfig.cmake
+#
+# Defines:
+#   - imported target `daedalus::daedalus` (the static library)
+#   - imported interface target `daedalus::headers` (the include dir)
+#
+# The @PACKAGE_*@ variables are auto-substituted by CMake's
+# configure_package_config_file().
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+# Declare runtime dependencies so they're find_package-able for the consumer.
+# The static lib's internal symbols need curl, openssl, etc. to be linkable,
+# AND the daedalusTargets.cmake (exported via install(EXPORT)) references the
+# IMPORTED targets nlohmann_json::nlohmann_json, CURL::libcurl, etc.
+# So we must find_package() each one before loading the targets file.
+find_dependency(CURL)
+find_dependency(OpenSSL)
+find_dependency(nlohmann_json 3.10 REQUIRED)
+find_dependency(PkgConfig)
+pkg_check_modules(PNG REQUIRED libpng)
+pkg_check_modules(POPPLER REQUIRED poppler-cpp)
+find_dependency(Threads)
+
+# No external runtime dependencies are required at *use* time. The
+# static lib was already linked against curl/openssl/sqlite/json/png
+# at *build* time, so consumers don't need find_package() calls for
+# those. We document them here so embedders know what the library
+# pulls in:
+#   - CURL
+#   - OpenSSL
+#   - SQLite3 (with sqlite-vec)
+#   - nlohmann_json
+#   - libpng + poppler-cpp (PDFTool support)
+#   - OmniNet (HTTP/WS/SSE transport)
+
+# ---- imported targets ----
+
+# Load the export set (daedalusTargets.cmake) so the imported
+# daedalus::daedalus target gets its full INTERFACE_LINK_LIBRARIES
+# (CURL, OpenSSL, nlohmann_json, PNG, poppler, ...) propagated to
+# consumers via find_package(daedalus).
+include("${CMAKE_CURRENT_LIST_DIR}/daedalusTargets.cmake")
+
+# The main static library. The daedalusTargets.cmake include above
+# already created this target with the right INTERFACE_LINK_LIBRARIES;
+# we just need to ensure IMPORTED_LOCATION is set correctly when
+# the static lib's filename differs from the CMake target name.
+# (daedalusConfigVersion.cmake creates a daedalus::daedalus INTERFACE
+# target when consumers call find_package(daedalus), so set its
+# IMPORTED_LOCATION if not already set.)
+if(NOT TARGET daedalus::daedalus)
+    add_library(daedalus::daedalus STATIC IMPORTED)
+    set_target_properties(daedalus::daedalus PROPERTIES
+        IMPORTED_LOCATION             "@PACKAGE@/lib/@DAEDALUS_LIB_NAME@"
+        INTERFACE_INCLUDE_DIRECTORIES "@PACKAGE@/include"
+    )
+endif()
+
+# Convenience: a header-only target for hosts that just want the
+# public headers without linking the static library. Useful for
+# doc-only setups and IDE indexing.
+if(NOT TARGET daedalus::headers)
+    add_library(daedalus::headers INTERFACE IMPORTED)
+    set_target_properties(daedalus::headers PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "@PACKAGE@/include"
+    )
+endif()
+
+# ---- convenience function: daedalus_add_example ----
+#
+# Helper that hosts can call to add their own example executables
+# using the same compile/link conventions as the bundled demos.
+#
+# Usage in a host's CMakeLists.txt:
+#   find_package(daedalus REQUIRED)
+#   daedalus_add_example(my_host PRIVATE main.cpp)
+#
+function(daedalus_add_example NAME)
+    cmake_parse_arguments(_DAE "" "" "PRIVATE;PUBLIC" ${ARGN})
+    add_executable(${NAME} ${_DAE_PRIVATE} ${_DAE_PUBLIC})
+    target_link_libraries(${NAME} PRIVATE daedalus::daedalus)
+endfunction()
+
+# ---- summary ----
+set(DAEDALUS_FOUND TRUE)
+set(DAEDALUS_VERSION       "@PACKAGE_VERSION@")
+set(DAEDALUS_VERSION_MAJOR "@PACKAGE_VERSION_MAJOR@")
+set(DAEDALUS_VERSION_MINOR "@PACKAGE_VERSION_MINOR@")
+set(DAEDALUS_VERSION_PATCH "@PACKAGE_VERSION_PATCH@")
+
+if(NOT daedalus_FIND_QUIET)
+    message(STATUS "Found daedalus: ${DAEDALUS_VERSION}")
+endif()
+
+# Mark variables as advanced so they don't show up in the default
+# `cmake -L` output. Hosts that want to inspect them can override.
+mark_as_advanced(FORCE DAEDALUS_VERSION DAEDALUS_VERSION_MAJOR DAEDALUS_VERSION_MINOR DAEDALUS_VERSION_PATCH)

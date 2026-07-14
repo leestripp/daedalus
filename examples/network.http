@@ -1,0 +1,262 @@
+# Example: Using codemax's Network Tools
+#
+# This is a worked example showing how the LLM agent combines the
+# network tools to diagnose and call public APIs. It's meant as
+# documentation, not a runnable script — the LLM reads the tool
+# descriptions and decides what to call.
+#
+# All these are real calls that codemax's tools can execute today.
+
+# ─────────────────────────────────────────────────────────────────
+# 1. Simple REST call
+# ─────────────────────────────────────────────────────────────────
+
+# LLM asks: "What's the star count of the codemax repo?"
+#
+# Tool call:
+{
+  "name": "http_request",
+  "args": {
+    "url": "https://api.github.com/repos/leestripp/codemax",
+    "method": "GET",
+    "headers": { "Accept": "application/vnd.github+json" }
+  }
+}
+#
+# Returns:
+# {
+#   "status_code": 200,
+#   "headers": { "content-type": "application/json; charset=utf-8", ... },
+#   "body": "{\"stargazers_count\": 42, \"forks_count\": 7, ...}",
+#   "elapsed_ms": 187
+# }
+#
+# LLM then answers: "The codemax repo has 42 stars."
+
+
+# ─────────────────────────────────────────────────────────────────
+# 2. Diagnose a flaky HTTPS endpoint
+# ─────────────────────────────────────────────────────────────────
+
+# LLM asks: "Why is https://api.example.com timing out?"
+
+# Step 1 — is the service even up?
+{
+  "name": "tcp_check",
+  "args": {
+    "host": "api.example.com",
+    "port": 443,
+    "timeout_seconds": 5
+  }
+}
+# Returns: { "reachable": true, "elapsed_ms": 87 }
+# → TCP is fine. Service is up.
+
+# Step 2 — DNS resolution OK?
+{
+  "name": "dns_lookup",
+  "args": {
+    "hostname": "api.example.com",
+    "record_type": "ANY"
+  }
+}
+# Returns: { "records": [{"address": "203.0.113.10", "family": "IPv4"}], ... }
+# → DNS resolves. Not a DNS issue.
+
+# Step 3 — TLS handshake: cert expired? wrong hostname?
+{
+  "name": "tls_inspect",
+  "args": {
+    "host": "api.example.com",
+    "port": 443
+  }
+}
+# Returns:
+# {
+#   "tls_version": "TLSv1.2",
+#   "peer_cert_verified": true,
+#   "certificate": {
+#     "subject": "/CN=api.example.com",
+#     "issuer": "/C=US/O=Let's Encrypt/CN=R10",
+#     "not_after": "2026-03-15T12:00:00Z",
+#     "days_until_expiry": -42,   ← expired 42 days ago!
+#     "fingerprint_sha256": "..."
+#   }
+# }
+# → Server cert is expired. That's the bug.
+
+# LLM tells the user: "api.example.com's TLS certificate expired 42 days
+# ago. They'll need to renew it before HTTPS calls will work."
+
+
+# ─────────────────────────────────────────────────────────────────
+# 3. POST a JSON payload
+# ─────────────────────────────────────────────────────────────────
+
+# LLM asks: "Create a webhook on the staging server."
+
+{
+  "name": "http_request",
+  "args": {
+    "url": "https://staging.internal/api/webhooks",
+    "method": "POST",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer ${env.STAGING_TOKEN}"
+    },
+    "body": "{\"url\":\"https://my-app.com/hook\",\"events\":[\"push\",\"merge\"]}"
+  }
+}
+#
+# Returns:
+# {
+#   "status_code": 201,
+#   "headers": { "location": "/api/webhooks/123", ... },
+#   "body": "{\"id\": 123, \"url\": \"...\", \"events\": [...]}",
+#   "elapsed_ms": 312
+# }
+
+
+# ─────────────────────────────────────────────────────────────────
+# 4. WebSocket round trip
+# ─────────────────────────────────────────────────────────────────
+
+# LLM asks: "Stream live data from the prices feed."
+
+# Step 1 — open connection
+{
+  "name": "websocket_connect",
+  "args": {
+    "url": "ws://prices.example.com/stream",
+    "protocol": "json",
+    "timeout_seconds": 10
+  }
+}
+# Returns: { "connection_id": "ws_0x1", ... }
+
+# Step 2 — subscribe
+{
+  "name": "websocket_send",
+  "args": {
+    "connection_id": "ws_0x1",
+    "message": "{\"action\":\"subscribe\",\"symbols\":[\"AAPL\",\"GOOG\"]}"
+  }
+}
+# Returns: { "bytes_sent": 53, "type": "text" }
+
+# Step 3 — read price updates (LLM loops this)
+{
+  "name": "websocket_recv",
+  "args": {
+    "connection_id": "ws_0x1",
+    "timeout_seconds": 30
+  }
+}
+# Returns: { "type": "text", "payload": "{\"symbol\":\"AAPL\",\"price\":178.42,...}" }
+
+# Step 4 — when done, close cleanly
+{
+  "name": "websocket_close",
+  "args": {
+    "connection_id": "ws_0x1",
+    "code": 1000,
+    "reason": "user finished"
+  }
+}
+
+
+# ─────────────────────────────────────────────────────────────────
+# 5. WebSocket: send binary
+# ─────────────────────────────────────────────────────────────────
+
+{
+  "name": "websocket_connect",
+  "args": { "url": "ws://echo.websocket.events" }
+}
+# → connection_id: "ws_0x2"
+
+# Send binary data (base64-encoded: 0xDE 0xAD 0xBE 0xEF)
+{
+  "name": "websocket_send",
+  "args": {
+    "connection_id": "ws_0x2",
+    "message_base64": "3q2+7w=="
+  }
+}
+# → { "bytes_sent": 4, "type": "binary" }
+
+{
+  "name": "websocket_recv",
+  "args": { "connection_id": "ws_0x2", "timeout_seconds": 5 }
+}
+# → { "type": "binary", "payload_base64": "3q2+7w==", "bytes": 4 }
+
+
+# ─────────────────────────────────────────────────────────────────
+# 6. Streaming multiple frames in a loop
+# ─────────────────────────────────────────────────────────────────
+
+# LLM pattern: keep calling websocket_recv until done, then close.
+
+# 1. connect (returns ws_0x3)
+# 2. loop:
+#      websocket_send(... message ...)
+#      websocket_recv(... 5s timeout ...)
+#      if recv returns {status: "closed"} → break
+#      otherwise process the payload
+# 3. websocket_close(... ws_0x3 ...)
+
+
+# ─────────────────────────────────────────────────────────────────
+# 7. Error: unknown connection_id
+# ─────────────────────────────────────────────────────────────────
+
+# (LLM tries to use a stale id from a previous session)
+{
+  "name": "websocket_send",
+  "args": {
+    "connection_id": "ws_does_not_exist",
+    "message": "hello"
+  }
+}
+# Returns:
+# {
+#   "status": "error",
+#   "error": "unknown connection_id",
+#   "connection_id": "ws_does_not_exist"
+# }
+# LLM should call websocket_connect again to get a fresh id.
+
+
+# ─────────────────────────────────────────────────────────────────
+# 8. Error: TLS verification failed
+# ─────────────────────────────────────────────────────────────────
+
+# LLM asks: "Fetch from https://self-signed-test.local/"
+{
+  "name": "http_request",
+  "args": {
+    "url": "https://self-signed-test.local/",
+    "method": "GET"
+  }
+}
+# Returns:
+# {
+#   "status": "error",
+#   "error": "connect failed: TLS verification failed: ..."
+# }
+
+# LLM checks: "Is this a test environment with self-signed certs?"
+# If yes, retries with insecure: true:
+{
+  "name": "http_request",
+  "args": {
+    "url": "https://self-signed-test.local/",
+    "method": "GET",
+    "insecure": true
+  }
+}
+# Returns: 200 OK (with [WARN] in stderr)
+
+# Better practice: have the user install the test CA's cert in the
+# system trust store instead of using insecure: true.

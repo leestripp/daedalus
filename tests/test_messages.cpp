@@ -1,0 +1,1377 @@
+/**
+ * @file test_messages.cpp
+ * @brief Unit tests for Messages class - split and replace functions
+ * 
+ * Tests message splitting logic and replacement functionality.
+ * Uses standalone approach to avoid external dependencies.
+ */
+
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
+
+#include <string>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
+// Include Messages.h after doctest so FRIEND_TEST is available
+#include "core/Messages.h"
+
+using json = nlohmann::json;
+namespace fs = std::filesystem;
+
+// ============================================================================
+// Test Fixtures
+// ============================================================================
+
+/**
+ * @brief Create a temporary project directory with .daedalus subdir
+ */
+fs::path create_test_project() {
+    fs::path proj = fs::temp_directory_path() / ("daedalus_messages_test_" + std::to_string(getpid()));
+    fs::create_directories(proj / ".daedalus");
+    return proj;
+}
+
+/**
+ * @brief Clean up test project
+ */
+void cleanup_test_project(const fs::path& proj) {
+    fs::remove_all(proj);
+}
+
+/**
+ * @brief Create Messages with custom config for testing
+ */
+Messages create_test_messages(const fs::path& proj_root, int keep_head = 2, int keep_tail = 2) {
+    MessageCompressionConfig config;
+    config.keep_head_count = keep_head;
+    config.keep_tail_count = keep_tail;
+    config.max_context_size = 200000;
+    config.compress_threshold = 0.9f;
+    config.debug_output = false;  // Disable debug output in tests
+    // §Phase 8.8: Messages takes the per-agent data dir, not the
+    // project root. Tests that want the legacy default namespace
+    // pass `<proj_root>/.daedalus`. Use create_test_messages_with_name()
+    // below to test the named-agent code path.
+    return Messages(proj_root / ".daedalus", config);
+}
+
+/**
+ * @brief Create a simple message
+ */
+json make_msg(const std::string& role, const std::string& content) {
+    return json{{"role", role}, {"content", content}};
+}
+
+// ============================================================================
+// Test Suite: Message Addition
+// ============================================================================
+
+TEST_SUITE("Message Addition") {
+    
+    TEST_CASE("Empty messages on construction") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        CHECK(msgs.size() == 0);
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Add system message") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        msgs.add_system("You are a helpful assistant.");
+        CHECK(msgs.size() == 1);
+        CHECK(msgs.get_messages()[0]["role"] == "system");
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Add user message") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        msgs.add_user("Hello, how are you?");
+        CHECK(msgs.size() == 1);
+        CHECK(msgs.get_messages()[0]["role"] == "user");
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Add assistant message") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        msgs.add_assistant("I'm doing great!");
+        CHECK(msgs.size() == 1);
+        CHECK(msgs.get_messages()[0]["role"] == "assistant");
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Add tool result message") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        msgs.add_tool_result("call_123", "File content here");
+        CHECK(msgs.size() == 1);
+        CHECK(msgs.get_messages()[0]["role"] == "tool");
+        CHECK(msgs.get_messages()[0]["tool_call_id"] == "call_123");
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Set Messages
+// ============================================================================
+
+TEST_SUITE("Set Messages") {
+    
+    TEST_CASE("Set messages array directly") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "You are helpful."));
+        test_msgs.push_back(make_msg("user", "Hello"));
+        test_msgs.push_back(make_msg("assistant", "Hi there!"));
+        
+        msgs.set_messages(test_msgs);
+        CHECK(msgs.size() == 3);
+        CHECK(msgs.get_messages()[0]["content"] == "You are helpful.");
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Split Messages
+// ============================================================================
+
+TEST_SUITE("Split Messages - Basic Split") {
+    // NOTE: These tests verify the NEW simplified split behavior
+    // The new compress() rebuilds as: system + user(instruction) + summary
+    // split_messages() is now DEPRECATED - kept for debugging only
+    // New behavior: prefix = system (index 0), middle = all others, suffix = empty
+    
+    TEST_CASE("Split with 6 messages - normal case") {
+        // With the NEW 50/50 split:
+        // prefix = system (1 msg), middle = first 50% of non-system (3), suffix = last 50% (3)
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));
+        test_msgs.push_back(make_msg("user", "Task 1"));
+        test_msgs.push_back(make_msg("assistant", "Response 1"));
+        test_msgs.push_back(make_msg("user", "Task 2"));  // middle (first half)
+        test_msgs.push_back(make_msg("assistant", "Response 2"));  // middle (first half)
+        test_msgs.push_back(make_msg("user", "Task 3"));  // suffix (second half)
+        test_msgs.push_back(make_msg("assistant", "Response 3"));  // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        CHECK(msgs.size() == 7);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 70/30 split: prefix=1 (system), middle=4 (first 70%), suffix=2 (last 30%)
+        CHECK(prefix_size == 1);    // system only
+        CHECK(middle_size == 4);    // first 70% of non-system
+        CHECK(suffix_size == 2);   // last 30% of non-system
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Split with 5 messages - overlap case") {
+        // NEW 50/50 split: 4 non-system messages split as 2/2
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));
+        test_msgs.push_back(make_msg("user", "Task 1"));    // middle (first half)
+        test_msgs.push_back(make_msg("assistant", "Response 1"));  // middle (first half)
+        test_msgs.push_back(make_msg("user", "Task 2"));    // suffix (second half)
+        test_msgs.push_back(make_msg("assistant", "Response 2"));  // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        CHECK(msgs.size() == 5);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 50/50 split: prefix=1, middle=2, suffix=2
+        CHECK(prefix_size == 1);     // system only
+        CHECK(middle_size == 2);     // first half of non-system
+        CHECK(suffix_size == 2);     // second half of non-system
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Split with 4 messages - edge case") {
+        // NEW 50/50 split: 3 non-system messages split as 1/2
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));
+        test_msgs.push_back(make_msg("user", "Task 1"));    // middle (first half)
+        test_msgs.push_back(make_msg("assistant", "Response 1"));  // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Task 2"));    // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        CHECK(msgs.size() == 4);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 70/30 split: prefix=1, middle=2, suffix=1
+        CHECK(prefix_size == 1);     // system only
+        CHECK(middle_size == 2);     // first 70% of non-system
+        CHECK(suffix_size == 1);     // last 30% of non-system
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Split with 3 messages - edge case (all in prefix)") {
+        // NEW 50/50 split: 2 non-system messages split as 1/1
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));
+        test_msgs.push_back(make_msg("user", "Task 1"));    // middle (first half)
+        test_msgs.push_back(make_msg("assistant", "Response 1"));  // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        CHECK(msgs.size() == 3);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 50/50 split: prefix=1 (system), middle=1, suffix=1
+        CHECK(prefix_size == 1);
+        CHECK(middle_size == 1);
+        CHECK(suffix_size == 1);
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Split Messages - Custom Config
+// ============================================================================
+
+TEST_SUITE("Split Messages - Custom Config") {
+    // NOTE: The keep_head_count and keep_tail_count are DEPRECATED
+    // The new compress() ignores these values
+    // New behavior: prefix = system only, middle = all others, suffix = empty
+    
+    TEST_CASE("Split with keep_head=1, keep_tail=1") {
+        // NEW 50/50 split: 7 non-system → 3 middle, 4 suffix
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 1, 1);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));  // prefix
+        test_msgs.push_back(make_msg("user", "Msg 0"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 1"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 2"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 3"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 4"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 5"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 6"));    // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        CHECK(msgs.size() == 8);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 70/30 split: prefix=1 (system), middle=4 (first 70%), suffix=3 (last 30%)
+        CHECK(prefix_size == 1);    // system only
+        CHECK(middle_size == 4);    // first 70% of non-system
+        CHECK(suffix_size == 3);   // last 30% of non-system
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Split with keep_head=3, keep_tail=1") {
+        // NEW 50/50 split: 9 non-system → 4 middle, 5 suffix
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 3, 1);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));  // prefix
+        test_msgs.push_back(make_msg("user", "Msg 0"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 1"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 2"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 3"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 4"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 5"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 6"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 7"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 8"));    // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 70/30 split: prefix=1 (system), middle=6, suffix=3
+        CHECK(prefix_size == 1);     // system only
+        CHECK(middle_size == 6);     // first 70% of non-system
+        CHECK(suffix_size == 3);     // last 30% of non-system
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Split with keep_head=1, keep_tail=3") {
+        // NEW 50/50 split: 9 non-system → 4 middle, 5 suffix (ignores config)
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 1, 3);
+        
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System"));  // prefix
+        test_msgs.push_back(make_msg("user", "Msg 0"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 1"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 2"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 3"));    // middle (first half)
+        test_msgs.push_back(make_msg("user", "Msg 4"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 5"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 6"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 7"));    // suffix (second half)
+        test_msgs.push_back(make_msg("user", "Msg 8"));    // suffix (second half)
+        
+        msgs.set_messages(test_msgs);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 70/30 split: prefix=1 (system), middle=6 (first 70%), suffix=3 (last 30%)
+        CHECK(prefix_size == 1);     // system only
+        CHECK(middle_size == 6);     // first 70% of non-system
+        CHECK(suffix_size == 3);     // last 30% of non-system
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Replace Messages
+// ============================================================================
+
+TEST_SUITE("Replace Messages") {
+    
+    TEST_CASE("Replace with valid JSON string") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("Original system");
+        CHECK(msgs.size() == 1);
+        
+        // Create compressed JSON (simulating compression result)
+        json compressed = json::array();
+        compressed.push_back(make_msg("system", "Original system"));  // Keep system
+        compressed.push_back(make_msg("user", "Original task"));  // prefix
+        compressed.push_back(make_msg("assistant", "Summary of middle messages..."));  // summary replaces middle
+        
+        std::string compressed_str = compressed.dump();
+        msgs.replace_messages(compressed_str);
+        
+        CHECK(msgs.size() == 3);
+        CHECK(msgs.get_messages()[2]["content"] == "Summary of middle messages...");
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Replace with invalid JSON - graceful handling") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("Original");
+        msgs.add_user("Test");
+        CHECK(msgs.size() == 2);
+        
+        // Send invalid JSON - should not throw, just log error
+        msgs.replace_messages("not valid json {{{");
+        
+        // Original messages should be unchanged
+        CHECK(msgs.size() == 2);
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Replace with empty array") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("Should be kept");
+        CHECK(msgs.size() == 1);
+        
+        // Replace with empty array
+        msgs.replace_messages("[]");
+        
+        CHECK(msgs.size() == 0);
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Replace Messages - Compression Workflow
+// ============================================================================
+
+TEST_SUITE("Replace Messages - Compression Workflow") {
+    
+    TEST_CASE("Simulate compression workflow: set -> split info -> replace") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        // Build up messages like a real session
+        msgs.add_system("You are CodeMax.");
+        msgs.add_user("Build a calculator");
+        msgs.add_assistant("I'll create a calculator app.");
+        msgs.add_user("Add addition function");
+        msgs.add_assistant("Added add() function.");
+        msgs.add_user("Add multiplication function");
+        msgs.add_assistant("Added multiply() function.");
+        msgs.add_user("Build the project");
+        msgs.add_assistant("Project builds successfully.");
+        
+        CHECK(msgs.size() == 9);
+        
+        // Verify split before compression
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // Should have middle to compress
+        CHECK(middle_size > 0);
+        
+        // Simulate compression: keep prefix + summary + suffix
+        json compressed = json::array();
+        // Keep first 3 messages (system + prefix)
+        for (int i = 0; i < 3; i++) {
+            compressed.push_back(msgs.get_messages()[i]);
+        }
+        // Add summary
+        compressed.push_back(make_msg("assistant", "[COMPRESSED] Summary: Created calculator with add and multiply functions. Build verified."));
+        // Keep suffix (last 2 messages)
+        compressed.push_back(msgs.get_messages()[7]);
+        compressed.push_back(msgs.get_messages()[8]);
+        
+        msgs.replace_messages(compressed.dump());
+        
+        // After compression: system + prefix(2) + summary(1) + suffix(2) = 6 messages
+        CHECK(msgs.size() == 6);
+        
+        // Verify the summary message is there
+        bool found_summary = false;
+        for (const auto& msg : msgs.get_messages()) {
+            if (msg["content"].get<std::string>().find("[COMPRESSED]") != std::string::npos) {
+                found_summary = true;
+                break;
+            }
+        }
+        CHECK(found_summary);
+        
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Edge Cases
+// ============================================================================
+
+TEST_SUITE("Edge Cases") {
+    
+    TEST_CASE("Empty messages array") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        CHECK(prefix_size == 0);
+        CHECK(middle_size == 0);
+        CHECK(suffix_size == 0);
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Only system message (1 message)") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        msgs.add_system("Only system");
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // Edge case: total(1) <= head_end(3)? Yes -> all in prefix
+        CHECK(prefix_size == 1);
+        CHECK(middle_size == 0);
+        CHECK(suffix_size == 0);
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("System + just enough for head (3 messages)") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        msgs.add_system("System");
+        msgs.add_user("Task");
+        msgs.add_assistant("Done");
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 50/50 split: 2 non-system → 1 middle, 1 suffix
+        CHECK(prefix_size == 1);
+        CHECK(middle_size == 1);
+        CHECK(suffix_size == 1);
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Large message count") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        // Add system + 100 messages
+        msgs.add_system("System");
+        for (int i = 0; i < 100; i++) {
+            msgs.add_user("Message " + std::to_string(i));
+        }
+        
+        CHECK(msgs.size() == 101);
+        
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+        
+        // NEW 70/30 split: prefix=1 (system), middle=70, suffix=30
+        CHECK(prefix_size == 1);
+        CHECK(middle_size == 70);
+        CHECK(suffix_size == 30);
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Compression Threshold
+// ============================================================================
+
+TEST_SUITE("Compression Threshold") {
+    
+    TEST_CASE("should_compress at 90% threshold") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj, 2, 2);
+        
+        msgs.add_system("System");
+        msgs.add_user("Task");
+        msgs.add_assistant("Response");
+        
+        // Default config: compress_threshold=0.9, max_context_size=200000
+        CHECK_FALSE(msgs.should_compress(150000));  // 75% - below threshold
+        CHECK_FALSE(msgs.should_compress(179999)); // 89.99% - below threshold
+        CHECK(msgs.should_compress(180000));       // 90% - at threshold
+        CHECK(msgs.should_compress(200000));        // 100% - at max
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("should_compress with custom threshold") {
+        auto proj = create_test_project();
+        MessageCompressionConfig config;
+        config.compress_threshold = 0.5f;  // 50%
+        config.max_context_size = 100000;
+        Messages msgs(proj, config);
+        
+        msgs.add_system("System");
+        msgs.add_user("Task");
+        
+        CHECK_FALSE(msgs.should_compress(49000));  // 49%
+        CHECK(msgs.should_compress(50000));        // 50%
+        CHECK(msgs.should_compress(100000));       // 100%
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Token Estimation
+// ============================================================================
+
+TEST_SUITE("Token Estimation") {
+    
+    TEST_CASE("estimate_tokens returns reasonable value") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("Short system message");
+        msgs.add_user("Short user message");
+        
+        size_t tokens = msgs.estimate_tokens();
+        
+        // Should be non-zero and roughly proportional to content size
+        CHECK(tokens > 0);
+        CHECK(tokens < 1000);  // Very rough upper bound for small messages
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("estimate_tokens with large content") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        // Add a larger message (~1000 chars = ~250 tokens estimate)
+        std::string large_content(1000, 'x');
+        msgs.add_user(large_content);
+        
+        size_t tokens = msgs.estimate_tokens();
+        
+        // 1000 chars / 4 = ~250 tokens estimate
+        CHECK(tokens > 200);
+        CHECK(tokens < 350);
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Save and Load (Persistence)
+// ============================================================================
+
+TEST_SUITE("Save and Load") {
+    
+    TEST_CASE("has_saved_messages returns false when no file exists") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        CHECK_FALSE(msgs.has_saved_messages());
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("save creates messages file") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("System message");
+        msgs.add_user("User message");
+        msgs.add_assistant("Assistant response");
+        
+        CHECK_FALSE(msgs.has_saved_messages());  // Not saved yet
+        msgs.save();
+        CHECK(msgs.has_saved_messages());  // Now saved
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("save and load round-trip") {
+        auto proj = create_test_project();
+        auto msgs1 = create_test_messages(proj);
+        
+        // Add various message types
+        msgs1.add_system("System prompt here");
+        msgs1.add_user("User input with special chars: äöü");
+        msgs1.add_assistant("Assistant response with more text");
+        // Add proper tool call chain: assistant with tool_calls + tool result
+        msgs1.get_messages().push_back({
+            {"role", "assistant"},
+            {"tool_calls", json::array({
+                {
+                    {"id", "tool_call_123"},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", "test_tool"},
+                        {"arguments", "{}"}
+                    }}
+                }
+            })}
+        });
+        msgs1.add_tool_result("tool_call_123", "Tool result content");
+        
+        msgs1.save();
+        
+        // Create new Messages instance and load
+        auto msgs2 = create_test_messages(proj);
+        CHECK(msgs2.load());  // Should successfully load
+        
+        // Verify message count and content
+        // Structure: system + user + assistant + assistant(tool_calls) + tool_result = 5
+        CHECK(msgs2.size() == 5);
+        CHECK(msgs2.get_messages()[0]["content"] == "System prompt here");
+        CHECK(msgs2.get_messages()[1]["content"] == "User input with special chars: äöü");
+        CHECK(msgs2.get_messages()[2]["content"] == "Assistant response with more text");
+        CHECK(msgs2.get_messages()[3]["role"] == "assistant");
+        CHECK(msgs2.get_messages()[3].contains("tool_calls"));
+        // Tool result is at index 4 (the assistant with tool_calls at 3 has matching result)
+        CHECK(msgs2.get_messages()[4]["role"] == "tool");
+        CHECK(msgs2.get_messages()[4]["tool_call_id"] == "tool_call_123");
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("load returns false when no file exists") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        CHECK_FALSE(msgs.load());
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("load returns false for empty file") {
+        auto proj = create_test_project();
+        
+        // Create empty messages file
+        fs::path daedalus_dir = proj / ".daedalus";
+        fs::create_directories(daedalus_dir);
+        std::ofstream f(daedalus_dir / "messages.json");
+        f << "";  // Empty file
+        f.close();
+        
+        auto msgs = create_test_messages(proj);
+        CHECK_FALSE(msgs.load());
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("load returns false for invalid JSON") {
+        auto proj = create_test_project();
+        
+        // Create invalid JSON file
+        fs::path daedalus_dir = proj / ".daedalus";
+        fs::create_directories(daedalus_dir);
+        std::ofstream f(daedalus_dir / "messages.json");
+        f << "this is not json";  // Invalid JSON
+        f.close();
+        
+        auto msgs = create_test_messages(proj);
+        CHECK_FALSE(msgs.load());
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("load returns false for non-array JSON") {
+        auto proj = create_test_project();
+        
+        // Create JSON object instead of array
+        fs::path daedalus_dir = proj / ".daedalus";
+        fs::create_directories(daedalus_dir);
+        std::ofstream f(daedalus_dir / "messages.json");
+        f << "{\"invalid\": true}";  // Not an array
+        f.close();
+        
+        auto msgs = create_test_messages(proj);
+        CHECK_FALSE(msgs.load());
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("save does not create file for empty messages") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        CHECK_FALSE(msgs.has_saved_messages());
+        msgs.save();  // Should not create file for empty messages
+        CHECK_FALSE(msgs.has_saved_messages());
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("clear removes messages but not file (must call save to remove file)") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("Test");
+        msgs.save();
+        CHECK(msgs.has_saved_messages());
+        
+        msgs.clear();
+        CHECK(msgs.size() == 0);
+        // clear() only clears memory, file remains
+        // call save() on empty messages to remove file
+        msgs.save();
+        CHECK_FALSE(msgs.has_saved_messages());  // Now file is removed
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("messages persist after destruction and recreation") {
+        auto proj = create_test_project();
+        
+        // Create, save messages, then destruct
+        {
+            auto msgs1 = create_test_messages(proj);
+            msgs1.add_system("Persistent system");
+            msgs1.add_user("Persistent user");
+            msgs1.save();
+        }
+        
+        // Create new instance and load
+        auto msgs2 = create_test_messages(proj);
+        CHECK(msgs2.load());
+        CHECK(msgs2.size() == 2);
+        CHECK(msgs2.get_messages()[0]["content"] == "Persistent system");
+        
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Tool Call State Machine
+// ============================================================================
+
+TEST_SUITE("Tool Call State Machine") {
+    
+    TEST_CASE("get_tool_state returns NOT_FOUND for unknown ID") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_123"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        CHECK(msgs.get_tool_state("nonexistent") == Messages::ToolState::INVALID);
+        CHECK(msgs.get_tool_state("call_123") == Messages::ToolState::PENDING);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("mark_tool_executing transitions PENDING to EXECUTING") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_123"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        // Before marking - PENDING
+        CHECK(msgs.get_tool_state("call_123") == Messages::ToolState::PENDING);
+        
+        // Mark as executing
+        bool result = msgs.mark_tool_executing("call_123");
+        CHECK(result == true);
+        
+        // After marking - EXECUTING
+        CHECK(msgs.get_tool_state("call_123") == Messages::ToolState::EXECUTING);
+        CHECK(msgs.is_executing("call_123") == true);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("mark_tool_executing fails for non-existent ID") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        bool result = msgs.mark_tool_executing("nonexistent");
+        CHECK(result == false);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("mark_tool_executing fails when not in PENDING state") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_123"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        // Mark as executing
+        msgs.mark_tool_executing("call_123");
+        
+        // Try to mark again - should fail
+        bool result = msgs.mark_tool_executing("call_123");
+        CHECK(result == false);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("add_tool_result transitions to COMPLETED (non-error)") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_123"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        msgs.mark_tool_executing("call_123");
+        CHECK(msgs.get_tool_state("call_123") == Messages::ToolState::EXECUTING);
+        
+        // Add tool result (non-error)
+        msgs.add_tool_result("call_123", "File content here");
+        
+        // In real LLMClient flow, clear_executing() is called after add_tool_result()
+        // Here we simulate that by clearing the executing marker
+        msgs.clear_executing("call_123");
+        
+        // After result - should be COMPLETED
+        CHECK(msgs.get_tool_state("call_123") == Messages::ToolState::COMPLETED);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("add_tool_result with Error: prefix transitions to FAILED") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_err"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        // Add error result with "Error:" prefix
+        msgs.add_tool_result("call_err", "Error: something failed");
+        
+        // After error result - should be FAILED
+        CHECK(msgs.get_tool_state("call_err") == Messages::ToolState::FAILED);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("clear_executing removes EXECUTING state") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_123"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        msgs.mark_tool_executing("call_123");
+        CHECK(msgs.is_executing("call_123") == true);
+        
+        msgs.clear_executing("call_123");
+        CHECK(msgs.is_executing("call_123") == false);
+        CHECK(msgs.get_tool_state("call_123") == Messages::ToolState::PENDING);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("get_pending_tool_ids returns correct list") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_1"}, {"function", {{"name", "test1"}, {"arguments", "{}"}}}},
+            {{"id", "call_2"}, {"function", {{"name", "test2"}, {"arguments", "{}"}}}}
+        });
+        
+        auto pending = msgs.get_pending_tool_ids();
+        CHECK(pending.size() == 2);
+        
+        // Complete one tool
+        msgs.add_tool_result("call_1", "result1");
+        pending = msgs.get_pending_tool_ids();
+        CHECK(pending.size() == 1);
+        CHECK(pending[0] == "call_2");
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("has_pending_tools and has_executing_tools work correctly") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_1"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        // Before any action - call_1 is PENDING
+        CHECK(msgs.has_pending_tools() == true);  // call_1 is PENDING
+        CHECK(msgs.has_executing_tools() == false);
+        
+        msgs.mark_tool_executing("call_1");
+        // After marking, call_1 is EXECUTING
+        // Note: has_pending_tools checks if tools have NO result yet
+        // A tool in EXECUTING still has no result, so it's still "pending" conceptually
+        // but the EXECUTING state takes precedence in get_tool_state()
+        CHECK(msgs.has_executing_tools() == true);
+        
+        // Simulate LLMClient clearing executing after adding result
+        msgs.clear_executing("call_1");
+        msgs.add_tool_result("call_1", "done");
+        CHECK(msgs.has_executing_tools() == false);
+        CHECK(msgs.has_pending_tools() == false);  // call_1 now COMPLETED
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("all_tools_resolved returns correct value") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_1"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        CHECK(msgs.all_tools_resolved() == false);
+        
+        msgs.add_tool_result("call_1", "done");
+        CHECK(msgs.all_tools_resolved() == true);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("clear_executing_markers clears all executing tools") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_1"}, {"function", {{"name", "test1"}, {"arguments", "{}"}}}},
+            {{"id", "call_2"}, {"function", {{"name", "test2"}, {"arguments", "{}"}}}}
+        });
+        
+        msgs.mark_tool_executing("call_1");
+        msgs.mark_tool_executing("call_2");
+        CHECK(msgs.has_executing_tools() == true);
+        
+        msgs.clear_executing_markers();
+        CHECK(msgs.has_executing_tools() == false);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("Tool state persists correctly after save/load") {
+        auto proj = create_test_project();
+        
+        // Create messages with completed and failed tools
+        {
+            auto msgs = create_test_messages(proj);
+            msgs.add_system("You are helpful.");
+            msgs.add_assistant("");
+            msgs.get_last_assistant_message()["tool_calls"] = json::array({
+                {{"id", "call_success"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}},
+                {{"id", "call_failed"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+            });
+            
+            msgs.add_tool_result("call_success", "success result");
+            msgs.add_tool_result("call_failed", "Error: failed result");
+            
+            msgs.save();
+        }
+        
+        // Load and verify state persisted
+        auto msgs2 = create_test_messages(proj);
+        CHECK(msgs2.load() == true);
+        
+        // Note: EXECUTING state is ephemeral and won't persist
+        // But COMPLETED and FAILED states derive from message chain
+        CHECK(msgs2.get_tool_state("call_success") == Messages::ToolState::COMPLETED);
+        CHECK(msgs2.get_tool_state("call_failed") == Messages::ToolState::FAILED);
+        
+        cleanup_test_project(proj);
+    }
+    
+    TEST_CASE("has_tool_result works correctly") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        
+        msgs.add_system("You are helpful.");
+        msgs.add_assistant("");
+        msgs.get_last_assistant_message()["tool_calls"] = json::array({
+            {{"id", "call_1"}, {"function", {{"name", "test"}, {"arguments", "{}"}}}}
+        });
+        
+        // Manually add tool result (bypass normal flow)
+        msgs.get_messages().push_back({
+            {"role", "tool"},
+            {"tool_call_id", "call_1"},
+            {"content", "result"}
+        });
+        
+        // Check via get_tool_state
+        CHECK(msgs.get_tool_state("call_1") == Messages::ToolState::COMPLETED);
+        
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
+// Test Suite: Compression Regression - Safe Split with Tool Calls
+// ============================================================================
+// These tests are REGRESSION tests for a critical bug where the safe split
+// logic was too aggressive. When a tool call pair was at the beginning of
+// messages, the safe split would shrink to 1, deleting only 1 message
+// instead of ~70%.
+//
+// The fix: the algorithm should EXTEND the target split to AFTER the tool
+// result (so the whole tool call chain is in the compressed region), not
+// shrink it to before the assistant.
+
+TEST_SUITE("Compression Regression - Safe Split with Tool Calls") {
+
+    /**
+     * Helper: Create a tool call message (assistant with tool_calls)
+     */
+    json make_tool_call_msg(const std::string& tc_id, const std::string& tool_name) {
+        return {
+            {"role", "assistant"},
+            {"tool_calls", json::array({
+                {
+                    {"id", tc_id},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", tool_name},
+                        {"arguments", "{}"}
+                    }}
+                }
+            })}
+        };
+    }
+
+    /**
+     * Helper: Create a tool result message
+     */
+    json make_tool_result_msg(const std::string& tc_id, const std::string& content) {
+        return {
+            {"role", "tool"},
+            {"tool_call_id", tc_id},
+            {"content", content}
+        };
+    }
+
+    /**
+     * REGRESSION TEST 1: Tool call pair at the very beginning
+     * This was the exact bug from prompt.txt - 595 messages, first message
+     * was a user prompt, second was assistant with git_add tool_calls,
+     * third was tool result. The old algorithm would shrink the split
+     * to 1, deleting only the first message.
+     *
+     * Expected: The compression should still delete ~70% of messages
+     * (with the whole tool call chain in the compressed region).
+     */
+    TEST_CASE("Tool call pair at the very beginning - should still compress ~70%") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        // Build 100 messages: system + 99 non-system
+        // First 10 messages contain a tool call pair (simulating the bug scenario)
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System prompt"));
+
+        // Add 5 user/assistant pairs (10 messages) with a tool call in the middle
+        for (int i = 0; i < 5; ++i) {
+            test_msgs.push_back(make_msg("user", "Task " + std::to_string(i)));
+            test_msgs.push_back(make_msg("assistant", "Response " + std::to_string(i)));
+        }
+        // Add a tool call pair (assistant with tool_calls + tool result)
+        test_msgs.push_back(make_tool_call_msg("call_001", "git_add"));
+        test_msgs.push_back(make_tool_result_msg("call_001", "Files staged successfully"));
+
+        // Add 88 more user/assistant pairs (44 pairs = 88 messages) to reach 100 non-system
+        // Total: 1 system + 10 (5 pairs) + 2 (tool call pair) + 88 (44 pairs) = 101
+        for (int i = 0; i < 44; ++i) {
+            test_msgs.push_back(make_msg("user", "Task " + std::to_string(i + 5)));
+            test_msgs.push_back(make_msg("assistant", "Response " + std::to_string(i + 5)));
+        }
+
+        msgs.set_messages(test_msgs);
+        REQUIRE(msgs.size() == 101);  // 1 system + 100 non-system
+
+        // 70% of 100 = 70, so middle should be ~70, suffix ~30
+        // The tool call pair is at indices 12-13 (after 10 normal + 2 from pair)
+        // Since the tool call pair is in [1, 70], it should be INCLUDED in compression
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+
+        // Critical: middle should be ~70 (NOT 1!)
+        CHECK(middle_size >= 60);  // At least 60 (allowing some flexibility)
+        CHECK(middle_size <= 72);  // At most 72
+        CHECK(suffix_size >= 28);  // At least 28 kept
+        CHECK(suffix_size <= 40);  // At most 40 kept
+
+        // Verify the compression indices
+        auto [start, end] = msgs.get_compression_indices();
+        CHECK(start == 1);
+        CHECK(end >= 61);  // Should be at least 61 (not 2!)
+
+        cleanup_test_project(proj);
+    }
+
+    /**
+     * REGRESSION TEST 2: get_compression_indices with tool call at start
+     * Direct test of the get_compression_indices() function which is
+     * called by compress(). The old buggy version returned (1, 2) when
+     * there was a tool call at index 1-2.
+     */
+    TEST_CASE("get_compression_indices does not shrink to 1 with tool call at start") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        // Build: system + user + assistant(tool_calls) + tool_result + 96 more
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System prompt"));
+        test_msgs.push_back(make_msg("user", "First user message"));
+        test_msgs.push_back(make_tool_call_msg("call_abc", "some_tool"));
+        test_msgs.push_back(make_tool_result_msg("call_abc", "Some result"));
+
+        // Add 97 more messages (48 pairs = 96, +1 extra = 97)
+        // Total: 1 system + 1 user + 2 (tool call pair) + 97 = 101
+        for (int i = 0; i < 48; ++i) {
+            test_msgs.push_back(make_msg("user", "User " + std::to_string(i)));
+            test_msgs.push_back(make_msg("assistant", "Assistant " + std::to_string(i)));
+        }
+        test_msgs.push_back(make_msg("user", "Extra user"));
+
+        msgs.set_messages(test_msgs);
+        REQUIRE(msgs.size() == 101);  // 1 system + 100 non-system
+
+        auto [start, end] = msgs.get_compression_indices();
+
+        // CRITICAL: The old bug returned (1, 2) - deleting only 1 message
+        // The fix: end should be ~71 (70% of 100 = 70, plus 1 for inclusive end)
+        CHECK(start == 1);
+        CHECK(end >= 50);   // At least 50 (definitely NOT 2!)
+        CHECK(end <= 75);   // At most 75
+
+        cleanup_test_project(proj);
+    }
+
+    /**
+     * REGRESSION TEST 3: Many tool call pairs throughout
+     * Real-world scenario: 595 messages with many tool call pairs scattered
+     * throughout. The algorithm should still compress ~70%.
+     */
+    TEST_CASE("Many tool call pairs throughout - still compresses ~70%") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System prompt"));
+
+        // 100 non-system messages with tool call pairs scattered
+        for (int i = 0; i < 100; ++i) {
+            if (i % 5 == 0 && i < 95) {
+                // Add a tool call pair every 5 messages
+                std::string tc_id = "call_" + std::to_string(i);
+                test_msgs.push_back(make_tool_call_msg(tc_id, "tool_" + std::to_string(i)));
+                test_msgs.push_back(make_tool_result_msg(tc_id, "result " + std::to_string(i)));
+            } else {
+                test_msgs.push_back(make_msg("user", "User " + std::to_string(i)));
+                test_msgs.push_back(make_msg("assistant", "Assistant " + std::to_string(i)));
+            }
+        }
+
+        msgs.set_messages(test_msgs);
+        // Size will be: 1 system + (some messages based on loop logic)
+        // Just verify the split is reasonable
+        size_t prefix_size, middle_size, suffix_size;
+        msgs.get_split_info(prefix_size, middle_size, suffix_size);
+
+        // Verify middle is ~70% and suffix is ~30%
+        size_t total_non_system = msgs.size() - 1;
+        size_t expected_middle = (total_non_system * 70) / 100;
+        size_t expected_suffix = total_non_system - expected_middle;
+
+        // Allow some flexibility for the safe split adjustments
+        CHECK(middle_size >= expected_middle - 5);
+        CHECK(middle_size <= expected_middle + 5);
+        CHECK(suffix_size >= expected_suffix - 5);
+        CHECK(suffix_size <= expected_suffix + 5);
+
+        cleanup_test_project(proj);
+    }
+
+    /**
+     * REGRESSION TEST 4: Tool call pair straddling the 70% boundary
+     * A tool call pair that starts in the first 70% and the result
+     * is in the last 30%. The whole chain should be in the compressed region.
+     */
+    TEST_CASE("Tool call pair straddling the 70% boundary - whole chain compressed") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System prompt"));
+
+        // 69 normal messages, then a tool call (assistant) at index 70,
+        // then tool result at index 71, then more messages
+        for (int i = 0; i < 69; ++i) {
+            test_msgs.push_back(make_msg("user", "User " + std::to_string(i)));
+        }
+        // Tool call at index 70 (just inside the 70% boundary)
+        test_msgs.push_back(make_tool_call_msg("call_boundary", "straddle_tool"));
+        // Tool result at index 71 (just outside the 70% boundary)
+        test_msgs.push_back(make_tool_result_msg("call_boundary", "result"));
+
+        // Add 29 more messages (14 pairs = 28, +1 extra = 29)
+        // Total: 1 system + 69 user + 2 (tool call pair) + 29 = 101
+        for (int i = 0; i < 14; ++i) {
+            test_msgs.push_back(make_msg("user", "Tail user " + std::to_string(i)));
+            test_msgs.push_back(make_msg("assistant", "Tail assistant " + std::to_string(i)));
+        }
+        test_msgs.push_back(make_msg("user", "Extra tail user"));
+
+        msgs.set_messages(test_msgs);
+        REQUIRE(msgs.size() == 101);
+
+        auto [start, end] = msgs.get_compression_indices();
+
+        // The tool call pair is at indices 70-71 (0-indexed) = 71-72 (1-indexed)
+        // The whole chain should be in the compressed region, so end should be >= 72
+        CHECK(start == 1);
+        CHECK(end >= 72);  // Must include the tool result
+
+        cleanup_test_project(proj);
+    }
+
+    /**
+     * REGRESSION TEST 5: No tool calls - basic 70/30 split
+     * Sanity check: with no tool calls, the split should be exactly 70/30.
+     */
+    TEST_CASE("No tool calls - basic 70/30 split") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System prompt"));
+
+        for (int i = 0; i < 100; ++i) {
+            test_msgs.push_back(make_msg("user", "User " + std::to_string(i)));
+        }
+
+        msgs.set_messages(test_msgs);
+        REQUIRE(msgs.size() == 101);
+
+        auto [start, end] = msgs.get_compression_indices();
+
+        // 70% of 100 = 70, so end = 1 + 70 = 71
+        CHECK(start == 1);
+        CHECK(end == 71);
+
+        cleanup_test_project(proj);
+    }
+
+    /**
+     * REGRESSION TEST 6: All tool calls in first 70%
+     * All tool call pairs are in the compressed region. The split
+     * should still be ~70% with all chains included.
+     */
+    TEST_CASE("All tool calls in first 70% - whole chains compressed") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json test_msgs = json::array();
+        test_msgs.push_back(make_msg("system", "System prompt"));
+
+        // Add 10 tool call pairs (20 messages) at the beginning
+        for (int i = 0; i < 10; ++i) {
+            std::string tc_id = "call_" + std::to_string(i);
+            test_msgs.push_back(make_tool_call_msg(tc_id, "tool_" + std::to_string(i)));
+            test_msgs.push_back(make_tool_result_msg(tc_id, "result " + std::to_string(i)));
+        }
+        // Add 80 normal messages
+        for (int i = 0; i < 80; ++i) {
+            test_msgs.push_back(make_msg("user", "User " + std::to_string(i)));
+        }
+
+        msgs.set_messages(test_msgs);
+        REQUIRE(msgs.size() == 101);
+
+        auto [start, end] = msgs.get_compression_indices();
+
+        // 70% of 100 = 70, so end should be ~71
+        // All 20 tool call messages are in the first 20, well within 70%
+        CHECK(start == 1);
+        CHECK(end >= 70);
+        CHECK(end <= 72);
+
+        cleanup_test_project(proj);
+    }
+}

@@ -1,0 +1,266 @@
+/**
+ * @file SystemPromptBuilder.cpp
+ * @brief §Phase 14 — host prompt + library adders.
+ *
+ * See Agent.md Phase 14 for the design rationale. The library's job is
+ * strictly mechanical: take the host's text verbatim and append sections
+ * that the host couldn't have written itself (live tool list, live skill
+ * list, session memory, runtime stats). No prose, no identity, no rules.
+ */
+
+#include "SystemPromptBuilder.h"
+
+#include <pwd.h>
+#include <ctime>
+#include <iomanip>
+#include <sstream>
+
+// ============================================================================
+// §Phase 14: SystemPromptOptions default-constructs with the in-class
+// defaults declared in the header. The constructor used to fetch a username
+// from the OS passwd database, but the library no longer writes that into
+// the composed prompt — the host's system_prompt can include username if
+// it wants to. Kept the comment as a tombstone; nothing else to do here.
+// ============================================================================
+
+// ============================================================================
+// Utility
+// ============================================================================
+
+size_t SystemPromptBuilder::estimateTokens(const std::string& text) {
+    // Rough estimate: 1 token ≈ 4 bytes (matches what most providers charge).
+    return text.size() / 4;
+}
+
+bool SystemPromptBuilder::isValid(const std::string& prompt, size_t max_tokens) {
+    return estimateTokens(prompt) <= max_tokens;
+}
+
+std::string SystemPromptBuilder::combineSections(const std::vector<std::string>& sections) {
+    std::string result;
+    for (const auto& section : sections) {
+        if (!section.empty()) {
+            if (!result.empty()) {
+                result += "\n";
+            }
+            result += section;
+        }
+    }
+    return result;
+}
+
+// ============================================================================
+// Section formatters — all take content as parameter. NO library prose.
+// ============================================================================
+
+std::string SystemPromptBuilder::getSessionMemorySection(const std::string& memory) {
+    if (memory.empty()) return "";
+    return "# Session Memory\n" + memory;
+}
+
+std::string SystemPromptBuilder::getActiveSkillsSection(const std::string& skills) {
+    if (skills.empty()) return "";
+    return "# Active Skills\n" + skills;
+}
+
+std::string SystemPromptBuilder::getAvailableSkillsSection(const std::string& skills) {
+    if (skills.empty()) return "";
+    return std::string("# Available Skills (catalog)\n\n")
+         + "The following skills are available. If your task seems related to one, "
+         + "use the load_skill tool to activate it before proceeding.\n\n"
+         + skills;
+}
+
+std::string SystemPromptBuilder::getToolDefinitionsSection(const std::string& tool_defs) {
+    if (tool_defs.empty()) return "";
+    std::ostringstream oss;
+    oss << "# Tool Definitions (JSON Schema)\n```json\n" << tool_defs << "\n```";
+    return oss.str();
+}
+
+std::string SystemPromptBuilder::getMcpServersSection(const std::string& status) {
+    if (status.empty()) return "";
+    return "# Active MCP Servers\n" + status;
+}
+
+std::string SystemPromptBuilder::getStateMachineSection() {
+    // §State Machine: ALWAYS appended.  The agent is the only one that
+    // knows when it is done — and when it is NOT done (e.g. verification
+    // failed → switch back to Understanding).  We tell it explicitly so
+    // it never stalls in a state, and so the host UI / sink can render
+    // the current stage correctly.  Each tool call carries a `state`
+    // field; set it to the state you are in WHEN you make the call.
+    return
+        "# State Machine\n"
+        "\n"
+        "You drive a state machine. The library fires `state_change` SSE\n"
+        "events on every transition; the host UI uses them to render the\n"
+        "stage chips (Understanding → Planning → Acting → Verifying).\n"
+        "\n"
+        "States:\n"
+        "\n"
+        "| State | Meaning |\n"
+        "|-------|---------|\n"
+        "| `Idle` | No work in flight. |\n"
+        "| `Understanding` | Reading the request, parsing input, gathering context. |\n"
+        "| `Planning` | Designing the approach, choosing which tools to call. |\n"
+        "| `Acting` | Running tools (file edits, bash, MCP, etc.). |\n"
+        "| `Verifying` | Compiling, testing, validating the result. |\n"
+        "| `Compressing` | Context compaction in flight (rare, do not initiate). |\n"
+        "| `Done` | Turn complete — emit your final assistant message and stop. |\n"
+        "| `Cancelled` | Host cancelled the turn; stop work and ack. |\n"
+        "| `Error` | Unrecoverable error; report to host and stop. |\n"
+        "\n"
+        "Rules:\n"
+        "\n"
+        "1. **You are the only one who knows when the work is truly done.**\n"
+        "   Do not stay in `Acting` after the last tool result — switch to\n"
+        "   `Verifying`, run the build / tests if applicable, then `Done`.\n"
+        "2. **If verification fails, switch back.** Set state to\n"
+        "   `Understanding` (or `Planning`) before re-planning the fix —\n"
+        "   never loop silently inside `Acting`.\n"
+        "3. Each tool call you emit carries a `state` field. Set it to the\n"
+        "   state you are in WHEN you make the call. The library uses it to\n"
+        "   fire the corresponding `state_change` event to the host.\n"
+        "4. **Never stay in `Acting` forever.** If you have no more tools to\n"
+        "   call, transition to `Verifying` (and then `Done`) or back to\n"
+        "   `Planning` if more work is needed.\n"
+        "5. **Always end with `Done`.** Every turn MUST end with a `Done`\n"
+        "   transition; otherwise the host UI will leave the chips stuck.\n";
+}
+
+std::string SystemPromptBuilder::getContextStatsSection(size_t current_tokens,
+                                                        size_t max_tokens,
+                                                        size_t iteration,
+                                                        size_t max_iterations) {
+    std::ostringstream oss;
+    int pct = max_tokens == 0 ? 0
+             : static_cast<int>(static_cast<float>(current_tokens) / max_tokens * 100);
+    oss << "# Context Status\n"
+        << "<!-- Auto-updated each iteration -->\n"
+        << "| Metric | Value |\n"
+        << "|--------|-------|\n"
+        << "| Token Usage | " << current_tokens << "/" << max_tokens
+        << " (" << pct << "%)\n"
+        << "| Iterations | " << iteration << "/" << max_iterations << " |\n"
+        << "| Messages | (tracked in messages array) |\n";
+    return oss.str();
+}
+
+std::string SystemPromptBuilder::getReservedAgentDirsSection() {
+    // §Reserved Agent Dirs: ALWAYS appended last.  Tells the agent
+    // that .daedalus* folders are reserved runtime state — same
+    // contract as .git/ — so it never deletes / renames / edits /
+    // moves them.  Without this, a well-meaning "clean up junk
+    // directories" task will silently nuke the agent's memory and
+    // the user's session scratch state.
+    return
+        "# Reserved Agent Directories (.daedalus*)\n"
+        "\n"
+        "The following directories in the project root are owned by the\n"
+        "agent runtime. They are HIDDEN system folders — treat them with\n"
+        "the same care as `.git/`.\n"
+        "\n"
+        "| Directory | Purpose |\n"
+        "|-----------|---------|\n"
+        "| `.daedalus/` | Default agent's persistent state. Memory (everything you've learned about the project), session scratch, per-project config, skills cache. |\n"
+        "| `.daedalus-<id>/` | Per-agent / per-session state when the host namespaces agents. `<id>` is a hex / session id; the contents are the same as `.daedalus/`. |\n"
+        "\n"
+        "NEVER:\n"
+        "\n"
+        "1. **Delete** any `.daedalus*` directory. Doing so wipes the\n"
+        "   agent's memory and all session scratch — unrecoverable.\n"
+        "2. **Rename** or **move** them.\n"
+        "3. **Edit files inside them directly** with `modify_file` /\n"
+        "   `edit_file_patch` / `create_file` unless the user has\n"
+        "   EXPLICITLY asked you to (and even then, ask first).\n"
+        "4. Include them in any \"clean up junk directories\" or\n"
+        "   \"remove cruft\" task. They are not junk.\n"
+        "5. Suggest that the user delete them to \"fix\" a problem.\n"
+        "   They are not the cause of any problem you can observe.\n"
+        "\n"
+        "ALWAYS:\n"
+        "\n"
+        "1. Treat them as **out-of-bounds** during normal work — like a\n"
+        "   `.git/` folder: read what's relevant via the agent's own\n"
+        "   tools (`memory_*`, `get_skill_context`, etc.) and never\n"
+        "   touch the directory tree directly.\n"
+        "2. If the user asks you to do something that would affect a\n"
+        "   `.daedalus*` directory, **stop and ask** before doing it.\n";
+}
+
+// ============================================================================
+// compose() — the only composer the library exposes.
+//
+// §Phase 14: takes the host's system_prompt verbatim as the first section,
+// then appends the dynamic adders in a fixed order. The host text is never
+// inspected, parsed, modified, or augmented by the library.
+// ============================================================================
+
+std::string SystemPromptBuilder::compose(const SystemPromptOptions& options) {
+    std::vector<std::string> sections;
+
+    // 1. The host's full system prompt — verbatim. ALWAYS first.
+    if (!options.system_prompt.empty()) {
+        sections.push_back(options.system_prompt);
+    }
+
+    // 2. Optional 1-line note about system_info (host decides policy).
+    if (options.include_system_info_note && !options.system_info_note.empty()) {
+        sections.push_back(options.system_info_note);
+    }
+
+    // 3. Active MCP servers — names + transports + tools. Built by the
+    //    caller from McpServerManager::list_connected_servers() and
+    //    get_all_tools(). The MCP **tools** also appear in the next section
+    //    (tool_definitions JSON schema); this is the human-readable "what
+    //    servers are connected and what they offer" summary.
+    if (!options.mcp_servers.empty()) {
+        sections.push_back(getMcpServersSection(options.mcp_servers));
+    }
+
+    // 4. Tool JSON schema — the live tool surface.
+    if (!options.tool_definitions.empty()) {
+        sections.push_back(getToolDefinitionsSection(options.tool_definitions));
+    }
+
+    // 5. Active skills (currently loaded) — SUMMARY (table of name + description).
+    //    Full SKILL.md content is fetched on demand via the get_skill_context tool.
+    if (!options.active_skills.empty()) {
+        sections.push_back(getActiveSkillsSection(options.active_skills));
+    }
+
+    // 6. Available skills catalog (names + descriptions, NOT full SKILL.md).
+    //    Caller is responsible for filtering out active skills to avoid duplication.
+    if (!options.available_skills.empty()) {
+        sections.push_back(getAvailableSkillsSection(options.available_skills));
+    }
+
+    // 7. Session memory (opt-in).
+    if (options.include_session_memory && !options.session_memory.empty()) {
+        sections.push_back(getSessionMemorySection(options.session_memory));
+    }
+
+    // 8. Context stats (token usage / iteration counter).
+    if (options.include_context_stats) {
+        sections.push_back(getContextStatsSection(
+            options.current_tokens,
+            options.max_context_size,
+            options.iteration,
+            options.max_iterations));
+    }
+
+    // 9. State machine — ALWAYS appended. Non-empty by construction;
+    //    there is no host option to disable it.  This is so the host
+    //    can be sure the prompt always explains the state machine and
+    //    the agent is instructed to set it as it works.
+    sections.push_back(getStateMachineSection());
+
+    // 10. Reserved agent directories — ALWAYS last.  Tells the agent
+    //     that .daedalus* folders are owned by the runtime and must
+    //     never be deleted / renamed / edited.
+    sections.push_back(getReservedAgentDirsSection());
+
+    return combineSections(sections);
+}
+

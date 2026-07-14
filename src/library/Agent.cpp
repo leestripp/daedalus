@@ -1,0 +1,81 @@
+/**
+ * @file src/library/Agent.cpp
+ * @brief Implementation of the daedalus::Agent facade.
+ *
+ * Holds std::unique_ptr<detail::AgentImpl>. The PIMPL ensures the public
+ * Agent.h header stays small and doesn't drag in the heavy subsystem
+ * types (LLMClient, SettingsManager, McpServerManager, ...).
+ */
+#include "daedalus/Agent.h"
+
+#include "AgentImpl.h"
+
+#include <stop_token>
+#include <utility>
+
+namespace daedalus {
+
+Agent::Agent(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
+    : impl_(std::make_unique<detail::AgentImpl>(std::move(cfg), std::move(sink)))
+{}
+
+Agent::~Agent() = default;
+Agent::Agent(Agent&&) noexcept = default;
+Agent& Agent::operator=(Agent&&) noexcept = default;
+
+// ---- Lifecycle -------------------------------------------------------------
+
+void Agent::initialize()       { impl_->initialize(); }
+void Agent::shutdown()         { impl_->shutdown(); }
+
+// ---- Conversation control --------------------------------------------------
+
+void Agent::run_one_turn(std::stop_token st)                 { impl_->run_one_turn(st); }
+void Agent::submit_user_message(std::string text)             { impl_->submit_user_message(std::move(text)); }
+void Agent::submit_user_message(std::string text,
+                                std::vector<ImageAttachment> imgs)
+{
+    impl_->submit_user_message(std::move(text), std::move(imgs));
+}
+void Agent::cancel() noexcept { impl_->cancel(); }
+
+// ---- Read-only views -------------------------------------------------------
+
+AgentState  Agent::state() const noexcept { return impl_->state(); }
+AgentStats  Agent::stats() const noexcept { return impl_->stats(); }
+const AgentConfig& Agent::config() const noexcept { return impl_->config(); }
+
+std::string_view Agent::agent_name() const noexcept { return impl_->agent_name(); }
+
+std::vector<ToolInfo>  Agent::list_tools()  const { return impl_->list_tools(); }
+std::vector<SkillInfo> Agent::list_skills() const { return impl_->list_skills(); }
+std::vector<ModelInfo> Agent::list_models() const { return impl_->list_models(); }
+
+ModelInfo Agent::active_model() const noexcept { return impl_->active_model(); }
+bool        Agent::auto_approve() const noexcept { return impl_->auto_approve(); }
+std::string Agent::library_version() noexcept   { return detail::AgentImpl::library_version(); }
+
+nlohmann::json Agent::execute_tool(const std::string& name,
+                                   const nlohmann::json& args)
+{
+    return impl_->execute_tool(name, args);
+}
+
+void Agent::register_tool(std::unique_ptr<HostTool> tool)
+{
+    impl_->register_tool(std::move(tool));
+}
+
+void Agent::clear_memory() { impl_->clear_memory(); }
+
+bool Agent::switch_model(const std::string& model_name)
+{
+    return impl_->switch_model(model_name);
+}
+
+std::string Agent::last_assistant_text() const
+{
+    return impl_->last_assistant_text();
+}
+
+}  // namespace daedalus

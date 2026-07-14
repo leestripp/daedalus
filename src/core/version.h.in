@@ -1,0 +1,10 @@
+// Auto-generated version header - do not edit
+#ifndef VERSION_H
+#define VERSION_H
+
+#define VERSION_MAJOR @VERSION_MAJOR@
+#define VERSION_MINOR @VERSION_MINOR@
+#define VERSION_PATCH @VERSION_PATCH@
+#define VERSION_STRING "@VERSION_STRING@"
+
+#endif // VERSION_H

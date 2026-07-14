@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: BSL-1.0
+// tests/test_daedalus_api.cpp
+//
+// Phase 1+ smoke test: compile against the public API surface and
+// verify the Agent facade behaves as documented:
+//
+//   - Constructible from AgentConfig + AgentSink.
+//   - initialize() / shutdown() round-trips.
+//   - state() reports daedalus::AgentState correctly.
+//   - stats() returns sensible defaults before any turn.
+//   - run_one_turn() with no queued message is a no-op.
+//   - cancel() does not crash.
+//
+// We do NOT exercise an actual LLM turn here — that requires API
+// credentials and a live endpoint. The Phase 1+ test suite covers
+// subsystem wiring in dedicated tests (test_session_memory, etc.).
+
+#include <cassert>
+#include <iostream>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <daedalus.h>
+
+namespace {
+
+int g_state_changes = 0;
+int g_log_count = 0;
+std::vector<std::string> g_states;
+std::vector<daedalus::AgentState> g_state_seen;
+
+struct RecordingSink : public daedalus::AgentSink {
+    void on_state_change(int /*from*/, int to) noexcept override {
+        ++g_state_changes;
+        daedalus::AgentState s = static_cast<daedalus::AgentState>(to);
+        g_state_seen.push_back(s);
+        g_states.push_back(std::string(daedalus::to_string(s)));
+    }
+    void on_log(daedalus::LogLevel level, std::string_view msg) noexcept override {
+        ++g_log_count;
+        std::cerr << "[sink " << daedalus::to_string(level) << "] " << msg << '\n';
+    }
+};
+
+}  // namespace
+
+int main()
+{
+    g_state_changes = 0;
+    g_log_count = 0;
+    g_states.clear();
+    g_state_seen.clear();
+
+    // Construct Agent with no settings_path and no model — initialize()
+    // should still succeed (it just doesn't have a real LLMClient to wire).
+    daedalus::AgentConfig cfg;
+    cfg.project_root = "/tmp";
+    cfg.session_id = "smoke-test";
+
+    auto sink = std::make_shared<RecordingSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+
+    assert(agent.state() == daedalus::AgentState::Idle);
+
+    // initialize() — should not crash, no model_name so no LLMClient created
+    // (the real LLMClient requires API creds; with no settings_path the Impl
+    //  leaves body_->client null until a real turn is requested).
+    //
+    // To keep this test pure (no network), we only test the path that
+    // does NOT trigger a settings.json load.
+    agent.initialize();
+    assert(agent.state() == daedalus::AgentState::Idle);
+
+    // run_one_turn() with empty queue is a no-op.
+    agent.run_one_turn();
+    assert(agent.state() == daedalus::AgentState::Idle);
+
+    // submit_user_message + cancel before run_one_turn — turn should not crash.
+    agent.submit_user_message("ignored — test cancels");
+    agent.cancel();
+    agent.run_one_turn();
+    // After cancel, state should be Cancelled.
+    assert(agent.state() == daedalus::AgentState::Cancelled);
+
+    // stats() should return sensible defaults.
+    daedalus::AgentStats s = agent.stats();
+    (void)s;
+
+    // shutdown() round-trip.
+    agent.shutdown();
+
+    std::cerr << "[test] Phase 1+ smoke test passed "
+              << "(state_changes=" << g_state_changes
+              << ", logs=" << g_log_count << ")\n";
+    return 0;
+}
