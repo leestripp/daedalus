@@ -1,39 +1,62 @@
 # System Prompt Composition
 
-> **TL;DR** — You write the identity, rules, and workflow. daedalus
-> appends the live tool surface, MCP status, skill catalog, memory,
-> and context stats. You control all prose via config; daedalus
-> handles all mechanics.
+> **TL;DR** — You write the identity, rules, workflow, build conventions,
+> and tone. daedalus appends the live tool surface, MCP status, skill
+> catalog, memory dump, context stats, the **state-machine instructions**,
+> and the **reserved-directory contract**. You control all prose via
+> config; daedalus handles all mechanics — and emits two always-on
+> sections that protect the runtime.
 
 ---
 
 ## The Contract
 
-The system prompt is a **composite document** assembled in this order:
+The system prompt is a **composite document** assembled by
+`SystemPromptBuilder::compose()` in this fixed order. There are 10 slots:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  [system_prompt_prefix]         ← developer (optional)     │
-│  [system_prompt]                ← developer (your rules)  │
-│  [tool definitions]              ← daedalus (live JSON)   │
-│  [MCP servers + tools]           ← daedalus (live)        │
-│  [active skills]                 ← daedalus (live)        │
-│  [available skills]              ← daedalus (live)        │
-│  [session memory]                ← daedalus (if enabled)  │
-│  [context status]                ← daedalus (per-turn)    │
-│  [system_prompt_suffix]         ← developer (optional)    │
+│  1. system_prompt          ← developer (your identity /      │
+│                                rules / workflow — verbatim)  │
+│  2. system_info_note       ← developer (optional 1-line     │
+│                                reminder about system_info)  │
+│  3. mcp_servers            ← daedalus (live servers + tools, │
+│                                when MCP enabled)             │
+│  4. tool_definitions       ← daedalus (live JSON Schema of   │
+│                                every callable tool)          │
+│  5. active_skills          ← daedalus (skills currently      │
+│                                loaded — name + desc only)    │
+│  6. available_skills       ← daedalus (catalog of skills the │
+│                                agent can load_skill)         │
+│  7. session_memory         ← daedalus (fact dump, opt-in)    │
+│  8. context_status         ← daedalus (token usage /         │
+│                                iteration, every turn)        │
+│  9. State Machine          ← daedalus (ALWAYS appended —     │
+│                                see §2.7)                     │
+│ 10. Reserved Agent Dirs    ← daedalus (ALWAYS appended —     │
+│                                see §2.8)                     │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**You** write everything the agent needs to *know about its role*.
-**daedalus** appends everything the agent needs to *know about its environment*.
+**You** write everything the agent needs to *know about its role and
+rules*. **daedalus** appends everything the agent needs to *know about
+its environment* — and the two always-on sections that protect the
+runtime.
+
+Slots 1–2 are **yours**. Slots 3–8 are daedalus's dynamic, data-driven
+additions (each can be suppressed by leaving the corresponding field
+empty or toggling a flag). Slots 9 and 10 are **non-optional** daedalus
+prose sections — see §2.7 and §2.8 for why they exist and how to
+augment (not replace) them in your prose.
 
 ---
 
 ## 1. Developer's Job: Write the Prompt
 
-Set `AgentConfig::system_prompt` to the full role/persona/rules text.
-daedalus takes it verbatim — no transformation, no defaults.
+Set `AgentConfig::system_prompt` (or, for fine-grained control,
+`SystemPromptOptions::system_prompt`) to the full role / persona /
+rules text. daedalus takes it verbatim — no transformation, no
+defaults, no validation.
 
 ```cpp
 daedalus::AgentConfig cfg;
@@ -59,90 +82,118 @@ verify your changes compile before finishing.
 
 | Content | Example |
 |---|---|
-| **Identity** | "You are a senior C++ engineer…" |
-| **Task focus** | "Stay on task. Do not modify unrelated code." |
+| **Identity / persona** | "You are a senior C++ engineer…" |
+| **Task focus rules** | "Stay on task. Do not modify unrelated code." |
 | **Workflow** | "Understand → Plan → Act → Verify → Stop" |
 | **Tool policies** | "Always run `cmake --build` after editing." |
+| **Build conventions** | "Configure with `-S . -B build`, never `cd build`." |
 | **Error handling** | "On a build error, read the output before acting." |
-| **Tone/persona** | "Explain reasoning before acting." |
+| **Style / tone** | "Be terse; cite file:line." |
 
-### Prefix and suffix
+### `system_info_note` — optional 1-line reminder
 
-For text that should appear *before* the role section or *after* the
-daedalus sections, use:
+If your agent should be nudged to call the `system_info` tool at
+session start (so it knows the host environment), set
+`LLMClient::Config::system_info_note` to a one-liner like:
 
-```cpp
-cfg.system_prompt_prefix = "You are in a secure sandbox.\n";
-cfg.system_prompt_suffix = "\n---\nRemember: safety over speed.\n";
+```
+Call `system_info` once at the start of each session.
 ```
 
-Both are optional. Both are inserted verbatim without any daedalus
-processing.
+The library appends it verbatim after your `system_prompt` but before
+the daedalus-managed sections if `include_system_info_note = true`
+(default) and the string is non-empty. Empty (the default) → the slot
+is skipped entirely.
+
+### Do **NOT** put the following in `system_prompt`
+
+These are daedalus's job — the library will write them for you:
+
+| If you write… | Result |
+|---|---|
+| **JSON tool schemas** | Library appends live JSON in slot 4 — your copy goes stale |
+| **MCP server list** | Library appends live status in slot 3 — your copy goes stale |
+| **Skill catalog / active-skill lists** | Library appends live data in slots 5–6 — your copy goes stale |
+| **Session-memory fact dump** | Library appends live facts in slot 7 |
+| **Token-usage / iteration table** | Library appends live table in slot 8 |
+| **`# State Machine` instructions** | Library appends its own version in slot 9 — your copy duplicates |
+| **`# Reserved Agent Directories` instructions** | Library appends its own version in slot 10 — your copy duplicates |
+
+If you want to *augment* the library's slots 9 and 10 with extra
+domain-specific rules (e.g. "in this project, the agent must always
+run `pytest` before `Done`"), put those *prose* rules in your
+`system_prompt` — the library sections are appended **after** yours
+and won't overwrite them.
+
+### Demo hosts
+
+The repo ships three reference system prompts in `demos/`:
+
+| Host | File |
+|---|---|
+| `daedalus-cli` (interactive coding agent) | `demos/daedalus-cli/system_prompt.txt` |
+| `daedalus-manager` (planner / orchestrator) | `demos/daedalus-manager/main.cpp` (inline) |
+| `daedalus-webui` (per-session web assistant) | `demos/daedalus-webui/main.cpp` (inline) |
+
+Use any of these as a starting point and tailor the identity / rules
+section to your use case.
 
 ---
 
-## 2. daedalus's Job: Append Dynamic Sections
+## 2. daedalus's Job: Append Dynamic + Mandatory Sections
 
-daedalus appends the following sections in fixed order. You cannot
-reorder them, but you can disable some via `AgentConfig` flags.
+daedalus appends the following sections in fixed order. Slots 3, 5, 6
+opt out by leaving the matching `SystemPromptOptions` field empty.
+Slots 7 and 8 also have a master `include_*` flag. Slots 9 and 10
+are **non-optional** — see each sub-section.
 
 ### 2.1 Tool Definitions (JSON Schema)
 
 daedalus appends a fenced JSON block containing every tool the agent
 can call — built-in tools plus any MCP tools currently loaded.
 
-```json
+```
 # Tool Definitions (JSON Schema)
-
 ```json
 [
-  {
-    "type": "function",
-    "function": {
-      "name": "execute_bash",
-      "description": "Execute a shell command...",
-      "parameters": { ... }
-    }
-  },
+  { "type": "function", "function": { "name": "execute_bash", ... } },
   ...
 ]
 ```
 ```
 
-**How to control it:** Tools are registered by the host (built-in
-tools are always present). MCP tools appear here only when
-`cfg.mcp_enabled = true` and the MCP server is running.
-
-**Why it is JSON:** The agent receives machine-readable schemas it can
-parse without the library needing to maintain a parallel prose
-description. The host does not need to write this section.
-
----
+**You don't write this.** It's generated per turn from
+`ToolHandler::get_tool_definitions()`. To control it, register /
+unregister tools in `AgentConfig::tools` (or via MCP servers); the
+JSON surfaces those bindings verbatim.
 
 ### 2.2 MCP Servers and Tools
 
-If `cfg.mcp_enabled = true`, daedalus appends a section listing each
-active MCP server and its available tools:
+If MCP is enabled and any servers are connected, daedalus appends a
+section naming each server, its transport, and the tools it offers:
 
 ```
 # MCP Servers
 
-## server-name
+## filesystem
 Connected via: stdio
 Tools:
-  - mcp_read_image   — read and describe an image file
-  - mcp_web_search  — search the web
+  - filesystem__read_file   — read a file by absolute path
+  - filesystem__write_file  — write to a file by absolute path
 ```
 
-**How to control it:** Set `cfg.mcp_enabled = false` to suppress this
-section entirely (sandboxed agent with no external tool integrations).
-
----
+**You don't write this.** It is generated from
+`McpServerManager::list_connected_servers()` +
+`McpServerManager::get_all_tools()`. The MCP **tools** also surface
+inside `# Tool Definitions` (slot 4) — this slot is the human-readable
+"what servers are connected and what they offer" summary. Leave
+`mcp_servers` empty to suppress.
 
 ### 2.3 Active Skills
 
-Skills are domain-specific knowledge packages the agent can load at
-runtime. daedalus appends the list of *currently loaded* skills:
+Skills are domain-specific knowledge packages (e.g.
+`gdb-crash-debugger`, `memory-leak`). daedalus appends a table of
+currently-loaded skills:
 
 ```
 # Active Skills
@@ -150,85 +201,200 @@ runtime. daedalus appends the list of *currently loaded* skills:
 | Skill | Description |
 |-------|-------------|
 | gdb-crash-debugger | Run GDB in batch mode to get crash backtraces |
-| memory-leak | Detect memory leaks using Valgrind Memcheck |
 ```
 
-The full skill content (`SKILL.md`) is **not** inlined here. The agent
-sees the name, description, and a short usage note. The agent must
-call `load_skill` to bring the full content into context.
+The full `SKILL.md` content is **not** inlined — the agent calls
+`get_skill_context <name>` to retrieve the body of a single skill on
+demand. This keeps the system prompt small.
 
-**How to control it:** Pass `cfg.skills` to name skills to pre-load,
-or set `cfg.skills_dirs` to directories to scan. Empty = no skills.
-
----
+**You don't write this.** It's generated per turn from
+`SkillManager::get_active_skills()`. Pre-load skills via
+`AgentConfig::skills` (names → loaded from disk by the library) or
+fill `SystemPromptOptions::active_skills` directly with pre-formatted
+prose.
 
 ### 2.4 Available Skills Catalog
 
-daedalus also appends every *available-but-not-loaded* skill it
-discovers, so the agent can decide to load more at runtime:
+daedalus also appends every *available-but-not-loaded* skill it has
+discovered on disk, so the agent can decide to load more at runtime:
 
 ```
-# Available Skills (call load_skill to activate)
+# Available Skills (catalog)
+
+The following skills are available. If your task seems related to
+one, use the load_skill tool to activate it before proceeding.
 
 | Skill | Description |
 |-------|-------------|
-| codemax-container-setup | Set up and run daedalus inside a Podman container |
 | mcp-standard | How to build MCP servers and MCP-aware agents |
 | firefox | Access Firefox via WebDriver BiDi |
 ```
 
-The agent uses `load_skill <name>` to bring one into the Active
-Skills list above.
+**You don't write this.** It's generated from
+`SkillManager::discover_all_skills() - active_set`. Pass
+`SystemPromptOptions::available_skills` to override the formatted
+prose, or leave empty to suppress.
 
----
+### 2.5 Session Memory (opt-in)
 
-### 2.5 Session Memory
-
-If `cfg.memory_enabled = true` (the default), daedalus appends a
-fact dump from the long-term memory store:
+If `include_session_memory = true` (default) and `session_memory` is
+non-empty, daedalus appends a fact dump from the long-term memory
+store:
 
 ```
 # Session Memory
 
-- remember 2026-07-12: the project's CMake uses -j8 for parallel builds
-- forget 2026-06-01: stale note about gcc version (now using clang++)
+- 2026-07-12: project uses -j8 for parallel builds
+- 2026-06-01: stale note about gcc (now on clang++) — pruned
 ```
 
-**How to control it:** Set `cfg.memory_enabled = false` to suppress
-this section.
-
----
+**You don't write this.** It's generated each turn from
+`SessionMemory::get_system_prompt_addition()`. To opt out, set
+`include_session_memory = false` or leave the field empty.
 
 ### 2.6 Context Status (per-turn)
 
-On every turn, daedalus appends a live token-usage and iteration
-table:
+daedalus appends a token-usage and iteration table on every turn:
 
 ```
 # Context Status
-
+<!-- Auto-updated each iteration -->
 | Metric | Value |
 |--------|-------|
-| Token Usage | 12,345 / 200,000 (6.2%) |
-| Messages | 8 |
+| Token Usage | 12,345 / 200,000 (6%) |
 | Iterations | 3 / 300 |
+| Messages | (tracked in messages array) |
 ```
 
-The agent uses this to decide when to call `compress_context`.
+The agent reads this to decide when to compact context.
+
+**You don't write this.** The library constructs it from
+`current_tokens`, `max_context_size`, `iteration`, `max_iterations`
+in `SystemPromptOptions`. Disable via `include_context_stats = false`.
+
+### 2.7 State Machine — **ALWAYS APPENDED** ✋
+
+This section is **mandatory** — there is no flag to turn it off. The
+library writes it on every `compose()` call because the agent is the
+only party that knows when its own work is done, and we need a stable
+set of state-transition rules in every prompt:
+
+```
+# State Machine
+
+You drive a state machine. The library fires `state_change` SSE events
+on every transition; the host UI uses them to render the stage chips
+(Understanding → Planning → Acting → Verifying).
+
+States:
+| State | Meaning |
+|-------|---------|
+| Idle         | No work in flight. |
+| Understanding | Reading the request, parsing input, gathering context. |
+| Planning     | Designing the approach, choosing which tools to call. |
+| Acting       | Running tools (file edits, bash, MCP, etc.). |
+| Verifying    | Compiling, testing, validating the result. |
+| Compressing  | Context compaction in flight (rare, do not initiate). |
+| Done         | Turn complete — emit your final assistant message and stop. |
+| Cancelled    | Host cancelled the turn; stop work and ack. |
+| Error        | Unrecoverable error; report to host and stop. |
+
+Rules:
+1. You are the only one who knows when the work is truly done. Do
+   not stay in `Acting` after the last tool result — switch to
+   `Verifying`, run the build / tests if applicable, then `Done`.
+2. If verification fails, switch back to `Understanding` (or
+   `Planning`) before re-planning the fix — never loop silently
+   inside `Acting`.
+3. Each tool call you emit carries a `state` field. Set it to the
+   state you are in WHEN you make the call. The library uses it to
+   fire the corresponding `state_change` event to the host.
+4. Never stay in `Acting` forever. If you have no more tools to
+   call, transition to `Verifying` (and then `Done`) or back to
+   `Planning` if more work is needed.
+5. Always end with `Done`. Every turn MUST end with a `Done`
+   transition; otherwise the host UI will leave the chips stuck.
+```
+
+**Why the library owns this.** The host UI (webui demo, plus any host
+that consumes `AgentSink::on_state_change`) renders state chips from
+`state_change` SSE events. If the agent isn't taught to set the
+state on every tool call, the UI breaks. Embedding the rules in the
+prompt (rather than expecting each host to remember them in their
+own prose) guarantees consistent behaviour across all hosts.
+
+**If you want to augment it.** You may add complementary *workflow
+prose* in your `system_prompt` (e.g. "always plan in detail before
+Acting", "treat build warnings as errors"), but the `# State Machine`
+table itself is non-negotiable — the library emits it as-is.
+
+### 2.8 Reserved Agent Directories — **ALWAYS APPENDED** ✋
+
+This section is also **mandatory**. It tells the agent that the
+`.daedalus/` and `.daedalus-<id>/` folders in the project root are
+owned by the agent runtime (memory + session state) and must never
+be touched:
+
+```
+# Reserved Agent Directories (.daedalus*)
+
+The following directories in the project root are owned by the agent
+runtime. They are HIDDEN system folders — treat them with the same
+care as .git/.
+
+| Directory | Purpose |
+|-----------|---------|
+| .daedalus/       | Default agent's persistent state. Memory (everything you've
+                    learned about the project), session scratch, per-project
+                    config, skills cache. |
+| .daedalus-<id>/  | Per-agent / per-session state when the host namespaces
+                    agents (AgentConfig::agent_name). The contents are the
+                    same as .daedalus/. |
+
+NEVER:
+1. Delete any .daedalus* directory. Doing so wipes the agent's memory
+   and all session scratch — unrecoverable.
+2. Rename or move them.
+3. Edit files inside them directly with modify_file / edit_file_patch
+   / create_file unless the user has EXPLICITLY asked you to (and
+   even then, ask first).
+4. Include them in any "clean up junk directories" or "remove cruft"
+   task. They are not junk.
+5. Suggest that the user delete them to "fix" a problem. They are not
+   the cause of any problem you can observe.
+
+ALWAYS:
+1. Treat them as out-of-bounds during normal work — like a .git/
+   folder: read what's relevant via the agent's own tools
+   (memory_*, get_skill_context, etc.) and never touch the directory
+   tree directly.
+2. If the user asks you to do something that would affect a
+   .daedalus* directory, stop and ask before doing it.
+```
+
+**Why the library owns this.** Without the contract, a well-meaning
+"clean up junk directories" task will silently nuke the agent's
+memory and the user's session scratch state. The same reasoning
+applies to `~/.daedalus/` in the user's home (the legacy single-agent
+layout — see `docs/storage.md` for the path-resolution rules).
+
+**If you want to teach more.** You may add complementary *prose* in
+your `system_prompt` (e.g. "before deleting any directory, verify
+it isn't a `.daedalus*` runtime folder"), but the `# Reserved Agent
+Directories` block stays put.
 
 ---
 
 ## 3. The Complete Flow
 
-```
-Host sets AgentConfig:
-  cfg.system_prompt         = role + rules text          (you write)
-  cfg.system_prompt_prefix  = optional pre-role text     (you write)
-  cfg.system_prompt_suffix  = optional post-stats text    (you write)
-  cfg.mcp_enabled           = true / false
-  cfg.memory_enabled        = true / false
-  cfg.skills_dirs           = { paths to scan }
-  cfg.skills                = { names to pre-load }
+```text
+Host sets AgentConfig (or SystemPromptOptions):
+  cfg.system_prompt        = role + rules + workflow text   (you write)
+  LLMClient::Config::system_info_note = optional 1-line      (you may write)
+  cfg.mcp_enabled          = true / false
+  cfg.memory_enabled       = true / false
+  cfg.skills_dirs          = { paths to scan }
+  cfg.skills               = { names to pre-load }
 
 Agent::initialize()
   → loads settings, MCP (if enabled), memory, skills
@@ -237,37 +403,41 @@ Agent::initialize()
 
 Agent::run_one_turn(user_message)
   → SystemPromptBuilder.compose(options)
-       1. system_prompt_prefix          (verbatim)
-       2. system_prompt                 (verbatim — your text)
-       3. tool_definitions JSON schema   (live from ToolHandler)
-       4. MCP servers + tools            (live from McpServerManager)
-       5. active_skills                 (live from SkillManager)
-       6. available_skills catalog       (live from SkillManager)
-       7. session_memory fact dump        (live from SessionMemory, if enabled)
-       8. context_status table           (live: token count, iteration)
-       9. system_prompt_suffix           (verbatim)
+       1. system_prompt          (verbatim — your prose)
+       2. system_info_note       (verbatim, only if non-empty + flag on)
+       3. mcp_servers            (live, if any connected)
+       4. tool_definitions       (live, JSON schema of all tools)
+       5. active_skills          (live, name + desc)
+       6. available_skills       (live catalog, excluding active)
+       7. session_memory         (live, if include_session_memory)
+       8. context_status         (live token + iteration table)
+       9. State Machine          (ALWAYS — slot §2.7)
+      10. Reserved Agent Dirs    (ALWAYS — slot §2.8)
 
   → final_prompt = composed string
   → messages.add(role="system", content=final_prompt)
   → messages.add(role="user",   content=user_message)
   → LLMClient.call(messages)
   → LLMClient.on_assistant_delta → sink_->on_assistant_delta(token)
-  → LLMClient.on_tool_call     → sink_->on_tool_call(name, args)
+  → LLMClient.on_tool_call      → sink_->on_tool_call(name, args) (with state)
   → ToolHandler.execute(name, args) → sink_->on_tool_result(name, result)
   → messages.add(role="assistant", content=response)
 ```
+
+The host only sees slots 1–2 land "first". Slots 3–8 are mechanical
+and safe to ignore. Slots 9–10 are guaranteed to be present on every
+single turn — that's a contract, not an accident.
 
 ---
 
 ## 4. MCP Server Discovery
 
 When `cfg.mcp_enabled = true`, daedalus reads the MCP server
-definition file (default: `~/.daedalus/mcp/servers.json`) and
-launches each server process. The tool names and schemas advertised
-in the Tool Definitions section (§2.1) and the MCP Servers section
-(§2.2) come from the servers' `initialize` response — they are
-entirely server-controlled. daedalus does not interpret or filter
-them; it just passes them through.
+definition file (default: `~/.daedalus/mcp/servers.json`) and launches
+each server process. The tool names and schemas advertised in slots 3
+(MCP Servers) and 4 (Tool Definitions) come from the servers'
+`initialize` response — they are server-controlled. daedalus does not
+interpret or filter them; it just passes them through.
 
 To disable MCP entirely for a given Agent:
 
@@ -281,8 +451,8 @@ cfg.mcp_servers_path.clear();    // also suppress the path
 ## 5. Skills Discovery
 
 Skills live on disk as a directory tree. Each skill directory contains
-a `SKILL.md` file (the full content the agent sees after loading)
-and an optional `skill.json` metadata file.
+a `SKILL.md` file (the body the agent sees after loading) and an
+optional `skill.json` metadata file.
 
 ```
 ~/.daedalus/skills/
@@ -297,22 +467,22 @@ and an optional `skill.json` metadata file.
 ```
 
 daedalus discovers skills by scanning `cfg.skills_dirs` for directories
-containing `SKILL.md`. To configure skills:
+containing `SKILL.md`. Configure with:
 
 ```cpp
-// Scan this directory for available skills
+// Scan these directories for available skills
 cfg.skills_dirs = { "/home/user/.daedalus/skills/" };
 
-// Pre-load these skills (they appear in §2.3 immediately)
+// Pre-load these skills (they appear in slot 5 immediately)
 cfg.skills = { "gdb-crash-debugger", "memory-leak" };
 ```
 
-The agent uses these tools at runtime:
+Agent tools that operate on skills at runtime:
 
 | Tool | Effect |
 |---|---|
 | `discover_skills` | Re-scan skills_dirs and return the catalog |
-| `load_skill <name>` | Load a SKILL.md into the Active Skills section |
+| `load_skill <name>` | Load a SKILL.md into Active Skills (slot 5) |
 | `get_active_skills` | List currently active skills |
 | `get_skill_context <name>` | Return the full SKILL.md text for a skill |
 | `deactivate_skill <name>` | Remove from active list |
@@ -320,9 +490,9 @@ The agent uses these tools at runtime:
 
 ---
 
-## 6. Example: Three Different Agent Configurations
+## 6. Example: Three Host Configurations
 
-### CLI demo — interactive coding agent
+### CLI — interactive coding agent
 
 ```cpp
 cfg.system_prompt = R"(
@@ -334,33 +504,43 @@ users with software development tasks.
 ## Task Focus — CRITICAL
 
 DO NOT modify code that is unrelated to the user's request.
-
-## Workflow
-
-Understand → Plan → Act → Build/Test → Stop
 )";
 ```
 
-### Manager demo — orchestrates sub-agents
+**What the library will add (in order):**
+
+1. *(none — your prose is the whole identity / rules)*
+2. *(any `system_info_note`, if set)*
+3. *(any connected MCP servers)*
+4. tool JSON schemas (built-in tools)
+5. active skills
+6. available skills catalog
+7. *(omitted if `memory_enabled = false`)*
+8. context status table
+9. `# State Machine` (mandatory)
+10. `# Reserved Agent Directories` (mandatory)
+
+### Manager — orchestrates sub-agents
 
 ```cpp
 cfg.system_prompt = R"(
 # Role
 
 You are a PLANNING AGENT. Your job is to decompose a goal into
-ordered, independent sub-tasks that can be handed off to
-sub-agents for execution.
+ordered, independent sub-tasks that can be handed off to sub-agents.
 
 ## Rules
 
 - Break the task into tasks that can run in parallel.
 - Each sub-task must be independently verifiable.
 - Do NOT edit files or run commands yourself.
-- Hand off to sub-agents only.
 )";
 ```
 
-### Webui demo — isolated session per HTTP connection
+Library adders as above (1–10). The manager's status flips naturally
+land in `Planning`; its sub-agents use `Acting` heavily.
+
+### Webui — isolated session per HTTP connection
 
 ```cpp
 cfg.system_prompt = R"(
@@ -369,40 +549,81 @@ cfg.system_prompt = R"(
 You are a helpful coding assistant in a web-based IDE session.
 Each session is isolated — you have no memory of previous sessions.
 )";
-cfg.memory_enabled = false;   // no session memory in the webui
+cfg.memory_enabled = false;   // no session-memory slot
 ```
+
+Library adders as above (1–10). Slot 7 (`# Session Memory`) is
+skipped because `memory_enabled = false`. Slots 9 and 10 still append.
 
 ---
 
 ## 7. Backward Compatibility
 
-The old monolithic system prompt builder (which generated all prose
-in-library, including agent identity, task-focus text, workflow
-instructions, and build-system rules) has been deprecated. The
-deprecated API still returns empty strings — the library no longer
-generates any prose identity text.
+The old monolithic system prompt builder — which generated all prose
+in-library including agent identity, task-focus text, workflow
+instructions, and build-system rules — has been deprecated. The
+deprecated API still returns empty strings; the library no longer
+generates any prose identity text on the host's behalf.
 
-New hosts **must** supply their own `system_prompt`. Existing hosts
-should migrate by:
+**Migration checklist for existing hosts:**
 
-1. Copying the prose from the old `daedalus/system_prompt.txt` into
-   `AgentConfig::system_prompt`.
-2. Removing any calls to the deprecated `SystemPromptBuilder` static
-   methods (`getAgentIdentitySection`, `getTaskFocusSection`, etc.).
-3. Setting `cfg.skills_dirs` and `cfg.skills` if the old agent used
+1. Copy the prose from the old `daedalus/system_prompt.txt` into
+   `AgentConfig::system_prompt` (or `SystemPromptOptions::system_prompt`).
+2. Stop calling the deprecated `SystemPromptBuilder` static methods
+   (they return empty strings now and are slated for removal).
+3. Set `cfg.skills_dirs` and `cfg.skills` if the old agent used
    skill discovery.
+4. Trust the library to emit `# State Machine` and `# Reserved Agent
+   Directories` automatically — **do not duplicate them in your
+   prose** (you'd just be adding tokens for the same content).
+
+**Why there is no `# prefix` / `# suffix` slot any more.** Earlier
+versions of the library exposed `system_prompt_prefix` and
+`system_prompt_suffix` fields wrapping the dynamic sections. Those
+have been removed because:
+
+- They encouraged hosts to write prose in slots that should be empty
+  (the library adders are exactly enough).
+- They broke the order guarantee — the library can't promise "your
+  prose appears between the role and the tools" when the host also
+  injects prose there.
+
+If you want prose before the role: put it at the top of your
+`system_prompt` (slot 1). If you want prose after everything: put it
+at the bottom of your `system_prompt` (still slot 1 — the library
+always appends after you). If you want prose interleaved with the
+dynamic sections, that is **not supported** — the slot order is
+fixed because each slot has a defined semantic role (tools come after
+identity, skills come after tools, etc.).
 
 ---
 
-## 8. Reference: AgentConfig Fields
+## 8. Reference: `SystemPromptOptions` Fields
 
-| Field | Type | Default | Section injected |
+Every field maps 1:1 to a slot in the contract diagram.
+
+| Field | Slot | Default | Notes |
 |---|---|---|---|
-| `system_prompt` | `std::string` | *(empty)* | §1 (verbatim) |
-| `system_prompt_prefix` | `std::string` | *(empty)* | before §1 |
-| `system_prompt_suffix` | `std::string` | *(empty)* | after §8 |
-| `mcp_enabled` | `bool` | `true` | suppresses §2.2 and §2.1 MCP tools |
-| `memory_enabled` | `bool` | `true` | suppresses §2.5 |
-| `skills_dirs` | `vector<path>` | *(empty)* | drives §2.3 + §2.4 discovery |
-| `skills` | `vector<string>` | *(empty)* | pre-loads skills into §2.3 |
-| `daedalus_home` | `path` | `$DAEDALUS_HOME` / `$HOME/.daedalus` | path resolution for all daedalus-managed files |
+| `system_prompt` | 1 | `""` | Your prose, verbatim, first section |
+| `system_info_note` | 2 | `""` | 1-line reminder; empty = skipped |
+| `include_system_info_note` | 2 | `true` | Master switch for slot 2 |
+| `mcp_servers` | 3 | `""` | Pre-formatted MCP server status; empty = skipped |
+| `tool_definitions` | 4 | `""` | Tool JSON schema; empty = skipped |
+| `active_skills` | 5 | `""` | Currently loaded skills; empty = skipped |
+| `available_skills` | 6 | `""` | Catalog of available skills; empty = skipped |
+| `session_memory` | 7 | `""` | Pre-formatted fact dump |
+| `include_session_memory` | 7 | `true` | Master switch for slot 7 |
+| `current_tokens` | 8 | `0` | Token counter for slot 8 |
+| `max_context_size` | 8 | `200000` | Context window cap |
+| `iteration` | 8 | `0` | Current iteration |
+| `max_iterations` | 8 | `100` | Iteration cap |
+| `include_context_stats` | 8 | `true` | Master switch for slot 8 |
+
+Slots 9 (`# State Machine`) and 10 (`# Reserved Agent Directories`)
+are library-owned and **not configurable** — see §2.7 and §2.8.
+
+For ergonomic setup, prefer filling an `AgentConfig` (`cfg.system_prompt`,
+`cfg.mcp_enabled`, etc.) and letting `Agent::initialize()` populate the
+options for you; reach for raw `SystemPromptOptions` only when you need
+fine-grained control (e.g. swapping the pre-formatted prose strings or
+suppressing a specific section with a flag).

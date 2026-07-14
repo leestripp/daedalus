@@ -347,7 +347,7 @@ for the full field list. The most-used fields:
 | `max_agent_iterations` | Hard cap. The agent stops when this is reached. |
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
 | `session_id` | Opaque correlation id (logged, surfaced to sinks). |
-| `system_prompt`, `system_prompt_prefix`, `system_prompt_suffix` | Override the role the agent plays. |
+| `system_prompt` | Override the role the agent plays. See [`docs/agent_system_prompts.md`](./agent_system_prompts.md) — the library appends 9 more sections (tool defs, MCP status, skills, memory, context stats, and the two **always-on** `# State Machine` + `# Reserved Agent Directories` blocks) below your text. |
 | `stream` | `true` (default): SSE streaming — assistant text arrives token-by-token via `on_assistant_delta` (requires an SSE-capable sink). `false`: buffered — full reply arrives in one chunk. |
 | `temperature` | Sampling temperature. See "Temperature priority chain" below. |
 | `mcp_enabled` | `true` (default): load MCP servers from `mcp_servers_path`. `false`: skip MCP entirely (no servers spawned, no MCP tools registered, no `# Active MCP Servers` block). |
