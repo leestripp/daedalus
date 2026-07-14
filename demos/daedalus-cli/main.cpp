@@ -191,6 +191,13 @@ int main(int argc, char* argv[]) {
             agent.run_one_turn();
         }
     } catch (const std::exception& e) {
+        // §Demo fix 2026-07-14: restore cursor + SGR before printing
+        // the FATAL line. The catch block is the last chance to do
+        // regular stdio writes (the signal handler only uses the
+        // async-signal-safe `write(2)`). Try both so a console that
+        // was previously hidden / colour-painted reads cleanly.
+        std::cerr << "\x1b[?25h\x1b[0m" << std::flush;
+        daedalus_cli_restore_terminal_state();
         std::cerr << "\n[FATAL] " << e.what() << "\n";
         return 1;
     }

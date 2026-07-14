@@ -24,6 +24,20 @@ namespace fs = std::filesystem;
 static std::atomic<bool> g_shutting_down{false};
 
 extern "C" void daedalus_signal_handler(int /*sig*/) {
+    // §Demo fix 2026-07-14: the ThinkingSpinner hides the cursor
+    // (`\x1b[?25l`) at the start of its animation and restores it
+    // (`\x1b[?25h`) at the end. If the process is killed by a signal
+    // mid-animation (or abort() / unhandled exception unwinds
+    // through main() without running the spinner's destructor) the
+    // cursor is left hidden and the user's terminal stays cursor-less
+    // until they type `tput cnorm` or restart it.
+    //
+    // Fix: the signal handler itself restores the cursor before
+    // flagging shutdown. `write()` is async-signal-safe; `std::cerr`
+    // is not. We also do a one-shot via std::atexit() so the cursor
+    // is restored on a normal exit path too.
+    extern void daedalus_cli_restore_terminal_state() noexcept;
+    daedalus_cli_restore_terminal_state();
     g_shutting_down.store(true, std::memory_order_release);
 }
 
@@ -35,6 +49,53 @@ inline void install_signal_handlers() {
     sigaction(SIGINT,  &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
     std::signal(SIGPIPE, SIG_IGN);
+
+    // §Demo fix 2026-07-14: belt-and-braces cursor restore on
+    // graceful exit (return from main). The signal handler covers
+    // abnormal termination; atexit() covers the normal path.
+    extern void daedalus_cli_restore_terminal_state() noexcept;
+    std::atexit(daedalus_cli_restore_terminal_state);
+}
+
+// =============================================================================
+// §Demo fix 2026-07-14: terminal state restore.
+//
+// ThinkingSpinner hides the cursor and resets the colour palette
+// during its animation. We restore both on every exit path
+// (normal return, signal, unhandled exception). The implementation
+// uses raw `write(2)` because it is async-signal-safe — `std::cerr`
+// is NOT, and `daedalus_signal_handler` may run with arbitrary
+// locks held.
+//
+// Multiple invocations (atexit + signal + catch block) are harmless:
+//   - `\x1b[?25h` is idempotent (show cursor; visible if already shown).
+//   - `\x1b[0m`   is idempotent (reset SGR attributes; no-op if none set).
+//   - `write()` to the same fd is atomic for sizes < PIPE_BUF (4096).
+//     Our payload is 10 bytes, well below that, so concurrent calls
+//     from atexit + signal handler + catch block cannot interleave.
+//
+// Defined here in the header (rather than util.cpp) because the
+// signal handler at the top of this file needs a forward declaration
+// and util.h is header-only by convention for this demo.
+// =============================================================================
+
+#include <unistd.h>
+
+inline void daedalus_cli_restore_terminal_state() noexcept {
+    // `\x1b[?25h` = show cursor.
+    // `\x1b[0m`   = reset all SGR attributes (colour, bold, etc.).
+    // Together: leave the terminal exactly as the user found it.
+    static constexpr char kSeq[] = "\x1b[?25h\x1b[0m";
+    // write() returns ssize_t and may be interrupted by signals; loop
+    // until we've written everything or hit a hard error.
+    std::size_t total = 0;
+    while (total < sizeof(kSeq) - 1) {
+        ssize_t n = ::write(STDERR_FILENO,
+                            kSeq + total,
+                            sizeof(kSeq) - 1 - total);
+        if (n <= 0) break;
+        total += static_cast<std::size_t>(n);
+    }
 }
 
 // =============================================================================
