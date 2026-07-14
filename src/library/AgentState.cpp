@@ -17,8 +17,7 @@ const char* to_string(AgentState state) noexcept {
         case AgentState::Planning:         return "Planning";
         case AgentState::Acting:           return "Acting";
         case AgentState::Verifying:        return "Verifying";
-        case AgentState::AwaitingUser:     return "AwaitingUser";
-        case AgentState::AwaitingApproval: return "AwaitingApproval";
+        case AgentState::AwaitingApproval:  return "AwaitingApproval";
         case AgentState::Compressing:      return "Compressing";
         case AgentState::Done:             return "Done";
         case AgentState::Cancelled:        return "Cancelled";
@@ -41,9 +40,8 @@ AgentState agent_state_from(std::string_view name, bool* ok) noexcept {
     if (eq_ci("Understanding"))    { if (ok) *ok = true;  return AgentState::Understanding; }
     if (eq_ci("Planning"))         { if (ok) *ok = true;  return AgentState::Planning; }
     if (eq_ci("Acting"))           { if (ok) *ok = true;  return AgentState::Acting; }
-    if (eq_ci("Verifying"))        { if (ok) *ok = true;  return AgentState::Verifying; }
-    if (eq_ci("AwaitingUser"))     { if (ok) *ok = true;  return AgentState::AwaitingUser; }
-    if (eq_ci("AwaitingApproval")) { if (ok) *ok = true;  return AgentState::AwaitingApproval; }
+    if (eq_ci("Verifying"))         { if (ok) *ok = true;  return AgentState::Verifying; }
+    if (eq_ci("AwaitingApproval"))  { if (ok) *ok = true;  return AgentState::AwaitingApproval; }
     if (eq_ci("Compressing"))      { if (ok) *ok = true;  return AgentState::Compressing; }
     if (eq_ci("Done"))             { if (ok) *ok = true;  return AgentState::Done; }
     if (eq_ci("Cancelled"))        { if (ok) *ok = true;  return AgentState::Cancelled; }

@@ -173,20 +173,19 @@ public:
     /// @param to_state New state (cast-to-int AgentState value).
     /// Stops the spinner when the agent enters a terminal-like state
     /// that doesn't produce streaming text (Done, Error, Cancelled,
-    /// AwaitingUser, AwaitingApproval, Compressing).
+    /// AwaitingApproval, Compressing).
     void notify_state_change(int /*from*/, int to_state) noexcept {
         // AgentState enum values (cast to int):
         //   0=Idle, 1=Understanding, 2=Planning, 3=Acting,
-        //   4=Verifying, 5=AwaitingUser, 6=AwaitingApproval,
-        //   7=Compressing, 8=Done, 9=Cancelled, 10=Error
-        constexpr int kAwaitingUser = 5;
-        constexpr int kAwaitingApproval = 6;
-        constexpr int kCompressing = 7;
-        constexpr int kDone = 8;
-        constexpr int kCancelled = 9;
-        constexpr int kError = 10;
+        //   4=Verifying, 5=AwaitingApproval, 6=Compressing,
+        //   7=Done, 8=Cancelled, 9=Error
+        constexpr int kAwaitingApproval = 5;
+        constexpr int kCompressing = 6;
+        constexpr int kDone = 7;
+        constexpr int kCancelled = 8;
+        constexpr int kError = 9;
 
-        if (to_state == kAwaitingUser || to_state == kAwaitingApproval
+        if (to_state == kAwaitingApproval
             || to_state == kCompressing || to_state == kDone
             || to_state == kCancelled || to_state == kError) {
             if (!stopped_.load(std::memory_order_acquire)) {

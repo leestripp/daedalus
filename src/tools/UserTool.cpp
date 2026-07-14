@@ -83,58 +83,6 @@ json TellUserTool::execute(const json& args, FileIO&) {
     }
 }
 
-// ========== AskUserTool ==========
-
-json AskUserTool::get_definition() const {
-    return json::object({
-        {"type", "function"},
-        {"function", {
-            {"name", get_name()},
-            {"description", "Ask the user a question and wait for their response. Use this when you need clarification, are stuck, or want to confirm something with the user before proceeding."},
-            {"parameters", json::object({
-                {"type", "object"},
-                {"properties", json::object({
-                    {"question", json::object({
-                        {"type", "string"},
-                        {"description", "The question to ask the user"}
-                    })}
-                })},
-                {"required", json::array({"question"})}
-            })}
-        }}
-    });
-}
-
-json AskUserTool::execute(const json& args, FileIO&) {
-    (void)args;  // Will be used in actual implementation
-    try {
-        std::string question;
-
-        if (args.is_object() && args.contains("question")) {
-            question = args["question"].get<std::string>();
-        } else if (args.is_string()) {
-            try {
-                json parsed_args = json::parse(args.get<std::string>());
-                question = parsed_args.value("question", "");
-            } catch (...) {
-                question = args.get<std::string>();
-            }
-        } else {
-            question = args.value("question", "");
-        }
-
-        if (question.empty()) {
-            return json::object({{"status", "error"}, {"message", "Missing 'question' in arguments"}});
-        }
-
-        return json::object({
-            {"status", "ask_user"},
-            {"question", question}
-        });
-    } catch (const std::exception& e) {
-        return json::object({{"status", "error"}, {"message", std::string(e.what())}});
-    }
-}
 
 // ========== CompressContextTool ==========
 

@@ -302,10 +302,10 @@ function setState(name) {
 //                 arrives (auto-stop on assistant_delta).
 //
 // Both reset to "hidden" on terminal states (Done, Error, Cancelled,
-// AwaitingUser, AwaitingApproval).
+// AwaitingApproval).
 
 // Stages that warrant showing the thinking bubble + chip row.
-// Anything not in this list (e.g. AwaitingUser, Done) hides both.
+// Anything not in this list (e.g. Done) hides both.
 const THINKING_STATES = new Set([
   "Understanding", "Planning", "Acting", "Verifying", "Compressing",
 ]);

@@ -14,7 +14,7 @@
 namespace daedalus {
 
 // §Phase 9.10: set of AgentStates that warrant showing the spinner.
-// Anything outside this set (Done, Error, Cancelled, AwaitingUser, ...)
+// Anything outside this set (Done, Error, Cancelled, ...)
 // hides both the spinner and the spinner line.
 static const std::unordered_set<AgentState> THINKING_STATES = {
     AgentState::Understanding, AgentState::Planning,
@@ -103,24 +103,6 @@ void ConsoleAgentSink::on_log(daedalus::LogLevel level,
 
 void ConsoleAgentSink::on_bell() noexcept {
     std::cout << '\a' << std::flush;
-}
-
-std::string ConsoleAgentSink::request_user_input(std::string_view prompt) {
-    // §Phase 6+: minimal host-side input via std::getline.
-    //
-    // §Phase 5 update: the library has no concept of where input comes
-    // from — that's the host's job. The daedalus library is
-    // "input-source agnostic". This demo uses std::getline for the
-    // minimum working example. Hosts that want line-editing,
-    // history, completion, etc. are expected to bring their own
-    // (e.g. drop a copy of linenoise into the host's source tree
-    // and call its API from here instead of std::getline).
-    // See docs/embedding.md §"Wiring your own input source" for the
-    // pattern.
-    std::cout << "\n[ask_user] " << prompt << "\n> " << std::flush;
-    std::string line;
-    std::getline(std::cin, line);
-    return line;
 }
 
 bool ConsoleAgentSink::request_command_approval(std::string_view command) {

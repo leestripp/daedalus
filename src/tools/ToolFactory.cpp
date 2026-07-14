@@ -61,7 +61,6 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<SerperSearchTool>());
     // User interaction tools
     register_tool(std::make_shared<TellUserTool>());
-    register_tool(std::make_shared<AskUserTool>());
     register_tool(std::make_shared<CompressContextTool>());
     register_tool(std::make_shared<StopTool>());
     // §State Machine: agent-driven state transitions.

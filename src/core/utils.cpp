@@ -344,7 +344,7 @@ std::string download_image_as_base64(const std::string& url) {
 
 // §Phase 5: linenoise helpers removed from the library. The library
 // has no concept of where user input comes from — the host owns that
-// entirely (see AgentSink::request_user_input or Agent::submit_user_message).
+// entirely (see Agent::submit_user_message).
 // Hosts that want line-editing + history can bring their own (e.g. drop
 // a copy of linenoise into their host's own source tree). The CLI demo
 // uses std::getline as the minimal example.
@@ -924,9 +924,10 @@ std::string format_tool_result(const json& result) {
         return out.str();
     }
     
-    // ==== USER TOOLS (tell_user, ask_user, compress_context) ====
-    if (tool_name.find("tell_") == 0 || tool_name.find("ask_") == 0 || 
-        tool_name.find("compress_") == 0) {
+    // ==== USER TOOLS (tell_user, compress_context, stop) ====
+    if (tool_name.find("tell_") == 0 ||
+        tool_name.find("compress_") == 0 ||
+        tool_name.find("stop") == 0) {
         if (!message.empty()) {
             info_lines.push_back(truncate_for_display(message, 50));
         }

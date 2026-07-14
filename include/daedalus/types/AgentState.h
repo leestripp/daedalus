@@ -17,7 +17,6 @@ enum class AgentState : std::uint8_t {
     Planning,         ///< PLANNING phase (research + agent's per-project planning doc; library is neutral about the filename — Claude Code uses CLAUDE.md, others use Agent.md, etc.)
     Acting,           ///< ACT phase (tools, edits)
     Verifying,        ///< BUILD_TEST phase
-    AwaitingUser,     ///< ask_user in flight (sink->request_user_input blocked)
     AwaitingApproval, ///< bash approval in flight (sink->request_command_approval blocked)
     Compressing,      ///< Context compression in progress
     Done,             ///< Agent emitted stop() cleanly

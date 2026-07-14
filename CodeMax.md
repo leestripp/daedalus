@@ -21,6 +21,74 @@
 - `/workspace/daedalus` — the C++ agent library + demos (CMake build)
 - `/workspace/Testing` — manual + automated test suites for the demos
 
+## Task — Remove `ask_user` Tool
+
+### Context
+
+The `ask_user` tool is broken and needs to be removed along with all its dead/zombie code.
+
+### Files to Modify
+
+| File | Change |
+|------|--------|
+| `src/tools/UserTool.h` | Remove `AskUserTool` class declaration and forward declaration |
+| `src/tools/UserTool.cpp` | Remove `AskUserTool::get_definition()` and `AskUserTool::execute()` |
+| `src/api/LLMClient.h` | Update comment at line ~167 mentioning "ask_user" |
+| `src/api/LLMClient.cpp` | Remove ask_user handling block (~lines 1967-2007), update comment at line ~1797 |
+| `include/daedalus/AgentSink.h` | Remove `request_user_input()` virtual method |
+| `include/daedalus/types/AgentState.h` | Remove `AwaitingUser` enum value |
+| `src/library/AgentState.cpp` | Remove `AwaitingUser` from `to_string()` and `agent_state_from()` |
+| `src/library/AgentImpl.cpp` | Remove CHAT → AwaitingUser mapping (line ~53) |
+| `src/tools/SetStatusTool.cpp` | Remove "AwaitingUser" from valid states array |
+| `demos/daedalus-cli/ConsoleAgentSink.cpp` | Remove `request_user_input()` method |
+| `demos/daedalus-webui/web_sse_sink.h` | Remove `request_user_input()` method and comment |
+| `src/core/utils.cpp` | Update comment mentioning request_user_input |
+
+### Tests to Update
+
+| File | Change |
+|------|--------|
+| `tests/test_agent_state_transitions.cpp` | Update CHAT documentation comments |
+| `tests/test_set_status_tool.cpp` | Remove "AwaitingUser" from test data |
+
+### Code Reference Summary
+
+The ask_user tool:
+- **Returns**: `{"status": "ask_user", "question": "..."}`
+- **Handled in**: `LLMClient.cpp` lines ~1967-2007 - calls `sink_->request_user_input()`, returns `AgentState::CHAT`
+- **State mapping**: Internal `CHAT` → public `AwaitingUser` in `AgentImpl.cpp`
+
+### Risk / Scope
+
+- Medium. Multiple files across library, demos, and tests.
+- `compress_context` and `stop` tools in `UserTool.{h,cpp}` remain untouched.
+- The `request_command_approval()` method in `AgentSink` is separate and stays.
+
+### Verification Plan
+
+1. Build library: `cmake --build build -j12`
+2. Run tests: `ctest --test-dir build --output-on-failure`
+3. Ensure all `ask_user` and `AwaitingUser` references are gone
+
+### Status
+
+- [x] Remove `AskUserTool` from `UserTool.h`
+- [x] Remove `AskUserTool` implementation from `UserTool.cpp`
+- [x] Update `LLMClient.h` comments
+- [x] Remove ask_user handling from `LLMClient.cpp`
+- [x] Remove `request_user_input()` from `AgentSink.h`
+- [x] Remove `AwaitingUser` from `AgentState.h`
+- [x] Remove `AwaitingUser` from `AgentState.cpp`
+- [x] Remove CHAT→AwaitingUser mapping from `AgentImpl.cpp`
+- [x] Remove "AwaitingUser" from `SetStatusTool.cpp`
+- [x] Update `ConsoleAgentSink.cpp` (remove `request_user_input()`)
+- [x] Update `web_sse_sink.h` (remove `request_user_input()`)
+- [x] Update `utils.cpp` comment
+- [x] Update tests
+- [x] Build and test
+
+---
+
 ## Plan — Add `set_status` tool so the agent can drive its own state machine
 
 ### Context

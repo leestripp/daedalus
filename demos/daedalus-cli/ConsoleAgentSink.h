@@ -10,7 +10,6 @@
  *   - on_state_change   → cerr (Phase 9.6)
  *   - on_compaction     → cerr (Phase 9.6)
  *   - on_bell           → play_system_bell()
- *   - request_user_input → std::getline(std::cin)
  *   - request_command_approval → y/n prompt on cin
  *
  * Hosts that need different I/O (TUI, web, GTK4) implement their own
@@ -67,7 +66,6 @@ public:
     void on_bell() noexcept override;
 
     // Blocking I/O.
-    std::string request_user_input(std::string_view prompt) override;
     bool request_command_approval(std::string_view command) override;
 
 private:

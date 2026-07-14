@@ -1005,7 +1005,6 @@ std::string LLMClient::get_state_name(AgentState state) const {
         case AgentState::PLANNING: return "PLANNING";
         case AgentState::ACT: return "ACT";
         case AgentState::BUILD_TEST: return "BUILD_TEST";
-        case AgentState::CHAT: return "CHAT";
         case AgentState::DONE: return "DONE";
         case AgentState::CANCELLED: return "CANCELLED";
         default: return "UNKNOWN";
@@ -1794,7 +1793,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                                               result.value("error", "unknown error"));
                     LOG_ERROR("Tool " + function_name + " failed: " + msg);
                 } else {
-                    // Success (or non-error status like "ask_user" or "compress_context")
+                    // Success (or non-error status like "compress_context")
                     if (sink_) sink_->on_log(daedalus::LogLevel::Info,
                         format_tool_result(result));
                 }
@@ -1964,58 +1963,6 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                 compress_after_done = true;
             }
 
-            // Check if ask_user was called - pause and wait for user response
-            if (function_name == "ask_user" && result.value("status", "") == "ask_user") {
-                // Add tool result to messages first
-                messages.insert(messages.end(), tool_results.begin(), tool_results.end());
-
-                // Get the question
-                std::string question = result.value("question", "What would you like to do?");
-
-                // §Phase 3: route question display and user input through the sink.
-                // This lets the host decide how to display prompts and gather input.
-                // §Phase 5: the library has no opinion on which input source the host
-                // uses — linenoise in a CLI REPL, std::getline in a quick-and-dirty
-                // embed, a GUI dialog in a TUI, an HTTP form in webui, etc.
-                // See docs/embedding.md §"Wiring your own input source".
-                if (sink_) {
-                    std::ostringstream prompt;
-                    prompt << "\n═══════════════════════════════════════════════════════\n"
-                           << "  [AGENT QUESTION]\n"
-                           << "  " << question << "\n"
-                           << "═══════════════════════════════════════════════════════";
-                    sink_->on_log(daedalus::LogLevel::Info, prompt.str());
-                    try {
-                        std::string user_response = sink_->request_user_input("> ");
-                        if (user_response.empty()) {
-                            messages = messages_->sanitize_message_chain(messages);
-                            messages_->clear_executing_markers();
-                            return AgentState::CANCELLED;
-                        }
-                        messages.push_back(build_multimodal_message(user_response));
-                        return AgentState::CHAT;
-                    } catch (...) {
-                        // request_user_input threw — abort the turn.
-                        messages = messages_->sanitize_message_chain(messages);
-                        messages_->clear_executing_markers();
-                        return AgentState::CANCELLED;
-                    }
-                } else {
-                    // §Phase 5: no sink attached but the agent asked a
-                    // question. The library has zero knowledge of where
-                    // user input comes from — it's the host's job to wire
-                    // input via AgentSink::request_user_input or
-                    // Agent::submit_user_message(). This branch is a
-                    // programmer error: a host that doesn't provide a
-                    // sink but also doesn't pre-load the message stream.
-                    // Surface it loudly so the host can fix its wiring.
-                    throw std::runtime_error(
-                        "Agent asked a question but no AgentSink is "
-                        "attached. Provide a sink with request_user_input() "
-                        "or pre-load the message stream via "
-                        "Agent::submit_user_message().");
-                }
-            }
         }
 
         // Add tool results to message history
@@ -2770,9 +2717,6 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             LOG_INFO("[AGENT] Execution cancelled by user.");
             final_state = AgentState::CANCELLED;
             break;
-        }
-        if (result_state == AgentState::CHAT) {
-            continue;
         }
         if (result_state == AgentState::ACT || result_state == AgentState::BUILD_TEST) {
             continue;

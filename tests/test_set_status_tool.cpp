@@ -63,7 +63,7 @@ TEST_SUITE("SetStatusTool — valid input") {
         FileIO io(std::filesystem::temp_directory_path());  // unused by SetStatusTool
         const std::vector<std::string> valid = {
             "Idle", "Understanding", "Planning", "Acting", "Verifying",
-            "AwaitingUser", "AwaitingApproval", "Compressing",
+            "AwaitingApproval", "Compressing",
             "Done", "Cancelled", "Error",
         };
         for (const auto& name : valid) {
@@ -198,7 +198,6 @@ TEST_SUITE("daedalus::agent_state_from") {
         CHECK(daedalus::agent_state_from("Planning", &ok)         == daedalus::AgentState::Planning);         CHECK(ok);
         CHECK(daedalus::agent_state_from("Acting", &ok)           == daedalus::AgentState::Acting);           CHECK(ok);
         CHECK(daedalus::agent_state_from("Verifying", &ok)        == daedalus::AgentState::Verifying);        CHECK(ok);
-        CHECK(daedalus::agent_state_from("AwaitingUser", &ok)     == daedalus::AgentState::AwaitingUser);     CHECK(ok);
         CHECK(daedalus::agent_state_from("AwaitingApproval", &ok) == daedalus::AgentState::AwaitingApproval); CHECK(ok);
         CHECK(daedalus::agent_state_from("Compressing", &ok)      == daedalus::AgentState::Compressing);      CHECK(ok);
         CHECK(daedalus::agent_state_from("Done", &ok)             == daedalus::AgentState::Done);             CHECK(ok);
@@ -243,7 +242,7 @@ TEST_SUITE("to_string ↔ agent_state_from round-trip") {
     TEST_CASE("Every public name survives a round-trip") {
         const std::vector<std::string> names = {
             "Idle", "Understanding", "Planning", "Acting", "Verifying",
-            "AwaitingUser", "AwaitingApproval", "Compressing",
+            "AwaitingApproval", "Compressing",
             "Done", "Cancelled", "Error",
         };
         for (const auto& name : names) {

@@ -50,7 +50,6 @@ constexpr AgentState map_from_internal(::AgentState s) noexcept {
         case ::AgentState::PLANNING:    return AgentState::Planning;
         case ::AgentState::ACT:         return AgentState::Acting;
         case ::AgentState::BUILD_TEST:  return AgentState::Verifying;
-        case ::AgentState::CHAT:        return AgentState::AwaitingUser;
         case ::AgentState::DONE:        return AgentState::Done;
         case ::AgentState::CANCELLED:   return AgentState::Cancelled;
     }

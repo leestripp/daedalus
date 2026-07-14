@@ -16,8 +16,7 @@ TEST_CASE("AgentState - all states are distinct") {
     // for what should be handled in the main loop
     
     SUBCASE("State count matches enum definition") {
-        // AgentState enum should have 7 states
-        // UNDERSTAND, PLANNING, ACT, BUILD_TEST, CHAT, DONE, CANCELLED
+        // AgentState enum has states: Idle, Understanding, Planning, Acting, Verifying, AwaitingApproval, Compressing, Done, Cancelled, Error
         CHECK(true); // Documentation: if you add a state, update this test
     }
     
@@ -31,13 +30,6 @@ TEST_CASE("AgentState - all states are distinct") {
     SUBCASE("BUILD_TEST state should continue agent loop") {
         // BUILD_TEST = verification phase - runs compiler/tests
         // When run_agent_cycle returns BUILD_TEST, the main loop MUST continue
-        std::string expected_behavior = "continue";
-        CHECK(expected_behavior == "continue");
-    }
-    
-    SUBCASE("CHAT state should continue agent loop") {
-        // CHAT = conversation phase - user responded to ask_user
-        // When run_agent_cycle returns CHAT, the main loop MUST continue
         std::string expected_behavior = "continue";
         CHECK(expected_behavior == "continue");
     }
@@ -89,9 +81,8 @@ TEST_CASE("Agent State Transition Matrix - CRITICAL") {
         {1, "PLANNING", true, "Research phase - agent is working"},
         {2, "ACT", true, "Execution phase - agent MUST continue working"},
         {3, "BUILD_TEST", true, "Verification phase - agent MUST continue working"},
-        {4, "CHAT", true, "Conversation - user responded, agent MUST continue"},
-        {5, "DONE", false, "Task complete - exit loop normally"},
-        {6, "CANCELLED", false, "User cancelled - MUST exit loop immediately"}
+        {4, "DONE", false, "Task complete - exit loop normally"},
+        {5, "CANCELLED", false, "User cancelled - MUST exit loop immediately"}
     };
     
     SUBCASE("ACT and BUILD_TEST states MUST continue loop") {
@@ -102,18 +93,6 @@ TEST_CASE("Agent State Transition Matrix - CRITICAL") {
         for (const auto& t : expected_transitions) {
             if (t.state_name == "ACT" || t.state_name == "BUILD_TEST") {
                 CHECK_MESSAGE(t.should_continue_loop == true, 
-                    "CRITICAL BUG: " << t.state_name << " state must continue the agent loop!");
-            }
-        }
-    }
-    
-    SUBCASE("CHAT state MUST continue loop") {
-        // CHAT state is returned when ask_user was called and user responded
-        // If this doesn't continue the loop, the conversation is broken
-        
-        for (const auto& t : expected_transitions) {
-            if (t.state_name == "CHAT") {
-                CHECK_MESSAGE(t.should_continue_loop == true,
                     "CRITICAL BUG: " << t.state_name << " state must continue the agent loop!");
             }
         }
@@ -160,24 +139,18 @@ TEST_CASE("State Handler Checklist - DO NOT REMOVE") {
     
     std::vector<std::string> required_handlers = {
         "AgentState::CANCELLED",   // Must break immediately
-        "AgentState::CHAT",        // Must continue (user responded)
         "AgentState::ACT",         // Must continue (tool executed)
         "AgentState::BUILD_TEST",  // Must continue (build/test ran)
         "AgentState::DONE"         // Must break (task complete)
     };
     
     SUBCASE("All states must have handlers in main loop") {
-        CHECK(required_handlers.size() == 5);
+        CHECK(required_handlers.size() == 4);
     }
     
     SUBCASE("CANCELLED handler must break the loop") {
         bool cancelled_breaks = true;
         CHECK(cancelled_breaks == true);
-    }
-    
-    SUBCASE("CHAT handler must continue the loop") {
-        bool chat_continues = true;
-        CHECK(chat_continues == true);
     }
     
     SUBCASE("ACT handler must continue the loop") {

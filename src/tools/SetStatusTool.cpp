@@ -11,13 +11,12 @@ namespace {
 // Public AgentState names — keep in sync with
 // include/daedalus/types/AgentState.h and
 // demos/daedalus-webui/web_sse_sink.h.
-constexpr std::array<std::string_view, 11> kValidStates = {
+constexpr std::array<std::string_view, 10> kValidStates = {
     "Idle",
     "Understanding",
     "Planning",
     "Acting",
     "Verifying",
-    "AwaitingUser",
     "AwaitingApproval",
     "Compressing",
     "Done",

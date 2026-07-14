@@ -67,7 +67,6 @@ enum class AgentState : std::uint8_t {
     PLANNING,    // Research with grep_search, analyze task, and formulate strategy
     ACT,         // Execution phase - implements changes
     BUILD_TEST,  // Verification phase - runs compiler/tests
-    CHAT,        // Conversation phase - chatting with user
     DONE,        // Task completed successfully
     CANCELLED    // Interrupted by user (ESC key)
 };
@@ -164,7 +163,7 @@ public:
 
     /// @brief Attach a sink. Call this after construction and before
     ///        initialize(). Required for streaming output, log routing, and
-    ///        blocking I/O (ask_user / bash approval).
+    ///        blocking I/O (bash approval).
     ///        Also propagates the sink to ToolHandler so execute_bash can
     ///        call request_command_approval when not auto-approved.
     void set_sink(std::shared_ptr<daedalus::AgentSink> sink) {

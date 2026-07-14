@@ -95,15 +95,6 @@ public:
     // to abort the current turn if input/approval fails.
     // ------------------------------------------------------------------
 
-    /// @brief The ask_user tool is asking a question.
-    /// @return The user's answer (becomes the tool result).
-    /// @throws Anything to abort the turn.
-    virtual std::string request_user_input(std::string_view prompt)
-    {
-        (void)prompt;
-        return {};
-    }
-
     /// @brief The execute_bash tool wants permission to run a command.
     /// @return true to approve, false to deny.
     /// @throws Anything to abort the turn.

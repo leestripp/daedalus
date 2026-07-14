@@ -46,14 +46,14 @@ public:
         if (!sse_) return;
         const char* names[] = {
             "Idle","Understanding","Planning","Acting","Verifying",
-            "AwaitingUser","AwaitingApproval","Compressing","Done",
+            "AwaitingApproval","Compressing","Done",
             "Cancelled","Error"
         };
-        const char* nm = (to >= 0 && to < 11) ? names[to] : "Unknown";
+        const char* nm = (to >= 0 && to < 10) ? names[to] : "Unknown";
         json j = { {"to", nm}, {"raw", to} };
         sse_->broadcast("state_change", j.dump());
         // Treat terminal states as "end of current assistant message".
-        if (to == 8 /* Done */ || to == 9 /* Cancelled */) {
+        if (to == 7 /* Done */ || to == 8 /* Cancelled */) {
             sse_->broadcast("assistant_end", "{}");
         }
     }
@@ -88,15 +88,6 @@ public:
             sse_->broadcast("command_approval", j.dump());
         }
         return true;
-    }
-
-    // ask_user: no UI hook yet, so return empty (= abort the tool).
-    std::string request_user_input(std::string_view prompt) override {
-        if (sse_) {
-            json j = { {"prompt", std::string(prompt)} };
-            sse_->broadcast("user_input_request", j.dump());
-        }
-        return {};
     }
 
 private:
