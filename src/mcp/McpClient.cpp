@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <sys/socket.h>  // send(), MSG_NOSIGNAL
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <optional>
@@ -255,11 +256,18 @@ bool McpClient::initialize() {
         last_error_ = "Not connected";
         return false;
     }
-    
+
     if (initialized_) {
         return true;
     }
-    
+
+    // §SIGPIPE note (2026-07-14): the underlying transport's
+    // send_request() / send_notification() write to the MCP subprocess's
+    // stdin pipe via send(fd, ..., MSG_NOSIGNAL), which is the surgical
+    // fix for "subprocess exits before parent writes its notification".
+    // A closed pipe then returns EPIPE instead of raising SIGPIPE that
+    // would kill the daemon. No signal-handler dance required.
+
     // Send initialize request
     json params = {
         {"protocolVersion", "2025-06-18"},
@@ -472,8 +480,12 @@ json McpClient::send_request(const std::string& method, const json& params, int 
     
     // Send request
     std::string request_str = request.dump() + "\n";
-    ssize_t written = write(pipes_->stdin_write, request_str.c_str(), request_str.size());
-    
+    // MSG_NOSIGNAL suppresses SIGPIPE if the subprocess has closed
+    // stdin (e.g. it crashed/exited before reading our request). On
+    // Linux this works for pipe FDs as well as sockets (since 2.6.32).
+    ssize_t written = send(pipes_->stdin_write, request_str.c_str(),
+                           request_str.size(), MSG_NOSIGNAL);
+
     if (written < 0) {
         last_error_ = "Failed to write to stdin: " + std::string(strerror(errno));
         return json::object();
@@ -498,7 +510,10 @@ void McpClient::send_notification(const std::string& method, const json& params)
     }
     
     std::string notif_str = notification.dump() + "\n";
-    [[maybe_unused]] ssize_t rc = write(pipes_->stdin_write, notif_str.c_str(), notif_str.size());
+    // MSG_NOSIGNAL: see send_request() comment. Subprocess may have
+    // closed stdin between initialize() and this notification.
+    [[maybe_unused]] ssize_t rc = send(pipes_->stdin_write, notif_str.c_str(),
+                                       notif_str.size(), MSG_NOSIGNAL);
 }
 
 json McpClient::read_response(int timeout_ms) {

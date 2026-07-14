@@ -454,10 +454,21 @@ void AgentImpl::initialize()
     // §Phase 15: typo-detection for the mcp_servers_disabled list.
     // Same idea as the skills one — warn if a disabled name doesn't
     // match any loaded server.
+    //
+    // §UB fix (2026-07-14): do NOT call list_configured_servers() twice
+    // in the range-constructor expression. Each call returns a fresh
+    // `vector<string>` by value, so `.begin()` and `.end()` end up
+    // pointing into *different* containers — the resulting iterator
+    // pair is ill-formed per [forward.iterators], and the set's range
+    // constructor dereferences invalid memory. Symptom: SIGSEGV during
+    // `_M_insert_unique_` (single-element inserts inside the unrolled
+    // range loop). With creds resolved from the user's real config.json
+    // this branch always runs; before, it was skipped because no
+    // default model existed and `has_explicit_creds` was false.
     if (!cfg_.mcp_servers_disabled.empty() && body_->mcp && sink_) {
+        const auto configured_servers = body_->mcp->list_configured_servers();
         std::set<std::string> known_servers(
-            body_->mcp->list_configured_servers().begin(),
-            body_->mcp->list_configured_servers().end());
+            configured_servers.begin(), configured_servers.end());
         for (const auto& name : cfg_.mcp_servers_disabled) {
             if (!known_servers.count(name)) {
                 sink_->on_log(daedalus::LogLevel::Warn,

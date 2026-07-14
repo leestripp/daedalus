@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/socket.h>  // send(), MSG_NOSIGNAL
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cstring>
@@ -165,9 +166,12 @@ StdioMcpTransport::send_request(
         pending_[request_id] = promise;
     }
 
-    // Write request
+    // Write request. MSG_NOSIGNAL: see McpClient::send_request() — if
+    // the subprocess has closed stdin we get EPIPE back instead of a
+    // SIGPIPE that would kill the daemon.
     std::string req_str = request.dump() + "\n";
-    ssize_t written = write(stdin_write_, req_str.c_str(), req_str.size());
+    ssize_t written = send(stdin_write_, req_str.c_str(), req_str.size(),
+                           MSG_NOSIGNAL);
     if (written < 0) {
         std::scoped_lock lock(mutex_);
         pending_.erase(request_id);
@@ -193,8 +197,10 @@ std::expected<void, TransportError> StdioMcpTransport::send_notification(
         notification["params"] = params;
     }
 
+    // MSG_NOSIGNAL: see send_request() above.
     std::string notif_str = notification.dump() + "\n";
-    ssize_t written = write(stdin_write_, notif_str.c_str(), notif_str.size());
+    ssize_t written = send(stdin_write_, notif_str.c_str(), notif_str.size(),
+                           MSG_NOSIGNAL);
     if (written < 0) {
         return std::unexpected(TransportError::WriteFailed);
     }
