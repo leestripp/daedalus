@@ -52,18 +52,24 @@ struct Session {
 
 class SessionManager {
 public:
-    explicit SessionManager(HTTP::Server& server) : server_(server) {}
+    explicit SessionManager(HTTP::Server& server,
+                            std::string model_name = "",
+                            std::filesystem::path project_root = {})
+        : server_(server)
+        , default_model_name_(std::move(model_name))
+        , project_root_(std::move(project_root)) {}
 
     std::string create() {
         auto sess = std::make_unique<Session>();
         sess->id = new_session_id();
 
-        // Build AgentConfig. Default daedalus_home matches the CLI demo
-        // so the user's settings.json is found without env vars.
+        // Build AgentConfig. Leave daedalus_home empty so AgentImpl uses
+        // SettingsStore::instance() which reads from the XDG-compliant
+        // location (~/.local/share/daedalus/daedalus.db) where the user's
+        // models are migrated to.
         daedalus::AgentConfig cfg;
-        cfg.daedalus_home = "/home/ubuntu/.daedalus";
         cfg.session_id   = "webui-" + sess->id;
-        cfg.project_root = fs::current_path();
+        cfg.project_root = project_root_.empty() ? fs::current_path() : project_root_;
         // §Phase 8.8: each HTTP session gets its own per-agent
         // namespace so two browser tabs don't share
         // messages.json. agent_name == sess->id where id is a
@@ -74,6 +80,7 @@ public:
         // positions), those also pass — the validator allows
         // '-' in non-leading positions.
         cfg.agent_name   = sess->id;
+        cfg.model_name  = default_model_name_;
 
         // §Phase 9.7: opt in to the user's global skills. Without
         // this the Agent's system prompt always reports
@@ -173,6 +180,8 @@ public:
 
 private:
     HTTP::Server& server_;
+    std::string default_model_name_;
+    std::filesystem::path project_root_;
     std::mutex mu_;
     std::unordered_map<std::string, std::unique_ptr<Session>> sessions_;
     std::mutex queued_mu_;

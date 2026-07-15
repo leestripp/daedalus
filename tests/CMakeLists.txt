@@ -765,6 +765,38 @@ target_link_libraries(daedalus_settings_store_e2e_tests PRIVATE
 )
 add_test(NAME settings_store_e2e_tests COMMAND daedalus_settings_store_e2e_tests)
 
+# Agent::active_model() regression test: verifies the Agent can find
+# models when using SettingsStore::instance() (default). Previously the
+# webui demo set cfg.daedalus_home to a legacy path, causing AgentImpl
+# to use SettingsStore::for_home() instead, which opened an empty DB.
+add_executable(daedalus_settings_active_model_tests
+    test_settings_active_model.cpp
+)
+target_include_directories(daedalus_settings_active_model_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_settings_active_model_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME settings_active_model_tests COMMAND daedalus_settings_active_model_tests)
+
+# Regression test: SettingsStore::for_home() vs instance() distinction.
+# Ensures that hosts understand these are different stores with different data.
+add_executable(daedalus_settings_for_home_vs_instance_tests
+    test_settings_for_home_vs_instance.cpp
+)
+target_include_directories(daedalus_settings_for_home_vs_instance_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_settings_for_home_vs_instance_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME settings_for_home_vs_instance_tests COMMAND daedalus_settings_for_home_vs_instance_tests)
+
 # SettingsMigrator — JSON → SQLite auto-migrator (v0.3.1).
 # See test_settings_migrator.cpp for what each pin covers.
 add_executable(daedalus_settings_migrator_tests

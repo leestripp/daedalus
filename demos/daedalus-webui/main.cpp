@@ -32,8 +32,31 @@
 
 int main(int argc, char* argv[]) {
     uint16_t port = 8080;
-    if (argc > 1) {
-        try { port = static_cast<uint16_t>(std::stoi(argv[1])); } catch (...) {}
+    std::string model_name;
+    std::filesystem::path project_root = std::filesystem::current_path();
+
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg == "-h" || arg == "--help") {
+            std::cout << "Usage: " << argv[0] << " [port] [--model NAME] [project_dir]\n";
+            std::cout << "  port         HTTP port (default: 8080)\n";
+            std::cout << "  --model NAME Use model NAME from settings\n";
+            std::cout << "  project_dir  Project root (default: .)\n";
+            return 0;
+        }
+        else if (arg == "--model") {
+            if (i + 1 < argc) model_name = argv[++i];
+        }
+        else if (arg == "--home") {
+            if (i + 1 < argc) ++i; // skip, not used in webui
+        }
+        else {
+            try {
+                port = static_cast<uint16_t>(std::stoi(arg));
+            } catch (...) {
+                project_root = arg;
+            }
+        }
     }
     if (const char* env = std::getenv("DAEDALUS_WEBUI_PORT"); env && *env) {
         try { port = static_cast<uint16_t>(std::stoi(env)); } catch (...) {}
@@ -49,7 +72,7 @@ int main(int argc, char* argv[]) {
     cfg.corsAllowedOrigins = "*";
 
     OmniNet::HTTP::Server server(cfg);
-    websse::SessionManager mgr(server);
+    websse::SessionManager mgr(server, model_name, project_root);
     websse::register_routes(server, mgr);
 
     std::cerr << "[daedalus-webui] listening on http://"
