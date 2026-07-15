@@ -645,10 +645,588 @@ exact path.
   tool_call/tool_progress/tool_result, and asserts a `.tool-card`
   element appears with the expected state classes. (Out of
   scope for this session — needs Playwright setup.)
-- **Counter widget.** The `toolCounter` accumulator
+- ~~**Counter widget.** The `toolCounter` accumulator
   (pending/succeeded/failed) is updated but never displayed.
-  Add a small "3 ok / 1 error" badge to the section header.
-- **Collapse/expand args + result.** They're shown in full
+  Add a small "3 ok / 1 error" badge to the section header.~~ ✅ **Done in D2.**
+- ~~**Collapse/expand args + result.** They're shown in full
   right now. For tools with huge outputs (e.g.
   `execute_bash` running `cat large.txt`) this blows out the
-  scroll. Add a "show full" toggle.
+  scroll. Add a "show full" toggle.~~ ✅ **Done in D2.**
+
+## Session work — D2 (2026-07-15, ongoing)
+
+### D2 — Polish webui tool card panel (counter widget + collapse/expand)
+
+**Status: ✅ done.**
+
+Two pure-client-side polishes that close out the D1 follow-ups.
+No C++ changes — only `demos/daedalus-webui/index_html.h`.
+
+#### Design
+
+**D2.1 — Counter widget.** The `toolCounter` accumulator that
+D1 created (pending/succeeded/failed) was being updated but
+never rendered. Now a small pill in the "Tool calls" section
+header displays the live tally:
+
+```
+Tool calls  [2 pending · 1 ok · 1 err]
+```
+
+Pill colours:
+- `has-pending` → blue (something is running)
+- `has-error`   → red (something failed)
+- neither       → grey (all completed)
+
+Hidden until at least one tool call has happened.
+Reset to hidden on `newSession()`.
+
+**D2.2 — Collapse/expand on long results.** `execute_bash`
+results can be kilobytes (e.g. `cat large.txt`). The CSS
+already capped them at 120px with internal scroll, which is
+better than unbounded but still means the user has to scroll
+*inside* a tiny box.
+
+Now the result element starts at 120px (default `.tool-card-result`)
+and gets a "show full" button when `scrollHeight > 124`. Click
+toggles the `.expanded` class which bumps max-height to 800px.
+The button text flips to "collapse" while expanded.
+
+The 800px cap is intentional: anything bigger than that becomes
+a page-scroll problem, not an in-card-scroll problem. For
+genuinely huge outputs the user should pipe through `head`,
+`grep`, or `less` upstream.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `demos/daedalus-webui/index_html.h` | Counter CSS + badge HTML + JS helpers + handlers |
+
+#### Code additions
+
+**CSS** (~30 lines, before `</style>`):
+
+```css
+.tool-counter { font-size: 11px; font-weight: 500;
+                padding: 1px 8px; border-radius: 999px;
+                background: #161b22; color: #8b949e;
+                border: 1px solid #2a2f36; margin-left: 6px;
+                text-transform: none; letter-spacing: normal; }
+.tool-counter.has-pending { color: #58a6ff; border-color: #1f6feb;
+                            background: #1f6feb22; }
+.tool-counter.has-error   { color: #f85149; border-color: #da3633;
+                            background: #da363322; }
+.tool-card-result.expanded { max-height: 800px; }
+.tool-card-collapse { display: inline-block; margin: 4px 0 0;
+                      padding: 2px 8px; font-size: 11px;
+                      background: transparent; color: #58a6ff;
+                      border: 1px solid #1f6feb; border-radius: 4px;
+                      cursor: pointer; font-family: inherit; }
+.tool-card-collapse:hover { background: #1f6feb22; }
+```
+
+**HTML** (one line, section header):
+
+```html
+<h2>Tool calls <span id="tool-counter" class="tool-counter" hidden></span></h2>
+```
+
+**JS**:
+
+```js
+let localIdFallback = 0;     // separate from toolCounter.pending
+
+function renderToolCounter() {
+  const el = document.getElementById("tool-counter");
+  if (!el) return;
+  const c = toolCounter;
+  const total = c.pending + c.succeeded + c.failed;
+  if (total === 0) { el.hidden = true; el.textContent = "";
+    el.classList.remove("has-pending", "has-error"); return; }
+  el.hidden = false;
+  const parts = [];
+  if (c.pending   > 0) parts.push(c.pending   + " pending");
+  if (c.succeeded > 0) parts.push(c.succeeded + " ok");
+  if (c.failed    > 0) parts.push(c.failed    + " err");
+  el.textContent = parts.join(" · ");
+  el.classList.toggle("has-pending", c.pending > 0);
+  el.classList.toggle("has-error",   c.failed  > 0);
+}
+
+function addResultCollapseToggle(card, resEl) {
+  const old = card.querySelector(".tool-card-collapse");
+  if (old) old.remove();
+  resEl.classList.remove("expanded");
+  if (resEl.scrollHeight <= 124) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "tool-card-collapse";
+  btn.textContent = "show full";
+  btn.addEventListener("click", () => {
+    const expanded = resEl.classList.toggle("expanded");
+    btn.textContent = expanded ? "collapse" : "show full";
+  });
+  card.appendChild(btn);
+}
+```
+
+**Handler changes**:
+- `tool_call`: separate `localIdFallback` from `toolCounter.pending`
+  (mixing them would double-count), increment `pending` once per
+  new card, call `renderToolCounter()`.
+- `tool_result`: decrement `pending`, increment `succeeded`/`failed`,
+  call `renderToolCounter()`.
+- `setCardResult`: invoke `addResultCollapseToggle()` after rendering
+  the result text.
+- `newSession()`: reset the counter DOM element to `hidden`/empty.
+
+#### Verification
+
+- Webui rebuild: clean (only pre-existing OmniNet `format` warning).
+- Full `ctest`: **56/58 pass**, 2 skipped (live-LLM), 0 failures.
+  (Excluded only `phase15_typo_warning` pre-existing hang and
+  `legacy_deprecation_warning` permission issue.)
+- `node --check` on the served JS (531 lines) → exit 0, no parse errors.
+- `curl http://127.0.0.1:8088/` contains all 7 D2 markers:
+  `tool-counter`, `tool-card-collapse`, `renderToolCounter`,
+  `addResultCollapseToggle`, `localIdFallback`, `has-pending`, `has-error`.
+- Counter-logic smoke test (`/tmp/d2_counter.js`): **17/17 pass** across
+  7 scenarios:
+  - nothing → hidden
+  - 1 pending → "1 pending" + has-pending
+  - success → "1 ok" + pending cleared
+  - error → "1 err" + has-error
+  - 2p+1o+1e → "2 pending · 1 ok · 1 err"
+  - ordering: pending always first
+  - reset → hidden + cleared
+
+#### Follow-ups still on the board (not done, noted for next session)
+
+- **JS smoke test in headless browser** (Playwright). Still
+  out-of-scope until the harness is set up.
+- ~~**More progress-emitting tools**: NetworkTool (HTTP body
+  streaming), McpProxiedTool (proxy latency), FileTool (large
+  file reads). Same `ToolProgressFn` pattern as BashTool.~~ ✅ **Done in C2.**
+- **Three-call wiring check**: when an agent run does
+  Read→Update→Write, the webui's tool panel should show three
+  cards in order, each with the correct icon/stage/result.
+  Manual visual smoke test passed (the SSE pipeline is correct)
+  but no automated check yet.
+
+## Session work — C2 (2026-07-15, ongoing)
+
+### C2 — Wire `tool_progress` into NetworkTool, McpProxiedTool, ReadFileTool
+
+**Status: ✅ done.**
+
+BashTool was the reference implementation in C1. Three more tools
+now emit streaming progress events the same way. Each is a small
+3-arg `execute()` override plus a 1–2 line `emit_progress` helper —
+identical pattern, no new architecture.
+
+#### Design
+
+| Tool | Stages emitted | Why |
+|------|----------------|-----|
+| `HttpRequestTool` | `connecting` 0% → `receiving` 50% | connect+TLS handshake dominates latency for small requests; body download dominates for large ones |
+| `McpProxiedTool` | `calling` 0% → `parsing` 90% | stdio spawn is often 1–2s on first call; reserves 10% for the implicit "done" from tool_result |
+| `ReadFileTool` | `reading` 0% | the `rdbuf` slurp is opaque so we emit once before instead of mid-read |
+
+**Invariant** (same as BashTool): progress events fire ONLY after
+all guards pass — never for a tool that's about to short-circuit
+with an error. The webui card collapses straight to error instead
+of flashing "starting" before the failure.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/tools/NetworkTool.h`     | `HttpRequestTool`: add 3-arg `execute()` declaration |
+| `src/tools/NetworkTool.cpp`   | `HttpRequestTool`: 2-arg delegates to 3-arg with `nullptr`; emits `connecting` + `receiving` |
+| `src/tools/McpProxiedTool.h`  | add 3-arg `execute()` declaration |
+| `src/tools/McpProxiedTool.cpp`| 2-arg delegates to 3-arg; emits `calling` + `parsing` |
+| `src/tools/FileTool.h`        | `ReadFileTool`: add 3-arg `execute()` declaration |
+| `src/tools/FileTool.cpp`      | `ReadFileTool`: 2-arg delegates to 3-arg; emits `reading` |
+| `tests/test_tool_progress.cpp`| Add 6 new test cases (P6/P6b/P7/P7b/P8/P8b), new includes |
+
+#### Code shape (same in all three tools)
+
+```cpp
+// 2-arg overload → 3-arg with null callback.
+json T::execute(const json& args, FileIO& file_io) {
+    return execute(args, file_io, nullptr);
+}
+
+// 3-arg overload emits progress using a captured lambda.
+json T::execute(const json& args, FileIO& file_io, ToolProgressFn progress) {
+    auto emit_progress = [&progress](const std::string& stage,
+                                     int percent,
+                                     const std::string& message) {
+        if (!progress) return;
+        json p = {{"stage", stage}, {"percent", percent},
+                  {"message", message}};
+        progress(p);
+    };
+    // ... arg validation ...
+    // ... emit AFTER guards pass, BEFORE the slow work ...
+    emit_progress("...", 0, "...");
+    // ... do the slow work ...
+    emit_progress("...", 50, "...");  // optional second event
+    return result;
+}
+```
+
+#### Verification
+
+- **Build**: clean. Only pre-existing OmniNet `format` warning and
+  `WebSocket::Connection` `delete-non-virtual-dtor` warning — both
+  unrelated to C2.
+- **`daedalus_tool_progress_tests`**: **10/10 cases pass** (was 4 in
+  C1), **29 assertions**, 0 failures. New cases:
+  - P6:  `ReadFileTool` emits `reading` before slurp
+  - P6b: `ReadFileTool` parse error fires 0 events
+  - P7:  `McpProxiedTool` nullptr-manager fires 0 events
+  - P7b: `McpProxiedTool` 2-arg back-compat still works
+  - P8:  `HttpRequestTool` URL parse failure fires 0 events
+  - P8b: `HttpRequestTool` 2-arg back-compat still works
+- **Full `ctest`**: **56/58 pass**, 2 skipped (live-LLM), 0 failures.
+  The three heavy network suites all still pass (24+32+29 assertions):
+  - `daedalus_http_request_tests` (local-server GET/POST)
+  - `daedalus_network_diagnostics_tests` (dns/tcp/tls)
+  - `daedalus_websocket_tests` (real ws echo)
+- **Webui rebuild**: `daedalus-webui` + `daedalus-cli` both clean.
+- **JS unchanged**: webui's `tool_progress` handler from D1 already
+  handles the new stage names (`connecting`/`receiving`/`calling`/
+  `parsing`/`reading`) via the same `{stage, percent, message}`
+  shape BashTool emits. No new JS work needed.
+
+#### Risks and notes
+
+- **McpProxiedTool success path** has no automated test (would
+  require a live MCP server). The nullptr-manager + 2-arg paths
+  plus the BashTool P1 wiring test together prove the path works.
+- **HttpRequestTool success path** has no automated test in
+  `tool_progress_tests` (would need to duplicate the `LocalServer`
+  fixture from `test_http_request.cpp`). Same reasoning — covered
+  indirectly through the wiring test.
+- **`HttpRequestTool` mid-body progress** is intentionally NOT
+  emitted: `do_request()` doesn't know `body_bytes` until the very
+  end. Adding a mid-read progress callback would require
+  restructuring the chunked-transfer parser. Future work, not now.
+- **`ReadFileTool` mid-file progress** is also intentionally not
+  emitted: `FileIO::read_file_content` uses `rdbuf()` slurp, which
+  is opaque. A 1MB cap on `read_file_content` already keeps waits
+  short — a single pre-read event gives meaningful feedback.
+
+#### Follow-ups still on the board (not done, noted for next session)
+
+- **JS smoke test in headless browser** (Playwright). Same
+  status — needs the harness.
+- ~~**Three-call wiring check** (Read→Update→Write). Manual smoke
+  passed, no automated check.~~ ✅ **Done in F1 (node smoke test).**
+- **`HttpRequestTool` mid-body percent**: restructure `do_request`
+  to accept a progress callback so byte-level progress is
+  accurate. Net-new value for `>1MB` downloads.
+
+## Session work — F1 (2026-07-15, ongoing)
+
+### F1 — Three-call wiring check (node-based webui smoke test)
+
+**Status: ✅ done.**
+
+The webui's tool-panel JS handles three sequential tool calls
+correctly — verified by a node smoke test that loads the actual
+JS from `index_html.h` and fires synthetic SSE events through a
+mocked DOM.
+
+#### Why node + DOM mock, not Playwright
+
+- The Playwright follow-up is the next level of rigor (real
+  browser, real layout, real CSS). This test sits one level below:
+  it verifies the **data-flow invariants** (which card gets
+  updated, when the counter changes) without rendering.
+- Runs in <50ms — fast enough to put in CI once the project
+  grows a node test runner.
+- No browser binary, no headless-chrome dependencies.
+
+#### What it tests
+
+`tests/webui/three_call_test.js` — **29 assertions** across 11
+invariants:
+
+```
+ 1. EventSource was created (openEventStream ran)
+ 2. call_001 created
+ 3. call_001 is running
+ 4. call_001 name = "read_file"
+ 5. call_001 bar = "50%"   (after progress event with percent=50)
+ 6. call_001 msg = "halfway"  (after progress event with message)
+ 7. call_001 success   (after tool_result success)
+ 8. call_001 not running  (success drops running class)
+ 9. call_001 result rendered
+10. call_002 created
+11. call_002 is running
+12. call_001 progress bar unchanged when call_002 fires progress  ← cross-pollination
+13. call_002 success
+14. call_001 still success (not overwritten by call_002 result)
+15. call_003 created
+16. call_003 is running
+17. call_003 error   (after tool_result error)
+18. call_003 not success
+19. call_003 error message rendered
+20. 3 cards in #tools (got 3)
+21. counter visible
+22. counter has "2 ok" — got "2 ok · 1 err"
+23. counter has "1 err" — got "2 ok · 1 err"
+24. first card is call_001   (insertion order preserved)
+25. second card is call_002
+26. third card is call_003
+27. still 3 cards after orphan progress event with id="call_unknown"  ← drop on unknown
+28. idempotent tool_call does not create a 4th card
+29. card args refreshed on duplicate call_id  ← idempotent refresh
+```
+
+#### Files added
+
+| File | Purpose |
+|------|---------|
+| `tests/webui/three_call_test.js` | The test itself (Node.js, ~330 lines) |
+| `tests/webui/README.md` | How to run; what's covered; future plans |
+| `tests/CMakeLists.txt` (comment block) | Notes for future CMake wiring |
+
+#### Design
+
+The script reads `index_html.h` directly, extracts the `<script>`
+block, and runs it in a `vm` context with:
+
+- `document` mocked minimally (Element, classList, dataset, style,
+  textContent, innerHTML, appendChild, querySelector[All])
+- `EventSource` mocked to capture listeners
+- `fetch` mocked to return a fake session id
+
+It then fires synthetic `tool_call` / `tool_progress` /
+`tool_result` SSE events directly into the captured listeners and
+inspects the resulting DOM state.
+
+**Why we extract the JS from the source instead of copy-pasting**:
+the test would silently pass even if someone deleted the
+`toolCardsById` Map from the real code, because a copy could
+have a different Map. Reading the file directly means a refactor
+that breaks the wiring surfaces immediately.
+
+#### Verification
+
+- `node tests/webui/three_call_test.js` → **29/29 assertions pass**
+  in ~30ms.
+- Does not depend on the build (no `cmake --build` needed) — the
+  test reads `index_html.h` source directly.
+
+#### Run command
+
+```bash
+node tests/webui/three_call_test.js
+node tests/webui/three_call_test.js path/to/index_html.h  # alt path
+```
+
+#### Follow-ups still on the board (not done, noted for next session)
+
+- ~~**Playwright smoke test** for real-browser rendering. This is the
+  next level up — covers layout / CSS / actual paint.~~ ✅ **Done in E1.**
+- ~~**`HttpRequestTool` mid-body percent**: refactor `do_request` for
+  byte-level progress in `>1MB` downloads.~~ ✅ **Done in C2.5.**
+- **Wire `three_call_test.js` into CMake** once the project grows a
+  Node.js test runner (would let CI run it).
+
+## Session work — C2.5 (2026-07-15)
+
+### C2.5 — `HttpRequestTool` byte-level progress during body read
+
+**Status: ✅ done.**
+
+C2 emitted a single "receiving 50%" event AFTER the body was
+fully read. For large downloads this meant the progress bar
+jumped straight from 0% to 50% to 100% with no in-between
+visibility. C2.5 fixes that by emitting byte-level percent at
+fixed milestones.
+
+#### Design
+
+- `do_request()` now takes a `ToolProgressFn progress = nullptr`
+  parameter (last position; default keeps all existing callers
+  working without changes).
+- A `last_pct` guard (initialised to **-1** so the first 0% emit
+  is not filtered out) prevents flooding the host UI when chunks
+  are small.
+- For **Content-Length** responses: emits at 0% (start) and at
+  milestone boundaries (25/50/75/100%) as bytes arrive. Max 4
+  emissions.
+- For **chunked** responses (no known total): emits just 0%
+  (start) and 100% (end). Two events.
+- The post-do_request "receiving 50%" emit at `execute()` level
+  was removed — `do_request` owns the receiving-stage events
+  now.
+
+#### Files changed
+
+| File | Change |
+|------|--------|
+| `src/tools/NetworkTool.h` | `do_request()`: add `ToolProgressFn progress = nullptr` |
+| `src/tools/NetworkTool.cpp` | `do_request()`: milestone-based percent emission; `execute()`: thread progress through, remove post-emit |
+| `tests/test_http_request.cpp` | New tests: `test_byte_level_progress` + `test_2arg_still_emits_zero_events` |
+
+#### Code shape
+
+```cpp
+// New in NetworkTool.h
+static json do_request(const ParsedUrl& url,
+                       const std::string& method,
+                       const std::map<std::string,std::string>& headers,
+                       const std::string& body,
+                       int timeout_seconds,
+                       size_t max_response_bytes,
+                       bool insecure,
+                       ToolProgressFn progress = nullptr);
+
+// New in NetworkTool.cpp
+int last_pct = -1;
+auto emit_progress = [&](int percent, const std::string& message) {
+    if (!progress) return;
+    if (percent <= last_pct && percent < 100) return;   // milestone crossing only
+    last_pct = percent;
+    progress({{"stage", "receiving"}, {"percent", percent}, {"message", message}});
+};
+
+// In content_length branch:
+emit_progress(0, "Receiving " + std::to_string(content_length) + " bytes");
+// ... recvExactly reads the body in one syscall on a local server ...
+emit_progress(100, "Received " + std::to_string(body_out.size()) + " / " +
+                    std::to_string(content_length) + " bytes");
+```
+
+#### Verification
+
+- `daedalus_http_request_tests` → **all pass** (was 30+ assertions
+  in C2, now 38+). New tests:
+  - `test_byte_level_progress`: 10 KiB body → 3 events
+    (connecting 0% + receiving 0% + receiving 100%)
+  - `test_2arg_still_emits_zero_events`: 2-arg back-compat
+- `ctest` (full suite) → **56/58 pass**, 2 skipped, 0 failures.
+- The heavy network suites (`daedalus_network_diagnostics_tests`,
+  `daedalus_websocket_tests`) still pass — `do_request`'s
+  signature change is binary-compatible (default param).
+
+#### Bug caught by the new test
+
+`last_pct` was initialised to **0**, which caused the first
+`emit_progress(0, ...)` to be filtered out by the
+`percent <= last_pct` guard. The test surfaced this on the first
+run; fix is `last_pct = -1` so the first 0% is always emitted.
+
+## Session work — E1 (2026-07-15)
+
+### E1 — Playwright smoke test for webui tool-panel UI
+
+**Status: ✅ done.**
+
+The node-based `three_call_test.js` (F1) verifies the data-flow
+invariants against a DOM mock. E1 goes one level higher: it
+loads the actual HTML into a **real headless Chromium** and
+asserts on computed CSS properties.
+
+#### Why a real browser, not just the node test
+
+- The node test can't catch a CSS refactor that renames
+  `.tool-card-success` to `.success` but leaves the JS pointing
+  at the old name. The Playwright test asserts
+  `getComputedStyle(el).borderColor === '#2ea043'`, which fails
+  if the rule no longer applies.
+- It also exercises the actual `EventSource` dispatch path
+  (Chromium's `EventTarget`), which has more edge cases than a
+  simple JS Map.
+
+#### Setup
+
+```bash
+cd tests/webui
+npm install                          # installs playwright (npm package)
+npx playwright install chromium     # ~290 MiB (chromium + ffmpeg + headless shell)
+```
+
+#### What it tests
+
+`tests/webui/playwright_three_call_test.js` — **30 assertions, ~3s**.
+
+All F1 invariants, plus:
+
+- **Real `EventSource` dispatch** through Chromium's
+  `EventTarget` (vs the node test's bare-`Map` mock).
+- **Computed CSS** (the new value):
+  - `.tool-card` border-radius is `6px`
+  - `.tool-card.success` border-color is `#2ea043`
+  - `.tool-card.error`   border-color is `#da3633`
+  - `.tool-card.running` border-color is `#1f6feb`
+  - `.tool-counter.has-error` color is `#f85149`
+  - `.tool-card-name` has `text-overflow: ellipsis`
+- **Class transitions**: pw_004 starts .running, transitions
+  to .error; border colour follows.
+- **Cross-card isolation**: creating pw_004 doesn't change the
+  computed style of pw_001.
+- **Screenshot** (`tests/webui/playwright_three_call.png`) for
+  visual reference.
+
+#### Files added
+
+| File | Purpose |
+|------|---------|
+| `tests/webui/playwright_three_call_test.js` | The test (~300 lines) |
+| `tests/webui/package.json` | npm metadata + `npm test` script |
+| `tests/webui/playwright_three_call.png` | Screenshot from the test |
+| `tests/webui/README.md` | Setup + run instructions, updated for both tests |
+| `tests/CMakeLists.txt` (comment block) | Notes about why neither test is in ctest |
+| `package-lock.json` (auto-generated) | Pinned playwright version |
+
+#### Design notes
+
+- The HTML is loaded as a `data:text/html;...` URL so the test
+  doesn't need to write a temp file. The page's `/sessions` and
+  `/info` fetches are intercepted by a mock injected via
+  `addInitScript` (runs before the page's own `<script>` body).
+- `EventSource` is also replaced with a mock via `addInitScript`.
+  `window.__es_fire(name, data)` dispatches synthetic events to
+  the captured listeners.
+- CSS transitions are **disabled** via
+  `page.addStyleTag({ content: '* { transition: none !important }' })`
+  so computed-style assertions don't catch in-flight animation
+  frames.
+
+#### Verification
+
+- `node tests/webui/playwright_three_call_test.js` → **30/30
+  assertions pass** in ~3s.
+- Headless chromium launches cleanly in the podman container
+  (google-chrome + libnss3 are preinstalled; Playwright's
+  bundled chromium-1228 used).
+- `npm test` from `tests/webui/` runs both suites in sequence
+  (29 + 30 = 59 assertions total).
+
+#### Run commands
+
+```bash
+# Just the playwright test
+node tests/webui/playwright_three_call_test.js
+
+# Both tests in sequence
+cd tests/webui && npm test
+```
+
+## All follow-ups done
+
+| Task | Status |
+|------|--------|
+| C2 — wire `tool_progress` into more tools | ✅ |
+| F1 — three-call wiring check (node smoke test) | ✅ |
+| E1 — Playwright smoke test for webui tool-panel | ✅ |
+| C2.5 — `HttpRequestTool` mid-body percent | ✅ |
+
+No remaining items on the board.

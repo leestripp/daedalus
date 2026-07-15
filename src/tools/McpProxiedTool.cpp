@@ -45,7 +45,25 @@ json McpProxiedTool::get_definition() const {
     });
 }
 
-json McpProxiedTool::execute(const json& args, [[maybe_unused]] FileIO& file_io) {
+json McpProxiedTool::execute(const json& args, FileIO& file_io) {
+    return execute(args, file_io, nullptr);
+}
+
+json McpProxiedTool::execute(const json& args,
+                             [[maybe_unused]] FileIO& file_io,
+                             ToolProgressFn progress) {
+    auto emit_progress = [&progress](const std::string& stage,
+                                     int percent,
+                                     const std::string& message) {
+        if (!progress) return;
+        json p = {
+            {"stage",   stage},
+            {"percent", percent},
+            {"message", message},
+        };
+        progress(p);
+    };
+
     // §Phase 11: uses injected mcp_manager_ instead of ::instance().
     // If mcp_manager_ is nullptr (shouldn't happen in practice), return error.
     if (!mcp_manager_) {
@@ -56,8 +74,21 @@ json McpProxiedTool::execute(const json& args, [[maybe_unused]] FileIO& file_io)
             {"message",  "MCP manager not configured (mcp_enabled=false)"}
         });
     }
+    // §Phase C2: emit "calling" before the MCP round-trip. This is the
+    // stage that has the most latency variance — stdio servers spawn a
+    // child process on first call (often 1-2s), HTTP servers do a
+    // network round-trip, etc. Without this event the UI is frozen
+    // until the result comes back.
+    emit_progress("calling", 0,
+                  "Calling " + server_name_ + "::" + def_.name);
     mcp::ToolResult result =
         mcp_manager_->call_tool(server_name_, def_.name, args);
+
+    // §Phase C2: emit "parsing" once the server's response is back. The
+    // 90% milestone is intentional — result shaping (content extraction,
+    // error mapping) is fast but not free, and reserving the last 10%
+    // for the implicit "done" signal that tool_result provides.
+    emit_progress("parsing", 90, "Parsing response");
 
     json response = json::object({
         {"status", result.success ? "success" : "error"},

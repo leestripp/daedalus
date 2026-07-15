@@ -31,7 +31,11 @@
 #include "core/FileIO.h"
 #include "daedalus/AgentSink.h"
 #include "tools/BashTool.h"
+#include "tools/FileTool.h"
+#include "tools/McpProxiedTool.h"
+#include "tools/NetworkTool.h"
 #include "tools/ToolHandler.h"
+#include "mcp/McpServerManager.h"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -186,6 +190,133 @@ TEST_CASE("P5: ToolHandler wires progress through to sink") {
     CHECK(sink->events.size() >= 2);
 
     ToolHandler::set_sink(nullptr);
+}
+
+// -----------------------------------------------------------------------
+// §Phase C2: ReadFileTool emits a single "reading" event before the
+// slurp, and ZERO events when arg validation fails. Same invariants
+// as BashTool — progress only fires when real work is about to happen.
+// -----------------------------------------------------------------------
+TEST_CASE("P6: ReadFileTool emits reading progress event") {
+    AutoMode _am;
+    ScratchDir scratch("readfile-progress");
+    FileIO file_io(scratch.path);
+
+    // Create a small file to read.
+    const auto path = scratch.path / "hello.txt";
+    {
+        std::ofstream f(path);
+        f << "hello world\n";
+    }
+
+    std::mutex mu;
+    std::vector<json> events;
+    ToolProgressFn cb = [&](const json& p) {
+        std::lock_guard<std::mutex> lk(mu);
+        events.push_back(p);
+    };
+
+    ReadFileTool tool;
+    auto result = tool.execute({{"path", path.string()}}, file_io, cb);
+
+    REQUIRE(result.value("status", "") == "success");
+    REQUIRE(events.size() == 1);
+    CHECK(events[0].value("stage", "") == "reading");
+    CHECK(events[0].value("percent", -1) == 0);
+    CHECK(events[0].value("message", "").find("hello.txt") != std::string::npos);
+}
+
+TEST_CASE("P6b: ReadFileTool parse error fires zero progress events") {
+    ScratchDir scratch("readfile-progress-deny");
+    FileIO file_io(scratch.path);
+    ReadFileTool tool;
+
+    std::atomic<int> call_count{0};
+    ToolProgressFn cb = [&](const json&) { ++call_count; };
+
+    // Missing 'path' → returns error before reaching the read.
+    auto result = tool.execute(json::object(), file_io, cb);
+    REQUIRE(result.value("status", "") == "error");
+    CHECK(call_count.load() == 0);
+}
+
+// -----------------------------------------------------------------------
+// §Phase C2: McpProxiedTool emits zero progress events when its manager
+// isn't configured (nullptr path). The success-path emission is hard
+// to test without a live MCP server, but the emit-before-call-tool
+// structure is symmetric with BashTool's emit-before-execute pattern,
+// which P1 already exercises.
+// -----------------------------------------------------------------------
+TEST_CASE("P7: McpProxiedTool emits zero progress when manager is null") {
+    ScratchDir scratch("mcp-progress-null");
+    FileIO file_io(scratch.path);
+
+    mcp::ToolDefinition def;
+    def.name        = "noop";
+    def.description = "no-op tool";
+    def.input_schema = json::object();
+
+    // Construct with nullptr manager — same shape the ToolFactory uses
+    // when mcp_enabled=false.
+    McpProxiedTool tool("test", def, nullptr);
+
+    std::atomic<int> call_count{0};
+    ToolProgressFn cb = [&](const json&) { ++call_count; };
+
+    auto result = tool.execute(json::object(), file_io, cb);
+    REQUIRE(result.value("status", "") == "error");
+    CHECK(call_count.load() == 0);
+}
+
+TEST_CASE("P7b: McpProxiedTool 2-arg back-compat still works") {
+    ScratchDir scratch("mcp-progress-2arg");
+    FileIO file_io(scratch.path);
+
+    mcp::ToolDefinition def;
+    def.name        = "noop";
+    def.description = "no-op tool";
+    def.input_schema = json::object();
+
+    McpProxiedTool tool("test", def, nullptr);
+
+    // No progress callback passed — legacy 2-arg path.
+    auto result = tool.execute(json::object(), file_io);
+    REQUIRE(result.value("status", "") == "error");
+    CHECK(result.value("message", "").find("MCP manager") != std::string::npos);
+}
+
+// -----------------------------------------------------------------------
+// §Phase C2: HttpRequestTool emits zero progress events when URL
+// parsing fails. As with the other tools, the success path is tested
+// indirectly through the same ToolProgressFn signature — the BashTool
+// P1 test already proves the ToolHandler→ToolFactory→execute(args,
+// file_io, progress) wiring works end-to-end.
+// -----------------------------------------------------------------------
+TEST_CASE("P8: HttpRequestTool emits zero progress on URL parse failure") {
+    ScratchDir scratch("http-progress-deny");
+    FileIO file_io(scratch.path);
+    HttpRequestTool tool;
+
+    std::atomic<int> call_count{0};
+    ToolProgressFn cb = [&](const json&) { ++call_count; };
+
+    // file:// is rejected by parse_url() before any network call.
+    auto result = tool.execute({{"url", "file:///etc/passwd"}}, file_io, cb);
+    REQUIRE(result.value("status", "") == "error");
+    CHECK(call_count.load() == 0);
+}
+
+TEST_CASE("P8b: HttpRequestTool 2-arg back-compat still works") {
+    ScratchDir scratch("http-progress-2arg");
+    FileIO file_io(scratch.path);
+    HttpRequestTool tool;
+
+    // No progress callback passed — legacy 2-arg path. Same input as P8
+    // but exercised via the 2-arg overload to prove it still short-circuits
+    // before the network round-trip.
+    auto result = tool.execute({{"url", "file:///etc/passwd"}}, file_io);
+    REQUIRE(result.value("status", "") == "error");
+    CHECK(result.value("message", "").find("only http") != std::string::npos);
 }
 
 }  // namespace

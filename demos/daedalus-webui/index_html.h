@@ -263,6 +263,47 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     white-space: pre-wrap; word-break: break-all;
   }
   .tool-card.error .tool-card-result { color: #f85149; }
+  /* §Phase D2.1: tool-call counter badge in the section header.
+     Lives inside <h2>, so overrides the inherited uppercase +
+     letter-spacing. Shows "1 pending · 2 ok · 1 err" — only the
+     non-zero counts. Hidden until at least one tool call has
+     happened in this session. */
+  .tool-counter {
+    font-size: 11px; font-weight: 500;
+    padding: 1px 8px;
+    border-radius: 999px;
+    background: #161b22; color: #8b949e;
+    border: 1px solid #2a2f36;
+    margin-left: 6px;
+    text-transform: none; letter-spacing: normal;
+    transition: color 200ms, border-color 200ms, background 200ms;
+    cursor: default;
+  }
+  .tool-counter.has-pending { color: #58a6ff; border-color: #1f6feb;
+                              background: #1f6feb22; }
+  .tool-counter.has-error   { color: #f85149; border-color: #da3633;
+                              background: #da363322; }
+
+  /* §Phase D2.2: per-card collapse toggle on long results.
+     Default (.tool-card-result without .expanded) already has
+     max-height: 120px from the base rule above. .expanded bumps
+     to 800px so very long output doesn't dominate the page but
+     the user can read most of it without an internal scroll. */
+  .tool-card-result.expanded {
+    max-height: 800px;
+  }
+  .tool-card-collapse {
+    display: inline-block; margin: 4px 0 0;
+    padding: 2px 8px;
+    font-size: 11px;
+    background: transparent;
+    color: #58a6ff;
+    border: 1px solid #1f6feb;
+    border-radius: 4px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .tool-card-collapse:hover { background: #1f6feb22; }
 </style>
 </head>
 <body>
@@ -296,7 +337,7 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     </form>
   </section>
   <section>
-    <h2>Tool calls</h2>
+    <h2>Tool calls <span id="tool-counter" class="tool-counter" hidden></span></h2>
     <div id="tools" class="body"><span class="empty">No tool calls yet.</span></div>
   </section>
   <section>
@@ -456,6 +497,12 @@ function newSession() {
   transcriptEl.innerHTML = "";
   toolsEl.innerHTML      = '<span class="empty">No tool calls yet.</span>';
   logEl.innerHTML        = '<span class="empty">No events yet.</span>';
+  // §Phase D2.1: clear the counter badge (the JS counters live in
+  // the SSE-closure scope and reset implicitly when openEventStream
+  // runs again, but the DOM element persists across sessions).
+  const tc = document.getElementById("tool-counter");
+  if (tc) { tc.hidden = true; tc.textContent = "";
+            tc.classList.remove("has-pending", "has-error"); }
   statsEl.textContent     = "creating session...";
   fetch("/sessions", { method: "POST" })
     .then(r => r.json())
@@ -565,6 +612,11 @@ function openEventStream() {
   // We tolerate out-of-order progress events (only update if id is known).
   const toolCardsById = new Map();
   const toolCounter   = { pending: 0, succeeded: 0, failed: 0 };
+  // §Phase D2.1: separate counter for synthesised "local-*" ids when
+  // the SSE payload omits the call_id (rare; normally the sink
+  // supplies OpenAI's tool_calls[].id). Kept independent from
+  // toolCounter.pending so the badge stays accurate.
+  let localIdFallback = 0;
 
   function renderToolCardHeader(card, name) {
     card.innerHTML = "";
@@ -665,12 +717,73 @@ function openEventStream() {
     resEl.textContent = (typeof resultJson === "string")
         ? resultJson
         : JSON.stringify(resultJson, null, 2);
+    // §Phase D2.2: if the rendered result overflows the default
+    // 120px max-height, append a "show full / collapse" toggle.
+    addResultCollapseToggle(card, resEl);
+  }
+  // §Phase D2.2: per-card "show full / collapse" toggle for long
+  // tool results. The button only appears when the rendered content
+  // actually overflows the default CSS max-height (120px). When
+  // toggled, the result element gets the `.expanded` class which
+  // bumps max-height to 800px. The button is recreated on every
+  // result update (rare — only if a tool emits multiple results
+  // for the same call_id) so its handler always points at the
+  // current result element.
+  function addResultCollapseToggle(card, resEl) {
+    // Drop any prior toggle so we don't accumulate stale buttons
+    // when a result element is reused.
+    const old = card.querySelector(".tool-card-collapse");
+    if (old) old.remove();
+    // Always reset to the default (collapsed) max-height.
+    resEl.classList.remove("expanded");
+    // scrollHeight reflects the full content height regardless of
+    // overflow, so it tells us if the result actually overflows
+    // the default 120px cap. The +4 is a tiny fudge for borders.
+    const needsToggle = (resEl.scrollHeight > 124);
+    if (!needsToggle) return;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tool-card-collapse";
+    btn.textContent = "show full";
+    btn.addEventListener("click", () => {
+      const expanded = resEl.classList.toggle("expanded");
+      btn.textContent = expanded ? "collapse" : "show full";
+    });
+    card.appendChild(btn);
+  }
+  // §Phase D2.1: re-render the "Tool calls" header badge from the
+  // running toolCounter totals. Hidden when nothing has happened
+  // yet; shows "N pending · N ok · N err" with only non-zero
+  // buckets (so an early "1 pending" doesn't show "0 ok · 0 err").
+  function renderToolCounter() {
+    const el = document.getElementById("tool-counter");
+    if (!el) return;
+    const c = toolCounter;
+    const total = c.pending + c.succeeded + c.failed;
+    if (total === 0) {
+      el.hidden = true;
+      el.textContent = "";
+      el.classList.remove("has-pending", "has-error");
+      return;
+    }
+    el.hidden = false;
+    const parts = [];
+    if (c.pending   > 0) parts.push(c.pending   + " pending");
+    if (c.succeeded > 0) parts.push(c.succeeded + " ok");
+    if (c.failed    > 0) parts.push(c.failed    + " err");
+    el.textContent = parts.join(" · ");
+    el.classList.toggle("has-pending", c.pending > 0);
+    el.classList.toggle("has-error",   c.failed  > 0);
   }
 
   es.addEventListener("tool_call", (e) => {
     if (toolsEl.querySelector(".empty")) toolsEl.innerHTML = "";
     const d = JSON.parse(e.data);
-    const id = d.id || ("local-" + (++toolCounter.pending));
+    // §Phase D2.1: use a separate counter for the rare case the SSE
+    // payload omits `id` (the sink normally sets it from OpenAI's
+    // tool_calls[].id). Mixing it into toolCounter.pending would
+    // double-count when a fallback id is later overwritten.
+    const id = d.id || ("local-" + (++localIdFallback));
     // Idempotent: if a card for this id already exists, just
     // refresh its args (e.g. on retried calls).
     let card = toolCardsById.get(id);
@@ -680,9 +793,12 @@ function openEventStream() {
       card.dataset.id = id;
       toolsEl.appendChild(card);
       toolCardsById.set(id, card);
+      // §Phase D2.1: only count once per new card.
+      toolCounter.pending++;
     }
     const parts = setCardRunning(card, d.name);
     setCardArgs(card, d.args);
+    renderToolCounter();
   });
 
   es.addEventListener("tool_progress", (e) => {
@@ -705,6 +821,10 @@ function openEventStream() {
       setCardSuccess(card);
       toolCounter.succeeded++;
     }
+    // §Phase D2.1: every tool_result resolves one pending call.
+    // (Even errors count as "done", not "still pending".)
+    if (toolCounter.pending > 0) toolCounter.pending--;
+    renderToolCounter();
     toolsEl.scrollTop = toolsEl.scrollHeight;
   });
   es.addEventListener("log", (e) => {

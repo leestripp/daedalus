@@ -29,6 +29,13 @@ public:
     std::string get_description() const override { return "Read the contents of a file and return them as a string"; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
+    // §Phase C2: 3-arg overload for streaming tool-call progress.
+    // The 2-arg version above delegates here with `progress=nullptr`.
+    // Reads >1MB take noticeable wall time on slow disks / network
+    // filesystems, so we emit a single "reading" event just before
+    // the slurp. FileIO::read_file_content caps at 10MB; we don't try
+    // to mid-read percent updates because the rdbuf slurp is opaque.
+    json execute(const json& args, FileIO& file_io, ToolProgressFn progress) override;
 };
 
 // ========== ListDirectoryTool ==========

@@ -82,6 +82,11 @@ public:
     std::string get_description() const override;
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
+    // §Phase C2: 3-arg overload for streaming tool-call progress. The
+    // 2-arg version above delegates here with `progress=nullptr`.
+    // "connecting" fires before the network round-trip; "receiving"
+    // fires once the body is read (the long part for big downloads).
+    json execute(const json& args, FileIO& file_io, ToolProgressFn progress) override;
 
 private:
     struct ParsedUrl {
@@ -101,13 +106,17 @@ private:
     //    final_url, elapsed_ms, body_bytes}
     // On connection / TLS / parse error returns:
     //   {error, final_url, elapsed_ms}
+    // `progress` (optional) is invoked with byte-level progress during
+    // the body read. Emits at fixed milestones (25/50/75/100%) for
+    // Content-Length responses, and just start/end for chunked.
     static json do_request(const ParsedUrl& url,
                            const std::string& method,
                            const std::map<std::string,std::string>& headers,
                            const std::string& body,
                            int timeout_seconds,
                            size_t max_response_bytes,
-                           bool insecure);
+                           bool insecure,
+                           ToolProgressFn progress = nullptr);
 };
 
 class DnsLookupTool : public BaseTool {

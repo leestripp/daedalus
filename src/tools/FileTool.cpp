@@ -44,6 +44,23 @@ json ReadFileTool::get_definition() const {
 }
 
 json ReadFileTool::execute(const json& args, FileIO& file_io) {
+    return execute(args, file_io, nullptr);
+}
+
+json ReadFileTool::execute(const json& args, FileIO& file_io,
+                            ToolProgressFn progress) {
+    auto emit_progress = [&progress](const std::string& stage,
+                                     int percent,
+                                     const std::string& message) {
+        if (!progress) return;
+        json p = {
+            {"stage",   stage},
+            {"percent", percent},
+            {"message", message},
+        };
+        progress(p);
+    };
+
     std::string path;
     bool line_numbers = false;
     try {
@@ -70,8 +87,14 @@ json ReadFileTool::execute(const json& args, FileIO& file_io) {
     }
 
     try {
+        // §Phase C2: emit "reading" before the slurp. Only emit AFTER
+        // arg validation passes — matches BashTool's pattern of never
+        // firing a "starting" event for a tool that's about to return
+        // an error. The 0% mark lets the webui card show an
+        // indeterminate shimmer while the rdbuf is in flight.
+        emit_progress("reading", 0, "Reading " + path);
         std::string content = file_io.read_file_content(std::filesystem::path(path));
-        
+
         // Add line numbers if requested
         if (line_numbers) {
             std::istringstream stream(content);
@@ -84,7 +107,7 @@ json ReadFileTool::execute(const json& args, FileIO& file_io) {
             }
             content = numbered_content.str();
         }
-        
+
         return json::object({
             {"status", "success"},
             {"path", path},

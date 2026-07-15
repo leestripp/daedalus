@@ -135,7 +135,8 @@ json HttpRequestTool::do_request(const ParsedUrl& url,
                                  const std::string& body,
                                  int timeout_seconds,
                                  size_t max_response_bytes,
-                                 bool insecure) {
+                                 bool insecure,
+                                 ToolProgressFn progress) {
     using clock = std::chrono::steady_clock;
     auto t0 = clock::now();
 
@@ -146,6 +147,40 @@ json HttpRequestTool::do_request(const ParsedUrl& url,
             {"final_url", url.scheme + "://" + url.host + ":" + std::to_string(url.port) + url.path},
             {"elapsed_ms", std::chrono::duration_cast<std::chrono::milliseconds>(clock::now() - t0).count()}
         });
+    };
+
+    // §Phase C2.5: byte-level progress during the body read.
+    // Emits at fixed 25/50/75/100% milestones for Content-Length
+    // responses (max 4 emissions). For chunked responses (no known
+    // total) emits just "receiving" 0% at start and 100% at end.
+    // The "last_pct" guard prevents flooding when chunks are small
+    // (e.g. reading 1MB in 8KB chunks would otherwise emit thousands
+    // of events). Initialised to -1 so the first 0% emit is not
+    // filtered out by the `<= last_pct` check.
+    int last_pct = -1;
+    auto emit_progress = [&](int percent, const std::string& message) {
+        if (!progress) return;
+        if (percent <= last_pct && percent < 100) return;   // only fire on milestone crossings
+        last_pct = percent;
+        json p = {
+            {"stage",   "receiving"},
+            {"percent", percent},
+            {"message", message},
+        };
+        progress(p);
+    };
+    auto maybe_emit_cl = [&](size_t bytes_read, size_t total) {
+        if (total == 0) return;
+        const int pct = static_cast<int>((bytes_read * 100) / total);
+        // Milestone boundary at 25/50/75 — last_pct guard stops
+        // repeated emissions if percent jumps multiple boundaries
+        // in one chunk (e.g. a 1MB chunk on a 100KB total).
+        int milestone = (pct / 25) * 25;
+        if (milestone > last_pct) {
+            emit_progress(milestone,
+                          "Received " + std::to_string(bytes_read) +
+                          " / " + std::to_string(total) + " bytes");
+        }
     };
 
     // ----- Connect -----
@@ -264,6 +299,10 @@ json HttpRequestTool::do_request(const ParsedUrl& url,
     bool truncated = false;
 
     if (chunked) {
+        // §Phase C2.5: chunked transfer has no Content-Length, so
+        // we can't compute byte-level percent. Emit just "start" +
+        // "end" — the user knows the response is in flight.
+        emit_progress(0, "Receiving chunked body");
         // Minimal chunked transfer parser.
         while (true) {
             auto line = sock->readLine();
@@ -297,15 +336,28 @@ json HttpRequestTool::do_request(const ParsedUrl& url,
             // consume trailing CRLF
             (void)sock->readLine();
         }
+        emit_progress(100, "Received " + std::to_string(body_out.size()) +
+                          " bytes (chunked)");
     } else if (content_length > 0) {
+        // §Phase C2.5: we know the total up front, so emit 0% before
+        // the read and milestone updates as bytes arrive. For small
+        // responses (<25% of nothing) the only emission is 0% then
+        // 100% — same as chunked. For >=25KB responses we get the
+        // 4-milestone ladder.
+        emit_progress(0, "Receiving " + std::to_string(content_length) + " bytes");
         if (content_length > max_response_bytes) {
             truncated = true;
             auto buf = sock->recvExactly(max_response_bytes);
             body_out.assign(reinterpret_cast<const char*>(buf.data()), buf.size());
+            maybe_emit_cl(body_out.size(), content_length);
             // Connection: close — server will close when body sent; nothing to drain.
         } else {
+            // For smaller-than-recv-buffer reads, recvExactly gives us
+            // it in one shot — emit just the final 100%.
             auto buf = sock->recvExactly(content_length);
             body_out.assign(reinterpret_cast<const char*>(buf.data()), buf.size());
+            emit_progress(100, "Received " + std::to_string(body_out.size()) +
+                              " / " + std::to_string(content_length) + " bytes");
         }
     }
     // (Connection: close means we're done after body; no need to read more.)
@@ -386,7 +438,24 @@ json HttpRequestTool::get_definition() const {
 }
 
 json HttpRequestTool::execute(const json& args, FileIO& file_io) {
+    return execute(args, file_io, nullptr);
+}
+
+json HttpRequestTool::execute(const json& args, FileIO& file_io,
+                              ToolProgressFn progress) {
     (void)file_io;  // HTTP doesn't touch the local filesystem
+
+    auto emit_progress = [&progress](const std::string& stage,
+                                     int percent,
+                                     const std::string& message) {
+        if (!progress) return;
+        json p = {
+            {"stage",   stage},
+            {"percent", percent},
+            {"message", message},
+        };
+        progress(p);
+    };
 
     // ----- Parse args -----
     std::string url, method = "GET", body;
@@ -444,8 +513,21 @@ json HttpRequestTool::execute(const json& args, FileIO& file_io) {
         });
     }
 
-    return do_request(*parsed, method, headers, body,
-                      timeout_seconds, max_response_bytes, insecure);
+    // §Phase C2: emit "connecting" before the network round-trip. The
+    // vast majority of latency for a typical http_request is the
+    // connect+TLS handshake, so this is the stage the user wants to
+    // see. Progress is only emitted AFTER all guards pass (URL parse,
+    // arg validation) — matches BashTool's pattern of never emitting
+    // when the tool is about to short-circuit return an error.
+    emit_progress("connecting", 0, "Connecting to " + url);
+    // §Phase C2.5: do_request now emits "receiving" with byte-level
+    // percent (0/25/50/75/100% for Content-Length, just 0/100% for
+    // chunked). The post-receive emit at the call-site is therefore
+    // removed — do_request owns the receiving-stage events.
+    json result = do_request(*parsed, method, headers, body,
+                             timeout_seconds, max_response_bytes, insecure,
+                             progress);
+    return result;
 }
 // ============================================================================
 // DnsLookupTool

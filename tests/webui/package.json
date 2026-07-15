@@ -1,0 +1,13 @@
+{
+  "name": "webui",
+  "version": "1.0.0",
+  "description": "Browser-side smoke tests for the daedalus-webui UI. Run with Node.js — see README.md for setup.",
+  "main": "three_call_test.js",
+  "scripts": {
+    "test": "node three_call_test.js && node playwright_three_call_test.js"
+  },
+  "license": "ISC",
+  "devDependencies": {
+    "playwright": "^1.0.0"
+  }
+}

@@ -1275,3 +1275,28 @@ target_link_libraries(daedalus_ensure_directories_tests PRIVATE
 )
 add_test(NAME ensure_directories_tests
     COMMAND daedalus_ensure_directories_tests)
+
+# ============================================================================
+# §Phase E1: JS-side wiring check for the webui tool-panel.
+#
+# Two Node-based tests live under tests/webui/:
+#
+#   1. three_call_test.js — pure-JS data-flow test using a vm context
+#      and a minimal DOM mock. Runs in ~30ms with no external deps.
+#
+#   2. playwright_three_call_test.js — full browser test that drives
+#      a real headless Chromium. Adds computed-CSS verification on
+#      top of the data-flow checks. Requires `npm install playwright`
+#      + `npx playwright install chromium` (~290 MiB).
+#
+# Neither is registered with add_test() because they require
+# Node.js >= 18, which the project's CMake doesn't enforce.
+# Run manually from the tests/webui/ directory:
+#
+#   node three_call_test.js
+#   node playwright_three_call_test.js
+#   npm test                # runs both in sequence
+#
+# When the project grows a node-based test runner (e.g. CI with
+# Playwright preinstalled), both files should be wired into ctest.
+# ============================================================================

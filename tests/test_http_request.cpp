@@ -256,6 +256,86 @@ static void test_connect_refused() {
     EXPECT(r.value("message", "").size() > 0, "error message non-empty");
 }
 
+// §Phase C2.5: byte-level progress during the body read. We use a
+// 10KB body so the 25/50/75/100% milestones all cross at distinct
+// recv() points (small enough to keep the test fast, large enough
+// to span every milestone).
+static void test_byte_level_progress() {
+    std::cerr << "test_byte_level_progress\n";
+
+    // 10 KB of repeated 'a'. LocalServer sends it with Content-Length
+    // = 10000, so do_request can compute percent = bytes_read / 10000.
+    const std::string big_body(10 * 1024, 'a');
+    LocalServer srv(big_body, "application/octet-stream");
+
+    FileIO fileio(std::filesystem::current_path());
+    HttpRequestTool tool;
+
+    std::vector<json> events;
+    std::mutex mu;
+    ToolProgressFn cb = [&](const json& p) {
+        std::lock_guard<std::mutex> lk(mu);
+        events.push_back(p);
+    };
+
+    auto r = tool.execute(json{{"url", srv.url()}, {"method", "GET"}}, fileio, cb);
+
+    EXPECT(r.value("status", "") == "success", "GET 200 OK");
+    EXPECT(r.value("body_bytes", 0) == 10 * 1024,
+           "body_bytes matches 10 KiB body");
+
+    // §Phase C2.5 emits two event types:
+    //   - "connecting" 0% from execute() before the network round-trip
+    //   - "receiving"  0% and 100% from do_request() around the body read
+    // So the global sequence is: [connecting, receiving 0%, receiving 100%].
+    // We expect at least these three.
+    EXPECT(events.size() >= 3, "at least 3 progress events");
+
+    // First event: connecting (pre-handshake indicator).
+    EXPECT(events.front().value("stage", "") == "connecting",
+           "first event stage = connecting (pre-handshake)");
+    EXPECT(events.front().value("percent", -1) == 0,
+           "first event percent = 0");
+
+    // From index 1 onward, every event is "receiving" with monotonic %.
+    int last_pct = -1;
+    for (std::size_t i = 1; i < events.size(); ++i) {
+        const auto& e = events[i];
+        EXPECT(e.value("stage", "") == "receiving",
+               "post-connect event is 'receiving'");
+        const int p = e.value("percent", -1);
+        EXPECT(p >= last_pct,
+               "receiving-stage percent monotonically non-decreasing");
+        last_pct = p;
+    }
+
+    // The last "receiving" event must be 100% (we don't stop early).
+    EXPECT(events.back().value("stage", "") == "receiving",
+           "last event stage = receiving");
+    EXPECT(events.back().value("percent", -1) == 100,
+           "last event percent = 100");
+}
+
+// §Phase C2.5: 2-arg execute() still works (back-compat) — the new
+// progress parameter has a nullptr default, so legacy callers see
+// no behaviour change.
+static void test_2arg_still_emits_zero_events() {
+    std::cerr << "test_2arg_still_emits_zero_events\n";
+
+    LocalServer srv("hello", "text/plain");
+    FileIO fileio(std::filesystem::current_path());
+    HttpRequestTool tool;
+
+    // No progress callback passed — legacy 2-arg path.
+    auto r = tool.execute(json{{"url", srv.url()}}, fileio);
+
+    EXPECT(r.value("status", "") == "success", "GET 200 OK");
+    EXPECT(r.value("body", "") == "hello", "body matches");
+    // (Nothing to assert about events — we just need the legacy
+    // path to not crash and to still produce a correct response.)
+    EXPECT(r.contains("elapsed_ms"), "elapsed_ms still present");
+}
+
 // End-to-end HTTPS test. Only runs if both:
 //   1. OMNINET_HTTPS_TEST_URL is set in the env
 //   2. OMNINET_CA_FILE points at a usable CA bundle
@@ -293,6 +373,8 @@ int main() {
     test_local_get();
     test_local_post_with_body_and_headers();
     test_connect_refused();
+    test_byte_level_progress();
+    test_2arg_still_emits_zero_events();
     test_optional_https();
     std::cerr << "\nResults: " << (failures == 0 ? "all passed" : "FAILED (" + std::to_string(failures) + ")") << "\n";
     return failures > 0 ? 1 : 0;

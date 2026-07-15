@@ -39,6 +39,13 @@ public:
     std::string get_description() const override;
     json        get_definition() const override;
     json        execute(const json& args, FileIO& file_io) override;
+    // §Phase C2: 3-arg overload for streaming tool-call progress.
+    // The 2-arg version above delegates here with `progress=nullptr`.
+    // MCP calls often involve stdio spawn (1-2s on first invocation)
+    // or HTTP round-trips, both of which look like a frozen UI
+    // without progress feedback. Emits "calling" before the call and
+    // "parsing" after the response is in.
+    json        execute(const json& args, FileIO& file_io, ToolProgressFn progress) override;
 
 private:
     std::string               server_name_;
