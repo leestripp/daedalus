@@ -215,7 +215,7 @@ void test_m6_placeholder_skipped() {
 }
 
 // ===========================================================================
-// M7: mcp/servers.json ingested
+// M7: mcp/servers.json ingested (v0.5.0: into mcp_servers table, not kv)
 // ===========================================================================
 void test_m7_mcp_servers_migrated() {
     TmpHome h("m7");
@@ -225,13 +225,16 @@ void test_m7_mcp_servers_migrated() {
     daedalus::SettingsMigrator::run(
         store, h.config_json(), h.mcp_json(), /*mark_files=*/false);
 
-    auto a = store.get_string("mcp.server.server-a", "");
-    auto b = store.get_string("mcp.server.server-b", "");
-    EXPECT(!a.empty());
-    EXPECT(!b.empty());
-    EXPECT(a.find("echo") != std::string::npos);
-    EXPECT(b.find("cat")  != std::string::npos);
-    std::cout << "[ok] M7: mcp/servers.json ingested\n";
+    auto servers = store.list_mcp_servers();
+    EXPECT(servers.size() == 2);
+    bool found_echo = false, found_cat = false;
+    for (const auto& s : servers) {
+        if (s.command.find("echo") != std::string::npos) found_echo = true;
+        if (s.command.find("cat")  != std::string::npos) found_cat = true;
+    }
+    EXPECT(found_echo);
+    EXPECT(found_cat);
+    std::cout << "[ok] M7: mcp/servers.json ingested into mcp_servers table\n";
 }
 
 // ===========================================================================

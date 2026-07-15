@@ -173,6 +173,8 @@ int migrate_config_json(const fs::path& src, SettingsStore& store)
 // ===========================================================================
 // mcp/servers.json → mcp_servers
 // ===========================================================================
+// mcp/servers.json → mcp_servers (v0.5.0)
+// ===========================================================================
 int migrate_mcp_servers_json(const fs::path& src, SettingsStore& store)
 {
     std::ifstream in(src);
@@ -190,14 +192,38 @@ int migrate_mcp_servers_json(const fs::path& src, SettingsStore& store)
     int count = 0;
 
     // Two top-level shapes are accepted: {"mcpServers": {...}} (the
-    // current shape) and {"servers": [...]}. We just look for any
-    // object-of-servers under any of the known keys.
+    // current shape) and {"servers": [...]}.
     auto try_ingest = [&](const json& servers) {
         if (!servers.is_object()) return;
         for (auto& [name, cfg] : servers.items()) {
-            // For v0.3.1 we just stash the raw JSON in kv_settings under
-            // a per-server key. A proper mcp_servers table comes later.
-            store.set_string("mcp.server." + name, cfg.dump());
+            SettingsStore::McpServer s;
+            s.name        = name;
+            s.transport   = cfg.value("transport", "stdio");
+            s.command     = cfg.value("command", "");
+            s.url         = cfg.value("url", "");
+            s.description = cfg.value("description", "");
+            s.enabled     = cfg.value("enabled", true);
+            // bearer_token: accept snake_case or camelCase
+            if (cfg.contains("bearer_token") && cfg["bearer_token"].is_string()) {
+                s.bearer_token = cfg["bearer_token"].get<std::string>();
+            } else if (cfg.contains("bearerToken") && cfg["bearerToken"].is_string()) {
+                s.bearer_token = cfg["bearerToken"].get<std::string>();
+            }
+            // args: JSON array of strings
+            if (cfg.contains("args") && cfg["args"].is_array()) {
+                for (const auto& a : cfg["args"]) {
+                    if (a.is_string()) s.args.push_back(a.get<std::string>());
+                }
+            }
+            // env: JSON object of string→string
+            if (cfg.contains("env") && cfg["env"].is_object()) {
+                for (auto it = cfg["env"].begin(); it != cfg["env"].end(); ++it) {
+                    if (it.value().is_string()) {
+                        s.env[it.key()] = it.value().get<std::string>();
+                    }
+                }
+            }
+            store.upsert_mcp_server(s);
             ++count;
         }
     };
@@ -223,8 +249,13 @@ bool SettingsMigrator::needs_migration(const SettingsStore& store,
     if (!store.list_models().empty())         return false;
     // §v0.5.0: The store uses "default_model_name" as the kv_settings key.
     if (!store.get_string("default_model_name", "").empty()) return false;
+    // §v0.5.0: presence of MCP servers also means we're past the
+    // JSON→SQLite cutover.
+    if (store.has_mcp_servers()) return false;
     auto cfg = config_json_path.empty() ? default_config_json_path() : config_json_path;
-    return fs::exists(cfg);
+    if (fs::exists(cfg)) return true;
+    auto mcp = mcp_servers_path.empty() ? default_mcp_servers_path() : mcp_servers_path;
+    return fs::exists(mcp);
 }
 
 MigrateReport SettingsMigrator::run(SettingsStore& store,

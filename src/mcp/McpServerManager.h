@@ -54,6 +54,27 @@ public:
     // Returns true on success, false on error (check get_last_error())
     bool load_config(const std::string& config_path = "");
 
+    // §v0.5.0: Load configuration from a SettingsStore (SQLite).
+    // Pops McpServer entries out of the daedalus.db's mcp_servers table
+    // and ingests them into the same in-memory configs_ map that
+    // load_config() uses. Use this when the user has migrated to the
+    // SQLite-backed settings.
+    //
+    // This is declared in the header as a free function template so the
+    // SettingsStore header doesn't pollute the McpServerManager public API.
+    // See load_from_store_impl() in McpServerManager.cpp for the impl.
+    template <typename StoreT>
+    bool load_from_store(StoreT& store) {
+        return load_from_store_impl(&store);
+    }
+
+private:
+    // §v0.5.0: Concrete loader. Implementation is in McpServerManager.cpp.
+    // Public API is the templated load_from_store() above; this is the
+    // single place that actually touches daedalus::SettingsStore.
+    bool load_from_store_impl(void* store_ptr);
+
+public:
     // Connect to a specific server by name.
     // Dispatches to McpClient (stdio) or McpTransport (HTTP) based on the
     // server's configured transport.

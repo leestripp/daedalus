@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "core/Logger.h"
+#include "daedalus/settings.h"   // §v0.5.0: load_from_store() reads from here
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
 // statements into LOG_INFO/LOG_WARNING/LOG_ERROR calls via the
@@ -318,6 +319,57 @@ bool McpServerManager::load_config(const std::string& config_path) {
         return false;
     }
 }
+
+// §v0.5.0: Concrete loader called from the templated public API. Touches
+// daedalus::SettingsStore directly. Returning through void* keeps the
+// SettingsStore header out of McpServerManager.h.
+bool McpServerManager::load_from_store_impl(void* store_ptr)
+{
+    auto& store = *static_cast<daedalus::SettingsStore*>(store_ptr);
+
+    configs_.clear();
+    config_loaded_ = false;
+    clients_.clear();
+    http_transports_.clear();
+    server_tools_.clear();
+    mark_mcp_tools_dirty();
+
+    auto servers = store.list_mcp_servers();
+    for (const auto& s : servers) {
+        if (is_server_disabled(s.name)) {
+            LOG_CERR(INFO, "[MCP] skipping disabled server '" << s.name << "'\n");
+            continue;
+        }
+        McpServerConfig sc;
+        sc.name         = s.name;
+        sc.command      = s.command;
+        sc.args         = s.args;
+        sc.env          = s.env;
+        sc.transport    = s.transport;
+        sc.url          = s.url;
+        sc.bearer_token = s.bearer_token;
+        sc.description  = s.description;
+        sc.enabled      = s.enabled;
+        if (sc.is_valid()) {
+            configs_[s.name] = sc;
+        } else {
+            LOG_CERR(INFO,  "[MCP] WARNING: rejected server entry '"
+                      << s.name << "' from store — ");
+            if (sc.is_http()) {
+                LOG_CERR(INFO,  "transport is http but 'url' is missing or empty\n");
+            } else {
+                LOG_CERR(INFO,  "stdio requires non-empty 'command' and 'args'\n");
+            }
+        }
+    }
+
+    config_loaded_ = true;
+    return true;
+}
+
+// Explicit instantiation for the only concrete type we support now.
+template bool McpServerManager::load_from_store<daedalus::SettingsStore>(
+    daedalus::SettingsStore& store);
 
 bool McpServerManager::connect(const std::string& server_name) {
     last_error_.clear();

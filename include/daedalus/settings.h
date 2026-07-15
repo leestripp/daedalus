@@ -24,6 +24,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -201,6 +202,42 @@ public:
 
     /// Drop the persisted messages for `session_id`.
     void delete_messages_json(std::string_view session_id);
+
+    // -----------------------------------------------------------------------
+    // v0.5.0: MCP server registry. The `mcp_servers` table replaces
+    // `~/.config/daedalus/mcp/servers.json` — see SettingsMigrator for the
+    // auto-migration path.
+    // -----------------------------------------------------------------------
+
+    /// One MCP server config. Mirrors the McpServerConfig struct but lives
+    /// in the public API so hosts can read/write the registry directly.
+    struct McpServer
+    {
+        std::string name;
+        std::string transport = "stdio";        // stdio | streamable-http
+        std::string command;                    // stdio: executable
+        std::vector<std::string> args;          // stdio: argv
+        std::map<std::string, std::string> env; // stdio: env vars
+        std::string url;                        // http: endpoint
+        std::string bearer_token;               // http: Authorization header
+        std::string description;
+        bool enabled = true;
+    };
+
+    /// Get one MCP server by name.
+    std::optional<McpServer> get_mcp_server(std::string_view name) const;
+
+    /// List all configured MCP servers.
+    std::vector<McpServer> list_mcp_servers() const;
+
+    /// Insert or replace one MCP server.
+    void upsert_mcp_server(const McpServer& s);
+
+    /// Delete one MCP server by name.
+    void delete_mcp_server(std::string_view name);
+
+    /// True if any MCP servers are registered.
+    bool has_mcp_servers() const noexcept;
 
 private:
     SettingsStore() = default;

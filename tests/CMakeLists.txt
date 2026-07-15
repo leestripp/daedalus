@@ -191,6 +191,7 @@ target_include_directories(daedalus_mcp_server_config_http_tests PRIVATE
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_server_config_http_tests PRIVATE
+    daedalus
     nlohmann_json::nlohmann_json
     CURL::libcurl
     OmniNet
@@ -224,6 +225,7 @@ target_include_directories(daedalus_mcp_proxied_tool_tests PRIVATE
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_proxied_tool_tests PRIVATE
+    daedalus
     nlohmann_json::nlohmann_json
     CURL::libcurl
     OmniNet
@@ -257,6 +259,7 @@ target_include_directories(daedalus_mcp_hub_hardening_tests PRIVATE
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_hub_hardening_tests PRIVATE
+    daedalus
     nlohmann_json::nlohmann_json
     CURL::libcurl
     OmniNet
@@ -812,6 +815,48 @@ target_link_libraries(daedalus_auto_migrate_tests PRIVATE
     pthread
 )
 add_test(NAME auto_migrate_tests COMMAND daedalus_auto_migrate_tests)
+
+# SettingsStore v0.5.0 mcp_servers table: tests CRUD + migrator writes.
+add_executable(daedalus_mcp_servers_store_tests
+    test_mcp_servers_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/SettingsMigrator.cpp
+)
+target_include_directories(daedalus_mcp_servers_store_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_mcp_servers_store_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME mcp_servers_store_tests COMMAND daedalus_mcp_servers_store_tests)
+
+# McpServerManager::load_from_store wires SettingsStore → McpServerManager.
+add_executable(daedalus_mcp_load_from_store_tests
+    test_mcp_load_from_store.cpp
+    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
+    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+)
+target_include_directories(daedalus_mcp_load_from_store_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/mcp
+    ${CMAKE_SOURCE_DIR}/src/api
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_mcp_load_from_store_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    CURL::libcurl
+    OmniNet
+    pthread
+)
+add_test(NAME mcp_load_from_store_tests COMMAND daedalus_mcp_load_from_store_tests)
 
 # Instance() auto-migration test. Runs in its own process so the
 # SettingsStore singleton is fresh. Verifies the constructor's

@@ -241,22 +241,24 @@ void test_am6_corrupt_json_handled() {
 // ===========================================================================
 void test_am7_needs_migration_gating() {
     TmpHome h("am7");
-    fs::path cfg = h.config_root() / "config.json";
+    fs::path cfg  = h.config_root() / "config.json";
+    fs::path mcp  = h.config_root() / "mcp/servers.json";
+    fs::create_directories(h.config_root() / "mcp");
     auto& store = daedalus::SettingsStore::for_home(h.data_root());
 
-    // Fresh DB + no legacy JSON → false
+    // Fresh DB + no legacy JSONs (config.json AND mcp/servers.json) → false
     EXPECT(!daedalus::SettingsMigrator::needs_migration(
-        store, cfg, {}));
+        store, cfg, mcp));
 
-    // Fresh DB + legacy JSON → true
+    // Fresh DB + legacy config.json → true (config path is provided)
     write_legacy_config(cfg, "gate-model", "real-key-not-placeholder");
     EXPECT(daedalus::SettingsMigrator::needs_migration(
-        store, cfg, {}));
+        store, cfg, mcp));
 
     // Run the migrator; now needs_migration() must be false again.
-    daedalus::SettingsMigrator::run(store, cfg, {}, /*mark_files=*/true);
+    daedalus::SettingsMigrator::run(store, cfg, mcp, /*mark_files=*/true);
     EXPECT(!daedalus::SettingsMigrator::needs_migration(
-        store, cfg, {}));
+        store, cfg, mcp));
     std::cout << "[ok] AM7: needs_migration() gates correctly\n";
 }
 

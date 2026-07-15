@@ -19,11 +19,13 @@
 
 #include <cassert>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
+#include <nlohmann/json.hpp>
 #include <db/Database.h>      // OmniNet::DB::Database — sqlite3 wrapper
 
 #include "daedalus/paths.h"   // Paths::global() for the default DB path
@@ -84,7 +86,7 @@ int builtin_max_context_size(std::string_view model_name)
 // ===========================================================================
 namespace {
 
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -106,13 +108,19 @@ CREATE TABLE IF NOT EXISTS kv_settings (
     value TEXT NOT NULL
 );
 
+-- §v0.5.0: schema v2 adds description, bearer_token, enabled for full
+-- parity with McpServerConfig. Pre-v2 DBs get an in-place ALTER TABLE
+-- migration below.
 CREATE TABLE IF NOT EXISTS mcp_servers (
-    name      TEXT PRIMARY KEY,
-    transport TEXT NOT NULL,
-    command   TEXT,
-    args_json TEXT,
-    env_json  TEXT,
-    url       TEXT
+    name        TEXT PRIMARY KEY,
+    transport   TEXT NOT NULL DEFAULT 'stdio',
+    command     TEXT,
+    args_json   TEXT,
+    env_json    TEXT,
+    url         TEXT,
+    bearer_token TEXT,
+    description TEXT,
+    enabled     INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS serper_config (
@@ -121,17 +129,53 @@ CREATE TABLE IF NOT EXISTS serper_config (
 );
 )sql";
 
+/// Per-version migrations. Called when schema_version table reports
+/// a value less than kSchemaVersion. Each entry bumps v → v+1.
+void migrate_to_v2(OmniNet::DB::Database& db)
+{
+    // v2: add mcp_servers.description / bearer_token / enabled.
+    // ALTER TABLE columns; idempotent (catch "duplicate column" errors).
+    auto add_col = [&](const std::string& col, const std::string& def) {
+        try {
+            db.execute("ALTER TABLE mcp_servers ADD COLUMN " + col + " " + def);
+        } catch (...) {
+            // Column already exists — fine.
+        }
+    };
+    add_col("bearer_token", "TEXT");
+    add_col("description",  "TEXT");
+    add_col("enabled",      "INTEGER NOT NULL DEFAULT 1");
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
 
     // schema_version row
+    int current_version = 0;
     auto row = db.queryOne("SELECT version FROM schema_version LIMIT 1");
-    if (!row.has_value()) {
+    if (row.has_value() && !row->empty()) {
+        try {
+            current_version = std::stoi((*row)[0]);
+        } catch (...) {
+            current_version = 0;
+        }
+    } else {
+        db.execute("INSERT INTO schema_version(version) VALUES (" +
+                   std::to_string(kSchemaVersion) + ")");
+        current_version = kSchemaVersion;
+    }
+
+    // Run any pending per-version migrations.
+    if (current_version < 2) migrate_to_v2(db);
+
+    // Update the stored version if it advanced.
+    if (current_version != kSchemaVersion) {
+        // SQLite's UPSERT pattern. Set to current version.
+        db.execute("DELETE FROM schema_version");
         db.execute("INSERT INTO schema_version(version) VALUES (" +
                    std::to_string(kSchemaVersion) + ")");
     }
-    // (Future: if row->[0] < kSchemaVersion, run migrations.)
 }
 
 ModelConfig row_to_model(const std::vector<std::string>& r)
@@ -510,6 +554,103 @@ ServerErrorSettings SettingsStore::get_server_error_settings() const
     s.backoff_multiplier = std::stod(get_string("server_error_backoff_multiplier", std::to_string(s.backoff_multiplier)));
     s.max_retries_per_call = get_int("server_error_max_retries_per_call", s.max_retries_per_call);
     return s;
+}
+
+// ============================================================================
+// v0.5.0: MCP server registry
+// ============================================================================
+//
+// These accessors store McpServer entries in the `mcp_servers` table.
+// Hosts (or McpServerManager) call list_mcp_servers() on startup to
+// load the user's configured MCP servers, replacing the old JSON file
+// path. SettingsMigrator handles the one-shot JSON→SQLite migration.
+
+namespace {
+SettingsStore::McpServer row_to_mcp(const std::vector<std::string>& r)
+{
+    // SELECT order: name, transport, command, args_json, env_json, url,
+    //               bearer_token, description, enabled
+    SettingsStore::McpServer s;
+    if (r.size() < 9) return s;
+    s.name         = r[0];
+    s.transport    = r[1].empty() ? "stdio" : r[1];
+    s.command      = r[2];
+    s.url          = r[5];
+    s.bearer_token = r[6];
+    s.description  = r[7];
+    s.enabled      = (r[8] == "1" || r[8] == "true");
+    if (!r[3].empty()) {
+        try {
+            auto j = nlohmann::json::parse(r[3]);
+            if (j.is_array()) {
+                for (const auto& a : j) s.args.push_back(a.get<std::string>());
+            }
+        } catch (...) { /* leave empty */ }
+    }
+    if (!r[4].empty()) {
+        try {
+            auto j = nlohmann::json::parse(r[4]);
+            if (j.is_object()) {
+                for (auto it = j.begin(); it != j.end(); ++it) {
+                    s.env[it.key()] = it.value().get<std::string>();
+                }
+            }
+        } catch (...) { /* leave empty */ }
+    }
+    return s;
+}
+}  // anonymous namespace
+
+std::optional<SettingsStore::McpServer> SettingsStore::get_mcp_server(std::string_view name) const
+{
+    auto row = impl_->db->queryOne(
+        "SELECT name, transport, command, args_json, env_json, url, "
+        "bearer_token, description, enabled FROM mcp_servers WHERE name = '"
+        + std::string(name) + "'");
+    if (!row.has_value()) return std::nullopt;
+    return row_to_mcp(*row);
+}
+
+std::vector<SettingsStore::McpServer> SettingsStore::list_mcp_servers() const
+{
+    std::vector<McpServer> out;
+    for (const auto& row : impl_->db->query(
+            "SELECT name, transport, command, args_json, env_json, url, "
+            "bearer_token, description, enabled FROM mcp_servers ORDER BY name")) {
+        out.push_back(row_to_mcp(row));
+    }
+    return out;
+}
+
+void SettingsStore::upsert_mcp_server(const McpServer& s)
+{
+    nlohmann::json args_j = s.args;
+    nlohmann::json env_j  = s.env;
+    impl_->db->execute(
+        "INSERT INTO mcp_servers(name, transport, command, args_json, env_json, "
+        "url, bearer_token, description, enabled) VALUES('" +
+        s.name + "','" + s.transport + "','" + s.command + "','" +
+        args_j.dump() + "','" + env_j.dump() + "','" +
+        s.url + "','" + s.bearer_token + "','" + s.description + "'," +
+        (s.enabled ? "1" : "0") +
+        ") ON CONFLICT(name) DO UPDATE SET "
+        "transport=excluded.transport, command=excluded.command, "
+        "args_json=excluded.args_json, env_json=excluded.env_json, "
+        "url=excluded.url, bearer_token=excluded.bearer_token, "
+        "description=excluded.description, enabled=excluded.enabled");
+}
+
+void SettingsStore::delete_mcp_server(std::string_view name)
+{
+    impl_->db->execute(
+        "DELETE FROM mcp_servers WHERE name = '" + std::string(name) + "'");
+}
+
+bool SettingsStore::has_mcp_servers() const noexcept
+{
+    auto row = impl_->db->queryOne(
+        "SELECT 1 FROM mcp_servers LIMIT 1");
+    return row.has_value();
 }
 
 } // namespace daedalus

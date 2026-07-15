@@ -292,6 +292,79 @@ per unique `db_path`.
 
 ---
 
+## v0.5.0 — MCP server registry in SettingsStore
+
+The `mcp_servers` SQLite table replaces `~/.config/daedalus/mcp/servers.json`:
+
+```cpp
+#include <daedalus/settings.h>
+
+auto& store = daedalus::SettingsStore::instance();
+for (const auto& s : store.list_mcp_servers()) {
+    std::cout << s.name << " (" << s.transport << ")\n";
+}
+```
+
+### Schema v2
+
+The schema was bumped to v2 to add columns for full parity with `McpServerConfig`:
+
+```sql
+CREATE TABLE mcp_servers (
+    name         TEXT PRIMARY KEY,
+    transport    TEXT NOT NULL DEFAULT 'stdio',
+    command      TEXT,
+    args_json    TEXT,
+    env_json     TEXT,
+    url          TEXT,
+    bearer_token TEXT,
+    description  TEXT,
+    enabled      INTEGER NOT NULL DEFAULT 1
+);
+```
+
+Pre-v2 databases get an in-place ALTER TABLE migration on first open.
+
+### Public API
+
+```cpp
+struct McpServer {
+    std::string name;
+    std::string transport;        // stdio | streamable-http
+    std::string command;
+    std::vector<std::string> args;
+    std::map<std::string, std::string> env;
+    std::string url;
+    std::string bearer_token;
+    std::string description;
+    bool enabled = true;
+};
+
+std::optional<McpServer> get_mcp_server(std::string_view name) const;
+std::vector<McpServer>   list_mcp_servers() const;
+void upsert_mcp_server(const McpServer& s);
+void delete_mcp_server(std::string_view name);
+bool has_mcp_servers() const noexcept;
+```
+
+### McpServerManager integration
+
+`mcp::McpServerManager::load_from_store(store)` ingests McpServer rows
+into the same `configs_` map that `load_config(servers.json)` populates.
+Both APIs are interchangeable.
+
+---
+
+## v0.5.0 — Auto-migration on SettingsStore::instance()
+
+`SettingsStore::instance()` runs `SettingsMigrator::run()` once on first
+DB open. Idempotent — short-circuits if the store is already populated
+or no legacy JSON exists. Fixes the silent data-loss UX bug where legacy
+users upgrading daedalus had no models visible until they ran
+`--migrate-data` manually.
+
+---
+
 ## 8. File Locations Summary
 
 | What | Where |
