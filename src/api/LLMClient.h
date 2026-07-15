@@ -11,7 +11,6 @@
 
 #include "api/CurlMultiSession.h"
 #include "core/FileIO.h"
-#include "core/SettingsManager.h"
 #include "core/SessionMemory.h"
 #include "core/Messages.h"
 #include "mcp/McpClient.h"
@@ -21,6 +20,7 @@ namespace mcp { class McpServerManager; }
 #include "tools/ToolHandler.h"
 
 #include "daedalus/AgentSink.h"
+#include "daedalus/settings.h"   // §v0.5.0: SettingsStore* replaces SettingsManager*
 
 using json = nlohmann::json;
 
@@ -83,7 +83,7 @@ private:
     AppConfig config_;
     std::shared_ptr<daedalus::AgentSink> sink_;  // §Phase 3: routes all I/O + streaming
     std::unique_ptr<FileIO> file_io_;
-    SettingsManager* settings_manager_;
+    daedalus::SettingsStore* settings_store_ = nullptr;  // §v0.5.0: wired directly to SettingsStore
     std::unique_ptr<SessionMemory> session_memory_;
     std::unique_ptr<Messages> messages_;
     int iteration_count_;
@@ -157,8 +157,9 @@ private:
 
 public:
     // §Phase 11: mcp_manager added (injected instead of ::instance()).
+    // §v0.5.0: settings_manager replaced with settings_store (SettingsStore*).
     explicit LLMClient(const AppConfig& config,
-                       SettingsManager* settings_manager = nullptr,
+                       daedalus::SettingsStore* settings_store = nullptr,
                        mcp::McpServerManager* mcp_manager = nullptr);
 
     /// @brief Attach a sink. Call this after construction and before

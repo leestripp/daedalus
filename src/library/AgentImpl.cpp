@@ -19,8 +19,8 @@
 #include <utility>
 
 #include "daedalus/paths.h"
+#include "daedalus/settings.h"
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
-#include "core/SettingsManager.h"    // internal subsystem (src/core/)
 #include "core/SessionMemory.h"      // internal subsystem (src/core/)
 #include "core/SkillManager.h"       // internal subsystem (src/core/)
 #include "tools/ToolHandler.h"       // internal subsystem (src/tools/)
@@ -57,22 +57,22 @@ constexpr AgentState map_from_internal(::AgentState s) noexcept {
 }
 
 AppConfig make_app_config(const AgentConfig& cfg,
-                          SettingsManager* sm)
+                          daedalus::SettingsStore* store)
 {
     AppConfig out;
     out.target_directory = cfg.project_root.empty()
                             ? std::filesystem::current_path()
                             : cfg.project_root;
     out.agent_name = cfg.agent_name;        // §Phase 8.8
-    if (sm && sm->is_loaded() && !cfg.model_name.empty()) {
-        auto m = sm->get_model(cfg.model_name);
+    if (store && !cfg.model_name.empty()) {
+        auto m = store->get_model(cfg.model_name);
         if (m.has_value()) {
             out.base_url      = m->host;
             out.api_key       = m->api_key;
-            out.model         = m->model;
+            out.model         = m->model_id;
             out.model_name    = cfg.model_name;     // settings key
             out.chat_endpoint = m->chat_endpoint;
-            out.temperature  = m->temperature;  // §Phase 8.7
+            out.temperature   = m->temperature;  // §Phase 8.7
         }
     }
     // Fall back to explicit AgentConfig fields if settings didn't supply.
@@ -131,13 +131,12 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
         cfg_.memory_dir = cfg_.daedalus_home / "memory";
     }
 
-    // Load settings from the (now resolved) path.
-    body_->settings = std::make_unique<SettingsManager>(cfg_.settings_path);
-    try {
-        body_->settings->load();
-    } catch (...) {
-        // Non-fatal: run with explicit AgentConfig fields only.
-        body_->settings.reset();
+    // §v0.5.0: wire directly to SettingsStore instead of SettingsManager.
+    // Use per-agent DB if daedalus_home is set, otherwise the global singleton.
+    if (!cfg_.daedalus_home.empty()) {
+        body_->store = &daedalus::SettingsStore::for_home(cfg_.daedalus_home);
+    } else {
+        body_->store = &daedalus::SettingsStore::instance();
     }
 }
 
@@ -252,24 +251,21 @@ void AgentImpl::initialize()
     // "Explicit creds" now includes three sources (highest first):
     //   1. cfg_.model_name set                (e.g. --model minimax-m3)
     //   2. cfg_.api_key + cfg_.api_host set   (full override from CLI args)
-    //   3. settings.json has a default_model  (resolved below)
+    //   3. settings store has a default_model  (resolved below)
     //
     // Phase 8.5 (webui work): it was previously easy to ship the Agent
     // with no model at all if the host forgot to pass --model — the
-    // settings.json default wasn't treated as a credential source.
+    // settings default wasn't treated as a credential source.
     // The webui demo is exactly such a host: it knows nothing about
     // models and just passes cfg.daedalus_home. Now those hosts work
     // out of the box too.
     bool has_explicit_creds = !cfg_.model_name.empty()
         || (!cfg_.api_key.empty() && !cfg_.api_host.empty());
-    if (!has_explicit_creds && body_->settings) {
+    if (!has_explicit_creds && body_->store) {
         try {
-            auto default_model = body_->settings->get_default_model_name();
-            // is_loaded() may not be exposed by the public header, but a
-            // successful get_default_model_name() with a non-empty
-            // result implies the settings file was usable.
+            auto default_model = body_->store->get_default_model_name();
             if (!default_model.empty()
-                && body_->settings->get_model(default_model).has_value()) {
+                && body_->store->get_model(default_model).has_value()) {
                 cfg_.model_name = default_model;
                 has_explicit_creds = true;
             }
@@ -324,7 +320,7 @@ void AgentImpl::initialize()
     }
 
     if (has_explicit_creds) {
-        AppConfig app = make_app_config(cfg_, body_->settings.get());
+        AppConfig app = make_app_config(cfg_, body_->store);
 
         // §Phase 11: construct McpServerManager if mcp_enabled (default true).
         // Pass the raw pointer into LLMClient — it replaces all ::instance()
@@ -352,7 +348,7 @@ void AgentImpl::initialize()
         }
 
         body_->client = std::make_unique<LLMClient>(
-            app, body_->settings.get(), body_->mcp.get());
+            app, body_->store, body_->mcp.get());
         if (sink_) {
             body_->client->set_sink(sink_);
         }
@@ -638,17 +634,17 @@ std::vector<SkillInfo> AgentImpl::list_skills() const
 std::vector<ModelInfo> AgentImpl::list_models() const
 {
     std::vector<ModelInfo> out;
-    if (!body_->settings) return out;
-    const auto& models = body_->settings->get_models();
+    if (!body_->store) return out;
+    const auto models = body_->store->list_models();
     out.reserve(models.size());
-    for (const auto& [name, cfg] : models) {
+    for (const auto& cfg : models) {
         ModelInfo mi;
-        mi.name            = name;
-        mi.model_id        = cfg.model;
+        mi.name            = cfg.name;
+        mi.model_id        = cfg.model_id;
         mi.host            = cfg.host;
         mi.chat_endpoint   = cfg.chat_endpoint;
         mi.max_context_size = (cfg.max_context_size == 0)
-                                ? body_->settings->get_max_context_size_for_model(name)
+                                ? body_->store->get_max_context_size_for_model(cfg.name)
                                 : cfg.max_context_size;
         mi.temperature = cfg.temperature;  // §Phase 8.7
         out.push_back(std::move(mi));
@@ -661,21 +657,21 @@ ModelInfo AgentImpl::active_model() const noexcept
     // §Phase 8.5+: report the model that's actually loaded for this
     // session. Resolution priority (highest first):
     //   1. cfg.model_name (explicit --model argument)
-    //   2. settings.json::default_model
-    //   3. first model in settings.json::models
-    if (!body_->settings) return {};
-    const auto& models = body_->settings->get_models();
+    //   2. settings store default_model
+    //   3. first model in settings store
+    if (!body_->store) return {};
+    const auto models = body_->store->list_models();
 
     auto find_by_name = [&](const std::string& name) -> std::optional<ModelInfo> {
-        for (const auto& [n, cfg] : models) {
-            if (n == name) {
+        for (const auto& cfg : models) {
+            if (cfg.name == name) {
                 ModelInfo mi;
-                mi.name = n;
-                mi.model_id = cfg.model;
+                mi.name = cfg.name;
+                mi.model_id = cfg.model_id;
                 mi.host = cfg.host;
                 mi.chat_endpoint = cfg.chat_endpoint;
                 mi.max_context_size = (cfg.max_context_size == 0)
-                    ? body_->settings->get_max_context_size_for_model(n)
+                    ? body_->store->get_max_context_size_for_model(name)
                     : cfg.max_context_size;
                 mi.temperature = cfg.temperature;  // §Phase 8.7
                 return mi;
@@ -688,22 +684,23 @@ ModelInfo AgentImpl::active_model() const noexcept
     if (!cfg_.model_name.empty()) {
         if (auto m = find_by_name(cfg_.model_name)) return *m;
     }
-    // 2. default_model from settings.json
+    // 2. default_model from settings store
     try {
-        if (auto default_name = body_->settings->get_default_model_name(); !default_name.empty()) {
+        auto default_name = body_->store->get_default_model_name();
+        if (!default_name.empty()) {
             if (auto m = find_by_name(default_name)) return *m;
         }
     } catch (...) { /* not fatal */ }
-    // 3. first model in settings.json
+    // 3. first model in settings store
     if (!models.empty()) {
-        const auto& [name, cfg] = *models.begin();
+        const auto& cfg = models.front();
         ModelInfo mi;
-        mi.name = name;
-        mi.model_id = cfg.model;
+        mi.name = cfg.name;
+        mi.model_id = cfg.model_id;
         mi.host = cfg.host;
         mi.chat_endpoint = cfg.chat_endpoint;
         mi.max_context_size = (cfg.max_context_size == 0)
-            ? body_->settings->get_max_context_size_for_model(name)
+            ? body_->store->get_max_context_size_for_model(cfg.name)
             : cfg.max_context_size;
         mi.temperature = cfg.temperature;  // §Phase 8.7
         return mi;
@@ -722,13 +719,13 @@ std::string AgentImpl::library_version() noexcept
 
 bool AgentImpl::auto_approve() const noexcept
 {
-    // Effective auto_approve = cfg.auto_approve OR settings.json::auto_approve.
+    // Effective auto_approve = cfg.auto_approve OR settings store.
     // The library's LLMClient applies both — see LLMClient ctor where it
-    // calls `if (settings_manager->get_auto_approve()) ToolHandler::set_auto_mode(true)`.
+    // calls `if (settings_store->get_auto_approve()) ToolHandler::set_auto_mode(true)`.
     if (cfg_.auto_approve) return true;
-    if (body_->settings && body_->settings->is_loaded()) {
+    if (body_->store) {
         try {
-            return body_->settings->get_auto_approve();
+            return body_->store->get_auto_approve();
         } catch (...) { /* fall through */ }
     }
     return false;
@@ -790,10 +787,10 @@ void AgentImpl::clear_memory()
 
 bool AgentImpl::switch_model(const std::string& model_name)
 {
-    if (!body_->settings) return false;
-    auto opt = body_->settings->get_model(model_name);
+    if (!body_->store) return false;
+    auto opt = body_->store->get_model(model_name);
     if (!opt.has_value()) return false;
-    body_->settings->set_default_model(model_name);
+    body_->store->set_default_model_name(model_name);
     cfg_.model_name = model_name;
     if (sink_) {
         sink_->on_log(daedalus::LogLevel::Info,

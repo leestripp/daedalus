@@ -301,11 +301,11 @@ static ErrorCategory classify_api_error(const std::string& error_type, const std
 
 
 // Implementation of LLMClient methods
-LLMClient::LLMClient(const AppConfig& config, SettingsManager* settings_manager,
+LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_store,
                        mcp::McpServerManager* mcp_manager) :
     config_(config),
-    file_io_(std::make_unique<FileIO>(config.target_directory, settings_manager)),
-    settings_manager_(settings_manager),
+    file_io_(std::make_unique<FileIO>(config.target_directory, nullptr)),
+    settings_store_(settings_store),
     iteration_count_(0),   // §Phase 11: order follows declaration; sink_ defaulted
     mcp_manager_(mcp_manager)   // §Phase 11: injected; nullptr = MCP disabled
 {
@@ -338,15 +338,15 @@ LLMClient::LLMClient(const AppConfig& config, SettingsManager* settings_manager,
     // Initialize memory tools with SessionMemory pointer
     ToolHandler::init_memory_tools(session_memory_.get());
     
-    // Load settings from SettingsManager if available
-    if (settings_manager && settings_manager->is_loaded()) {
-        max_iterations_ = settings_manager->get_max_agent_iterations();
-        max_tool_result_size_ = settings_manager->get_max_tool_result_size();
-        max_request_size_ = settings_manager->get_max_request_size();
-        max_response_size_ = settings_manager->get_max_response_size();
+    // §v0.5.0: load settings from SettingsStore (no is_loaded() check needed — SQLite is always ready)
+    if (settings_store) {
+        max_iterations_ = settings_store->get_max_agent_iterations();
+        max_tool_result_size_ = settings_store->get_max_tool_result_size();
+        max_request_size_ = settings_store->get_max_request_size();
+        max_response_size_ = settings_store->get_max_response_size();
 
         // Apply auto_approve setting (already displayed at startup if enabled)
-        if (settings_manager->get_auto_approve()) {
+        if (settings_store->get_auto_approve()) {
             ToolHandler::set_auto_mode(true);
         }
         
@@ -359,9 +359,10 @@ LLMClient::LLMClient(const AppConfig& config, SettingsManager* settings_manager,
         // m2.7 (which actually has 200000).
         if (!config_.model_name.empty()) {
             messages_config.max_context_size =
-                settings_manager->get_max_context_size_for_model(config_.model_name);
+                settings_store->get_max_context_size_for_model(config_.model_name);
         } else {
-            messages_config.max_context_size = settings_manager->get_max_context_size();
+            messages_config.max_context_size =
+                settings_store->get_max_context_size_for_model(config_.model);
         }
         messages_config.model = config_.model;
         messages_config.max_compress_output = 1500;
@@ -411,10 +412,11 @@ LLMClient::LLMClient(const AppConfig& config, SettingsManager* settings_manager,
     // log a warning so the user can prune servers.json. Default 5% is
     // a conservative bound; well-tuned configs sit well below.
     // §Phase 11: guard with mcp_manager_ (nullptr when mcp_enabled=false).
-    if (mcp_manager_ && settings_manager_ && settings_manager_->is_loaded()) {
+    // §v0.5.0: soft-cap check uses settings_store_ (nullptr is safe — check guards it)
+    if (mcp_manager_ && settings_store_) {
         const size_t est_tokens = mcp_manager_->estimated_token_count();
         if (est_tokens > 0) {
-            const int cap_pct = settings_manager_->get_mcp_tool_schema_soft_cap_percent();
+            const int cap_pct = settings_store_->get_mcp_tool_schema_soft_cap_percent();
             const size_t max_ctx = static_cast<size_t>(get_max_context_size());
             const size_t cap_tokens = (max_ctx * static_cast<size_t>(cap_pct)) / 100;
             if (est_tokens > cap_tokens) {
@@ -456,10 +458,10 @@ std::future<std::string> LLMClient::make_api_request_async(
     using daedalus::net::to_string;
 
     // Get server error settings
-    ServerErrorSettings server_error_settings;
+    daedalus::ServerErrorSettings server_error_settings;
     try {
-        if (settings_manager_ && settings_manager_->is_loaded()) {
-            server_error_settings = settings_manager_->get_server_error_settings();
+        if (settings_store_) {
+            server_error_settings = settings_store_->get_server_error_settings();
         }
     } catch (...) {
         server_error_settings.enabled = true;
@@ -567,10 +569,10 @@ std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::strin
     std::string response_buffer;
 
     // Get server error settings for configurable retry behavior
-    ServerErrorSettings server_error_settings;
+    daedalus::ServerErrorSettings server_error_settings;
     try {
-        if (settings_manager_ && settings_manager_->is_loaded()) {
-            server_error_settings = settings_manager_->get_server_error_settings();
+        if (settings_store_) {
+            server_error_settings = settings_store_->get_server_error_settings();
             max_retries = server_error_settings.max_retries_per_call;
         }
     } catch (...) {

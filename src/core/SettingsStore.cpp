@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include <db/Database.h>      // OmniNet::DB::Database — sqlite3 wrapper
 
@@ -31,6 +32,51 @@
 namespace fs = std::filesystem;
 
 namespace daedalus {
+
+// ============================================================================
+// Built-in max_context_size defaults for known models
+// ============================================================================
+namespace {
+int builtin_max_context_size(std::string_view model_name)
+{
+    // Map is keyed by the settings name (e.g. "minimax-m2.7") so the user
+    // can also match by the model id (e.g. "MiniMax-M2.7") if needed.
+    // Entries are (setting_name, context_size) pairs.
+    static const std::pair<std::string_view, int> known_models[] = {
+        // MiniMax models
+        {"minimax-m3",      500000},  // 500K tokens (actual model limit)
+        {"MiniMax-M3",     500000},
+        {"minimax-m2.7",    200000},  // 200K tokens
+        {"MiniMax-M2.7",   200000},
+        {"minimax",         500000},  // Default MiniMax alias
+        {"minimax-m2",      200000},  // Default MiniMax-M2 alias
+        // OpenAI models
+        {"gpt-4",           8192},
+        {"gpt-4-32k",       32768},
+        {"gpt-4-turbo",     128000},
+        {"gpt-4o",          128000},
+        {"gpt-4o-mini",     128000},
+        {"gpt-3.5-turbo",    16385},
+        {"o1",              200000},
+        {"o1-mini",         128000},
+        {"o3-mini",         200000},
+        // Anthropic models
+        {"claude-3-opus",       200000},
+        {"claude-3-sonnet",     200000},
+        {"claude-3-haiku",      200000},
+        {"claude-3.5-sonnet",   200000},
+        {"claude-3.5-haiku",    200000},
+        // DeepSeek models
+        {"deepseek-chat",       128000},
+        {"deepseek-coder",      128000},
+    };
+
+    for (const auto& [name, size] : known_models) {
+        if (name == model_name) return size;
+    }
+    return 0;  // 0 means "unknown" — caller applies the 1M fallback
+}
+}  // anonymous namespace
 
 // ===========================================================================
 // Schema
@@ -180,10 +226,17 @@ SettingsStore& SettingsStore::instance()
     return s;
 }
 
-SettingsStore SettingsStore::for_home(fs::path home)
+SettingsStore& SettingsStore::for_home(fs::path home)
 {
+    // Every call returns a fresh SettingsStore wrapper. The underlying
+    // sqlite3 handle is managed by DbPool (per db_path), so actual
+    // resource reuse happens there — we don't need to cache wrappers.
+    // This also means tests that delete the DB file and reopen can get
+    // a clean handle (DbPool detects the missing file and reopens).
     fs::create_directories(home);
-    return SettingsStore(home / "daedalus.db", /*is_default=*/false);
+    // Heap-allocate so we can return a stable reference. The wrapper
+    // is tiny (just Impl*) and DbPool handles the real resource pooling.
+    return *(new SettingsStore(home / "daedalus.db", /*is_default=*/false));
 }
 
 // ===========================================================================
@@ -351,6 +404,82 @@ void SettingsStore::delete_messages_json(std::string_view session_id)
     impl_->db->execute(
         "DELETE FROM kv_settings WHERE key = 'msg." +
         std::string(session_id) + "'");
+}
+
+// ============================================================================
+// v0.5.0: AgentImpl direct-wiring accessors
+// ============================================================================
+
+std::string SettingsStore::get_default_model_name() const
+{
+    return get_string("default_model_name", "");
+}
+
+void SettingsStore::set_default_model_name(std::string_view name)
+{
+    set_string("default_model_name", name);
+}
+
+bool SettingsStore::get_auto_approve() const
+{
+    return get_bool("auto_approve", false);
+}
+
+void SettingsStore::set_auto_approve(bool value)
+{
+    set_bool("auto_approve", value);
+}
+
+int SettingsStore::get_max_context_size_for_model(std::string_view model_name) const
+{
+    // 1. Check if the user has set an explicit max_context_size for this model.
+    auto m = get_model(model_name);
+    if (m.has_value() && m->max_context_size > 0) {
+        return m->max_context_size;
+    }
+
+    // 2. Fall back to the built-in default for known models.
+    int builtin = builtin_max_context_size(model_name);
+    if (builtin > 0) return builtin;
+
+    // 3. Ultimate fallback: 1M tokens (generous for unknown models).
+    return 1000000;
+}
+
+int SettingsStore::get_max_agent_iterations() const
+{
+    return get_int("max_agent_iterations", 100);
+}
+
+size_t SettingsStore::get_max_tool_result_size() const
+{
+    return static_cast<size_t>(get_int("max_tool_result_size", 10000));
+}
+
+size_t SettingsStore::get_max_request_size() const
+{
+    return static_cast<size_t>(get_int("max_request_size", 4000000));
+}
+
+size_t SettingsStore::get_max_response_size() const
+{
+    return static_cast<size_t>(get_int("max_response_size", 5000000));
+}
+
+int SettingsStore::get_mcp_tool_schema_soft_cap_percent() const
+{
+    return get_int("mcp_tool_schema_soft_cap_percent", 5);
+}
+
+ServerErrorSettings SettingsStore::get_server_error_settings() const
+{
+    ServerErrorSettings s;
+    s.enabled = get_bool("server_error_enabled", s.enabled);
+    s.initial_wait_seconds = get_int("server_error_initial_wait_seconds", s.initial_wait_seconds);
+    s.max_wait_seconds = get_int("server_error_max_wait_seconds", s.max_wait_seconds);
+    s.backoff_multiplier = std::stod(get_string("server_error_backoff_multiplier", std::to_string(s.backoff_multiplier)));
+    s.max_retries_per_call = get_int("server_error_max_retries_per_call", s.max_retries_per_call);
+    return s;
 }
 
 } // namespace daedalus

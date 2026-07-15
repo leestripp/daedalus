@@ -34,9 +34,9 @@
 #include "daedalus/types/ModelInfo.h"
 #include "daedalus/types/SkillInfo.h"
 #include "daedalus/types/ToolInfo.h"
+#include "daedalus/settings.h"
 
 #include "api/LLMClient.h"
-#include "core/SettingsManager.h"
 #include "mcp/McpServerManager.h"  // §Phase 11
 
 namespace daedalus::detail {
@@ -97,7 +97,7 @@ private:
     // can be destroyed at the AgentImpl instantiation point (PIMPL needs the
     // complete type visible to the deleter).
     struct Body {
-        std::unique_ptr<SettingsManager>       settings;
+        daedalus::SettingsStore* store = nullptr;   // §v0.5.0: wired directly to SettingsStore
         std::unique_ptr<mcp::McpServerManager> mcp;   // §Phase 11: owned; nullptr when mcp_enabled=false
         std::unique_ptr<LLMClient>             client;
         std::stop_source                       cancel_source;
