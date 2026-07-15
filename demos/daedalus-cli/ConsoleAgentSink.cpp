@@ -72,6 +72,23 @@ void ConsoleAgentSink::on_tool_result(std::string_view name,
     std::cerr << "[/TOOL] " << name << std::flush;
 }
 
+/// §Phase C1: streaming tool-call progress. Most useful for slow tools
+/// like `execute_bash` running a long build. We just print a compact
+/// one-liner so the user knows the tool is alive between [TOOL] and
+/// [/TOOL]. The webui SSE stream (which renders it per-event) gets the
+/// full JSON; the CLI only needs this compact marker.
+void ConsoleAgentSink::on_tool_progress(std::string_view name,
+                                       const nlohmann::json& progress) noexcept {
+    const std::string stage = progress.value("stage", "");
+    const int percent = progress.value("percent", -1);
+    if (percent >= 0) {
+        std::cerr << "  ↳ " << name << ": " << stage
+                  << " (" << percent << "%)\n";
+    } else {
+        std::cerr << "  ↳ " << name << ": " << stage << "\n";
+    }
+}
+
 void ConsoleAgentSink::on_state_change(int from, int to) noexcept {
     (void)from;
     // §Phase 9.10: stop the spinner first so the new state's label

@@ -28,18 +28,43 @@ public:
         sse_->broadcast("assistant_delta", j.dump());
     }
 
+    // §Phase D1: 3-arg overloads keyed by OpenAI-style call_id so the
+    // browser can group tool_call + tool_progress + tool_result events
+    // for the same invocation into a single card. Sinks that don't
+    // care about correlation (ConsoleAgentSink, test stubs) keep
+    // overriding only the 2-arg version — the 3-arg default in
+    // AgentSink discards the id and forwards.
     void on_tool_call(std::string_view name,
+                      std::string_view call_id,
                       const json& args) noexcept override {
         if (!sse_) return;
-        json j = { {"name", std::string(name)}, {"args", args} };
+        json j = { {"id", std::string(call_id)},
+                   {"name", std::string(name)},
+                   {"args", args} };
         sse_->broadcast("tool_call", j.dump());
     }
 
     void on_tool_result(std::string_view name,
+                        std::string_view call_id,
                         const json& result) noexcept override {
         if (!sse_) return;
-        json j = { {"name", std::string(name)}, {"result", result} };
+        json j = { {"id", std::string(call_id)},
+                   {"name", std::string(name)},
+                   {"result", result} };
         sse_->broadcast("tool_result", j.dump());
+    }
+
+    /// §Phase C1: streaming tool-call progress — fires between
+    /// tool_call and tool_result. The webui can show a live progress
+    /// bar / status text per tool, instead of waiting in silence.
+    void on_tool_progress(std::string_view name,
+                         std::string_view call_id,
+                         const json& progress) noexcept override {
+        if (!sse_) return;
+        json j = { {"id", std::string(call_id)},
+                   {"name", std::string(name)},
+                   {"progress", progress} };
+        sse_->broadcast("tool_progress", j.dump());
     }
 
     void on_state_change(int /*from*/, int to) noexcept override {

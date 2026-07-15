@@ -88,8 +88,6 @@ int main(int argc, char* argv[]) {
     if (args.daedalus_home.empty()) {
         cfg.daedalus_home = daedalus::Paths::global().user_config_root();
     }
-    if (args.daedalus_home.empty())
-        cfg.settings_path   = daedalus::default_settings_path();
 
     // §Phase 14: load the demo's system_prompt.txt (or override file)
     // and pass to AgentConfig as cfg.system_prompt. The library treats

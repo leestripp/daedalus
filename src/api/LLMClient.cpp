@@ -1731,7 +1731,13 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             // library never invoked it. Hosts could only see tool
             // activity via on_log() breadcrumbs or by parsing the
             // transcript. See Agent.md §Phase 9.6.
-            if (sink_) sink_->on_tool_call(function_name, args_for_display);
+            // §Phase D1: correlate tool_call/result/progress events via call_id.
+            // Sinks that don't care (e.g. ConsoleAgentSink) override only
+            // the 2-arg versions — the 3-arg defaults above discard the
+            // id and forward. WebSseSink overrides 3-arg and uses the
+            // id as the DOM key for its per-tool card.
+            if (sink_) sink_->on_tool_call(function_name, call_id,
+                                           args_for_display);
 
             // Check if this tool_call has invalid arguments (marked during validation)
             if (tool_call.contains("_invalid_args") && tool_call["_invalid_args"] == true) {
@@ -1750,7 +1756,19 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             // Execute tool once - no retries. If it fails, the LLM will fix it in the next response.
             json result;
             try {
-                result = ToolHandler::execute_tool_call(tool_call, *file_io_);
+                // Wire streaming progress through the sink. Tools that
+                // opt into the 3-arg execute() overload (e.g. bash,
+                // network, MCP) will call this between on_tool_call
+                // and on_tool_result, giving hosts live feedback for
+                // long-running operations.
+                ToolProgressFn progress_cb = nullptr;
+                if (sink_) {
+                    progress_cb = [this, function_name, call_id](const json& p) {
+                        sink_->on_tool_progress(function_name, call_id, p);
+                    };
+                }
+                result = ToolHandler::execute_tool_call(
+                    tool_call, *file_io_, progress_cb);
                 result["tool_name"] = function_name;
 
                 std::string status = result.value("status", "unknown");
@@ -1758,7 +1776,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
 
                 // §Phase 9.6: notify the host of the tool's outcome.
                 // Same shape hosts already consume via Agent::execute_tool().
-                if (sink_) sink_->on_tool_result(function_name, result);
+                if (sink_) sink_->on_tool_result(function_name, call_id, result);
 
                 // §State Machine: when the agent explicitly drives its
                 // own state via the `set_status` tool, fire
@@ -1818,7 +1836,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                 // when the tool throws.
                 if (sink_) {
                     result["tool_name"] = function_name;
-                    sink_->on_tool_result(function_name, result);
+                    sink_->on_tool_result(function_name, call_id, result);
                 }
             }
             

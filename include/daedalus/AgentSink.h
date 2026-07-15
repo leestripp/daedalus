@@ -47,7 +47,22 @@ public:
     // Tool lifecycle
     // ------------------------------------------------------------------
 
-    /// @brief A tool call is about to be executed.
+    /// @brief A tool call is about to be executed. `call_id` is the
+    /// OpenAI-style identifier for this specific invocation (empty
+    /// string if the caller has no id); sinks that want to correlate
+    /// `on_tool_progress` / `on_tool_result` events with the
+    /// originating call should key off it.
+    virtual void on_tool_call(std::string_view name,
+                              std::string_view call_id,
+                              const nlohmann::json& args) noexcept
+    {
+        (void)call_id;
+        return on_tool_call(name, args);   // default delegates to 2-arg
+    }
+
+    /// @brief Back-compat 2-arg overload. Sinks that don't need the
+    /// call_id can keep overriding only this version — the 3-arg
+    /// default above forwards here.
     virtual void on_tool_call(std::string_view name,
                               const nlohmann::json& args) noexcept
     {
@@ -56,9 +71,44 @@ public:
 
     /// @brief A tool call has finished (success or failure indicated in result).
     virtual void on_tool_result(std::string_view name,
+                                std::string_view call_id,
+                                const nlohmann::json& result) noexcept
+    {
+        (void)call_id;
+        return on_tool_result(name, result);
+    }
+
+    /// @brief Back-compat 2-arg overload.
+    virtual void on_tool_result(std::string_view name,
                                 const nlohmann::json& result) noexcept
     {
         (void)name; (void)result;
+    }
+
+    /// @brief A tool emitted a progress event during execution. Only
+    /// tools that opt in (by overriding the 3-arg `BaseTool::execute`
+    /// overload) emit this — for them, it fires between
+    /// `on_tool_call` and `on_tool_result`. Default: no-op.
+    ///
+    /// `progress` JSON shape:
+    ///   {
+    ///     "stage":   "starting" | "executing" | "finalizing" | "done",
+    ///     "percent": 0..100,           // optional
+    ///     "message": "human-readable"  // optional
+    ///   }
+    virtual void on_tool_progress(std::string_view name,
+                                  std::string_view call_id,
+                                  const nlohmann::json& progress) noexcept
+    {
+        (void)call_id;
+        return on_tool_progress(name, progress);
+    }
+
+    /// @brief Back-compat 2-arg overload.
+    virtual void on_tool_progress(std::string_view name,
+                                  const nlohmann::json& progress) noexcept
+    {
+        (void)name; (void)progress;
     }
 
     // ------------------------------------------------------------------

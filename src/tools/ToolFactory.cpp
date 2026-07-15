@@ -114,9 +114,16 @@ json ToolFactory::get_all_definitions() const {
     return definitions;
 }
 json ToolFactory::execute_tool(const std::string& tool_name, const json& args, FileIO& file_io) {
+    return execute_tool(tool_name, args, file_io, nullptr);
+}
+
+json ToolFactory::execute_tool(const std::string& tool_name,
+                               const json& args,
+                               FileIO& file_io,
+                               ToolProgressFn progress) {
     for (const auto& tool : m_tools) {
         if (tool->get_name() == tool_name) {
-            return tool->execute(args, file_io);
+            return tool->execute(args, file_io, progress);
         }
     }
     return json::object({{"status", "error"}, {"message", "Unknown tool: " + tool_name}});

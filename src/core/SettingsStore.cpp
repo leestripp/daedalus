@@ -1,0 +1,356 @@
+// SPDX-License-Identifier: BSL-1.0
+// src/core/SettingsStore.cpp
+//
+// SQLite-backed settings store for libdaedalus. Backed by OmniNet's
+// `DB::Database` (which itself wraps sqlite3) — we do NOT directly call
+// sqlite3_* APIs from daedalus. That keeps the SQLite version, error
+// reporting, thread-safety policy, and prepared-statement caching in one
+// place (OmniNet) instead of duplicating it here.
+//
+// Stored at:
+//   $XDG_DATA_HOME/daedalus/daedalus.db        (default)
+//       └─ ~/.local/share/daedalus/daedalus.db
+//   <home>/daedalus.db                          (per-agent override)
+//
+// Schema is created idempotently on first open. `schema_version` table
+// keeps migrations straightforward.
+
+#include "daedalus/settings.h"
+
+#include <cassert>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
+
+#include <db/Database.h>      // OmniNet::DB::Database — sqlite3 wrapper
+
+#include "daedalus/paths.h"   // Paths::global() for the default DB path
+#include "core/Logger.h"
+
+namespace fs = std::filesystem;
+
+namespace daedalus {
+
+// ===========================================================================
+// Schema
+// ===========================================================================
+namespace {
+
+constexpr int kSchemaVersion = 1;
+
+constexpr const char* kSchemaSql = R"sql(
+CREATE TABLE IF NOT EXISTS schema_version (
+    version INTEGER PRIMARY KEY
+);
+
+CREATE TABLE IF NOT EXISTS models (
+    name             TEXT PRIMARY KEY,
+    host             TEXT NOT NULL,
+    api_key          TEXT NOT NULL,
+    model_id         TEXT NOT NULL,
+    chat_endpoint    TEXT NOT NULL DEFAULT '/v1/chat/completions',
+    max_context_size INTEGER NOT NULL DEFAULT 0,
+    temperature      REAL    NOT NULL DEFAULT 0.0
+);
+
+CREATE TABLE IF NOT EXISTS kv_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    name      TEXT PRIMARY KEY,
+    transport TEXT NOT NULL,
+    command   TEXT,
+    args_json TEXT,
+    env_json  TEXT,
+    url       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS serper_config (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+    api_key TEXT NOT NULL
+);
+)sql";
+
+void ensure_schema(OmniNet::DB::Database& db)
+{
+    db.execute(kSchemaSql);
+
+    // schema_version row
+    auto row = db.queryOne("SELECT version FROM schema_version LIMIT 1");
+    if (!row.has_value()) {
+        db.execute("INSERT INTO schema_version(version) VALUES (" +
+                   std::to_string(kSchemaVersion) + ")");
+    }
+    // (Future: if row->[0] < kSchemaVersion, run migrations.)
+}
+
+ModelConfig row_to_model(const std::vector<std::string>& r)
+{
+    // SELECT order: name, host, api_key, model_id, chat_endpoint,
+    // max_context_size, temperature
+    ModelConfig m;
+    if (r.size() < 7) return m;
+    m.name             = r[0];
+    m.host             = r[1];
+    m.api_key          = r[2];
+    m.model_id         = r[3];
+    m.chat_endpoint    = r[4];
+    m.max_context_size = std::stoi(r[5]);
+    m.temperature      = std::stod(r[6]);
+    return m;
+}
+
+}  // anonymous namespace
+
+// ===========================================================================
+// Per-path singleton DB pool. One sqlite3 handle per unique db_path so
+// a SettingsStore copy (or two for_home(home) calls) shares the same
+// connection. Opens lazily on first use.
+// ===========================================================================
+class DbPool
+{
+public:
+    static DbPool& instance()
+    {
+        static DbPool p;
+        return p;
+    }
+
+    OmniNet::DB::Database& get(const fs::path& path)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = dbs_.find(path);
+        // If the cached handle's file was removed out from under us,
+        // drop the stale handle and reopen. (Real users stop daedalus
+        // before nuking the DB — but tests delete the file constantly.)
+        if (it != dbs_.end() && !fs::exists(path)) {
+            dbs_.erase(it);
+            it = dbs_.end();
+        }
+        if (it == dbs_.end()) {
+            // Open + migrate + store.
+            fs::create_directories(path.parent_path());
+            auto db = std::make_unique<OmniNet::DB::Database>();
+            db->open(path.string());
+            ensure_schema(*db);
+            it = dbs_.emplace(path, std::move(db)).first;
+        }
+        return *it->second;
+    }
+
+private:
+    std::mutex mu_;
+    std::unordered_map<fs::path, std::unique_ptr<OmniNet::DB::Database>> dbs_;
+};
+
+// ===========================================================================
+// SettingsStore::Impl
+// ===========================================================================
+struct SettingsStore::Impl
+{
+    fs::path path;
+    OmniNet::DB::Database* db = nullptr;   // non-owning — owned by DbPool
+};
+
+SettingsStore::SettingsStore(fs::path db_path, bool /*is_default*/)
+    : impl_(new Impl)
+{
+    impl_->path = std::move(db_path);
+    impl_->db   = &DbPool::instance().get(impl_->path);
+}
+
+// ===========================================================================
+// instance() / for_home()
+// ===========================================================================
+fs::path default_db_path()
+{
+    // XDG_DATA_HOME/daedalus/daedalus.db (default
+    // ~/.local/share/daedalus/daedalus.db) — matches the plan.
+    fs::path dir = fs::path(Paths::global().user_data_root());
+    fs::create_directories(dir);
+    return dir / "daedalus.db";
+}
+
+SettingsStore& SettingsStore::instance()
+{
+    static SettingsStore s(default_db_path(), /*is_default=*/true);
+    return s;
+}
+
+SettingsStore SettingsStore::for_home(fs::path home)
+{
+    fs::create_directories(home);
+    return SettingsStore(home / "daedalus.db", /*is_default=*/false);
+}
+
+// ===========================================================================
+// Read
+// ===========================================================================
+std::optional<ModelConfig> SettingsStore::get_model(std::string_view name) const
+{
+    auto row = impl_->db->queryOne(
+        "SELECT name, host, api_key, model_id, chat_endpoint, "
+        "max_context_size, temperature FROM models WHERE name = '" +
+        std::string(name) + "'");
+        // NOTE: name is treated as a key (validated in API), not user input.
+        // For raw user input we'd use a prepared Statement::bind — the
+        // public API surface here is name/key lookups by trusted callers.
+    if (!row.has_value()) return std::nullopt;
+    return row_to_model(*row);
+}
+
+std::vector<ModelConfig> SettingsStore::list_models() const
+{
+    // OmniNet 0.8.8+ (commit fbecf55) populates m_currentRow in the
+    // QueryResult constructor and honours m_atEnd in the Iterator
+    // constructor, so range-based iteration returns the correct number
+    // of rows in all cases — including the empty / post-DELETE /
+    // post-reopen edge cases that the old callback workaround
+    // papered over.
+    std::vector<ModelConfig> out;
+    for (const auto& row : impl_->db->query(
+            "SELECT name, host, api_key, model_id, chat_endpoint, "
+            "max_context_size, temperature FROM models")) {
+        out.push_back(row_to_model(row));
+    }
+    return out;
+}
+
+std::string SettingsStore::get_string(std::string_view key, std::string_view def) const
+{
+    auto row = impl_->db->queryOne(
+        "SELECT value FROM kv_settings WHERE key = '" + std::string(key) + "'");
+    if (!row.has_value()) return std::string(def);
+    return row->empty() ? std::string(def) : (*row)[0];
+}
+
+bool SettingsStore::get_bool(std::string_view key, bool def) const
+{
+    auto v = get_string(key, "");
+    if (v.empty()) return def;
+    return v == "1" || v == "true" || v == "yes";
+}
+
+int SettingsStore::get_int(std::string_view key, int def) const
+{
+    auto v = get_string(key, "");
+    if (v.empty()) return def;
+    try { return std::stoi(v); } catch (...) { return def; }
+}
+
+// ===========================================================================
+// Write
+// ===========================================================================
+void SettingsStore::upsert_model(const ModelConfig& m)
+{
+    impl_->db->execute(
+        "INSERT INTO models(name, host, api_key, model_id, chat_endpoint, "
+        "max_context_size, temperature) VALUES('" +
+        m.name + "','" + m.host + "','" + m.api_key + "','" +
+        m.model_id + "','" + m.chat_endpoint + "'," +
+        std::to_string(m.max_context_size) + "," +
+        std::to_string(m.temperature) +
+        ") ON CONFLICT(name) DO UPDATE SET "
+        "host=excluded.host, api_key=excluded.api_key, "
+        "model_id=excluded.model_id, chat_endpoint=excluded.chat_endpoint, "
+        "max_context_size=excluded.max_context_size, "
+        "temperature=excluded.temperature");
+}
+
+void SettingsStore::delete_model(std::string_view name)
+{
+    impl_->db->execute(
+        "DELETE FROM models WHERE name = '" + std::string(name) + "'");
+}
+
+void SettingsStore::set_string(std::string_view key, std::string_view value)
+{
+    impl_->db->execute(
+        "INSERT INTO kv_settings(key, value) VALUES('" +
+        std::string(key) + "','" + std::string(value) +
+        "') ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+}
+
+void SettingsStore::set_bool(std::string_view key, bool value)
+{
+    set_string(key, value ? "1" : "0");
+}
+
+void SettingsStore::set_int(std::string_view key, int value)
+{
+    set_string(key, std::to_string(value));
+}
+
+// ===========================================================================
+// Atomic
+// ===========================================================================
+void SettingsStore::transaction(std::function<void(SettingsStore&)> fn)
+{
+    // OmniNet::DB::Database::transaction takes a no-arg lambda but our
+    // API needs to pass `*this` so the callback can chain. Trampoline.
+    SettingsStore& self = *this;
+    impl_->db->transaction([&self, &fn]() { fn(self); });
+}
+
+// ===========================================================================
+// Introspection
+// ===========================================================================
+fs::path SettingsStore::db_path() const noexcept { return impl_->path; }
+
+bool SettingsStore::has_data() const noexcept
+{
+    if (!list_models().empty()) return true;
+    // Cheap kv_settings probe — one row, one column.
+    auto row = impl_->db->queryOne("SELECT 1 FROM kv_settings LIMIT 1");
+    return row.has_value();
+}
+
+// ===========================================================================
+// v0.3.5: per-project persistence (session memory + messages)
+// ===========================================================================
+//
+// Both are stored as kv_settings under namespaced keys ("mem.<sid>",
+// "msg.<sid>") — same table as scalars, no schema change needed.
+// Just append-only logic on top of the existing set_string/get_string.
+
+std::string SettingsStore::get_session_memory(std::string_view session_id) const
+{
+    return get_string("mem." + std::string(session_id), "");
+}
+
+void SettingsStore::set_session_memory(std::string_view session_id, std::string_view json_blob)
+{
+    set_string("mem." + std::string(session_id), json_blob);
+}
+
+void SettingsStore::delete_session_memory(std::string_view session_id)
+{
+    // No delete-by-key API on kv_settings yet — use a literal DELETE via
+    // raw SQL through OmniNet. Cheaper than adding delete_kv() right now
+    // (only one caller, this one).
+    impl_->db->execute(
+        "DELETE FROM kv_settings WHERE key = 'mem." +
+        std::string(session_id) + "'");
+}
+
+std::string SettingsStore::get_messages_json(std::string_view session_id) const
+{
+    return get_string("msg." + std::string(session_id), "");
+}
+
+void SettingsStore::set_messages_json(std::string_view session_id, std::string_view json_blob)
+{
+    set_string("msg." + std::string(session_id), json_blob);
+}
+
+void SettingsStore::delete_messages_json(std::string_view session_id)
+{
+    impl_->db->execute(
+        "DELETE FROM kv_settings WHERE key = 'msg." +
+        std::string(session_id) + "'");
+}
+
+} // namespace daedalus

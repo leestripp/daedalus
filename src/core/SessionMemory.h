@@ -134,6 +134,7 @@ private:
     std::filesystem::path memory_file_path_;
     std::filesystem::path memory_dir_path_;
     std::filesystem::path data_dir_;        // §Phase 8.8: per-agent namespace dir
+    std::string session_id_ = "default";    // §Plan.md v0.3.5: SQLite mirror key
     
     std::string version_ = "1.0";
     std::chrono::system_clock::time_point updated_at_;

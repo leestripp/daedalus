@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <memory>
 
+#include "BaseTool.h"  // for ToolProgressFn
 #include "daedalus/AgentSink.h"
 
 class FileIO;  // Forward declaration
@@ -37,6 +38,12 @@ namespace ToolHandler {
 
     // Execute a tool call - delegates to ToolFactory
     json execute_tool_call(const json& tool_call, FileIO& file_io);
+
+    // Execute a tool call with an optional progress callback. See
+    // ToolFactory::execute_tool() and BaseTool::execute(args, file_io, progress).
+    json execute_tool_call(const json& tool_call,
+                           FileIO& file_io,
+                           ToolProgressFn progress);
     
     // Get tool definitions as JSON string
     std::string get_tool_definitions();

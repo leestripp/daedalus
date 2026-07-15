@@ -176,6 +176,93 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   #state.error {
     background: #da363322; color: #f85149; border-color: #da3633;
   }
+
+  /* === Phase D1: Tool Calls panel — structured cards ====================
+     Each tool invocation gets its own card, keyed by the OpenAI-style
+     `call_id` emitted by the SSE sink. Card state transitions:
+        running  → has progress bar, no result yet
+        success  → green check, result rendered (collapsed by default)
+        error    → red x, error message rendered
+     Progress events from BashTool etc. drive the bar in real time. */
+
+  .tool-card {
+    margin: 0 0 8px;
+    padding: 8px 10px;
+    background: #0d1117;
+    border: 1px solid #2a2f36;
+    border-radius: 6px;
+    transition: border-color 200ms, background 200ms;
+  }
+  .tool-card.running { border-color: #1f6feb; background: #0d1117; }
+  .tool-card.success { border-color: #2ea043; }
+  .tool-card.error   { border-color: #da3633; }
+  .tool-card-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 13px; font-weight: 600;
+  }
+  .tool-card-name  { color: #58a6ff; flex: 1;
+                     overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; }
+  .tool-card-icon  {
+    display: inline-block; width: 16px; text-align: center;
+    color: #6e7681;
+  }
+  .tool-card.running .tool-card-icon { color: #58a6ff;
+                                      animation: spin 1.2s linear infinite; }
+  .tool-card.success .tool-card-icon { color: #56d364; }
+  .tool-card.error   .tool-card-icon { color: #f85149; }
+  @keyframes spin { from { transform: rotate(0deg); }
+                    to   { transform: rotate(360deg); } }
+  .tool-card-stage {
+    font-size: 11px; color: #8b949e;
+    padding: 2px 6px; border-radius: 999px;
+    background: #161b22; border: 1px solid #2a2f36;
+  }
+  .tool-card.running .tool-card-stage { color: #58a6ff;
+                                        border-color: #1f6feb; }
+  .tool-card-args {
+    margin-top: 6px; font-size: 11px; color: #8b949e;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-all;
+    max-height: 80px; overflow-y: auto;
+  }
+  .tool-card-progress {
+    margin-top: 6px; height: 4px;
+    background: #161b22; border-radius: 2px;
+    overflow: hidden;
+    /* Hidden when no progress bar is active — JS toggles display. */
+    display: none;
+  }
+  .tool-card.running .tool-card-progress { display: block; }
+  .tool-card-progress-bar {
+    height: 100%; width: 0%;
+    background: linear-gradient(90deg, #1f6feb, #58a6ff);
+    transition: width 300ms ease-out;
+  }
+  /* Indeterminate "shimmer" while no percent is known — bar slides
+     left-to-right without filling. */
+  .tool-card.running.indeterminate .tool-card-progress-bar {
+    width: 30%;
+    animation: shimmer 1.4s infinite ease-in-out;
+  }
+  @keyframes shimmer {
+    0%   { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+  }
+  .tool-card-message {
+    margin-top: 4px; font-size: 11px; color: #8b949e;
+    font-style: italic;
+  }
+  .tool-card-result {
+    margin-top: 6px; font-size: 11px;
+    color: #8b949e;
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    background: #161b22; padding: 4px 6px;
+    border-radius: 4px;
+    max-height: 120px; overflow-y: auto;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .tool-card.error .tool-card-result { color: #f85149; }
 </style>
 </head>
 <body>
@@ -466,16 +553,159 @@ function openEventStream() {
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   });
   es.addEventListener("assistant_end", () => { currentDelta = null; });
+  // §Phase D1: Tool Calls panel — each invocation gets its own card
+  // keyed by OpenAI-style call_id so tool_call/progress/result events
+  // for the same invocation land in one place.
+  //
+  // Card lifecycle:
+  //   1. tool_call({id, name, args})         → create card, state=running
+  //   2. tool_progress({id, progress})        → update card stage+bar
+  //   3. tool_result({id, result})            → mark done/error+render
+  //
+  // We tolerate out-of-order progress events (only update if id is known).
+  const toolCardsById = new Map();
+  const toolCounter   = { pending: 0, succeeded: 0, failed: 0 };
+
+  function renderToolCardHeader(card, name) {
+    card.innerHTML = "";
+    const head = document.createElement("div");
+    head.className = "tool-card-head";
+    const nameEl = document.createElement("span");
+    nameEl.className = "tool-card-name";
+    nameEl.textContent = name;
+    const icon = document.createElement("span");
+    icon.className = "tool-card-icon";
+    icon.textContent = "⋯";          // placeholder, JS sets real icon
+    head.appendChild(icon);
+    head.appendChild(nameEl);
+    const stage = document.createElement("span");
+    stage.className = "tool-card-stage";
+    stage.textContent = "running";
+    head.appendChild(stage);
+    card.appendChild(head);
+    return { head, nameEl, icon, stage };
+  }
+  function setCardRunning(card, name) {
+    card.classList.remove("success", "error");
+    card.classList.add("running");
+    const h = renderToolCardHeader(card, name);
+    h.icon.textContent = "⟳";
+    // Args (collapsed)
+    const argsEl = document.createElement("div");
+    argsEl.className = "tool-card-args";
+    card.appendChild(argsEl);
+    // Progress bar
+    const wrap = document.createElement("div");
+    wrap.className = "tool-card-progress";
+    const bar = document.createElement("div");
+    bar.className = "tool-card-progress-bar";
+    wrap.appendChild(bar);
+    card.appendChild(wrap);
+    // Message line
+    const msg = document.createElement("div");
+    msg.className = "tool-card-message";
+    card.appendChild(msg);
+    return { argsEl, bar, msg, h };
+  }
+  function setCardSuccess(card) {
+    card.classList.remove("running", "error", "indeterminate");
+    card.classList.add("success");
+    const stage = card.querySelector(".tool-card-stage");
+    if (stage) stage.textContent = "done";
+    const icon  = card.querySelector(".tool-card-icon");
+    if (icon)  icon.textContent  = "✓";
+  }
+  function setCardError(card) {
+    card.classList.remove("running", "indeterminate");
+    card.classList.add("error");
+    const stage = card.querySelector(".tool-card-stage");
+    if (stage) stage.textContent = "error";
+    const icon  = card.querySelector(".tool-card-icon");
+    if (icon)  icon.textContent  = "✗";
+  }
+  function setCardArgs(card, argsJson) {
+    const el = card.querySelector(".tool-card-args");
+    if (!el) return;
+    let pretty = "";
+    try {
+      const parsed = (typeof argsJson === "string")
+                   ? JSON.parse(argsJson) : argsJson;
+      // Skip framework-internal fields when displaying args.
+      delete parsed.__daedalus_call_id;
+      pretty = JSON.stringify(parsed, null, 2);
+    } catch { pretty = String(argsJson); }
+    el.textContent = pretty || "(no arguments)";
+  }
+  function setCardProgress(card, progress) {
+    const bar = card.querySelector(".tool-card-progress-bar");
+    const msg = card.querySelector(".tool-card-message");
+    const stagePill = card.querySelector(".tool-card-stage");
+    if (!bar) return;
+    const stage   = progress.stage   || "executing";
+    const percent = progress.percent;       // may be undefined
+    const message = progress.message || "";
+    if (stagePill) stagePill.textContent = stage;
+    if (typeof percent === "number" && percent >= 0) {
+      card.classList.remove("indeterminate");
+      bar.style.width  = Math.min(100, Math.max(0, percent)) + "%";
+      bar.style.transform = "";
+    } else if (stage !== "done") {
+      card.classList.add("indeterminate");
+    }
+    if (message && msg) msg.textContent = message;
+  }
+  function setCardResult(card, resultJson) {
+    // Append a result block if not already present.
+    let resEl = card.querySelector(".tool-card-result");
+    if (!resEl) {
+      resEl = document.createElement("div");
+      resEl.className = "tool-card-result";
+      card.appendChild(resEl);
+    }
+    resEl.textContent = (typeof resultJson === "string")
+        ? resultJson
+        : JSON.stringify(resultJson, null, 2);
+  }
+
   es.addEventListener("tool_call", (e) => {
     if (toolsEl.querySelector(".empty")) toolsEl.innerHTML = "";
     const d = JSON.parse(e.data);
-    append(toolsEl, "→ " + escapeHtml(d.name) + " " +
-                     escapeHtml(JSON.stringify(d.args)), "tool-call");
+    const id = d.id || ("local-" + (++toolCounter.pending));
+    // Idempotent: if a card for this id already exists, just
+    // refresh its args (e.g. on retried calls).
+    let card = toolCardsById.get(id);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "tool-card running indeterminate";
+      card.dataset.id = id;
+      toolsEl.appendChild(card);
+      toolCardsById.set(id, card);
+    }
+    const parts = setCardRunning(card, d.name);
+    setCardArgs(card, d.args);
   });
+
+  es.addEventListener("tool_progress", (e) => {
+    const d = JSON.parse(e.data);
+    const card = toolCardsById.get(d.id);
+    if (!card) return;            // progress before call_id seen: drop.
+    setCardProgress(card, d.progress);
+  });
+
   es.addEventListener("tool_result", (e) => {
     const d = JSON.parse(e.data);
-    append(toolsEl, "← " + escapeHtml(JSON.stringify(d.result).slice(0, 400)),
-                      "tool-result");
+    const card = toolCardsById.get(d.id);
+    if (!card) return;
+    setCardResult(card, d.result);
+    const status = (d.result && d.result.status) || "";
+    if (status === "error" || status === "denied") {
+      setCardError(card);
+      toolCounter.failed++;
+    } else {
+      setCardSuccess(card);
+      toolCounter.succeeded++;
+    }
+    toolsEl.scrollTop = toolsEl.scrollHeight;
   });
   es.addEventListener("log", (e) => {
     const d = JSON.parse(e.data);

@@ -10,6 +10,14 @@ via the public API. See `docs/embedding.md` to get started.
 **Current tag: `0.2.5`** — stable library. See `CHANGELOG.md` for what's
 in each release. See `docs/storage.md` for the storage architecture.
 
+## File Locations
+
+| Path | Contents |
+|------|----------|
+| `~/.config/daedalus/` | config.json, settings.json, mcp/ |
+| `~/.local/share/daedalus/skills/` | Agent skills |
+| `~/.local/share/daedalus/memory/` | Session memory |
+
 ## Quick Start (Ubuntu)
 
 ### 1. Install Dependencies
@@ -491,10 +499,7 @@ middle pane, and the stats pane shows the live state badge plus the
 log. The header has two info-pills: the active **model** (read from
 the `POST /sessions` response, which embeds `Agent::active_model()`)
 and the **cwd** (read from `GET /info`, which returns the project's
-working directory). Skills loaded from
-`$XDG_DATA_HOME/daedalus/skills/installed/` (default
-`~/.local/share/daedalus/skills/installed/`) are listed in the
-system prompt's "Available Skills (catalog)" section.
+working directory). Skills are loaded from the skills directory listed above.
 
 To exercise the webui from a terminal (uses the Firefox BiDi skill):
 

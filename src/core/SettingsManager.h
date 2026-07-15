@@ -12,6 +12,8 @@
 #include "SkillsSettings.h"
 #include "core/SerperConfig.h"
 
+namespace daedalus { class SettingsStore; }   // forward decl for v0.4.0 cutover
+
 using json = nlohmann::json;
 
 // Custom exception for settings-related errors
@@ -69,6 +71,7 @@ private:
     std::filesystem::path settings_file_path_;
     AppSettings settings_;
     bool loaded_;
+    daedalus::SettingsStore* store_ = nullptr;   // §v0.4.0: which SQLite store to read from
 
     // Process-wide default instance for legacy callers (tests,
     // demos/daedalus-cli, anything not running through Agent).
@@ -106,6 +109,12 @@ public:
     // settings isolation is the job of cfg.daedalus_home (Phase
     // 8.5), not cfg.agent_name.
     explicit SettingsManager(std::filesystem::path settings_path = {});
+
+    // §v0.4.0: explicit store injection. When provided, this SettingsManager
+    // reads ONLY from this store (no JSON fallback). The default constructor
+    // (above) still uses SettingsStore::instance().
+    explicit SettingsManager(daedalus::SettingsStore& store,
+                             std::filesystem::path settings_path = {});
 
     // Legacy accessor. Returns the process-wide default instance.
     // Created lazily on first call; persists for the process lifetime.

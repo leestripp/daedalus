@@ -1,0 +1,79 @@
+// End-to-end: write a model into the SQLite SettingsStore, then read it
+// through the Agent's SettingsManager (which now reads from the store
+// first). This validates the wire-in is real.
+#include <cassert>
+#include <chrono>
+#include <filesystem>
+#include <iostream>
+#include <string>
+
+#include <daedalus.h>
+#include <daedalus/settings.h>
+
+namespace fs = std::filesystem;
+
+int main() {
+    // Stage 1: put a model into the SQLite store via the PUBLIC API.
+    {
+        auto& store = daedalus::SettingsStore::instance();
+        daedalus::ModelConfig m;
+        m.name             = "store-e2e";
+        m.host             = "http://test.invalid";
+        m.api_key          = "sk-store-e2e-not-placeholder";
+        m.model_id         = "model-store-e2e";
+        m.chat_endpoint    = "/v1/chat/completions";
+        m.max_context_size = 50000;
+        m.temperature      = 0.5;
+        store.upsert_model(m);
+        store.set_string("default_model", "store-e2e");
+        std::cout << "[stage 1] wrote store-e2e to "
+                  << store.db_path().string() << "\n";
+    }
+
+    // Stage 2: read it back through Agent (which uses the wired
+    // SettingsManager.load() → SettingsStore path).
+    {
+        daedalus::AgentConfig cfg;
+        cfg.project_root = "/tmp";
+        // No daedalus_home / settings_path — AgentImpl uses the default,
+        // which calls SettingsStore::instance() first; the store has our
+        // model, so the JSON layer is bypassed.
+
+        struct NullSink : daedalus::AgentSink {
+            void on_log(daedalus::LogLevel, std::string_view) noexcept override {}
+            void on_assistant_delta(std::string_view) noexcept override {}
+            void on_tool_call(std::string_view, const nlohmann::json&) noexcept override {}
+            void on_tool_result(std::string_view, const nlohmann::json&) noexcept override {}
+            void on_state_change(int, int) noexcept override {}
+        };
+        auto sink = std::make_shared<NullSink>();
+        daedalus::Agent agent(std::move(cfg), sink);
+        try {
+            agent.initialize();
+        } catch (const std::exception& e) {
+            std::cerr << "init threw: " << e.what() << "\n";
+            return 1;
+        }
+
+        auto models = agent.list_models();
+        bool found = false;
+        for (const auto& m : models) {
+            if (m.name == "store-e2e") {
+                found = true;
+                std::cout << "[stage 2] Agent sees model: " << m.name
+                          << " (model_id=" << m.model_id
+                          << ", host=" << m.host
+                          << ", temperature=" << m.temperature << ")\n";
+            }
+        }
+        if (!found) {
+            std::cerr << "FAIL: Agent did not see model written via SettingsStore\n";
+            return 1;
+        }
+    }
+
+    // Cleanup
+    daedalus::SettingsStore::instance().delete_model("store-e2e");
+    std::cout << "[ok] end-to-end SettingsStore → SettingsManager → Agent list_models\n";
+    return 0;
+}

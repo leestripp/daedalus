@@ -69,6 +69,22 @@ json BashTool::get_definition() const {
 }
 
 json BashTool::execute(const json& args, FileIO& file_io) {
+    return execute(args, file_io, nullptr);
+}
+
+json BashTool::execute(const json& args, FileIO& file_io, ToolProgressFn progress) {
+    auto emit_progress = [&progress](const std::string& stage,
+                                     int percent,
+                                     const std::string& message) {
+        if (!progress) return;
+        json p = {
+            {"stage",   stage},
+            {"percent", percent},
+            {"message", message},
+        };
+        progress(p);
+    };
+
     // ===== Parse Arguments =====
     std::string command;
     int timeout_seconds = BashTool::get_default_timeout_seconds();
@@ -162,6 +178,17 @@ json BashTool::execute(const json& args, FileIO& file_io) {
             });
         }
         ToolHandler::add_session_approved_command_internal(command);
+
+        // ===== Phase C1: streaming progress =====
+        // "starting" fires as soon as the command is parsed + approved —
+        // the host can show a spinner / "Running…" indicator before any
+        // subprocess I/O has happened. Useful for slow bash commands
+        // (cmake builds, package installs, etc.) where the user otherwise
+        // sees a frozen UI for tens of seconds.
+        emit_progress("starting", 0,
+                      "Starting command: " + command.substr(
+                          0, std::min<size_t>(80, command.size())));
+        emit_progress("executing", 50, "Running command...");
 
         // ===== Rule 4: Execute single command =====
         return execute_single_command(command, project_path, timeout_seconds);

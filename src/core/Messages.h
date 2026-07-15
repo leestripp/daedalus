@@ -399,6 +399,7 @@ public:
 private:
     std::filesystem::path data_dir_;     // §Phase 8.8: per-agent namespace dir
     std::filesystem::path messages_file_;
+    std::string session_id_ = "default"; // §Plan.md v0.3.5: SQLite mirror key
     json messages_;
     MessageCompressionConfig config_;
     

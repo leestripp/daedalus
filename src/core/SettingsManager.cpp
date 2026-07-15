@@ -1,5 +1,6 @@
 #include "SettingsManager.h"
 #include "core/SerperConfig.h"
+#include "core/SettingsMigrator.h"
 #include <fstream>
 #include <iostream>
 #include <cstdlib>
@@ -13,6 +14,7 @@
 #include <filesystem>
 
 #include "daedalus/paths.h"
+#include "daedalus/settings.h"   // SettingsStore (v0.3.0 SQLite-backed store)
 #include "core/Logger.h"
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
@@ -75,7 +77,18 @@ SettingsManager::SettingsManager(std::filesystem::path settings_path)
                             ? default_settings_path()
                             : std::move(settings_path))
     , settings_()
-    , loaded_(false) {
+    , loaded_(false)
+    , store_(&daedalus::SettingsStore::instance()) {
+}
+
+SettingsManager::SettingsManager(daedalus::SettingsStore& store,
+                                 std::filesystem::path settings_path)
+    : settings_file_path_(settings_path.empty()
+                            ? default_settings_path()
+                            : std::move(settings_path))
+    , settings_()
+    , loaded_(false)
+    , store_(&store) {
 }
 
 namespace {
@@ -284,57 +297,176 @@ void SettingsManager::save_to_json(const json& j) const {
 }
 
 void SettingsManager::load() {
+    // §Plan.md SettingsStore refactor (v0.3.1): auto-migrate legacy
+    // JSON config into the SQLite store on first run. Idempotent —
+    // `needs_migration()` returns false once the store is populated
+    // or the JSON files are gone, so re-runs are no-ops.
+    bool store_authoritative = false;
+    try {
+        auto& store = *store_;
+        // Use settings_file_path_ as the migration source so tests with
+        // temp paths don't pick up real user config.
+        daedalus::MigrateReport rep;
+        bool mig_ran = false;
+        if (daedalus::SettingsMigrator::needs_migration(
+                store, settings_file_path_, {})) {
+            rep = daedalus::SettingsMigrator::run(
+                store, settings_file_path_, {},
+                /*mark_files=*/!settings_file_path_.string().starts_with("/tmp/"));
+            mig_ran = true;
+            if (rep.items_migrated > 0 || !rep.skipped) {
+                LOG_CERR(INFO, "[Migrator] migrated "
+                          << rep.items_migrated
+                          << " item(s) from "
+                          << settings_file_path_.string()
+                          << " into " << store.db_path().string());
+            }
+            (void)mig_ran;
+        }
+        store_authoritative = store.has_data();
+    } catch (const std::exception& e) {
+        LOG_CERR(WARNING, "[Migrator] auto-migration failed ("
+                  << e.what() << "); continuing with JSON fallback");
+    }
+
+    // §Plan.md SettingsStore refactor (v0.3.0): try the SQLite-backed
+    // SettingsStore FIRST. If the store has any data, use it. Otherwise
+    // fall back to JSON for backward compatibility (one release cycle).
+    //
+    // The store is the source of truth for `models` and the scalar
+    // kv_settings rows. MCP / Skills sub-objects still come from the
+    // JSON file (they're loaded by McpServerManager / SkillManager
+    // directly) — see the plan for the v0.3.5 cutover.
+    // §v0.4.0 cutover: read scalars from the store UNCONDITIONALLY. If
+    // the store has them, they win. JSON is only the source if the
+    // store doesn't have a particular key (or if models/scalars
+    // collectively are empty).
+    //
+    // `loaded_from_store` = true iff the store has any data (models OR
+    // kv_settings rows). This is the v0.4.0 cutover flag — when true,
+    // the JSON file is completely ignored.
+    bool loaded_from_store = store_authoritative;
+    try {
+        auto& store = *store_;
+        auto models = store.list_models();
+        settings_.default_model_name = store.get_string("default_model", settings_.default_model_name);
+        settings_.auto_approve        = store.get_bool("auto_approve", settings_.auto_approve);
+        settings_.max_agent_iterations = store.get_int("max_agent_iterations",
+                                                       settings_.max_agent_iterations);
+        settings_.max_tool_result_size =
+            static_cast<size_t>(store.get_int("max_tool_result_size",
+                                              static_cast<int>(settings_.max_tool_result_size)));
+        settings_.max_request_size =
+            static_cast<size_t>(store.get_int("max_request_size",
+                                              static_cast<int>(settings_.max_request_size)));
+        settings_.max_response_size =
+            static_cast<size_t>(store.get_int("max_response_size",
+                                              static_cast<int>(settings_.max_response_size)));
+        if (!models.empty()) {
+            loaded_from_store = true;
+            for (auto& m : models) {
+                ::ModelConfig cfg;
+                cfg.name             = m.name;
+                cfg.host             = m.host;
+                cfg.api_key          = m.api_key;
+                cfg.model            = m.model_id;
+                cfg.chat_endpoint    = m.chat_endpoint;
+                cfg.max_context_size = m.max_context_size;
+                cfg.temperature      = m.temperature;
+                settings_.models[m.name] = std::move(cfg);
+            }
+        }
+        if (loaded_from_store) {
+            LOG_CERR(INFO, "[SettingsStore] loaded " << models.size()
+                      << " model(s) from " << store.db_path().string());
+        }
+    } catch (const std::exception& e) {
+        LOG_CERR(WARNING, "[SettingsStore] unavailable ("
+                  << e.what() << "); falling back to JSON");
+    }
+
+    // Always load MCP / Skills from the JSON file (v0.3.0 scope —
+    // the store doesn't have those tables yet).
     // Check if settings file exists
     if (!std::filesystem::exists(settings_file_path_)) {
-        // Create default settings file
-        create_default_settings();
-        
-        LOG_CERR(INFO,  "\n===========================================\n"
-                  << "Welcome to daedalus!\n"
-                  << "===========================================\n"
-                  << "A settings file has been created at:\n"
-                  << "  " << settings_file_path_.string() << "\n\n"
-                  << "Please edit this file and add your API key.\n"
-                  << "Then run daedalus again.\n"
-                  << "===========================================\n\n");
-        
-        throw SettingsError("Settings file not found. A default file has been created at: " + settings_file_path_.string() + ". Please configure it and try again.");
+        // No JSON file AND no store — create the default JSON so the user
+        // has SOMETHING to edit. (Same behaviour as before this refactor.)
+        if (!loaded_from_store) {
+            create_default_settings();
+
+            LOG_CERR(INFO,  "\n===========================================\n"
+                      << "Welcome to daedalus!\n"
+                      << "===========================================\n"
+                      << "A settings file has been created at:\n"
+                      << "  " << settings_file_path_.string() << "\n\n"
+                      << "Please edit this file and add your API key.\n"
+                      << "Then run daedalus again.\n"
+                      << "===========================================\n\n");
+
+            throw SettingsError("Settings file not found. A default file has been created at: " + settings_file_path_.string() + ". Please configure it and try again.");
+        }
+        // else: store has data, no JSON file — that's fine, proceed.
+        loaded_ = true;
+        return;
     }
-    
+
     // Wait for any existing lock to be released (another process may be writing)
     if (!wait_for_lock_release()) {
         LOG_CERR(WARNING, "[WARNING] Settings file may be in use by another process. Continuing anyway...");
     }
-    
+
     // Read and parse the JSON file
     try {
         std::ifstream in_file(settings_file_path_);
         if (!in_file.is_open()) {
             throw SettingsError("Failed to open settings file: " + settings_file_path_.string());
         }
-        
+
         json user_settings;
         in_file >> user_settings;
         in_file.close();
-        
 
-        // Load the user's settings as-is. We do NOT merge with defaults
-        // here, because that would silently add models the user never
-        // configured. Defaults are only used to create the file the
-        // first time (see create_default_settings()).
-        load_from_json(user_settings);
+        // Load the JSON layer (MCP, Skills, anything the store doesn't
+        // own).
+        //
+        // §v0.4.0 cutover: if the SQLite store has any models, we skip
+        // the JSON load entirely. The JSON file may still exist with
+        // STALE values (different default_model, different scalars)
+        // that would silently override the store's source-of-truth
+        // values via the fallback in our scalar reads. Skipping the
+        // JSON makes the store authoritative.
+        //
+        // TODO(v0.4.1): when MCP + Skills move into the store, drop
+        // this whole block.
+        if (!loaded_from_store) {
+            load_from_json(user_settings);
+        }
 
-        // If using new models format, validate that way
-        if (!settings_.models.empty()) {
+        // Mark as loaded before validation so the validator can call
+        // get_default_model() without tripping its loaded_ guard.
+        // (Pre-v0.4.0 this flag was never set in load()'s normal path
+        //  — likely a latent bug masked by the validator's call into
+        //  settings_.models directly.)
+        loaded_ = true;
+
+        // (No more "undo" block — see v0.4.0 comment above.)
+
+        // Validation (only if we have BOTH a default_model set AND a
+        // non-empty models list — otherwise we can't validate).
+        if (!settings_.default_model_name.empty()
+            && !settings_.models.empty()) {
             auto default_model = get_default_model();
             if (!default_model) {
-                throw SettingsError("default_model is set but model not found in models list. Edit: " + settings_file_path_.string());
+                throw SettingsError("default_model '"
+                          + settings_.default_model_name
+                          + "' is set but not found in models list. Edit: "
+                          + settings_file_path_.string());
             }
             if (default_model->api_key.empty() || default_model->api_key == "YOUR_API_KEY_HERE") {
                 throw SettingsError("Missing or invalid API key for default model. Edit: " + settings_file_path_.string());
             }
         }
-        
+
     } catch (const json::parse_error& e) {
         throw SettingsError("Failed to parse settings file: " + std::string(e.what()));
     } catch (const json::type_error& e) {

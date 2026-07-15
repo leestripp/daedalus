@@ -328,6 +328,12 @@ namespace ToolHandler {
 
     // Execute a tool call - delegates to appropriate tool
     json execute_tool_call(const json& tool_call, FileIO& file_io) {
+        return execute_tool_call(tool_call, file_io, nullptr);
+    }
+
+    json execute_tool_call(const json& tool_call,
+                           FileIO& file_io,
+                           ToolProgressFn progress) {
         // Initialize tool factory if not done
         init_tool_factory();
         
@@ -421,7 +427,7 @@ namespace ToolHandler {
         }
         
         // Delegate to tool factory for all tools (including execute_bash)
-        return g_tool_factory->execute_tool(tool_name, args, file_io);
+        return g_tool_factory->execute_tool(tool_name, args, file_io, progress);
     }
 
     // Get tool definitions as JSON string

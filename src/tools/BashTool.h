@@ -27,6 +27,7 @@ public:
     [[nodiscard]] std::string get_description() const override { return "Execute shell commands"; }
     [[nodiscard]] json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
+    json execute(const json& args, FileIO& file_io, ToolProgressFn progress) override;
     
     // Set callback for build events (called from MiniMaxClient)
     static void set_build_callback(BuildEventCallback callback) { build_callback_ = callback; }

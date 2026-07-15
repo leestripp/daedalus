@@ -1,5 +1,6 @@
 #include "SessionMemory.h"
 #include "SettingsManager.h"
+#include "daedalus/settings.h"   // v0.3.5: SettingsStore mirror
 #include "Logger.h"
 #include <fstream>
 #include <iostream>
@@ -427,24 +428,72 @@ size_t SessionMemory::calculate_size() const {
 }
 
 void SessionMemory::load() {
+    // §Plan.md v0.3.5: prefer SQLite mirror if present. Falls back to
+    // the legacy JSON file at <data_dir>/memory/memory.json. The
+    // SQLite mirror is a plain kv_settings row under "mem.<session_id>".
+    try {
+        auto store = daedalus::SettingsStore::for_home(memory_dir_path_);
+        auto blob = store.get_session_memory(session_id_);
+        if (!blob.empty()) {
+            json j = json::parse(blob);
+            // (mirror of the JSON parse body below — keep them in sync)
+            version_ = j.value("version", "1.0");
+            updated_at_ = iso_to_time_point(j.value("updated_at", ""));
+            builds_.clear();
+            if (j.contains("builds"))
+                for (const auto& b : j["builds"]) builds_.push_back(BuildEntry::from_json(b));
+            errors_.clear();
+            if (j.contains("errors"))
+                for (const auto& e : j["errors"]) errors_.push_back(ErrorEntry::from_json(e));
+            preferences_.clear();
+            if (j.contains("preferences"))
+                for (const auto& p : j["preferences"]) preferences_.push_back(PreferenceEntry::from_json(p));
+            patterns_.clear();
+            if (j.contains("patterns"))
+                for (const auto& p : j["patterns"]) patterns_.push_back(PatternEntry::from_json(p));
+            sessions_.clear();
+            if (j.contains("sessions"))
+                for (const auto& s : j["sessions"]) sessions_.push_back(SessionSummary::from_json(s));
+            if (j.contains("project")) project_info_ = ProjectInfo::from_json(j["project"]);
+            if (j.contains("config")) {
+                const auto& cfg = j["config"];
+                config_.enabled                = cfg.value("enabled", true);
+                config_.max_total_size_kb      = cfg.value("max_total_size_kb", 100);
+                config_.max_entries_per_category = cfg.value("max_entries_per_category", 50);
+                config_.max_session_history    = cfg.value("max_session_history", 20);
+                config_.memory_age_days        = cfg.value("memory_age_days", 30);
+                config_.auto_detect_errors     = cfg.value("auto_detect_errors", true);
+                config_.auto_detect_preferences = cfg.value("auto_detect_preferences", true);
+                config_.auto_learn_builds      = cfg.value("auto_learn_builds", true);
+            }
+            LOG_INFO("SessionMemory: Loaded from SQLite mirror | Builds: "
+                     + std::to_string(builds_.size()));
+            return;
+        }
+    } catch (const std::exception& e) {
+        // Mirror unavailable — fall through to JSON.
+        LOG_WARNING("SessionMemory: SQLite mirror load failed ("
+                    + std::string(e.what()) + "); falling back to JSON");
+    }
+
     try {
         // Read file content into string first for better error handling
         std::ifstream file(memory_file_path_);
         if (!file.is_open()) {
             return;
         }
-        
+
         // Get file size
         file.seekg(0, std::ios::end);
         size_t file_size = file.tellg();
         file.seekg(0, std::ios::beg);
-        
+
         // Read entire file into string
         std::string file_content;
         file_content.resize(file_size);
         file.read(file_content.data(), file_size);
         file.close();
-        
+
         if (file_content.empty()) {
             return;
         }
@@ -545,26 +594,39 @@ void SessionMemory::load() {
 void SessionMemory::save() {
     try {
         ensure_memory_dir();
-        
+
         json j = to_json_full();
-        
+
         // Sanitize all string values to prevent invalid UTF-8 from corrupting the file
         sanitize_json(j);
-        
+
         std::ofstream file(memory_file_path_);
         if (!file.is_open()) {
             LOG_CERR(ERROR, "SessionMemory: Failed to open file for writing");
             LOG_ERROR("SessionMemory: Failed to open file for writing");
             return;
         }
-        
+
         file << std::setw(2) << j << '\n';
-        
+
         LOG_DEBUG("SessionMemory: Saved | Total entries: " + std::to_string(builds_.size() + errors_.size() + preferences_.size()));
-        
+
     } catch (const std::exception& e) {
         LOG_CERR(ERROR, "SessionMemory: Failed to save: " << e.what());
         LOG_ERROR("SessionMemory: Failed to save - " + std::string(e.what()));
+    }
+
+    // §Plan.md v0.3.5: write-through mirror to SQLite (best-effort).
+    // Failure here must NOT prevent the JSON save above from succeeding —
+    // the JSON file is still the source of truth in v0.3.5.
+    try {
+        json mirror = to_json_full();
+        sanitize_json(mirror);
+        auto store = daedalus::SettingsStore::for_home(memory_dir_path_);
+        store.set_session_memory(session_id_, mirror.dump());
+    } catch (const std::exception& e) {
+        LOG_WARNING("SessionMemory: SQLite mirror save failed ("
+                    + std::string(e.what()) + ")");
     }
 }
 

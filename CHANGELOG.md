@@ -6,6 +6,90 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added (2026-07-15)
+
+- **Webui "Tool Calls" panel — structured cards** (§Phase D1).
+  Each tool invocation now renders as its own card with a header
+  (tool name + status icon + stage pill), a collapsed args block,
+  a progress bar that updates in real time from `tool_progress`
+  events, and a final result block (or error message). Replaces
+  the previous flat "→ name ← result" line stream that mixed
+  unrelated tool calls together.
+  - **Correlation key:** OpenAI-style `call_id` (the same id the
+    LLM uses to match tool calls to tool results). Threaded
+    through to all three SSE event types via new 3-arg
+    `AgentSink` overloads (`on_tool_call(name, call_id, args)`,
+    `on_tool_result(name, call_id, result)`,
+    `on_tool_progress(name, call_id, progress)`). The 2-arg
+    overloads are kept as back-compat; sinks that don't care
+    about correlation (ConsoleAgentSink, test stubs) keep
+    overriding only those — the 3-arg default delegates.
+  - **Card states:** `running` (blue border, indeterminate
+    shimmer bar until percent arrives, spinner icon),
+    `success` (green border, ✓ icon, result block),
+    `error` / `denied` (red border, ✗ icon, error result).
+  - **Idempotency:** if a `tool_call` arrives for an id that
+    already has a card (e.g. a retried invocation), the args
+    are refreshed in place — no duplicate card is created.
+  - **Out-of-order tolerance:** `tool_progress` for an unknown
+    id is silently dropped (LLMClient emits `tool_call` before
+    the tool runs, so this should never happen, but defensive).
+  - **SSE event payload changes:**
+    `tool_call`, `tool_progress`, `tool_result` now include
+    `"id": "<call_id>"` at the top level. Hosts that ignore the
+    id (or use a different correlation scheme) are unaffected.
+
+- **Unit test** (`daedalus_sink_call_id_tests`, 5 cases, 17
+  assertions, all pass) for the new `AgentSink` 3-arg
+  overloads:
+  - D1.1 — 3-arg sink receives `call_id` for all 3 events
+  - D1.2 — empty `call_id` still produces an event
+  - D1.3 — back-compat: 2-arg-only sink still fires when called
+    through a base pointer (which is how LLMClient does it)
+  - D1.4 — default no-op sink swallows everything
+  - D1.5 — same id across the 3 events enables correlation
+
+- **CSS for the new panel:** `.tool-card` and its variants
+  (`running` / `success` / `error` / `indeterminate`),
+  `.tool-card-head`, `.tool-card-name`, `.tool-card-icon`,
+  `.tool-card-stage`, `.tool-card-args`, `.tool-card-progress`,
+  `.tool-card-progress-bar` (with `shimmer` keyframes for
+  indeterminate state), `.tool-card-message`, `.tool-card-result`.
+  Dark theme, monospace, ~80 lines.
+
+### Added (2026-07-15)
+
+- **Streaming tool-call progress events** (§Phase C1).
+  Long-running tools (`execute_bash` with big builds, network ops,
+  MCP calls) now report progress between `on_tool_call` and
+  `on_tool_result` so hosts can show live feedback instead of
+  freezing until the result lands.
+  - **Public API:** `AgentSink::on_tool_progress(name, progress_json)`
+    — virtual method on the sink interface. Default: no-op.
+  - **Tool opt-in:** `BaseTool::execute(args, file_io, ToolProgressFn)`
+    — new 3-arg overload. Default 2-arg `execute()` still works
+    unchanged for the 18 tools that don't need progress.
+  - **JSON shape:** `{ "stage": "...", "percent": 0..100, "message": "..." }`
+    with `stage ∈ { "starting" | "executing" | "finalizing" | "done" }`.
+  - **BashTool** is the first tool to emit progress (two events:
+    `"starting"` at 0% and `"executing"` at 50% before the
+    `BashCommandExecutor::execute` call returns).
+  - **Demo sinks wired:**
+    - `ConsoleAgentSink` (CLI) — compact one-liner per event:
+      `  ↳ execute_bash: executing (50%)`
+    - `WebSseSink` (webui) — broadcasts as a new SSE event type
+      `tool_progress` with `{ "name", "progress" }` payload. The
+      webui JS can render a live status bar from it.
+  - **Test added:** `daedalus_tool_progress_tests` (4 cases, 14
+    assertions, all pass):
+    - `P1+P2`: BashTool emits `starting` + `executing` with the
+      right JSON shape
+    - `P3`: pre-execution rejection (privilege escalation) fires
+      **zero** progress events
+    - `P4`: legacy 2-arg `execute()` still works (back-compat)
+    - `P5`: `ToolHandler::execute_tool_call` wires the closure
+      through to the sink the same way `LLMClient` does
+
 ### Changed (2026-07-13)
 
 - **XDG-compliant storage layout implemented in full.**
@@ -306,6 +390,96 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **CMake static-library target** `codemax` (`add_library(... STATIC)`).
 - **`install(TARGETS codemax ARCHIVE DESTINATION lib)`** for
   downstream `find_package` / raw link.
+
+## [v0.4.0] — 2026-07-15
+
+Settings refactor cutover + OmniNet bug resolutions.
+
+### Added (v0.4.0)
+
+- **`daedalus::SettingsStore` public API** in `include/daedalus/settings.h`:
+  - `SettingsStore::instance()` — global default DB handle
+  - `SettingsStore::for_home(path)` — per-agent isolated handle
+  - CRUD for models, kv_settings, mcp_servers, serper_config
+  - `transaction()` for atomic batches
+  - `db_path()`, `has_data()` introspection
+
+  SQLite-backed (`$XDG_DATA_HOME/daedalus/daedalus.db`), replaces the
+  scattered JSON files. Hosts that use libdaedalus no longer touch
+  `config.json` / `mcp/servers.json` / `mcp/.env` directly.
+
+- **`tests/test_settings_store.cpp`** — 9 unit tests for the public
+  API (CRUD, transaction, for_home isolation).
+- **`tests/test_settings_store_e2e.cpp`** — end-to-end wire-in test
+  (write via `SettingsStore` → read via `Agent.list_models()`).
+- **`tests/test_settings_v040_cutover.cpp`** — 5 cutover tests pinning
+  the SQLite-only semantics.
+- **`tests/test_settings_migrator.cpp`** — 10 tests for the JSON→SQLite
+  auto-migrator.
+- **`omninet_bugs.md`** — tracks OmniNet bugs found via daedalus.
+
+### Changed (v0.4.0)
+
+- **`src/core/SettingsManager::load()` is now SQLite-only when the
+  store has data.** JSON is consulted only when the store is empty.
+  Stale scalars in `config.json` can no longer leak into a populated
+  store.
+- **Validation requires both `default_model_name` AND a non-empty
+  `models` map** (was: either one threw spuriously).
+- **Per-project state (session memory + messages)** moved into the
+  `daedalus.db` store under `mem.<sid>` / `msg.<sid>` keys, with JSON
+  files retained as a read fallback (v0.3.5 → v0.4.0 step).
+- **`SettingsStore::list_models()` uses range-based iteration** again.
+  The OmniNet callback-overload workaround has been removed — see
+  "Fixed (v0.4.0)" below.
+
+### Removed (v0.4.0)
+
+- **`AskUserTool`** — broken and unused. Removed from
+  `src/tools/UserTool.{h,cpp}`, plus the related plumbing:
+  - `request_user_input()` from `AgentSink` (and both demo sinks)
+  - `AgentState::AwaitingUser` enum value
+  - CHAT → AwaitingUser mapping in `AgentImpl`
+  - ask_user handling block in `LLMClient::run_agent_cycle()`
+- **Stale "ask_user" / "AwaitingUser" references** throughout the
+  library, demos, and tests.
+
+### Fixed (v0.4.0)
+
+- **OMNINET-1 (Bug 1) — `QueryResult` lost the first row's data on
+  range-based iteration.** The constructor stepped to the first row
+  but did not populate `m_currentRow`, so `for (const auto& row :
+  db.query("SELECT ..."))` yielded N rows with the first empty and
+  the real first row missing. Fixed upstream in OmniNet **0.8.7**
+  (`Database.cpp` lines 335-344: populate `m_currentRow` after
+  `step()`). daedalus workaround (callback overload) was retained
+  until Bug 2 below was also confirmed fixed.
+- **OMNINET-2 (Bug 2) — `QueryResult` returned a phantom empty row
+  on the first range-based query after a DELETE or DB-file reopen.**
+  The `Iterator` constructor blindly copied `m_currentRow` without
+  honouring `m_atEnd`, so `begin() != end()` on empty result sets.
+  Fixed upstream in OmniNet **0.8.8-1-gfbecf55**
+  (`Database.cpp:392-404`: check `result->m_atEnd` and mirror it on
+  the iterator). Upstream added 4 regression tests
+  (`database_query_range_empty_after_delete`,
+  `database_query_range_empty_after_reopen`,
+  `database_query_range_empty_table`,
+  `database_query_range_after_delete_then_insert`). OmniNet's own
+  suite went 121/121 → 125/125. **Workaround removed** from
+  `src/core/SettingsStore.cpp::list_models()`. Closed in daedalus.
+
+### Migration notes (v0.4.0)
+
+- First run on a system with existing JSON config: auto-migrator
+  reads `config.json` / `mcp/servers.json` / `mcp/.env`, writes
+  rows to `daedalus.db`, and renames the originals to
+  `*.migrated`. No user action required.
+- Placeholder API keys (`YOUR_API_KEY_HERE`) are skipped by the
+  migrator — they'd fail validation later.
+- `SettingsManager` itself is still present (would require touching
+  many call sites to delete) but is now a thin SQLite shim. Future
+  cleanup: route `AgentImpl::initialize()` straight through
+  `SettingsStore::instance()` and delete `SettingsManager`.
 
 ## [0.x] — Pre-refactor
 

@@ -25,13 +25,24 @@ public:
     [[nodiscard]] json get_all_definitions() const;
     
     /**
-     * Execute a tool by name
+     * Execute a tool by name (no progress callback).
      * @param tool_name Name of the tool to execute
      * @param args Arguments for the tool
      * @param file_io Reference to FileIO
      * @return JSON result of execution
      */
     json execute_tool(const std::string& tool_name, const json& args, FileIO& file_io);
+
+    /**
+     * Execute a tool by name, with an optional progress callback.
+     * Tools that override the 3-arg `BaseTool::execute` overload
+     * receive `progress` and can call it freely; tools that don't
+     * override it get the same behaviour as the no-callback version.
+     */
+    json execute_tool(const std::string& tool_name,
+                      const json& args,
+                      FileIO& file_io,
+                      ToolProgressFn progress);
 
     /**
      * Rebuild the registered set of MCP-proxied tools from the currently

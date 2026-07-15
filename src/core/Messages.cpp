@@ -12,6 +12,7 @@
  */
 
 #include "Messages.h"
+#include "daedalus/settings.h"
 #include <algorithm>
 #include "api/CurlMultiSession.h"
 #include "Utf8Utils.h"
@@ -309,10 +310,30 @@ void Messages::set_messages(const json& msgs) {
 // ============================================================================
 
 bool Messages::load() {
+    // §Plan.md v0.3.5: try SQLite mirror first. Fall back to JSON file.
+    try {
+        auto store = daedalus::SettingsStore::for_home(
+            messages_file_.parent_path());
+        auto blob = store.get_messages_json(session_id_);
+        if (!blob.empty()) {
+            json saved = json::parse(blob);
+            if (saved.is_array() && !saved.empty()) {
+                messages_ = saved;
+                messages_ = sanitize_message_chain(messages_);
+                LOG_INFO("Loaded " + std::to_string(messages_.size())
+                         + " messages from SQLite mirror");
+                return true;
+            }
+        }
+    } catch (const std::exception& e) {
+        LOG_WARNING("Messages: SQLite mirror load failed ("
+                    + std::string(e.what()) + "); falling back to JSON");
+    }
+
     if (!std::filesystem::exists(messages_file_)) {
         return false;
     }
-    
+
     try {
         std::ifstream f(messages_file_);
         if (!f.good()) {
@@ -386,6 +407,23 @@ void Messages::save() const {
         
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to save messages: " + std::string(e.what()));
+    }
+
+    // §Plan.md v0.3.5: write-through mirror to SQLite (best-effort).
+    try {
+        if (!messages_.empty()) {
+            json mirror = sanitize_message_chain(messages_);
+            auto store = daedalus::SettingsStore::for_home(
+                messages_file_.parent_path());
+            store.set_messages_json(session_id_, mirror.dump());
+        } else {
+            auto store = daedalus::SettingsStore::for_home(
+                messages_file_.parent_path());
+            store.delete_messages_json(session_id_);
+        }
+    } catch (const std::exception& e) {
+        LOG_WARNING("Messages: SQLite mirror save failed ("
+                    + std::string(e.what()) + ")");
     }
 }
 

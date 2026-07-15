@@ -179,6 +179,8 @@ endif()
 set(CORE_SOURCES
 	src/core/FileIO.cpp
 	src/core/SettingsManager.cpp
+	src/core/SettingsStore.cpp
+	src/core/SettingsMigrator.cpp
 	src/core/SkillManager.cpp
 	src/core/utils.cpp
 	src/core/ImageProcessor.cpp

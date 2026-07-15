@@ -520,6 +520,8 @@ target_include_directories(daedalus_session_memory_tests PRIVATE
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_session_memory_tests PRIVATE
+    daedalus
+    pthread
     nlohmann_json::nlohmann_json
 )
 add_test(NAME session_memory_tests COMMAND daedalus_session_memory_tests)
@@ -668,6 +670,38 @@ target_link_libraries(daedalus_sink_events_tests PRIVATE
 )
 add_test(NAME sink_events_tests COMMAND daedalus_sink_events_tests)
 
+# §Phase C1: streaming tool-call progress events.
+# Exercises BaseTool::execute(args, file_io, ToolProgressFn) end-to-end,
+# plus the ToolHandler → AgentSink routing. See test_tool_progress.cpp.
+add_executable(daedalus_tool_progress_tests
+    test_tool_progress.cpp
+)
+target_include_directories(daedalus_tool_progress_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/tools
+)
+target_link_libraries(daedalus_tool_progress_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME tool_progress_tests COMMAND daedalus_tool_progress_tests)
+
+# §Phase D1: AgentSink 3-arg overload (call_id propagation). Verifies
+# the back-compat 2-arg path still fires correctly.
+add_executable(daedalus_sink_call_id_tests
+    test_sink_call_id.cpp
+)
+target_include_directories(daedalus_sink_call_id_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_sink_call_id_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME sink_call_id_tests COMMAND daedalus_sink_call_id_tests)
+
 # Library does not call std::cin / std::cout / std::cerr (Phase 2.5: REPL
 # belongs to the host, not the library).
 add_executable(daedalus_no_repl_tests
@@ -697,6 +731,86 @@ target_link_libraries(daedalus_per_agent_home_tests PRIVATE
 )
 add_test(NAME per_agent_home_tests COMMAND daedalus_per_agent_home_tests)
 
+# Config / settings file location resolution (regression guard for the
+# recurring "settings.json vs config.json vs settings/settings.json"
+# bug family). See test_config_locations.cpp for what each pin covers.
+add_executable(daedalus_config_locations_tests
+    test_config_locations.cpp
+)
+target_include_directories(daedalus_config_locations_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_config_locations_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME config_locations_tests COMMAND daedalus_config_locations_tests)
+
+# SettingsStore — SQLite-backed settings DB (Plan: Refactor settings to
+# SQLite + public API). See test_settings_store.cpp for what each pin covers.
+add_executable(daedalus_settings_store_tests
+    test_settings_store.cpp
+)
+target_include_directories(daedalus_settings_store_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_settings_store_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME settings_store_tests COMMAND daedalus_settings_store_tests)
+
+# End-to-end wire-in test: write a model via the public SettingsStore
+# API, then verify Agent.list_models() sees it (this exercises
+# SettingsManager.load() → SettingsStore::instance() inside AgentImpl).
+add_executable(daedalus_settings_store_e2e_tests
+    test_settings_store_e2e.cpp
+)
+target_include_directories(daedalus_settings_store_e2e_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_settings_store_e2e_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME settings_store_e2e_tests COMMAND daedalus_settings_store_e2e_tests)
+
+# SettingsMigrator — JSON → SQLite auto-migrator (v0.3.1).
+# See test_settings_migrator.cpp for what each pin covers.
+add_executable(daedalus_settings_migrator_tests
+    test_settings_migrator.cpp
+)
+target_include_directories(daedalus_settings_migrator_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_settings_migrator_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME settings_migrator_tests COMMAND daedalus_settings_migrator_tests)
+
+# SettingsStore v0.4.0 cutover: pins the behaviour change that
+# SettingsManager.load() reads ONLY from SQLite. See
+# test_settings_v040_cutover.cpp for what each pin covers.
+add_executable(daedalus_settings_v040_cutover_tests
+    test_settings_v040_cutover.cpp
+)
+target_include_directories(daedalus_settings_v040_cutover_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_settings_v040_cutover_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME settings_v040_cutover_tests COMMAND daedalus_settings_v040_cutover_tests)
+
 # Messages class tests
 add_executable(daedalus_messages_tests
     test_messages.cpp
@@ -712,6 +826,7 @@ target_include_directories(daedalus_messages_tests PRIVATE
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_messages_tests PRIVATE
+    daedalus
     nlohmann_json::nlohmann_json
     ${CURL_LIBRARIES}
     pthread

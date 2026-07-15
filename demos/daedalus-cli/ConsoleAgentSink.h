@@ -50,6 +50,9 @@ public:
                       const nlohmann::json& args) noexcept override;
     void on_tool_result(std::string_view name,
                         const nlohmann::json& result) noexcept override;
+    // §Phase C1: streaming tool-call progress (compact stderr marker).
+    void on_tool_progress(std::string_view name,
+                          const nlohmann::json& progress) noexcept override;
 
     // State / lifecycle — §Phase 9.6 observability.
     void on_state_change(int from, int to) noexcept override;

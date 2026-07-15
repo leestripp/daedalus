@@ -116,7 +116,7 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
     //      $DAEDALUS_HOME, $XDG_CONFIG_HOME, legacy $HOME/.daedalus)
     if (cfg_.settings_path.empty()) {
         if (!cfg_.daedalus_home.empty()) {
-            cfg_.settings_path = cfg_.daedalus_home / "settings" / "settings.json";
+            cfg_.settings_path = cfg_.daedalus_home / "config.json";
         } else {
             cfg_.settings_path = default_settings_path();
         }
