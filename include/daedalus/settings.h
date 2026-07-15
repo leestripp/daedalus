@@ -154,6 +154,17 @@ public:
     int get_mcp_tool_schema_soft_cap_percent() const;
 
     // -----------------------------------------------------------------------
+    // v0.5.0: setters for the values the agent can change at runtime.
+    // (Reads exist for LLMClient; writes exist for /models + tests.)
+    // -----------------------------------------------------------------------
+
+    void set_max_agent_iterations(int v);
+    void set_max_tool_result_size(size_t v);
+    void set_max_request_size(size_t v);
+    void set_max_response_size(size_t v);
+    void set_mcp_tool_schema_soft_cap_percent(int v);
+
+    // -----------------------------------------------------------------------
     // v0.5.0: server error retry settings.
     // -----------------------------------------------------------------------
 
@@ -193,7 +204,10 @@ public:
 
 private:
     SettingsStore() = default;
-    SettingsStore(std::filesystem::path db_path, bool is_default);
+    /// Internal ctor. `auto_migrate=true` runs SettingsMigrator::run()
+    /// once on first open; `false` skips it (used by `for_home()` and tests).
+    SettingsStore(std::filesystem::path db_path, bool is_default,
+                  bool auto_migrate = false);
     struct Impl;
     Impl* impl_ = nullptr;        // pimpl'd; opaque to API users
 };

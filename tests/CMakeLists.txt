@@ -795,6 +795,42 @@ target_link_libraries(daedalus_settings_v040_cutover_tests PRIVATE
 )
 add_test(NAME settings_v040_cutover_tests COMMAND daedalus_settings_v040_cutover_tests)
 
+# SettingsStore v0.5.0 auto-migration tests:
+# Pins the behaviour that instance() runs the JSON→SQLite migrator on
+# first DB open. See test_auto_migrate.cpp for what each pin covers.
+add_executable(daedalus_auto_migrate_tests
+    test_auto_migrate.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/SettingsMigrator.cpp
+)
+target_include_directories(daedalus_auto_migrate_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_auto_migrate_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME auto_migrate_tests COMMAND daedalus_auto_migrate_tests)
+
+# Instance() auto-migration test. Runs in its own process so the
+# SettingsStore singleton is fresh. Verifies the constructor's
+# auto_migrate=true path actually fires against the user's real DB.
+add_executable(daedalus_instance_automigrate_tests
+    test_instance_automigrate.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/SettingsMigrator.cpp
+)
+target_include_directories(daedalus_instance_automigrate_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_instance_automigrate_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME instance_automigrate_tests COMMAND daedalus_instance_automigrate_tests)
+
 # Messages class tests
 add_executable(daedalus_messages_tests
     test_messages.cpp

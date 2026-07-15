@@ -28,6 +28,7 @@
 
 #include "daedalus/paths.h"   // Paths::global() for the default DB path
 #include "core/Logger.h"
+#include "core/SettingsMigrator.h"   // §v0.5.0: auto-migration on first DB open
 
 namespace fs = std::filesystem;
 
@@ -201,11 +202,26 @@ struct SettingsStore::Impl
     OmniNet::DB::Database* db = nullptr;   // non-owning — owned by DbPool
 };
 
-SettingsStore::SettingsStore(fs::path db_path, bool /*is_default*/)
+SettingsStore::SettingsStore(fs::path db_path, bool /*is_default*/, bool auto_migrate)
     : impl_(new Impl)
 {
     impl_->path = std::move(db_path);
     impl_->db   = &DbPool::instance().get(impl_->path);
+
+    // §v0.5.0: Auto-migrate legacy JSON on first DB open.
+    // Idempotent — SettingsMigrator::run() short-circuits if the store
+    // is already populated or no legacy JSON exists. Failure is
+    // non-fatal: the JSON fallback still works.
+    //
+    // Tests opt out via the third constructor arg so unit tests with
+    // temp paths don't accidentally trigger user-data migration.
+    if (auto_migrate) {
+        try {
+            daedalus::SettingsMigrator::run(*this, {}, {}, /*mark_files=*/true);
+        } catch (...) {
+            // Swallow — migration is best-effort. The store is still usable.
+        }
+    }
 }
 
 // ===========================================================================
@@ -222,7 +238,11 @@ fs::path default_db_path()
 
 SettingsStore& SettingsStore::instance()
 {
-    static SettingsStore s(default_db_path(), /*is_default=*/true);
+    // auto_migrate=true: first call on the user's real DB will migrate
+    // any legacy JSON config. Subsequent calls hit the static (singleton)
+    // so the migration runs exactly once per process.
+    static SettingsStore s(default_db_path(), /*is_default=*/true,
+                           /*auto_migrate=*/true);
     return s;
 }
 
@@ -233,10 +253,14 @@ SettingsStore& SettingsStore::for_home(fs::path home)
     // resource reuse happens there — we don't need to cache wrappers.
     // This also means tests that delete the DB file and reopen can get
     // a clean handle (DbPool detects the missing file and reopens).
+    //
+    // auto_migrate=false: callers that want auto-migration should pass
+    // explicit paths to SettingsMigrator::run() themselves. for_home() is
+    // used by tests and per-agent DBs where the test/temp dir has no
+    // legacy JSON to migrate.
     fs::create_directories(home);
-    // Heap-allocate so we can return a stable reference. The wrapper
-    // is tiny (just Impl*) and DbPool handles the real resource pooling.
-    return *(new SettingsStore(home / "daedalus.db", /*is_default=*/false));
+    return *(new SettingsStore(home / "daedalus.db", /*is_default=*/false,
+                               /*auto_migrate=*/false));
 }
 
 // ===========================================================================
@@ -470,6 +494,12 @@ int SettingsStore::get_mcp_tool_schema_soft_cap_percent() const
 {
     return get_int("mcp_tool_schema_soft_cap_percent", 5);
 }
+
+void SettingsStore::set_max_agent_iterations(int v)        { set_int("max_agent_iterations", v); }
+void SettingsStore::set_max_tool_result_size(size_t v)    { set_int("max_tool_result_size", static_cast<int>(v)); }
+void SettingsStore::set_max_request_size(size_t v)        { set_int("max_request_size", static_cast<int>(v)); }
+void SettingsStore::set_max_response_size(size_t v)       { set_int("max_response_size", static_cast<int>(v)); }
+void SettingsStore::set_mcp_tool_schema_soft_cap_percent(int v) { set_int("mcp_tool_schema_soft_cap_percent", v); }
 
 ServerErrorSettings SettingsStore::get_server_error_settings() const
 {
