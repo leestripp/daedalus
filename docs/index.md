@@ -32,6 +32,7 @@ embedding `libdaedalus.a` and for core contributors.
 | File | Audience | Description |
 |------|----------|-------------|
 | [`storage.md`](storage.md) | **Host developers / users** | Two-tier rule (XDG user vs project-per-agent), all 11 env vars, migration recipes for laptop / systemd / Podman / Docker / nix, FAQ. Source of truth if other docs conflict. |
+| [`settings.md`](settings.md) | **Host developers** | Complete reference for `daedalus::SettingsStore` (v0.4.0+): SQLite-backed API, model config, kv_settings, auto-migration from JSON, SettingsManager deprecation guide. |
 
 ## Integrations
 

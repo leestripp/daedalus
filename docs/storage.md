@@ -4,7 +4,7 @@
 > resolution, and migration recipes.** If anything in `Readme.md` or
 > other docs conflicts with this file, this file wins.
 >
-> *Last updated 2026-07-13.*
+> *Last updated 2026-07-15.*
 
 ---
 
@@ -61,20 +61,26 @@ DAEDALUS_HOME=/tmp/daedalus-test daedalus-cli --migrate-data-apply
 
 ### 1.2 What goes where
 
-| Concrete file / dir | Resolves to |
-|---|---|
-| `settings.json` (LLM keys + model list) | `<config_root>/config.json` |
-| `mcp/servers.json` (MCP registry) | `<config_root>/mcp/servers.json` |
-| `mcp/.env` (MCP secrets) | `<config_root>/mcp/.env` |
-| Globally-installed skill packs | `<data_root>/skills/installed/` |
-| Library logs | `<state_root>/logs/daedalus.log` |
-| Conversation history (future) | `<state_root>/history/` |
-| Response replay cache (future) | `<cache_root>/responses/` |
-| Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` |
+| Concrete file / dir | Resolves to | Notes |
+|---|---|---|
+| `daedalus.db` (settings store) | `<data_root>/daedalus.db` | **v0.4.0+**: SQLite-backed settings. Replaces `config.json`, `mcp/servers.json`, `mcp/.env`. See [`settings.md`](settings.md). |
+| `config.json` (LLM keys + model list) | `<config_root>/config.json` | **Legacy**: read as fallback during v0.4.0 migration. Migrated to `daedalus.db` on first run. |
+| `mcp/servers.json` (MCP registry) | `<config_root>/mcp/servers.json` | **Legacy**: read as fallback during v0.4.0 migration. |
+| `mcp/.env` (MCP secrets) | `<config_root>/mcp/.env` | **Legacy**: read as fallback during v0.4.0 migration. |
+| Globally-installed skill packs | `<data_root>/skills/installed/` | Unchanged. |
+| Library logs | `<state_root>/logs/daedalus.log` | Unchanged. |
+| Conversation history (v0.3.5+) | `daedalus.db` under `msg.<session_id>` keys | SQLite, not a JSON file. |
+| Session memory (v0.3.5+) | `daedalus.db` under `mem.<session_id>` keys | SQLite, not a JSON file. |
+| Response replay cache (future) | `<cache_root>/responses/` | Future. |
+| Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` | Future. |
 
 `<config_root>` defaults to `$XDG_CONFIG_HOME/daedalus` or `~/.config/daedalus`.
 `<data_root>` defaults to `$XDG_DATA_HOME/daedalus` or `~/.local/share/daedalus`.
 And so on.
+
+> **Migration note:** Original JSON files are renamed to `*.migrated` after
+> successful import into `daedalus.db`. You can delete them after verifying
+> the new layout works. See [`settings.md`](settings.md) §4.
 
 ### 1.3 The legacy fallback
 
@@ -315,14 +321,25 @@ In a Nix flake, wrap the binary with `wrapProgram` to bake these in.
 
 ### Q. Where do my LLM API keys live?
 
-`$XDG_CONFIG_HOME/daedalus/config.json` (or `~/.config/daedalus/config.json`
-by default). Never in XDG_DATA_HOME. Never in your project.
+`$XDG_DATA_HOME/daedalus/daedalus.db` (or `~/.local/share/daedalus/daedalus.db`
+by default). The `SettingsStore` API in `include/daedalus/settings.h` provides
+type-safe access — no raw JSON. See [`settings.md`](settings.md) for the
+full API reference.
 
 ### Q. Where is memory stored?
 
-`<project_root>/.daedalus[-<agent_name>]/memory/memory.sqlite`. **Always**
-in the project. NEVER in XDG. See `tests/test_two_tier_rule.cpp` for the
-test that enforces this.
+**Per-project, always.** Two storage modes:
+
+1. **v0.4.0+** (default): Session memory stored in `daedalus.db` under
+   `mem.<session_id>` keys. The `SessionMemory` class falls back to the
+   JSON file at `<project>/.daedalus[-<agent_name>]/memory/memory.json` if
+   the DB key is empty.
+
+2. **Legacy**: `<project_root>/.daedalus[-<agent_name>]/memory/memory.json`.
+   Read as fallback during v0.4.0 migration.
+
+**Never** in XDG. See `tests/test_two_tier_rule.cpp` for the test that
+enforces this. See [`settings.md`](settings.md) §3 for the DB schema.
 
 ### Q. How do I run two agents on the same project without their memory mixing?
 
@@ -381,6 +398,7 @@ daedalus::Paths::set_override(nullptr);
 
 - `include/daedalus/paths.h` — the `Paths` interface.
 - `include/daedalus/project_paths.h` — the `ProjectPaths` class.
+- [`settings.md`](settings.md) — complete SettingsStore API reference.
 - `tests/test_xdg_paths.cpp` — env-var resolution tests.
 - `tests/test_project_paths.cpp` — per-agent namespace tests.
 - `tests/test_two_tier_rule.cpp` — XDG-vs-project enforcement test.
@@ -389,5 +407,4 @@ daedalus::Paths::set_override(nullptr);
 - `tests/test_ensure_directories.cpp` — XDG-permissions test.
 - `demos/daedalus-cli/migrate.cpp` — migration CLI implementation.
 
-
-*Last updated 2026-07-13.*
+*Last updated 2026-07-15.*
