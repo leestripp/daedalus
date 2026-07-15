@@ -76,7 +76,7 @@ public:
         test_dir = "/tmp/daedalus_test_" + std::to_string(std::rand()) + "_" + std::to_string(::getpid());
         test_file = test_dir + "/test.txt";
         write_file(test_file, "// initial content\nline2\nline3\n");
-        file_io = std::make_unique<FileIO>(std::filesystem::path(test_dir), nullptr);
+        file_io = std::make_unique<FileIO>(std::filesystem::path(test_dir));
         tool = std::make_unique<EditFilePatchTool>();
     }
 

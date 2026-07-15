@@ -4,7 +4,7 @@
  *
  * Holds std::unique_ptr<detail::AgentImpl>. The PIMPL ensures the public
  * Agent.h header stays small and doesn't drag in the heavy subsystem
- * types (LLMClient, SettingsManager, McpServerManager, ...).
+ * types (LLMClient, McpServerManager, ...).
  */
 #include "daedalus/Agent.h"
 

@@ -15,7 +15,7 @@
 //   - `<project>/.daedalus*/messages.json`     → moved in v0.3.5
 //
 // Behaviour:
-//   - Auto-runs once on first SettingsManager.load() when the SQLite
+//   - Auto-runs once on first SettingsStore access when the SQLite
 //     store is empty AND legacy JSON exists. Marks migrated files
 //     with a `.migrated` suffix so the user can see what happened.
 //   - The CLI's existing `--migrate-data` flag invokes this explicitly.
@@ -36,8 +36,7 @@
 #include "daedalus/settings.h"
 #include "core/Logger.h"
 
-// §Phase 5.1: same helper macro used in SettingsManager.cpp — wraps
-// LOG_INFO/LOG_WARNING/LOG_ERROR style log calls through the Logger.
+// Helper macro for consistent logging through the Logger.
 #define LOG_CERR(level, expr) do {                          \
         std::ostringstream _daedalus_msg;                   \
         _daedalus_msg << expr;                               \
@@ -100,8 +99,10 @@ int migrate_config_json(const fs::path& src, SettingsStore& store)
 
     // Scalar kv_settings: keys we know about and care about.
     // Anything else stays in the (now .migrated) JSON for the user to read.
+    // JSON key → store key. The store uses "default_model_name" to avoid
+    // collision with the models table.
     static const std::map<std::string, std::string> kKvKeys = {
-        {"default_model",         "default_model"},
+        {"default_model",         "default_model_name"},
         {"auto_approve",          "auto_approve"},
         {"max_agent_iterations",  "max_agent_iterations"},
         {"max_request_size",      "max_request_size"},
@@ -220,7 +221,8 @@ bool SettingsMigrator::needs_migration(const SettingsStore& store,
     // If the store already has any models or kv entries, we're done.
     // (No migration is needed — the store is the source of truth.)
     if (!store.list_models().empty())         return false;
-    if (!store.get_string("default_model", "").empty()) return false;
+    // §v0.5.0: The store uses "default_model_name" as the kv_settings key.
+    if (!store.get_string("default_model_name", "").empty()) return false;
     auto cfg = config_json_path.empty() ? default_config_json_path() : config_json_path;
     return fs::exists(cfg);
 }

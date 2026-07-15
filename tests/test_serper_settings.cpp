@@ -11,7 +11,7 @@
  * These tests guard against:
  *   - The code regressing to a single-key lookup.
  *   - The example settings file losing the canonical key.
- *   - The SettingsManager losing its merge handling for the canonical key.
+ *   - The SettingsStore handling for the canonical key.
  *
  * The tests are static (source-grep based) because get_serper_api_key() is
  * a file-static function and not part of the public API; a behavioural
@@ -22,8 +22,8 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <nlohmann/json.hpp>
 
-#include "core/SettingsManager.h"
 
 using namespace std;
 
@@ -117,17 +117,16 @@ TEST(searchtool_error_message_mentions_serper_search) {
 }
 
 // ============================================================================
-// Test: SettingsManager defaults use the canonical "serper-search" key
+// Test: SettingsMigrator uses the canonical "serper-search" key
 // ============================================================================
-TEST(settingsmanager_uses_canonical_key_in_defaults) {
+TEST(settingsmigrator_uses_canonical_key) {
     auto root = find_project_root();
     if (root.empty()) return 0;
-    auto content = slurp(root / "src" / "core" / "SettingsManager.cpp");
+    auto content = slurp(root / "src" / "core" / "SettingsMigrator.cpp");
     CHECK(!content.empty());
 
-    // The merged "serper-search" key should appear in the defaults / merge
-    // code (the canonical form). The legacy "serper" may still appear
-    // alongside it as a compatibility alias, but not alone.
+    // The migrated "serper-search" key should appear in the migrator
+    // code (the canonical form).
     CHECK(contains(content, "serper-search"));
     return 0;
 }
@@ -197,7 +196,7 @@ int main() {
     int local_failures = 0;
     local_failures += test_searchtool_accepts_canonical_and_legacy_keys();
     local_failures += test_searchtool_error_message_mentions_serper_search();
-    local_failures += test_settingsmanager_uses_canonical_key_in_defaults();
+    local_failures += test_settingsmigrator_uses_canonical_key();
     local_failures += test_example_settings_uses_canonical_key();
     local_failures += test_cmakelists_installs_from_examples();
     local_failures += test_example_settings_is_valid_json();

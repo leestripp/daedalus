@@ -10,7 +10,6 @@
 #include <nlohmann/json.hpp>
 
 // Forward declarations
-class SettingsManager;
 
 /**
  * MemoryEntry - Single piece of remembered information
@@ -248,7 +247,6 @@ public:
     Stats get_stats() const;
     
     // Configuration
-    void load_config(const SettingsManager* settings);
     Config get_config() const { return config_; }
     void set_config(const Config& config) { config_ = config; }
     

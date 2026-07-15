@@ -12,7 +12,6 @@
 #include "SkillsSettings.h"
 
 // Forward declarations
-class SettingsManager;
 
 /**
  * SkillMetadata - Metadata parsed from SKILL.md YAML frontmatter
@@ -65,9 +64,9 @@ public:
     // Production code (Agent) constructs and owns its own instance.
     SkillManager() = default;
 
-    // Initialize from a SettingsManager after one is available.
+    // Initialize skill directories and settings.
     // MUST be called once before the manager is used (Agent's
-    // initialize() does this after constructing a SettingsManager).
+    // initialize() does this after constructing settings).
     // For get_instance() default, the first call lazily invokes this.
     void init_after_settings();
 
@@ -231,7 +230,7 @@ public:
     // =========================================================================
     
     /**
-     * Load settings from SettingsManager
+     * Load skill settings
      * @param settings Settings to apply
      */
     void load_settings(const SkillsSettings& settings);

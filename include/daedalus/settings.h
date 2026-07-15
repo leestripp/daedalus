@@ -98,12 +98,12 @@ public:
     std::filesystem::path db_path() const noexcept;
 
     /// True if this store has any user data (models OR non-schema kv rows).
-    /// Used by SettingsManager to decide whether the SQLite store is
+    /// Used by subsystems to decide whether the SQLite store is
     /// authoritative for v0.4.0 (and JSON can be ignored).
     bool has_data() const noexcept;
 
     // -----------------------------------------------------------------------
-    // v0.5.0: AgentImpl wires directly to SettingsStore (no SettingsManager shim).
+    // v0.5.0: AgentImpl wires directly to SettingsStore ().
     // These are the remaining accessors needed by AgentImpl that weren't
     // in the initial v0.4.0 API.
     // -----------------------------------------------------------------------
@@ -128,7 +128,7 @@ public:
 
     // -----------------------------------------------------------------------
     // v0.5.0: remaining agent settings that LLMClient needs.
-    // These were previously accessed via SettingsManager in LLMClient::LLMClient.
+    // .
     // Defaults: max_iterations=100, max_tool_result=10KB, max_request=4MB,
     //           max_response=5MB.
     // -----------------------------------------------------------------------

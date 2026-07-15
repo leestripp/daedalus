@@ -45,7 +45,7 @@ link_libraries(doctest::doctest)
 add_executable(daedalus_skill_auto_discovery_tests
     test_skill_auto_discovery.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
+    
     ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
@@ -63,26 +63,10 @@ target_link_libraries(daedalus_skill_auto_discovery_tests PRIVATE
 add_test(NAME skill_auto_discovery_tests COMMAND daedalus_skill_auto_discovery_tests)
 
 # ============================================================================
-# Regression: SettingsManager::save() must preserve max_context_size
+# Regression: SettingsStore preserves all fields
 # (previously omitted, causing user settings to be wiped on /models switch)
 # ============================================================================
 
-add_executable(daedalus_settings_save_preserves_tests
-    test_settings_save_preserves_context.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-)
-target_include_directories(daedalus_settings_save_preserves_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_settings_save_preserves_tests PRIVATE
-    daedalus
-    nlohmann_json::nlohmann_json
-)
-add_test(NAME settings_save_preserves_tests COMMAND daedalus_settings_save_preserves_tests)
 
 # ============================================================================
 # Skill frontmatter parser tests (regression for std::regex segfault on
@@ -92,7 +76,7 @@ add_test(NAME settings_save_preserves_tests COMMAND daedalus_settings_save_prese
 add_executable(daedalus_skill_frontmatter_tests
     test_skill_frontmatter.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
+    
     ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
@@ -347,7 +331,7 @@ add_executable(daedalus_edit_file_patch_tests
     ${CMAKE_SOURCE_DIR}/src/tools/PDFTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
+    
     ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
@@ -561,7 +545,7 @@ add_executable(daedalus_system_info_tests
     test_system_info.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/SystemInfoTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
+    
     ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
@@ -764,7 +748,7 @@ add_test(NAME settings_store_tests COMMAND daedalus_settings_store_tests)
 
 # End-to-end wire-in test: write a model via the public SettingsStore
 # API, then verify Agent.list_models() sees it (this exercises
-# SettingsManager.load() → SettingsStore::instance() inside AgentImpl).
+# SettingsStore is the primary store; AgentImpl wires directly to it.
 add_executable(daedalus_settings_store_e2e_tests
     test_settings_store_e2e.cpp
 )
@@ -795,7 +779,7 @@ target_link_libraries(daedalus_settings_migrator_tests PRIVATE
 add_test(NAME settings_migrator_tests COMMAND daedalus_settings_migrator_tests)
 
 # SettingsStore v0.4.0 cutover: pins the behaviour change that
-# SettingsManager.load() reads ONLY from SQLite. See
+# SettingsStore reads ONLY from SQLite. See
 # test_settings_v040_cutover.cpp for what each pin covers.
 add_executable(daedalus_settings_v040_cutover_tests
     test_settings_v040_cutover.cpp
@@ -896,7 +880,7 @@ add_executable(daedalus_tool_definitions_tests
     ${CMAKE_SOURCE_DIR}/src/tools/NetworkTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsManager.cpp
+    
     ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp

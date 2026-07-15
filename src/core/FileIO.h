@@ -5,20 +5,17 @@
 #include <nlohmann/json.hpp>
 #include <vector>
 
-#include "SettingsManager.h"
-
 using json = nlohmann::json;
 
 class FileIO {
 private:
     std::filesystem::path project_path;
-    SettingsManager* settings_manager_;
 
 public:
     // Find project root by looking for project markers
     static std::filesystem::path find_project_root(const std::filesystem::path& start_path);
 
-    explicit FileIO(const std::filesystem::path& base_path, SettingsManager* settings_manager = nullptr);
+    explicit FileIO(const std::filesystem::path& base_path);
 
     // File operations - simplified model (trust Linux permissions):
     // - Read: any accessible file

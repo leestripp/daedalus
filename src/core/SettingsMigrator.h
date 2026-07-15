@@ -27,8 +27,8 @@ class SettingsMigrator
 {
 public:
     /// True if any legacy JSON file exists AND the SQLite store is empty.
-    /// Cheap — just stat()s the candidate paths. Used by SettingsManager
-    /// to decide whether to auto-migrate on load().
+    /// Cheap — just stat()s the candidate paths. Used by SettingsStore
+    /// access to decide whether to auto-migrate.
     ///
     /// Pass an explicit `config_json_path` (and optionally
     /// `mcp_servers_path`) to override the defaults — used by tests and

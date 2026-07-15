@@ -34,7 +34,7 @@ namespace daedalus::detail {
 namespace fs = std::filesystem;
 
 // ===========================================================================
-// Body — holds LLMClient + SettingsManager. (Defined in AgentImpl.h so that
+// Body — holds LLMClient. (Defined in AgentImpl.h so that
 // std::unique_ptr<Body>'s destructor is visible at the AgentImpl dtor site.)
 // ===========================================================================
 

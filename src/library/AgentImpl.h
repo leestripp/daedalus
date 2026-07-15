@@ -4,7 +4,7 @@
  *
  * §Phase 1+: backs the public Agent facade with the real subsystems. Hosts
  * see only `daedalus::Agent` (in include/daedalus/Agent.h); the heavy
- * implementation (LLMClient, SettingsManager, McpServerManager) lives
+ * implementation (LLMClient, McpServerManager) lives
  * here in src/library/.
  *
  * Responsibilities:

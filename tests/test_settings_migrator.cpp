@@ -190,9 +190,9 @@ void test_m5_scalars_migrated() {
     daedalus::SettingsMigrator::run(
         store, h.config_json(), h.mcp_json(), /*mark_files=*/false);
 
-    EXPECT(store.get_string("default_model")        == "alpha");
+    EXPECT(store.get_default_model_name()           == "alpha");
     EXPECT(store.get_bool("auto_approve")           == true);
-    EXPECT(store.get_int("max_agent_iterations")    == 250);
+    EXPECT(store.get_max_agent_iterations()         == 250);
     EXPECT(store.get_int("max_request_size")        == 5000000);
     EXPECT(store.get_int("max_response_size")       == 7000000);
     EXPECT(store.get_int("max_tool_result_size")    == 300000);

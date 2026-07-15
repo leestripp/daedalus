@@ -1,6 +1,6 @@
 // End-to-end: write a model into the SQLite SettingsStore, then read it
-// through the Agent's SettingsManager (which now reads from the store
-// first). This validates the wire-in is real.
+// through the Agent (which reads from SettingsStore directly).
+// This validates the wire-in is real.
 #include <cassert>
 #include <chrono>
 #include <filesystem>
@@ -30,8 +30,7 @@ int main() {
                   << store.db_path().string() << "\n";
     }
 
-    // Stage 2: read it back through Agent (which uses the wired
-    // SettingsManager.load() → SettingsStore path).
+    // Stage 2: read it back through Agent (which uses SettingsStore directly).
     {
         daedalus::AgentConfig cfg;
         cfg.project_root = "/tmp";
@@ -74,6 +73,6 @@ int main() {
 
     // Cleanup
     daedalus::SettingsStore::instance().delete_model("store-e2e");
-    std::cout << "[ok] end-to-end SettingsStore → SettingsManager → Agent list_models\n";
+    std::cout << "[ok] end-to-end SettingsStore → Agent list_models\n";
     return 0;
 }

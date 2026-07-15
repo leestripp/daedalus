@@ -304,7 +304,7 @@ static ErrorCategory classify_api_error(const std::string& error_type, const std
 LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_store,
                        mcp::McpServerManager* mcp_manager) :
     config_(config),
-    file_io_(std::make_unique<FileIO>(config.target_directory, nullptr)),
+    file_io_(std::make_unique<FileIO>(config.target_directory)),
     settings_store_(settings_store),
     iteration_count_(0),   // §Phase 11: order follows declaration; sink_ defaulted
     mcp_manager_(mcp_manager)   // §Phase 11: injected; nullptr = MCP disabled

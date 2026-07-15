@@ -1,5 +1,4 @@
 #include "SessionMemory.h"
-#include "SettingsManager.h"
 #include "daedalus/settings.h"   // v0.3.5: SettingsStore mirror
 #include "Logger.h"
 #include <fstream>
@@ -1175,17 +1174,6 @@ SessionMemory::Stats SessionMemory::get_stats() const {
     stats.total_size_bytes = calculate_size();
     stats.last_updated = updated_at_;
     return stats;
-}
-
-// ============================================================================
-// Configuration
-// ============================================================================
-
-void SessionMemory::load_config(const SettingsManager* settings) {
-    if (!settings) return;
-    
-    // Try to load from settings
-    // This would integrate with the existing SettingsManager
 }
 
 // ============================================================================

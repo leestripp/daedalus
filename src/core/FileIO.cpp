@@ -49,8 +49,8 @@ std::filesystem::path FileIO::find_project_root(const std::filesystem::path& sta
     }
 }
 
-FileIO::FileIO(const std::filesystem::path& base_path, SettingsManager* settings_manager)
-    : project_path(base_path), settings_manager_(settings_manager) {
+FileIO::FileIO(const std::filesystem::path& base_path)
+    : project_path(base_path) {
     // Validate that the project path exists
     if (!std::filesystem::exists(base_path)) {
         throw std::invalid_argument("Project path does not exist: " + base_path.string());

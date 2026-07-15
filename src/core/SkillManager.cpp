@@ -1,6 +1,7 @@
 #include "SkillManager.h"
 #include "core/ThreadPool.h"
-#include "SettingsManager.h"
+#include "daedalus/settings.h"   // v0.5.0: SettingsStore for skill settings
+#include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
 #include <algorithm>
@@ -49,7 +50,7 @@ void SkillManager::delete_default() {
 }
 
 // SkillManager constructor body moved to `init_after_settings()` to allow
-// construction before SettingsManager exists. The header declares the
+// construction before the settings system exists. The header declares the
 // ctor as `= default`; init_after_settings() must be called once before
 // the manager is used (Agent's initialize() does this).
 //
@@ -59,15 +60,16 @@ void SkillManager::delete_default() {
 // init_after_settings() if it hasn't been called yet.
 
 void SkillManager::init_after_settings() {
-    // Try to load settings from SettingsManager if available
+    // §v0.5.0: Try to load skill settings from SettingsStore if available.
+    // If SettingsStore isn't available or has no skill settings, use defaults.
     try {
-        SettingsManager* sm = SettingsManager::get_instance();
-        if (sm && sm->is_loaded()) {
-            // Apply skill settings from the loaded SettingsManager.
-            settings_ = sm->get_skills_settings();
-        }
+        daedalus::SettingsStore& store = daedalus::SettingsStore::instance();
+        // v0.5.0: SkillsSettings are not yet stored in SettingsStore.
+        // For now, just use the directory defaults. Future: load from
+        // SettingsStore's kv_settings.
+        (void)store;  // suppress unused warning until skill settings are stored
     } catch (...) {
-        // SettingsManager not available yet, use defaults
+        // SettingsStore not available yet, use defaults
     }
 
     // Add default skill directories.

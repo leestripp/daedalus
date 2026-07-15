@@ -16,9 +16,9 @@
 //       `<daedalus_home>/config.json` when no explicit path is passed.
 //   L3. `Agent::initialize()` actually loads a config.json from the resolved
 //       path — i.e. the path is real, the file is opened, the JSON is parsed.
-//   L4. `SettingsManager::load()` validates a real config.json with a
-//       configured model and reports `is_loaded() == true` with a non-empty
-//       model list.
+//   L4. SettingsStore is populated from config.json during migration.
+//       Agent::list_models() returns non-empty for a valid config with
+//       a real (non-placeholder) API key.
 //   L5. `default_settings_path()` honours $DAEDALUS_CONFIG_HOME — overriding
 //       the path lets the test point at a temp dir without touching the
 //       real user's home.
@@ -203,7 +203,7 @@ void test_agent_uses_xdg_default_when_no_paths() {
 }
 
 // ===========================================================================
-// L4. SettingsManager reports is_loaded() and exposes models for a valid
+// L4. SettingsStore is populated from config.json during migration.
 // config.json — and FAILS validation for a config with the well-known
 // "YOUR_API_KEY_HERE" placeholder (which is what shipped with the migration
 // default file).
@@ -217,9 +217,9 @@ void test_settings_manager_loads_real_config() {
     auto good = tmp / "good";
     write_config(good, "l4-good", "sk-real-not-placeholder");
 
-    // We can't construct a SettingsManager directly from public headers
+    // We can't access SettingsStore directly from public headers
     // (it's an internal class). But Agent::list_models() exercises the
-    // load path. So drive it through Agent.
+    // load path through SettingsStore. So drive it through Agent.
     daedalus::AgentConfig cfg;
     cfg.project_root  = "/tmp";
     cfg.daedalus_home = good;
@@ -242,7 +242,7 @@ void test_settings_manager_loads_real_config() {
         assert(found);
     }
     fs::remove_all(tmp);
-    std::cout << "[ok] L4: SettingsManager loads real config.json, lists model\n";
+    std::cout << "[ok] L4: SettingsStore populated, Agent lists model\n";
 }
 
 // ===========================================================================
