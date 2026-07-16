@@ -193,7 +193,7 @@ target_include_directories(daedalus_mcp_server_config_http_tests PRIVATE
 target_link_libraries(daedalus_mcp_server_config_http_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    CURL::libcurl
+
     OmniNet
     pthread
 )
@@ -227,7 +227,7 @@ target_include_directories(daedalus_mcp_proxied_tool_tests PRIVATE
 target_link_libraries(daedalus_mcp_proxied_tool_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    CURL::libcurl
+
     OmniNet
     pthread
 )
@@ -261,7 +261,7 @@ target_include_directories(daedalus_mcp_hub_hardening_tests PRIVATE
 target_link_libraries(daedalus_mcp_hub_hardening_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    CURL::libcurl
+
     OmniNet
     pthread
 )
@@ -304,9 +304,12 @@ target_include_directories(daedalus_curl_multi_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/api
+    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: CurlMultiSession.cpp #includes <OmniNet.h>
 )
 target_link_libraries(daedalus_curl_multi_tests PRIVATE
-    CURL::libcurl
+    OmniNet
+    nlohmann_json::nlohmann_json
+    pthread
 )
 add_test(NAME curl_multi_tests COMMAND daedalus_curl_multi_tests)
 
@@ -355,13 +358,12 @@ target_include_directories(daedalus_edit_file_patch_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/tools
     ${CMAKE_SOURCE_DIR}/src/mcp
     ${nlohmann_json_INCLUDE_DIR}
-    ${CURL_INCLUDE_DIRS}
     ${POPPLER_INCLUDE_DIRS}
 )
 target_link_libraries(daedalus_edit_file_patch_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    ${CURL_LIBRARIES}
+
     ${POPPLER_LIBRARIES}
     pthread
     OmniNet
@@ -369,22 +371,11 @@ target_link_libraries(daedalus_edit_file_patch_tests PRIVATE
 add_test(NAME edit_file_patch_tests COMMAND daedalus_edit_file_patch_tests)
 
 # ============================================================================
-# CurlHandle tests - NO EXTERNAL DEPENDENCIES (C++23 RAII wrapper)
+# CurlHandle tests were removed 2026-07-16 as part of §NOMORE-CURL.
+# CurlHandle.h is gone; the libcurl easy-handle RAII wrapper is no
+# longer used. The OmniNet-backed CurlMultiSession is the sole
+# HTTP transport for the daemon.
 # ============================================================================
-
-# Create standalone CurlHandle test
-add_executable(daedalus_curl_handle_tests
-    test_curl_handle.cpp
-)
-target_include_directories(daedalus_curl_handle_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-)
-target_link_libraries(daedalus_curl_handle_tests PRIVATE
-    CURL::libcurl
-)
-add_test(NAME curl_handle_tests COMMAND daedalus_curl_handle_tests)
 
 # ============================================================================
 # McpTransport tests (C++23)
@@ -403,10 +394,11 @@ target_include_directories(daedalus_mcp_transport_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/api
     ${CMAKE_SOURCE_DIR}/src/mcp
     ${nlohmann_json_INCLUDE_DIR}
+    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: CurlMultiSession.cpp includes <OmniNet.h>
 )
 target_link_libraries(daedalus_mcp_transport_tests PRIVATE
     nlohmann_json::nlohmann_json
-    ${CURL_LIBRARIES}
+    OmniNet
     pthread
 )
 add_test(NAME mcp_transport_tests COMMAND daedalus_mcp_transport_tests)
@@ -477,7 +469,9 @@ add_test(NAME utf8_tests COMMAND daedalus_utf8_tests)
 # ============================================================================
 
 find_package(nlohmann_json REQUIRED)
-find_package(CURL REQUIRED)
+# §NC-11 (2026-07-16): find_package(CURL) removed. The entire daemon
+# HTTP stack now uses OmniNet::HTTP::Client. No daemon code, header,
+# or test links CURL::libcurl.
 
 # Create JSON UTF-8 sanitization test
 add_executable(daedalus_json_utf8_tests
@@ -897,7 +891,7 @@ target_include_directories(daedalus_mcp_load_from_store_tests PRIVATE
 target_link_libraries(daedalus_mcp_load_from_store_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    CURL::libcurl
+
     OmniNet
     pthread
 )
@@ -938,7 +932,7 @@ target_include_directories(daedalus_messages_tests PRIVATE
 target_link_libraries(daedalus_messages_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    ${CURL_LIBRARIES}
+
     pthread
 )
 add_test(NAME messages_tests COMMAND daedalus_messages_tests)
@@ -1027,13 +1021,12 @@ target_include_directories(daedalus_tool_definitions_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/tools
     ${CMAKE_SOURCE_DIR}/src/mcp
     ${nlohmann_json_INCLUDE_DIR}
-    ${CURL_INCLUDE_DIRS}
     ${POPPLER_INCLUDE_DIRS}
 )
 target_link_libraries(daedalus_tool_definitions_tests PRIVATE
     daedalus
     nlohmann_json::nlohmann_json
-    ${CURL_LIBRARIES}
+
     ${POPPLER_LIBRARIES}
     pthread
     OmniNet

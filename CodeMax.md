@@ -607,9 +607,9 @@ migrating this code to OmniNet, not adding new instances.
 | NC-6 | **Migrate `CurlMultiSession` → OmniNet-backed HTTP session.** Add an adapter that implements the existing `submit_cancellable(req, stop_token)` API on top of `OmniNet::HTTP::Client::send(req, stop)`. | HIGH (most-used path) | ✅ Done (2026-07-16) — `CurlMultiSession.cpp` rewritten on `OmniNet::HTTP::Client`. Public API (CurlRequest/CurlResponse/CurlError + submit/submit_cancellable/submit_batch/get_stats/shutdown) preserved. SSE streaming now goes through `send_streaming` + per-chunk callback. Live-LLM smoke test confirms real API calls + SSE streaming + tool calls work end-to-end through the new transport. |
 | NC-7 | Migrate `LLMClient::make_api_request_async` to the OmniNet-backed session. Preserve Retry-After, SSE, retry policy, cancellation, 401/429/5xx routing. | HIGH | ✅ Done (2026-07-16, by NC-6) — `LLMClient` keeps using `CurlMultiSession::submit_cancellable(req, stop_token)` exactly as before; the API surface is unchanged so the migration is transparent. Retry-After parsing, 401/429/5xx routing, stop_token cancellation, SSE streaming all preserved. Live-LLM test confirms `MiniMax-M2.7` model works through the new stack. |
 | NC-8 | Migrate `LLMClient::make_curl_request_with_retry` (sync path) + `run_agent_cycle(CURL*, ...)`. | HIGH | ✅ Done (2026-07-16) — `make_curl_request_with_retry(CURL*, ...)` rewritten on `OmniNet::HTTP::Client::send_blocking`. `CURL* curl` parameter dropped (4 internal call sites updated). `run_agent_cycle(CURL*, ...)` also drops the `CURL*` parameter. `run_one_turn` no longer calls `curl_easy_init/cleanup`; the local `CURL* curl` is gone. `<curl/curl.h>` removed from LLMClient.h. Dead `WriteBuffer` struct + `write_callback` removed (no longer needed). Retry policy preserved: 2xx returns body, 401 + 4xx no retry, 5xx + transport errors use exponential backoff via `server_error_settings`. Live-LLM smoke test (`MiniMax-M2.7`) confirms the sync fallback path works through OmniNet. |
-| NC-9 | Delete `CurlHandle.h` + `CurlMultiSession.{h,cpp}`. | LOW | 🟡 Open — depends on NC-8 (sync-path usage) being confirmed/eliminated. |
-| NC-10 | Delete `tests/test_curl_handle.cpp` + rewrite `tests/test_curl_multi_session.cpp` against OmniNet-backed transport. | LOW | 🟡 Open — same as NC-9. The current tests still pass because they only use the public API, but `test_curl_handle.cpp` tests a deleted internal type (`CurlHandle`). |
-| NC-11 | Drop `find_package(CURL REQUIRED)` + `CURL::libcurl` links from `CMakeLists.txt` + `tests/CMakeLists.txt`. | LOW | 🟡 Open — only possible after NC-9 + NC-10 remove every last curl reference. |
+| NC-9 | Delete `CurlHandle.h` + `CurlMultiSession.{h,cpp}`. | LOW | 🟡 Partial — `CurlHandle.h` deleted (only `CurlMultiSession.cpp` itself and its test referenced it). `CurlMultiSession.{h,cpp}` kept as the OmniNet-backed adapter (LLMClient + Messages.cpp + tests still use the CurlRequest/CurlResponse/CurlError API surface). Full deletion would require renaming the adapter's public API away from "Curl" — significant LLMClient rewrite. |
+| NC-10 | Delete `tests/test_curl_handle.cpp` + rewrite `tests/test_curl_multi_session.cpp` against OmniNet-backed transport. | LOW | ✅ Done (2026-07-16, partial) — `test_curl_handle.cpp` deleted (CurlHandle.h is gone). `test_curl_multi_session.cpp` kept; it tests the OmniNet-backed `CurlMultiSession` API surface unchanged, so all 8 assertions pass without modification. Test count went from 63 → 62 (curl_handle_tests removed). |
+| NC-11 | Drop `find_package(CURL REQUIRED)` + `CURL::libcurl` links from `CMakeLists.txt` + `tests/CMakeLists.txt`. | LOW | ✅ Done (2026-07-16) — `find_package(CURL REQUIRED)` removed from top-level CMakeLists.txt. `CURL::libcurl` link removed from daedalus target. All `CURL::libcurl` / `${CURL_LIBRARIES}` / `${CURL_INCLUDE_DIRS}` references removed from tests/CMakeLists.txt. The two tests that include `CurlMultiSession.cpp` directly (which now `#include <OmniNet.h>`) get the OmniNet include dir + OmniNet link. |
 | NC-12 | Update `ThreadPool.h` comment that mentions `curl_multi`. | TRIVIAL | ✅ Done (2026-07-16) — "curl_multi" → "OmniNet HTTP/MCP". |
 
 **Scope of THIS session:** NC-1, NC-2, NC-3, NC-4, NC-12. LLMClient
@@ -628,17 +628,20 @@ in one shot without breaking the live LLM smoke tests.
 - [x] NC-6: CurlMultiSession rewritten on OmniNet (public API preserved)
 - [x] NC-7: LLMClient migration done implicitly via NC-6 (API unchanged)
 - [x] NC-8: LLMClient sync fallback path (`make_curl_request_with_retry` + `run_agent_cycle`) rewritten on OmniNet. CURL* removed from all signatures + `run_one_turn`.
+- [x] NC-9 (partial): `CurlHandle.h` deleted; `CurlMultiSession.{h,cpp}` kept as the OmniNet-backed adapter (renaming public API is out of scope).
+- [x] NC-10 (partial): `test_curl_handle.cpp` deleted; `test_curl_multi_session.cpp` kept (tests the public CurlMultiSession API, still works).
+- [x] NC-11: `find_package(CURL REQUIRED)` + all `CURL::libcurl` link lines removed from CMakeLists.txt + tests/CMakeLists.txt. **libcurl is fully gone from the build system.**
 - [x] NC-12: ThreadPool.h comment update
 
 **Verification:**
 - ACP builds clean (no warnings from new code).
 - `test_acp_basic` → 25 cases / 84 assertions, all pass.
 - `daedalus_sse_parser_tests` → 17 cases / 47 assertions, all pass.
-- `ctest -E phase15_typo_warning` → **63/63 pass**, 2 live-LLM skipped, 0 failures.
-- **Live-LLM smoke test (daedalus-cli --model minimax-m2.7)**:
+- `ctest -E phase15_typo_warning` → **62/62 pass** (was 63 — `curl_handle_tests` deleted as part of NC-10), 2 live-LLM skipped, 0 failures.
+- **Live-LLM smoke test (daedalus-cli --model minimax-m2.7)** confirmed twice:
   Banner renders, model responds via SSE stream, tool calls (tell_user, stop)
   fire correctly, token usage tracked. End-to-end LLM traffic now flows
-  through `OmniNet::HTTP::Client` with zero libcurl on the hot path.
+  through `OmniNet::HTTP::Client` with **zero libcurl anywhere in the build**.
 
 ---
 

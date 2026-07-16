@@ -109,7 +109,6 @@ set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local")
 find_package(PkgConfig REQUIRED)
 
 # Find other required packages
-find_package(CURL REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
@@ -274,10 +273,6 @@ target_link_libraries(daedalus
 	PUBLIC
 		# nlohmann_json IS exposed via the public API (json types in AgentConfig/LogLevel).
 		nlohmann_json::nlohmann_json
-		# CURL is used internally (HTTP networking via libcurl).
-		# It is NOT exposed via public headers — propagates to consumers
-		# as an INTERFACE_LINK_LIB so they get the runtime symbols.
-		CURL::libcurl
 		# OpenSSL — TLS support uses libssl/libcrypto.
 		OpenSSL::Crypto
 		OpenSSL::SSL
