@@ -124,27 +124,29 @@ private:
     OmniNet::HTTP::ClientConfig cfg_;
 };
 
-// ============================================================================
-// SSE → IRunEventHandler dispatch.
+// §NC-3 + §ACP-7 (2026-07-16): structured event dispatch.
 //
-// §NC-3 STUB: all events pass through on_generic with the raw JSON,
-// so the caller can inspect the structure. Detailed dispatch
-// (on_run_*, on_message_*, on_error) requires adding matching callbacks
-// to IRunEventHandler first.
+// Each parsed SSE event's `data` is a JSON object whose shape
+// depends on the `type` discriminator. dispatch_sse_event (defined
+// in AcpTypes.cpp) reads `type` and calls the matching callback:
+//
+//   message.created / .part / .completed → on_message_*
+//   run.created / .in-progress / .awaiting /
+//     .completed / .failed / .cancelled    → on_run_*
+//   generic                                → on_generic
+//   error                                  → on_error
+//
+// Unknown types + malformed payloads fall through to on_generic,
+// so the stream stays live even if a future spec adds new events.
 // ============================================================================
-
-void dispatch_sse_event(const RunId& run_id,
-                        const daedalus::net::SseEvent& event,
-                        IRunEventHandler& handler) {
-    nlohmann::json data;
-    try {
-        data = nlohmann::json::parse(event.data);
-    } catch (const std::exception&) {
-        data = nlohmann::json{{"raw", event.data}};
+void dispatch_sse_event_inline(const RunId& run_id,
+                               const daedalus::net::SseEvent& event,
+                               IRunEventHandler& handler) {
+    if (event.data.empty()) {
+        // No payload — nothing to do.
+        return;
     }
-    if (!event.event.empty()) data["event_type"] = event.event;
-    if (!event.id.empty())    data["event_id"]   = event.id;
-    handler.on_generic(run_id, data);
+    dispatch_sse_event(run_id, event.data, handler);
 }
 
 // §NC-3: SSE streaming using OmniNet::HTTP::Client::send_streaming +
@@ -178,7 +180,7 @@ void OmninetTransport::stream_events(const RunId& run_id,
             for (;;) {
                 auto event = parser.try_pop();
                 if (!event) break;
-                dispatch_sse_event(run_id, *event, handler);
+                dispatch_sse_event_inline(run_id, *event, handler);
             }
         }
         parser.finish();  // flush any trailing in-flight event

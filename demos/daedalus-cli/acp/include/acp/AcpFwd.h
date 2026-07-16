@@ -169,35 +169,50 @@ struct AgentManifest {
 };
 
 // ============================================================================
-// Event types
+// Event payload structs (forward-looking — NOT in current spec).
+//
+// The ACP spec (docs/acp-protocol.md / acp-openapi.yaml) defines 11 event
+// types, all discriminated by a `type` field on the JSON payload:
+//
+//   message.created, message.part, message.completed,
+//   generic,
+//   run.created, run.in-progress, run.awaiting,
+//   run.completed, run.failed, run.cancelled,
+//   error
+//
+// None of these need a dedicated struct — the dispatcher reads the
+// discriminator and dispatches to the matching IRunEventHandler method.
+// The structs below were aspirational and are kept for source
+// compatibility with anything that referenced them, but are deprecated.
+// §ACP-7 (2026-07-16): use the IRunEventHandler callbacks instead.
 // ============================================================================
 
-struct MessageEvent {
+struct [[deprecated("Use IRunEventHandler callbacks instead — see ACP-7")]] MessageEvent {
     Message message;
 };
 
-struct ToolCallEvent {
+struct [[deprecated("Not in current ACP spec — use IRunEventHandler")]] ToolCallEvent {
     ToolCall tool_call;
 };
 
-struct ToolCallOutputEvent {
+struct [[deprecated("Not in current ACP spec — use IRunEventHandler")]] ToolCallOutputEvent {
     std::string tool_call_id;
     nlohmann::json output;
 };
 
-struct AwaitEvent {
+struct [[deprecated("Not in current ACP spec — use IRunEventHandler")]] AwaitEvent {
     nlohmann::json await_request;
 };
 
-struct RunCompletedEvent {
+struct [[deprecated("Not in current ACP spec — use IRunEventHandler")]] RunCompletedEvent {
     std::string final_output;
 };
 
-struct ErrorEvent {
+struct [[deprecated("Use IRunEventHandler::on_error instead")]] ErrorEvent {
     std::optional<AcpError> error;
 };
 
-using RunEventData = std::variant<
+using RunEventData [[deprecated("Use IRunEventHandler dispatch instead")]] = std::variant<
     MessageEvent,
     ToolCallEvent,
     ToolCallOutputEvent,
@@ -206,7 +221,7 @@ using RunEventData = std::variant<
     ErrorEvent
 >;
 
-struct RunEvent {
+struct [[deprecated("Use IRunEventHandler dispatch instead")]] RunEvent {
     RunId run_id;
     std::string event_type;
     RunEventData data;
@@ -236,5 +251,37 @@ RunStatus parse_run_status(const std::string& s);
 /// Render a RunStatus as its kebab-case ACP wire string. Inverse of
 /// parse_run_status. The returned pointer is to a static literal.
 const char* run_status_to_string(RunStatus s);
+
+// Forward declaration; the full definition lives in AcpClient.h.
+class IRunEventHandler;
+
+/// §ACP-7 (2026-07-16): dispatch a parsed SSE event payload to the
+/// matching IRunEventHandler method. The wire format uses a `type`
+/// discriminator on the JSON `data` (the SSE `event:` field is not
+/// used by ACP — see docs/acp-openapi.yaml).
+///
+/// Recognised types (all from the spec):
+///   - "message.created"   → on_message_created
+///   - "message.part"       → on_message_part
+///   - "message.completed"  → on_message_completed
+///   - "generic"            → on_generic
+///   - "run.created"        → on_run_created
+///   - "run.in-progress"    → on_run_in_progress
+///   - "run.awaiting"       → on_run_awaiting
+///   - "run.completed"      → on_run_completed
+///   - "run.failed"         → on_run_failed
+///   - "run.cancelled"      → on_run_cancelled
+///   - "error"              → on_error
+///
+/// Unknown types fall back to on_generic (with the parsed JSON so
+/// callers can inspect the structure).
+///
+/// Malformed payloads (parse failure, missing `type`) are silently
+/// dropped — they don't reach any callback. Callers should treat
+/// a stream with no callbacks as "transport error" if they expected
+/// at least a `run.created`.
+void dispatch_sse_event(const RunId& run_id,
+                        const std::string& event_data_json,
+                        IRunEventHandler& handler);
 
 } // namespace acp

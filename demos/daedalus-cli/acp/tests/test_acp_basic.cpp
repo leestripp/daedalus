@@ -18,6 +18,8 @@
 #include "acp/AcpClient.h"
 #include "acp/AcpFwd.h"
 
+#include <daedalus/net/SseParser.h>
+
 #include <nlohmann/json.hpp>
 
 using json = nlohmann::json;
@@ -395,4 +397,213 @@ TEST_CASE("create_run preserves server-provided run_id") {
     auto result = client.create_run("x", {m});
     REQUIRE(result.has_value());
     CHECK(result->run_id == "server-assigned-123");
+}
+
+// ============================================================================
+// §ACP-7 (2026-07-16): SSE event dispatcher tests.
+// Verify each spec event type routes to the correct IRunEventHandler
+// callback with the right payload.
+// ============================================================================
+
+/// Test handler that records which callbacks fired + last payload.
+struct RecordingHandler : IRunEventHandler {
+    std::vector<std::string> calls;
+
+    // Helper for the trivially-typed callbacks.
+    void on_message_created(const RunId&, Message) override { calls.push_back("message_created"); }
+    void on_message_part(const RunId&, MessagePart) override { calls.push_back("message_part"); }
+    void on_message_completed(const RunId&, Message) override { calls.push_back("message_completed"); }
+    void on_run_created(const RunId&, Run) override { calls.push_back("run_created"); }
+    void on_run_in_progress(const RunId&, Run) override { calls.push_back("run_in_progress"); }
+    void on_run_awaiting(const RunId&, Run) override { calls.push_back("run_awaiting"); }
+    void on_run_completed(const RunId&, Run) override { calls.push_back("run_completed"); }
+    void on_run_cancelled(const RunId&, Run) override { calls.push_back("run_cancelled"); }
+    void on_run_failed(const RunId&, Run) override { calls.push_back("run_failed"); }
+    void on_error(const RunId&, AcpError err) override {
+        calls.push_back("error");
+        last_error_code    = err.code;
+        last_error_message = err.message;
+    }
+    void on_generic(const RunId&, const nlohmann::json& data) override {
+        calls.push_back("generic");
+        last_generic = data;
+    }
+
+    int last_error_code = 0;
+    std::string last_error_message;
+    nlohmann::json last_generic;
+};
+
+TEST_CASE("dispatch_sse_event: message.created routes to on_message_created") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", R"({"type":"message.created","message":{"role":"user","parts":[]}})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "message_created");
+}
+
+TEST_CASE("dispatch_sse_event: message.part routes to on_message_part") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", R"({"type":"message.part","part":{"content_type":"text/plain","content":"hi"}})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "message_part");
+}
+
+TEST_CASE("dispatch_sse_event: message.completed routes to on_message_completed") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", R"({"type":"message.completed","message":{"role":"agent","parts":[]}})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "message_completed");
+}
+
+TEST_CASE("dispatch_sse_event: generic routes to on_generic") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", R"({"type":"generic","generic":{"foo":"bar"}})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "generic");
+    CHECK(h.last_generic["foo"] == "bar");
+}
+
+TEST_CASE("dispatch_sse_event: run.created / .in-progress / .awaiting / "
+         ".completed / .failed / .cancelled route to matching on_run_*") {
+    for (const auto& [type, callback] : std::vector<std::pair<std::string, std::string>>{
+            {"run.created",     "run_created"},
+            {"run.in-progress", "run_in_progress"},
+            {"run.awaiting",    "run_awaiting"},
+            {"run.completed",   "run_completed"},
+            {"run.failed",      "run_failed"},
+            {"run.cancelled",   "run_cancelled"}}) {
+        RecordingHandler h;
+        acp::dispatch_sse_event("run-1",
+            R"({"type":")" + type + R"(","run":{"run_id":"r","agent_name":"a","status":"created"}})", h);
+        REQUIRE(h.calls.size() == 1);
+        CHECK(h.calls[0] == callback);
+    }
+}
+
+TEST_CASE("dispatch_sse_event: error routes to on_error with parsed AcpError") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1",
+        R"({"type":"error","error":{"code":503,"message":"overloaded","cause":"upstream timeout"}})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "error");
+    CHECK(h.last_error_code    == 503);
+    CHECK(h.last_error_message == "overloaded");
+}
+
+TEST_CASE("dispatch_sse_event: error with no cause field still works") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1",
+        R"({"type":"error","error":{"code":500,"message":"boom"}})", h);
+    CHECK(h.calls[0] == "error");
+    CHECK(h.last_error_code    == 500);
+    CHECK(h.last_error_message == "boom");
+}
+
+TEST_CASE("dispatch_sse_event: unknown type falls through to on_generic") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1",
+        R"({"type":"future.event","some":"data"})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "generic");
+    // Spec-compatible: raw payload preserved so callers can inspect.
+    CHECK(h.last_generic["type"] == "future.event");
+    CHECK(h.last_generic["some"] == "data");
+}
+
+TEST_CASE("dispatch_sse_event: malformed JSON is dropped silently") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", "not valid json {", h);
+    CHECK(h.calls.empty());
+}
+
+TEST_CASE("dispatch_sse_event: missing type field is dropped silently") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", R"({"message":{"role":"user","parts":[]}})", h);
+    CHECK(h.calls.empty());
+}
+
+TEST_CASE("dispatch_sse_event: empty string is dropped silently") {
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", "", h);
+    CHECK(h.calls.empty());
+}
+
+TEST_CASE("dispatch_sse_event: malformed event_payload data is dropped silently") {
+    // Same as the empty-string test but with a slightly different
+    // failure mode: the payload parses as JSON but isn't an object.
+    // Spec requires an object with a `type` discriminator — anything
+    // else is dropped silently (we don't pollute the stream with
+    // on_generic calls for non-object JSON).
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1", R"([{"type":"run.created","run":{}}])", h);
+    CHECK(h.calls.empty());
+}
+
+TEST_CASE("dispatch_sse_event: warning surfaces when inner payload throws") {
+    // The dispatcher must never crash a stream on a per-event payload
+    // failure — it should log a warning via on_generic so the caller
+    // can observe the issue without the stream dying.
+    //
+    // We force an inner failure by passing a `message` payload whose
+    // `parts` field is the wrong type — from_json(Message&) calls
+    // `parts.get<std::vector<MessagePart>>()` which throws on type
+    // mismatch.
+    RecordingHandler h;
+    acp::dispatch_sse_event("run-1",
+        R"({"type":"message.created","message":{"role":"user","parts":"not-an-array"}})", h);
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "generic");
+    CHECK(h.last_generic.contains("warning"));
+}
+
+TEST_CASE("dispatch_sse_event: full lifecycle (5 events in sequence)") {
+    // Simulate one full ACP run cycle end-to-end:
+    //   run.created -> message.created -> message.completed
+    //                -> run.completed
+    //                -> (terminal)
+    RecordingHandler h;
+    const std::string run_id = "run-lifecycle-1";
+
+    acp::dispatch_sse_event(run_id,
+        R"({"type":"run.created","run":{"run_id":")" + run_id + R"(","agent_name":"a","status":"created"}})", h);
+    acp::dispatch_sse_event(run_id,
+        R"({"type":"message.created","message":{"role":"user","parts":[]}})", h);
+    acp::dispatch_sse_event(run_id,
+        R"({"type":"message.completed","message":{"role":"user","parts":[]}})", h);
+    acp::dispatch_sse_event(run_id,
+        R"({"type":"run.completed","run":{"run_id":")" + run_id + R"(","agent_name":"a","status":"completed"}})", h);
+
+    REQUIRE(h.calls.size() == 4);
+    CHECK(h.calls[0] == "run_created");
+    CHECK(h.calls[1] == "message_created");
+    CHECK(h.calls[2] == "message_completed");
+    CHECK(h.calls[3] == "run_completed");
+}
+
+// §ACP-7: end-to-end test using SseParser + dispatch_sse_event.
+// Feeds canned SSE bytes (matching what an ACP server would emit) and
+// verifies the right callbacks fire.
+TEST_CASE("dispatch_sse_event: end-to-end via SseParser") {
+    RecordingHandler h;
+    daedalus::net::SseParser parser;
+
+    // A 3-event stream in canonical ACP wire format.
+    const std::string wire =
+        "data: {\"type\":\"run.created\",\"run\":{\"run_id\":\"r1\",\"agent_name\":\"a\",\"status\":\"created\"}}\n"
+        "\n"
+        "data: {\"type\":\"message.created\",\"message\":{\"role\":\"user\",\"parts\":[]}}\n"
+        "\n"
+        "data: {\"type\":\"run.completed\",\"run\":{\"run_id\":\"r1\",\"agent_name\":\"a\",\"status\":\"completed\"}}\n"
+        "\n";
+
+    parser.feed(wire);
+    parser.finish();
+    while (auto ev = parser.try_pop()) {
+        acp::dispatch_sse_event("r1", ev->data, h);
+    }
+
+    REQUIRE(h.calls.size() == 3);
+    CHECK(h.calls[0] == "run_created");
+    CHECK(h.calls[1] == "message_created");
+    CHECK(h.calls[2] == "run_completed");
 }

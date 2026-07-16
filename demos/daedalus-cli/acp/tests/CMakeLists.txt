@@ -17,7 +17,8 @@ target_link_libraries(test_acp_basic PRIVATE
 )
 target_include_directories(test_acp_basic PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${DOCTEST_INCLUDE_DIR}    # doctest/doctest.h
+    ${CMAKE_SOURCE_DIR}/include          # <daedalus/net/SseParser.h> for §ACP-7
+    ${DOCTEST_INCLUDE_DIR}                # doctest/doctest.h
 )
 
 add_test(NAME test_acp_basic COMMAND test_acp_basic)

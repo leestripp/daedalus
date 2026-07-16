@@ -4,6 +4,8 @@
  */
 
 #include "acp/AcpFwd.h"
+#include "acp/AcpClient.h"   // §ACP-7: IRunEventHandler definition is needed for dispatch.
+
 #include <stdexcept>
 
 namespace acp {
@@ -103,6 +105,95 @@ void to_json(nlohmann::json& j, const RunCreateRequest& req) {
     
     if (req.session_id) {
         // TODO: add session_id
+    }
+}
+
+// ============================================================================
+// SSE event dispatch (ACP-7)
+// ============================================================================
+//
+// Wire format (from docs/acp-openapi.yaml):
+//   data: {"type": "<event>", <payload>}\n
+//   \n
+//
+// The `type` discriminator selects the IRunEventHandler callback. The
+// `event:` SSE field is NOT used — everything is in the data JSON.
+//
+// All payload structs (`message`, `run`, `part`, `error`) are deserialised
+// via the existing from_json() helpers. A parse failure in a payload
+// means we drop that event silently — better to drop a bad event than
+// to crash the whole stream on transient corruption.
+//
+// Unknown `type` values fall through to on_generic with the raw JSON,
+// so forward-compatible additions (new event types in future spec
+// revisions) don't get lost.
+
+void dispatch_sse_event(const RunId& run_id,
+                        const std::string& event_data_json,
+                        IRunEventHandler& handler) {
+    nlohmann::json j;
+    try {
+        j = nlohmann::json::parse(event_data_json);
+    } catch (const std::exception&) {
+        // Malformed JSON — drop.
+        return;
+    }
+    if (!j.is_object()) {
+        // Spec requires an object with `type` discriminator.
+        return;
+    }
+    const std::string type = j.value("type", std::string{});
+    if (type.empty()) {
+        // Missing `type` — drop. Could surface as on_generic, but the
+        // spec is explicit that `type` is required.
+        return;
+    }
+
+    try {
+        if (type == "message.created" || type == "message.completed") {
+            Message m;
+            if (j.contains("message")) from_json(j["message"], m);
+            if (type == "message.created") handler.on_message_created(run_id, std::move(m));
+            else                            handler.on_message_completed(run_id, std::move(m));
+        } else if (type == "message.part") {
+            MessagePart p;
+            if (j.contains("part")) from_json(j["part"], p);
+            handler.on_message_part(run_id, std::move(p));
+        } else if (type == "generic") {
+            nlohmann::json payload = j.value("generic", nlohmann::json::object());
+            handler.on_generic(run_id, payload);
+        } else if (type == "run.created" || type == "run.in-progress" ||
+                   type == "run.awaiting"  || type == "run.completed"  ||
+                   type == "run.failed"    || type == "run.cancelled") {
+            Run run;
+            if (j.contains("run")) from_json(j["run"], run);
+            if      (type == "run.created")     handler.on_run_created(run_id,     std::move(run));
+            else if (type == "run.in-progress") handler.on_run_in_progress(run_id, std::move(run));
+            else if (type == "run.awaiting")    handler.on_run_awaiting(run_id,    std::move(run));
+            else if (type == "run.completed")   handler.on_run_completed(run_id,   std::move(run));
+            else if (type == "run.failed")      handler.on_run_failed(run_id,      std::move(run));
+            else /* run.cancelled */            handler.on_run_cancelled(run_id,   std::move(run));
+        } else if (type == "error") {
+            AcpError err;
+            if (j.contains("error") && j["error"].is_object()) {
+                const auto& e = j["error"];
+                err.code    = e.value("code", 0);
+                err.message = e.value("message", std::string{});
+                if (e.contains("cause")) err.cause = e["cause"].get<std::string>();
+            }
+            handler.on_error(run_id, std::move(err));
+        } else {
+            // Unknown event type — surface via on_generic with the raw JSON
+            // so callers can inspect. Spec-compatible behaviour.
+            handler.on_generic(run_id, j);
+        }
+    } catch (const std::exception& e) {
+        // Per-event parse failure — log via on_generic with a warning.
+        // Better to keep streaming than to abort.
+        handler.on_generic(run_id, nlohmann::json{
+            {"warning", std::string("dispatch failed: ") + e.what()},
+            {"event_type", type},
+            {"raw", event_data_json}});
     }
 }
 
