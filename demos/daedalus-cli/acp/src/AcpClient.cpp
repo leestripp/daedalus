@@ -140,7 +140,21 @@ AcpResult<Run> AcpClient::create_run(
 
     auto r = response_to_result(transport_->post(path, body));
     if (!r) return std::unexpected(r.error());
-    return parse_run_response(*r, agent);
+    auto run = parse_run_response(*r, agent);
+
+    // If the server didn't assign a run_id, generate a client-side UUID
+    // so the caller can still correlate logs / cancel this run. The
+    // server may reject the client-generated id on subsequent calls;
+    // if so, get_run will return AcpError and the caller can fall back
+    // to a different correlation strategy.
+    if (run.run_id.empty()) {
+        uuid_t uu;
+        uuid_generate_random(uu);
+        char buf[UUID_STR_LEN] = {0};
+        uuid_unparse_lower(uu, buf);
+        run.run_id = buf;
+    }
+    return run;
 }
 
 AcpResult<Run> AcpClient::get_run(const RunId& run_id) {

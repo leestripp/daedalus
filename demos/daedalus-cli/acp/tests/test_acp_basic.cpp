@@ -38,6 +38,26 @@ TEST_CASE("acp::ping returns false on unreachable server") {
     CHECK_FALSE(client->ping());
 }
 
+/// Fake transport for tests that don't need a real HTTP server.
+/// Returns the same Response for every get/post call.
+class FakeTransport : public IAcpTransport {
+public:
+    Response next_response;
+    int  get_calls  = 0;
+    int  post_calls = 0;
+
+    Response get(const std::string& /*path*/) override {
+        ++get_calls;
+        return next_response;
+    }
+    Response post(const std::string& /*path*/, const nlohmann::json& /*body*/) override {
+        ++post_calls;
+        return next_response;
+    }
+    void stream_events(const RunId&, IRunEventHandler&) override {}
+    bool is_connected() const override { return next_response.transport_error.empty(); }
+};
+
 // ============================================================================
 // Regression: AcpResult<T> error propagation (ACP-6 — was silent failure).
 // ============================================================================
@@ -325,4 +345,54 @@ TEST_CASE("from_json(Session) ignores non-array messages field") {
     Session s;
     REQUIRE_NOTHROW(from_json(j, s));
     CHECK(s.messages.empty());
+}
+
+// ============================================================================
+// Regression: libuuid is actually used (ACP-8) — create_run generates a
+// client-side run_id when the server response doesn't include one.
+// ============================================================================
+
+TEST_CASE("create_run generates UUID when server omits run_id") {
+    auto fake = std::make_unique<FakeTransport>();
+    fake->next_response = IAcpTransport::Response{
+        /*status_code=*/201,
+        /*body=*/json{{"agent_name", "x"}, {"status", "created"}},  // no run_id
+        /*transport_error=*/""};
+
+    AcpClient client(std::move(fake), "http://test");
+    Message m;
+    m.role = "user";
+    MessagePart p;
+    p.content_type = "text/plain";
+    p.content = "hi";
+    m.parts.push_back(p);
+
+    auto result = client.create_run("x", {m});
+    REQUIRE(result.has_value());
+    REQUIRE_FALSE(result->run_id.empty());
+    // UUID format: 8-4-4-4-12 hex chars with hyphens = 36 chars total
+    CHECK(result->run_id.size() == 36);
+    CHECK(result->run_id[8]  == '-');
+    CHECK(result->run_id[13] == '-');
+    CHECK(result->run_id[18] == '-');
+    CHECK(result->run_id[23] == '-');
+}
+
+TEST_CASE("create_run preserves server-provided run_id") {
+    auto fake = std::make_unique<FakeTransport>();
+    fake->next_response = IAcpTransport::Response{
+        201,
+        json{{"run_id", "server-assigned-123"}, {"agent_name", "x"}, {"status", "created"}},
+        ""};
+
+    AcpClient client(std::move(fake), "http://test");
+    Message m;
+    m.role = "user";
+    m.parts.push_back(MessagePart{});
+    m.parts[0].content_type = "text/plain";
+    m.parts[0].content = "hi";
+
+    auto result = client.create_run("x", {m});
+    REQUIRE(result.has_value());
+    CHECK(result->run_id == "server-assigned-123");
 }

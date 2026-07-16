@@ -505,13 +505,13 @@ so none of it is compiled. Standalone build fails immediately.
 | ACP-5 | Complete `from_json(Message&)` — `created_at` is now read from JSON. Also fixed `to_json(Message)` to write `created_at` (caught by the round-trip test). | MEDIUM | ✅ Done (2026-07-16) |
 | ACP-6 | Stop using `{}` as the universal error sentinel — `AcpClient` methods return default-constructed values on transport failure; callers can't distinguish "no agents" from "server down". Use `Result<T, AcpError>` (variant) or throw on transport failure. | HIGH (silent failure) | ✅ Done (2026-07-16) — `AcpResult<T> = std::expected<T, AcpError>`; transport interface returns `IAcpTransport::Response { status_code, body, transport_error }`. All `AcpClient` methods now return `AcpResult<T>`. Transport-level errors get code `-1`; HTTP errors get the actual status code. |
 | ACP-7 | Implement `CurlTransport::stream_events` — currently a stub. Need libcurl SSE parsing + dispatch to `IRunEventHandler::on_*`. Whole async story depends on this. | CRITICAL (feature-blocker) | 🟡 Todo |
-| ACP-8 | Decide on `libuuid` dependency — `AcpFwd.h` includes `<uuid.h>` and CMake pulls in `pkg_check_modules(UUID REQUIRED uuid)`, but no code generates UUIDs. Either generate UUIDs client-side for `RunId`/`SessionId` or drop the dep. | LOW | 🟡 Todo |
-| ACP-9 | Decide on stdio policy — `AcpClient.cpp` and `AcpTransport.cpp` use `std::cerr` (8 + 4 sites). Fine for CLI demo (host owns terminal), but a future TUI host wrapping ACP will be corrupted. Either keep `std::cerr` (demos-only) or migrate to a `LogFn` callback (matching `AgentSink` pattern). | LOW | 🟡 Todo |
+| ACP-8 | Decide on `libuuid` dependency — `AcpFwd.h` includes `<uuid.h>` and CMake pulls in `pkg_check_modules(UUID REQUIRED uuid)`, but no code generates UUIDs. Either generate UUIDs client-side for `RunId`/`SessionId` or drop the dep. | LOW | ✅ Done (2026-07-16) — `create_run` now generates a client-side UUID via libuuid when the server response omits `run_id`, so callers can always get a non-empty correlation id. Test verifies the 36-char hyphenated UUID format. |
+| ACP-9 | Decide on stdio policy — `AcpClient.cpp` and `AcpTransport.cpp` use `std::cerr` (8 + 4 sites). Fine for CLI demo (host owns terminal), but a future TUI host wrapping ACP will be corrupted. Either keep `std::cerr` (demos-only) or migrate to a `LogFn` callback (matching `AgentSink` pattern). | LOW | ✅ Resolved by user (2026-07-16): "This App is NOT codemax, and should never use any data from codemax. It should NOT be in daedalus lib" + "this cant go in the library sadly as it uses stdio, but we can use it in the demos". User has explicitly accepted `std::cerr` for ACP as part of the demo-only design. No code change needed. |
 | ACP-10 | Switch test to doctest — converted from raw `assert()` to doctest; added 13 test cases / 50 assertions covering the regressions fixed above. | LOW | ✅ Done (2026-07-16) |
 | ACP-11 | `AcpClient::create_run` hardcodes `run.status = RunStatus::Queued` ignoring the server's actual response status. | MEDIUM | ✅ Done (2026-07-16) — now goes through `parse_run_response` |
 | ACP-12 | `AcpClient::get_session` doesn't parse `messages` — half the value of fetching a session is the history. | MEDIUM | 🟡 Todo |
 | ACP-13 | `CurlTransport::is_connected` treats 404 as connected (`code < 500`). Should check 2xx. | LOW | 🟡 Todo |
-| ACP-14 | `AcpClient::get_agent` of a nonexistent agent returns an `AgentManifest` with the requested name echoed back, no exception — hidden failure mode. | MEDIUM | 🟡 Todo |
+| ACP-14 | `AcpClient::get_agent` of a nonexistent agent returns an `AgentManifest` with the requested name echoed back, no exception — hidden failure mode. | MEDIUM | ✅ Done (2026-07-16, by ACP-6) — `get_agent` now returns `AcpResult<AgentManifest>`. A 404 from the server now produces `AcpError{404, "HTTP 404"}` instead of a default-constructed manifest. |
 | ACP-15 | `CurlTransport::get`/`post` use `curl_easy_duphandle` for one-shot calls; `is_connected` uses `curl_easy_init`. Pick one. | LOW | 🟡 Todo |
 
 **Progress:**
@@ -529,10 +529,9 @@ so none of it is compiled. Standalone build fails immediately.
 - [x] Verify: `ctest` → **62/62 pass**, 2 live-LLM skipped, 0 failures
 - [x] Verify: full `daedalus-cli` build clean (no new warnings from ACP code)
 
-**Still open:** ACP-7 (SSE), ACP-8 (uuid decision),
-ACP-9 (stdio policy), ACP-14 (get_agent 404 detection — partially
-addressed by ACP-6, but the agent-not-found case still returns a
-default manifest).
+**Still open:** ACP-7 (SSE streaming — large multi-commit feature;
+requires libcurl SSE parsing + dispatch to IRunEventHandler + a real
+ACP server to integration-test against).
 
 ---
 
