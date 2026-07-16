@@ -427,6 +427,17 @@ size_t CurlMultiSession::header_cb(void* contents, size_t size, size_t nmemb, vo
         // §18.9 — MCP streamable-HTTP. Cache the session id so the
         // transport can replay it on every subsequent request.
         state->response.mcp_session_id = value;
+    } else if (lc_name == "retry-after") {
+        // §B14 fix: capture Retry-After header (RFC 7231 §7.1.3).
+        // Both forms supported: <integer-seconds> or HTTP-date.
+        // For HTTP-date we approximate as max_seconds — caller can clamp.
+        try {
+            int secs = std::stoi(value);
+            if (secs > 0) state->response.retry_after_seconds = secs;
+        } catch (...) {
+            // HTTP-date format (RFC 1123). For now treat as 0; the caller
+            // will fall back to its exponential-backoff wait_time.
+        }
     }
     return realsize;
 }

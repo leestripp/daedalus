@@ -365,6 +365,7 @@ std::future<std::string> LLMClient::make_api_request_async(
          streaming_callback, weak_sink, log_err]() mutable -> std::string {
             int max_retries = server_error_settings.max_retries_per_call;
             int wait_time = server_error_settings.initial_wait_seconds;
+            bool last_attempt_was_transport = false;  // §B14 fix
             std::string last_body;
 
             for (int attempt = 1; attempt <= max_retries; ++attempt) {
@@ -404,12 +405,25 @@ std::future<std::string> LLMClient::make_api_request_async(
                 if (result) {
                     last_body = std::move(result->body);
                     long code = result->status_code;
+                    int  retry_after = result->retry_after_seconds;
                     if (code >= 200 && code < 300) {
                         return last_body;  // Success
                     } else if (code == 401) {
+                        // Auth failure: never retry. Surface the error.
                         log_err("[API] HTTP " + std::to_string(code) + " (auth failed)");
                         return last_body;
+                    } else if (code == 429) {
+                        // §B14 fix: rate-limited. Honour Retry-After if present;
+                        // otherwise fall through to the exponential-backoff path.
+                        log_err("[API] HTTP 429 (rate limited)");
+                        if (retry_after > 0) {
+                            wait_time = retry_after;
+                            log_err("[API] Honoring Retry-After: " +
+                                    std::to_string(retry_after) + "s");
+                        }
+                        // Continue to retry block below.
                     } else if (code >= 400 && code < 500) {
+                        // 4xx (other than 401/429): client error, no point retrying.
                         log_err("[API] HTTP " + std::to_string(code) + " (client error)");
                         return last_body;
                     } else {
@@ -424,11 +438,25 @@ std::future<std::string> LLMClient::make_api_request_async(
                     } else {
                         log_err("[API] request failed (attempt " + std::to_string(attempt) + "): " + to_string(err));
                     }
+                    // §B14 fix: transport errors (timeout / network) should retry
+                    // regardless of server_error_settings.enabled — a single blip
+                    // shouldn't drop the whole turn. The setting gates HTTP 5xx / 429.
+                    last_attempt_was_transport = true;
                 }
 
                 // Wait before retry (exponential backoff, cancellable)
-                if (attempt < max_retries && server_error_settings.enabled &&
-                    !stop_token.stop_requested()) {
+                // §B14 fix: split retry gate. Transport errors retry always
+                // (subject to max_retries + stop_token). HTTP 5xx / 429 retry
+                // only when server_error_settings.enabled is true.
+                const bool is_transport_retry = last_attempt_was_transport;
+                const bool is_http_retry = !last_attempt_was_transport;
+                const bool http_retry_allowed =
+                    is_http_retry && server_error_settings.enabled;
+                const bool should_retry =
+                    attempt < max_retries &&
+                    !stop_token.stop_requested() &&
+                    (is_transport_retry || http_retry_allowed);
+                if (should_retry) {
                     std::ostringstream w;
                     w << "Waiting " << wait_time << "s before retry...";
                     if (auto s = weak_sink.lock()) s->on_log(daedalus::LogLevel::Info, w.str());
@@ -442,6 +470,7 @@ std::future<std::string> LLMClient::make_api_request_async(
                         static_cast<int>(wait_time * server_error_settings.backoff_multiplier),
                         server_error_settings.max_wait_seconds
                     );
+                    last_attempt_was_transport = false;  // reset for next attempt
                 }
             }
 

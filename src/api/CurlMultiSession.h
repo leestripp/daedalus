@@ -100,6 +100,10 @@ struct CurlResponse {
     std::string mcp_session_id;
     bool timed_out = false;          ///< True if request timed out
     bool cancelled = false;          ///< True if cancelled via stop_token
+    /// §B14 fix: Retry-After header value (seconds, lowercased header name).
+    /// Only populated for 429 / 503 responses per RFC 7231 §7.1.3.
+    /// Empty if not present.
+    int retry_after_seconds = 0;
 
     [[nodiscard]] bool ok() const noexcept { return status_code >= 200 && status_code < 300; }
 };

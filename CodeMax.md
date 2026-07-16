@@ -36,11 +36,11 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 | # | Summary | Status |
 |---|---------|--------|
 | B7 | `compress_after_done` flag set but never read in `run_one_turn` (explicit compression request silently dropped) | ✅ Done (2026-07-16) — `run_one_turn` checks `at_threshold || compress_after_done` (LLMClient.cpp:2623); explicit `compress_context` tool calls now trigger compression |
-| B14 | HTTP 4xx not honoured as non-retry; 429 Retry-After header ignored | 🟡 Open |
+| B14 | HTTP 4xx not honoured as non-retry; 429 Retry-After header ignored | ✅ Done (2026-07-16) — split retry policy: transport errors retry always; 5xx/429 retry when `server_error_settings.enabled`. Added `Retry-After` capture in CurlMultiSession header callback (`retry_after_seconds` field on CurlResponse) and 429-aware wait in `LLMClient::make_api_request` |
 | B22 | Corrupt SQLite mirror row not deleted on load → user stuck forever | ✅ Done (2026-07-16) — `SessionMemory::load()` now wraps `json::parse(blob)` in its own try/catch; corrupt rows deleted and falls through to JSON. (Messages.cpp was already fixed.) |
 | B24 | `std::stod` throws on non-numeric `backoff_multiplier` value, swallowed silently by outer `catch(...)` | ✅ Done (2026-07-16) — SettingsStore.cpp:649 wraps `std::stod` in try/catch |
 | B25 | `McpServerManager::load_env_file` not idempotent (double-load on two `Agent`s in same process) | 🟡 Open (needs verify) |
-| B29 | `BashCommandExecutor::execute` has no timeout on synchronous read (`popen` + `fread` hangs on empty-interactive child) | 🟡 Open (needs verify) |
+| B29 | `BashCommandExecutor::execute` has no timeout on synchronous read (`popen` + `fread` hangs on empty-interactive child) | ✅ Done (already in place) — `Subprocess::wait_with_result` polls waitpid with timeout; `Subprocess::kill_group` sends SIGTERM then SIGKILL |
 | B31 | `phase15_typo_warning_tests` hangs in case 3 (`test_skills_disabled_empty_no_warn`) — SkillManager singleton mutex | 🟡 Open — was noted, not fixed |
 
 ### LOW
