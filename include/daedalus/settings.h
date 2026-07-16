@@ -173,6 +173,20 @@ public:
     ServerErrorSettings get_server_error_settings() const;
 
     // -----------------------------------------------------------------------
+    // v0.5.0: Serper.dev API key.
+    //
+    // Stored in the `serper_config` table (singleton row, id=1).
+    // Migration from JSON config (`serper-search.api_key`) happens in
+    // SettingsMigrator::run() — see Phase 2 notes in src/core/SerperConfig.cpp.
+    // -----------------------------------------------------------------------
+
+    /// Get the Serper API key from the store. Empty string if not set.
+    std::string get_serper_api_key() const;
+
+    /// Set the Serper API key. Empty string clears the row.
+    void set_serper_api_key(std::string_view api_key);
+
+    // -----------------------------------------------------------------------
     // v0.3.5: per-project persistence (session memory + messages).
     //
     // For v0.3.5 these are write-through mirrors of the existing JSON

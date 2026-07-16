@@ -661,6 +661,38 @@ ServerErrorSettings SettingsStore::get_server_error_settings() const
 }
 
 // ============================================================================
+// v0.5.0: Serper.dev API key (serper_config table, singleton row id=1)
+// ============================================================================
+
+std::string SettingsStore::get_serper_api_key() const {
+    if (!impl_ || !impl_->db) return {};
+    try {
+        // Singleton row (id=1); if missing, return empty.
+        auto result = query_one_prepared(*impl_->db,
+            "SELECT api_key FROM serper_config WHERE id = 1");
+        if (!result || result->empty()) return {};
+        return (*result)[0];
+    } catch (const std::exception& e) {
+        LOG_WARNING("SettingsStore::get_serper_api_key failed: "
+                    + std::string(e.what()));
+        return {};
+    }
+}
+
+void SettingsStore::set_serper_api_key(std::string_view api_key) {
+    if (!impl_ || !impl_->db) return;
+    try {
+        exec_prepared(*impl_->db,
+            "INSERT INTO serper_config(id, api_key) VALUES (1, ?) "
+            "ON CONFLICT(id) DO UPDATE SET api_key = excluded.api_key",
+            std::string(api_key));
+    } catch (const std::exception& e) {
+        LOG_WARNING("SettingsStore::set_serper_api_key failed: "
+                    + std::string(e.what()));
+    }
+}
+
+// ============================================================================
 // v0.5.0: MCP server registry
 // ============================================================================
 //

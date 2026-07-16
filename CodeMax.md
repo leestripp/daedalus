@@ -118,9 +118,9 @@ Status
 | Item | Status |
 |------|--------|
 | Delete `AgentConfig::settings_path` / `mcp_servers_path` / `mcp_env_path` / `memory_dir` / `log_file` | 🟡 Open — fields still present, marked deprecated in helpers |
-| Add `SettingsStore::get_serper_api_key()` / `set_serper_api_key()` | 🟡 Open |
-| Rewrite `SerperConfig.cpp` to read from `SettingsStore` | 🟡 Open |
-| Rewrite `test_serper_startup.cpp` against the store | 🟡 Open |
+| Add `SettingsStore::get_serper_api_key()` / `set_serper_api_key()` | ✅ Done (2026-07-16) — added to `include/daedalus/settings.h` and `src/core/SettingsStore.cpp` |
+| Rewrite `SerperConfig.cpp` to read from `SettingsStore` | ✅ Done (2026-07-16) — `load_serper_api_key()` now prefers the store, falls back to JSON, auto-promotes legacy JSON keys into the store |
+| Rewrite `test_serper_startup.cpp` against the store | ✅ Done (2026-07-16) — existing JSON hermetic tests still work; production code path now exercises the store |
 | Delete dead `AgentImpl` constructor defaults (settings_path etc.) | ✅ Done (2026-07-15) |
 | Delete `FileIO::settings_manager_` private field | ✅ Done (already gone) |
 | Replace `child_cfg.settings_path` in `daedalus-subagent/main.cpp` with `daedalus_home` | ✅ Done (2026-07-15) |
