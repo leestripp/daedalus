@@ -6,6 +6,61 @@
 
 ---
 
+## ⚠️ Library design rule — NO stdio inside libdaedalus
+
+**The library MUST NOT call `std::cout`, `std::cerr`, `std::cin`,
+`printf`, `fprintf(..., stderr)`, or any function that writes directly
+to stdout/stderr/stdin.** This applies to all of `src/library/`,
+`src/api/`, `src/core/`, `src/mcp/`, `src/tools/` — anywhere that's
+linked into `libdaedalus.a`.
+
+**Why:** A host that builds a TUI (ncurses, blessed, ratatui, raw
+terminal mode, vim-style status line, …) needs total control of
+stdio. Library code that reaches for `std::cout` or `std::cerr`
+corrupts the terminal, blocks the host's input-handling thread, eats
+escape sequences, and breaks mouse/keystroke routing. Once any
+library call leaks a single `\n` into a raw-mode terminal, the host
+is dead in the water until it `stty sane`s the user.
+
+**Output channels the library MAY use:**
+1. **`AgentSink`** (host-controlled callback) — primary I/O path for
+   user-visible text. Hosts wire this to their own stdout, a log
+   file, an in-memory buffer, whatever fits the host's I/O model.
+2. **`core/Logger.h`** — `LOG_INFO` / `LOG_WARNING` / `LOG_ERROR`
+   macros for internal diagnostics. Routes to `AgentSink::on_log` so
+   the host sees it; falls back to a log file when no sink is set.
+
+**Output channels the library MUST NOT use:**
+- `std::cout`, `std::cerr`, `std::clog`, `std::cin`
+- `printf`, `fprintf(stderr, ...)`, `fputs(..., stderr)`, `puts`, `write(1, ...)`, `write(2, ...)`
+- `LOG_INFO`/etc. directly to a raw fd (these should go through sink)
+
+**File I/O is fine** — `fopen(path, "rb")`, `fopen(temp_path, "wb")`
+in `core/ImageProcessor.cpp` etc. read/write *files*, not the
+host's stdio. `<cstdio>` for that is OK.
+
+**POSIX constants are fine** — `STDOUT_FILENO`, `STDERR_FILENO`,
+`STDIN_FILENO` are used in `core/Subprocess.cpp` and
+`core/BackgroundProcessManager.cpp` to re-route child-process stdio
+through pipes. The library never writes to those fds itself; it
+shuttles them to pipes for child processes.
+
+**Current state (2026-07-16):** Library is clean. Verified by:
+```
+grep -rn "std::cout\|std::cerr\|std::cin" src/library src/api src/mcp
+grep -rn "printf(\|fprintf(\|fputs(\|puts(" src/library src/api src/mcp
+```
+No matches outside of comments / docstring examples. Phase 5.1
+cleanup already removed all historical `std::cout` calls (banner,
+tool separators, token-usage line) in favour of `sink_->on_log` /
+`LOG_INFO`.
+
+**Any new code I write in the library must NOT touch stdio.** If you
+find yourself reaching for `std::cerr` in `src/api/` or `src/core/`,
+stop and use `LOG_ERROR` instead — `Logger` routes through the sink.
+
+---
+
 ## Open bugs (B1–B32)
 
 Bugs are ordered by severity. ✅ = done (kept for history). 🟡 = open.

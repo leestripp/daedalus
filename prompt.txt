@@ -1,23 +1,22 @@
-# Loop
+**Source**: `LLMClient::initialize()` in `build/_deps/daedalus-src/src/api/LLMClient.cpp:2373-2391`
 
-## analyse
-analyse the codebase to find bugs/issues and add them to CodeMax.md as Tasks to fix.
-
-## unit tests
-Check coverage, improve existing tests.
-If we need a new unit test, Create a Task in CodeMax.md for it.
-
-## Fix
-Work throught the bugs/issues you found and check them off as you fix them.
-Repeat the Fix stage until all Tasks are done.
-
-## CodeMax.md
-Clean up CodeMax.md after the sweep and fixes are done.
-
-## Documentation
-Check ./docs/*.md for issues and fix them.
-Update Readme.md to be clear for developer using daedalus lib.
-
-Once all these items are done, you may Stop.
+```cpp
+void LLMClient::initialize() {
+    // Display startup banner — §Phase 3: routed through sink.
+    if (sink_) {
+        std::ostringstream banner;
+        banner << "╔═══════════════════════════════════════════════════════════════════\n"
+               << "║  daedalus v" << VERSION_STRING << " - Autonomous Coding Agent\n"
+               << "║  Base URL: " << config_.base_url << "\n"
+               << "║  Chat path: " << config_.chat_endpoint << "\n"
+               << "║  Model:    " << config_.model << "\n"
+               << "╚═══════════════════════════════════════════════════════════════════";
+        sink_->on_log(daedalus::LogLevel::Info, banner.str());
+    } else {
+        // ... fallback to LOG_INFO() ...
+    }
+    // ... [PERSIST] / [SKILLS] lines are also from the lib ...
+}
+```
 
 

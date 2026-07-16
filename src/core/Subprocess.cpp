@@ -14,7 +14,6 @@
 #include <errno.h>
 #include <cstring>
 #include <cstdlib>
-#include <cstdio>
 #include <algorithm>
 #include <poll.h>
 
