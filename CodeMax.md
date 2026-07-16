@@ -48,21 +48,21 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 | # | Summary | Status |
 |---|---------|--------|
 | B4 | `BashTool::build_patterns` has duplicate `"make"` (callback fires twice) | ✅ Done (2026-07-15) — duplicate removed, list sorted |
-| B6 | `sanitize_assistant_message` comment contradicts code | 🟢 Trivial |
+| B6 | `sanitize_assistant_message` comment contradicts code | ✅ Done (already in place) — uses explicit `!tool_result_ids.empty() && count > 0` pattern (Messages.cpp:962-963) |
 | B9 | "Find last tool_call" loop repeated 4× in `run_agent_cycle` with divergent shape assumptions | 🟢 Refactor |
 | B11 | `sanitize_utf8` iconv + fallback paths duplicate the same 90-line state machine | ✅ Done (2026-07-16) — all four copies consolidated to `core/Utf8Utils.h::utf8_sanitize_replace_invalid` |
 | B12 | `SessionMemory::sanitize_utf8` truncates on partial UTF-8 sequence (loses bytes after `?`) | ✅ Done (2026-07-16) — fixed in `Utf8Utils.h::utf8_sanitize_replace_invalid` (line 342: "do NOT resize here"); all callers use the shared utility |
 | B13 | `split_messages` and `get_compression_indices` duplicate the same algorithm | 🟢 Refactor |
-| B15 | `run_agent_cycle` uses `dump(2)` for first request, `dump()` for retry (size mismatch vs `max_request_size_` check) | 🟢 Trivial |
-| B18 | `active_model` and `list_models` duplicate `ModelConfig` → `ModelInfo` construction | 🟢 Refactor |
-| B20 | `BackgroundProcessManager::FIFO_TIMEOUT_MS` is unused | 🟢 Trivial |
+| B15 | `run_agent_cycle` uses `dump(2)` for first request, `dump()` for retry (size mismatch vs `max_request_size_` check) | ✅ Done (already consistent) — all call sites use `request_payload.dump()` |
+| B18 | `active_model` and `list_models` duplicate `ModelConfig` → `ModelInfo` construction | ✅ Done (already in place) — shared `to_model_info()` helper at AgentImpl.cpp:625 |
+| B20 | `BackgroundProcessManager::FIFO_TIMEOUT_MS` is unused | ✅ Done (already removed) |
 | B21 | `BashTool` build-event double-fire (same as B4) | ✅ Done with B4 |
 | B24 | `std::stod` throws on non-numeric `backoff_multiplier` value, swallowed silently by outer `catch(...)` | ✅ Done (2026-07-16) — SettingsStore.cpp:649 wraps `std::stod` in try/catch; default value preserved |
-| B26 | `streaming_callback` fires one extra `on_assistant_delta` after cancellation | 🟢 Trivial |
-| B27 | SSE JSON-parse retry loop ignores `server_error_settings.enabled` | 🟢 Trivial |
+| B26 | `streaming_callback` fires one extra `on_assistant_delta` after cancellation | ✅ Done (already in place) — `safe_callback` checks `stop_token.stop_requested()` (LLMClient.cpp:386-390) |
+| B27 | SSE JSON-parse retry loop ignores `server_error_settings.enabled` | ✅ Done (already gated) — LLMClient.cpp:1212 breaks out of SSE retry loop when disabled |
 | B28 | Four copies of UTF-8 sanitizer with subtle drift (LLMClient×2, Messages, SessionMemory) | ✅ Done (2026-07-16) — see B11 |
 | B30 | `extract_summary_text` strips `<answer>` but not `<thinking>` | ✅ Done (2026-07-16) — `<thinking>...</thinking>` strip added in Messages.cpp:653-661 |
-| B32 | `update_token_usage` warns twice per turn (SSE without usage each warn) | 🟢 Trivial |
+| B32 | `update_token_usage` warns twice per turn (SSE without usage each warn) | ✅ Done (already in place) — `warned_no_usage_this_turn_` flag suppresses duplicates; reset at start of `run_agent_cycle` |
 
 ---
 
