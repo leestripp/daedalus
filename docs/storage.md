@@ -149,15 +149,21 @@ get different `agent_dir()` paths, so:
 
 | Path | Purpose | Safe to delete between sessions? |
 |---|---|---|
+| `agent_dir/messages.json` | Conversation transcript | Yes (rebuilds from the agent loop on next turn) |
+| `agent_dir/messages.sqlite` | Conversation mirror (v0.3.5+) — SQLite, in `daedalus.db` | Yes |
 | `agent_dir/memory/memory.sqlite` | Long-term facts (THE cardinal file) | No — losing this loses project memory |
-| `agent_dir/memory/memory.json` | Legacy memory format | No |
-| `agent_dir/sessions/<sid>/messages.sqlite` | Conversation transcripts per session | Yes (rebuilds from the agent loop) |
-| `agent_dir/sessions/<sid>/scratch.json` | Per-session scratch state | Yes |
+| `agent_dir/memory/memory.json` | Legacy memory format (v0.3.5+: backed up to `daedalus.db`) | No |
+| `agent_dir/sessions/<sid>/` | Per-session scratch state | Yes |
 | `agent_dir/cache/` | Project-specific regenerable caches | Yes |
-| `agent_dir/config.json` | Per-project overrides of global settings | No — losing this drops overrides |
 | `agent_dir/skills/active/` | Project-local skill overrides | No — losing this drops overrides |
 | `agent_dir/agents/<sub_name>/` | Sub-agent state (for `daedalus-manager` / `daedalus-subagent`) | Depends on sub-agent |
 | `agent_dir/.lock` | Lock file (always present, prevents concurrent writes) | No — recreated on next write |
+
+> **Note (v0.4.0+):** per-project *settings* (model overrides, kv
+> pairs) live in the user-level SQLite DB (`daedalus.db`), not in
+> `agent_dir/`. The per-project runtime state under `agent_dir/`
+> is purely the conversation + memory + skill overrides; config
+> lives at the user tier.
 
 ### 2.3 Legacy read-fallback (Phase 12 rename)
 

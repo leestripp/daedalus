@@ -36,66 +36,6 @@
 
 // Helper function to sanitize strings to valid UTF-8
 // Simple replacement-based approach (doesn't need iconv)
-static std::string sanitize_utf8_simple(const std::string& input) {
-    std::string result;
-    result.reserve(input.size());
-    
-    size_t i = 0;
-    while (i < input.size()) {
-        unsigned char c = static_cast<unsigned char>(input[i]);
-        
-        if (c < 0x80) {
-            // ASCII - valid
-            result += static_cast<char>(c);
-            i++;
-        } else if ((c & 0xE0) == 0xC0) {
-            // 2-byte sequence (110xxxxx 10xxxxxx)
-            if (i + 1 < input.size() && (static_cast<unsigned char>(input[i+1]) & 0xC0) == 0x80) {
-                result += input[i];
-                result += input[i+1];
-                i += 2;
-            } else {
-                result += '?';
-                i++;
-            }
-        } else if ((c & 0xF0) == 0xE0) {
-            // 3-byte sequence (1110xxxx 10xxxxxx 10xxxxxx)
-            if (i + 2 < input.size() && 
-                (static_cast<unsigned char>(input[i+1]) & 0xC0) == 0x80 &&
-                (static_cast<unsigned char>(input[i+2]) & 0xC0) == 0x80) {
-                result += input[i];
-                result += input[i+1];
-                result += input[i+2];
-                i += 3;
-            } else {
-                result += '?';
-                i++;
-            }
-        } else if ((c & 0xF8) == 0xF0) {
-            // 4-byte sequence (11110xxx 10xxxxxx 10xxxxxx 10xxxxxx)
-            if (i + 3 < input.size() && 
-                (static_cast<unsigned char>(input[i+1]) & 0xC0) == 0x80 &&
-                (static_cast<unsigned char>(input[i+2]) & 0xC0) == 0x80 &&
-                (static_cast<unsigned char>(input[i+3]) & 0xC0) == 0x80) {
-                result += input[i];
-                result += input[i+1];
-                result += input[i+2];
-                result += input[i+3];
-                i += 4;
-            } else {
-                result += '?';
-                i++;
-            }
-        } else {
-            // Invalid byte - replace
-            result += '?';
-            i++;
-        }
-    }
-    
-    return result;
-}
-
 // ============================================================================
 // Helper: Convert JSON messages to plain text for compression
 // ============================================================================
@@ -311,18 +251,26 @@ void Messages::set_messages(const json& msgs) {
 
 bool Messages::load() {
     // §Plan.md v0.3.5: try SQLite mirror first. Fall back to JSON file.
+    // §B22 fix: when the SQLite mirror is corrupt (parse error) or empty,
+    // delete it so the next load doesn't try it again.
     try {
         auto store = daedalus::SettingsStore::for_home(
             messages_file_.parent_path());
         auto blob = store.get_messages_json(session_id_);
         if (!blob.empty()) {
-            json saved = json::parse(blob);
-            if (saved.is_array() && !saved.empty()) {
-                messages_ = saved;
-                messages_ = sanitize_message_chain(messages_);
-                LOG_INFO("Loaded " + std::to_string(messages_.size())
-                         + " messages from SQLite mirror");
-                return true;
+            try {
+                json saved = json::parse(blob);
+                if (saved.is_array() && !saved.empty()) {
+                    messages_ = saved;
+                    messages_ = sanitize_message_chain(messages_);
+                    LOG_INFO("Loaded " + std::to_string(messages_.size())
+                             + " messages from SQLite mirror");
+                    return true;
+                }
+            } catch (const json::parse_error&) {
+                // Corrupt mirror: delete it and fall through to JSON load (B22)
+                LOG_WARNING("Messages: SQLite mirror corrupt; deleting and falling back to JSON");
+                store.delete_messages_json(session_id_);
             }
         }
     } catch (const std::exception& e) {
@@ -450,6 +398,56 @@ float Messages::get_compression_ratio(size_t current_tokens) const {
     return static_cast<float>(current_tokens) / static_cast<float>(config_.max_context_size);
 }
 
+// §B13 refactor: extract the safe split-point computation to a shared helper.
+// Both split_messages() and get_compression_indices() previously duplicated
+// this logic and had already drifted slightly. Now they share one source.
+size_t Messages::compute_safe_split() const {
+    // Count non-system messages (index 0 is always system)
+    size_t total_non_system = 0;
+    for (size_t i = 1; i < messages_.size(); ++i) {
+        total_non_system++;
+    }
+    if (total_non_system == 0) return 0;
+
+    // Target compress_ratio of non-system messages
+    size_t target = static_cast<size_t>(total_non_system * config_.compress_ratio);
+    if (target == 0) return 0;
+
+    // Collect tool_call ids from assistant messages in the [1, target] range
+    std::unordered_set<std::string> first_ids;
+    for (size_t i = 1; i <= target && i < messages_.size(); ++i) {
+        const auto& m = messages_[i];
+        if (m.value("role", "") == "assistant" && m.contains("tool_calls")) {
+            for (const auto& tc : m["tool_calls"]) {
+                std::string id = tc.value("id", "");
+                if (!id.empty()) first_ids.insert(id);
+            }
+        }
+    }
+
+    // Extend target to include any tool-result that belongs to a first_ids call
+    // (so the full chain is kept in the compressed region, not orphaned).
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (size_t i = 1; i < messages_.size(); ++i) {
+            const auto& m = messages_[i];
+            if (m.value("role", "") == "tool") {
+                std::string id = m.value("tool_call_id", "");
+                if (!id.empty() && first_ids.count(id) > 0) {
+                    if (i + 1 > target) {
+                        target = i + 1;
+                        changed = true;
+                    }
+                    break;  // one extension per tool-result is enough
+                }
+            }
+        }
+    }
+
+    return std::min(target, total_non_system);
+}
+
 void Messages::split_messages(json& prefix, json& middle, json& suffix) const {
     // Split at (compress_ratio * 100)% / ((1 - compress_ratio) * 100)%
     // Default: 70% / 30% - compress the oldest 70%, keep the newest 30%
@@ -461,9 +459,8 @@ void Messages::split_messages(json& prefix, json& middle, json& suffix) const {
     // If we split between these, the tool result becomes orphaned
     // (its tool_call_id is in the compressed section that no longer exists).
     //
-    // Safe split logic: If a tool result in [1, target_split] references a
-    // tool call whose assistant is also in [1, target_split], EXTEND the
-    // target to AFTER the tool result (include the whole chain in compression).
+    // Uses compute_safe_split() — the shared helper ensures both
+    // split_messages and get_compression_indices always agree.
 
     prefix = json::array();
     if (!messages_.empty() && messages_[0].value("role", "") == "system") {
@@ -473,72 +470,16 @@ void Messages::split_messages(json& prefix, json& middle, json& suffix) const {
     middle = json::array();
     suffix = json::array();
 
-    // Calculate target split point (exclude system message from calculation)
-    size_t total_non_system = 0;
+    size_t target = compute_safe_split();
+
+    // Build middle (compressed) and suffix (kept) from the split point.
+    // Non-system index 0 → messages_[1], non-system index 1 → messages_[2], ...
     for (size_t i = 1; i < messages_.size(); ++i) {
-        total_non_system++;
-    }
-
-    if (total_non_system == 0) {
-        return;  // Nothing to split
-    }
-
-    // Target 70% of non-system messages (or whatever compress_ratio is set to)
-    size_t target_split = static_cast<size_t>(total_non_system * config_.compress_ratio);
-
-    // Find all tool_call_ids from assistant messages in [1, target_split]
-    std::unordered_set<std::string> first_70_tool_calls;
-    for (size_t i = 1; i <= target_split && i < messages_.size(); ++i) {
-        const auto& msg = messages_[i];
-        if (msg.value("role", "") == "assistant" && msg.contains("tool_calls")) {
-            for (const auto& tc : msg["tool_calls"]) {
-                std::string tc_id = tc.value("id", "");
-                if (!tc_id.empty()) {
-                    first_70_tool_calls.insert(tc_id);
-                }
-            }
-        }
-    }
-
-    // Scan for tool results ANYWHERE in messages_ that reference a first_70
-    // tool call. For each such tool result, extend target_split to AFTER
-    // the tool result so the whole chain is included in the compressed
-    // region (not split). This handles tool call pairs that straddle the
-    // 70% boundary.
-    bool adjusted = true;
-    while (adjusted) {
-        adjusted = false;
-        for (size_t i = 1; i < messages_.size(); ++i) {
-            const auto& msg = messages_[i];
-            if (msg.value("role", "") == "tool") {
-                std::string tc_id = msg.value("tool_call_id", "");
-                if (!tc_id.empty() && first_70_tool_calls.count(tc_id) > 0) {
-                    if (i + 1 > target_split) {
-                        target_split = i + 1;
-                        adjusted = true;
-                    }
-                    break;  // only need to extend once per tool result
-                }
-            }
-        }
-    }
-
-    // Clamp to total non-system messages
-    if (target_split > total_non_system) {
-        target_split = total_non_system;
-    }
-
-    // Now do the actual split using the adjusted target_split
-    for (size_t i = 1; i < messages_.size(); ++i) {
-        const auto& msg = messages_[i];
-
-        // Find actual position in non-system messages
-        size_t non_system_index = i - 1;
-
-        if (non_system_index < target_split) {
-            middle.push_back(msg);
+        size_t non_sys_idx = i - 1;
+        if (non_sys_idx < target) {
+            middle.push_back(messages_[i]);
         } else {
-            suffix.push_back(msg);
+            suffix.push_back(messages_[i]);
         }
     }
 }
@@ -552,79 +493,9 @@ void Messages::get_split_info(size_t& prefix_size, size_t& middle_size, size_t& 
 }
 
 std::pair<size_t, size_t> Messages::get_compression_indices() const {
-    // Returns (start_index, end_index_exclusive) of the messages to be compressed.
-    // These are the oldest messages (first X% based on compress_ratio) that will be
-    // removed and replaced by a summary from the LLM.
-    //
-    // Algorithm:
-    //   1. Calculate target split at (compress_ratio * 100)% of non-system messages
-    //      (default 70%)
-    //   2. Adjust split to NEVER break a tool call pair. If a tool result in
-    //      [1, target_split] references a tool call whose assistant is also in
-    //      [1, target_split], INCLUDE the whole chain (assistant + tool result)
-    //      in the compressed region. Move target_split to AFTER the tool result.
-    //   3. Return (start=1, end=1+adjusted_target_split) as exclusive range.
-
-    size_t total_non_system = 0;
-    for (size_t i = 1; i < messages_.size(); ++i) {
-        total_non_system++;
-    }
-
-    if (total_non_system == 0) return {0, 0};
-
-    // Target 70% of non-system messages (or whatever compress_ratio is set to)
-    size_t target_split = static_cast<size_t>(total_non_system * config_.compress_ratio);
-    if (target_split == 0) return {0, 0};
-
-    // Find all tool_call_ids from assistant messages in [1, target_split]
-    std::unordered_set<std::string> first_70_tool_calls;
-    for (size_t i = 1; i <= target_split && i < messages_.size(); ++i) {
-        const auto& msg = messages_[i];
-        if (msg.value("role", "") == "assistant" && msg.contains("tool_calls")) {
-            for (const auto& tc : msg["tool_calls"]) {
-                std::string tc_id = tc.value("id", "");
-                if (!tc_id.empty()) {
-                    first_70_tool_calls.insert(tc_id);
-                }
-            }
-        }
-    }
-
-    // Scan for tool results ANYWHERE in messages_ that reference a first_70
-    // tool call. For each such tool result, extend target_split to AFTER
-    // the tool result so the whole chain is included in the compressed
-    // region (not split). This handles tool call pairs that straddle the
-    // 70% boundary (e.g., tool call at 70, tool result at 71).
-    bool adjusted = true;
-    while (adjusted) {
-        adjusted = false;
-        for (size_t i = 1; i < messages_.size(); ++i) {
-            const auto& msg = messages_[i];
-            if (msg.value("role", "") == "tool") {
-                std::string tc_id = msg.value("tool_call_id", "");
-                if (!tc_id.empty() && first_70_tool_calls.count(tc_id) > 0) {
-                    // Found a tool result that references a first_70 tool call.
-                    // Extend target_split to AFTER this tool result (include
-                    // the whole chain in the compressed region).
-                    if (i + 1 > target_split) {
-                        target_split = i + 1;
-                        adjusted = true;  // re-scan for new overlaps
-                    }
-                    break;  // only need to extend once per tool result
-                }
-            }
-        }
-    }
-
-    // Clamp to total non-system messages
-    if (target_split > total_non_system) {
-        target_split = total_non_system;
-    }
-
-    // Return indices: start=1 (after system), end=1+target_split (exclusive)
-    size_t start = 1;
-    size_t end = 1 + target_split;
-    return {start, end};
+    // §B13 refactor: uses compute_safe_split() — same algorithm as split_messages.
+    size_t target = compute_safe_split();
+    return {1, 1 + target};  // exclusive range
 }
 
 // Phase 11: removed dead Messages::build_compression_prompt(prefix,
@@ -770,12 +641,21 @@ std::string Messages::extract_summary_text(const std::string& response_body) {
         if (response_json.contains("choices") && !response_json["choices"].empty()) {
             std::string content = response_json["choices"][0]["message"]["content"].get<std::string>();
             
-            // Remove thinking tags if present
-            size_t think_start = content.find("<answer>");
-            if (think_start != std::string::npos) {
-                size_t think_end = content.find("</answer>");
-                if (think_end != std::string::npos) {
-                    content = content.substr(think_start + 8, think_end - think_start - 8);
+            // Remove <answer>...</answer> blocks if present
+            size_t ans_start = content.find("<answer>");
+            if (ans_start != std::string::npos) {
+                size_t ans_end = content.find("</answer>");
+                if (ans_end != std::string::npos) {
+                    content = content.substr(ans_start + 8, ans_end - ans_start - 8);
+                }
+            }
+
+            // Remove <thinking>...</thinking> blocks if present
+            size_t thk_start = content.find("<thinking>");
+            if (thk_start != std::string::npos) {
+                size_t thk_end = content.find("</thinking>");
+                if (thk_end != std::string::npos) {
+                    content.erase(thk_start, thk_end - thk_start + 11);
                 }
             }
             
@@ -971,134 +851,6 @@ void Messages::replace_messages(const std::string& compressed_json) {
     }
 }
 
-json Messages::truncate_if_needed(size_t max_size) {
-    // Serialize messages to check size
-    // First, sanitize any strings with invalid UTF-8 to prevent JSON serialization errors
-    std::function<void(json&)> sanitize_json_for_truncation;
-    sanitize_json_for_truncation = [&](json& j) {
-        if (j.is_object()) {
-            for (auto& [key, value] : j.items()) {
-                if (value.is_string()) {
-                    value = sanitize_utf8_simple(value.get<std::string>());
-                } else if (value.is_object() || value.is_array()) {
-                    sanitize_json_for_truncation(value);
-                }
-            }
-        } else if (j.is_array()) {
-            for (auto& item : j) {
-                if (item.is_string()) {
-                    item = sanitize_utf8_simple(item.get<std::string>());
-                } else if (item.is_object() || item.is_array()) {
-                    sanitize_json_for_truncation(item);
-                }
-            }
-        }
-    };
-    sanitize_json_for_truncation(messages_);
-    
-    std::string serialized = messages_.dump();
-    
-    if (serialized.size() <= max_size) {
-        return json::object();  // No truncation needed
-    }
-    
-    LOG_CERR(WARNING,  "[WARNING] Request payload (" << serialized.size() 
-              << " bytes) exceeds max_request_size (" << max_size 
-              << " bytes). Truncating oldest messages..." << '\n');
-    
-    // We need to keep:
-    // 1. The system message (first message)
-    // 2. As many recent messages as possible
-    
-    if (messages_.size() <= 1) {
-        // Can't truncate further - just return warning
-        LOG_ERROR("Cannot truncate - only system message present");
-        return json::object({{"warning", "Request too large even for single message"}});
-    }
-    
-    // Keep system message, try to keep as many recent messages as possible
-    json system_msg = messages_[0];
-    
-    // Start from the end and work backwards, keeping messages until we hit the limit
-    // IMPORTANT: Never cut between an assistant message with tool_calls and its tool results
-    json truncated_messages = json::array();
-    truncated_messages.push_back(system_msg);
-    
-    // Add messages from the end until we hit the limit
-    size_t current_size = system_msg.dump().size();
-    size_t target_size = max_size * 0.8;  // Aim for 80% of max to leave room
-    
-    int i = static_cast<int>(messages_.size()) - 1;
-    while (i >= 1) {
-        // Check if adding this message would exceed limit
-        std::string msg_str = messages_[i].dump();
-        if (current_size + msg_str.size() > target_size) {
-            break;  // Would exceed limit
-        }
-        
-        // If this is a tool result, we need to keep going back to find its parent
-        // (assistant message with tool_calls). We can't cut the chain.
-        std::string role = messages_[i].value("role", "");
-        if (role == "tool") {
-            // This is a tool result - we must include all preceding messages in this chain
-            // until we find the assistant that made the tool call
-            truncated_messages.push_back(messages_[i]);
-            current_size += msg_str.size();
-            i--;
-            
-            // Keep going back to find the tool call's parent assistant message
-            while (i >= 1) {
-                std::string prev_role = messages_[i].value("role", "");
-                std::string prev_str = messages_[i].dump();
-                if (current_size + prev_str.size() > target_size) {
-                    // Can't fit the parent assistant - this is a problem
-                    // The chain would be broken, so we stop here
-                    LOG_CERR(WARNING,  "[WARNING] Cannot keep complete tool call chain, truncating tool result" << '\n');
-                    break;
-                }
-                truncated_messages.push_back(messages_[i]);
-                current_size += prev_str.size();
-                i--;
-                
-                // Stop if we hit an assistant message (it should have tool_calls to match the tool result)
-                // Tool results are always preceded by their parent assistant message
-                if (prev_role == "assistant") {
-                    // Check if this assistant has tool_calls (should have for the tool result we found)
-                    if (messages_[i+1].contains("tool_calls") || 
-                        (messages_[i].contains("tool_calls") && !messages_[i]["tool_calls"].empty())) {
-                        // Found the parent - stop looking
-                        break;
-                    }
-                }
-            }
-            continue;
-        }
-        
-        truncated_messages.push_back(messages_[i]);
-        current_size += msg_str.size();
-        i--;
-    }
-    
-    // Reverse to restore chronological order (system -> oldest -> newest)
-    // Actually, we want newest first after system, so let's rebuild properly
-    json result = json::array();
-    result.push_back(system_msg);
-    
-    // Add remaining messages in reverse order (newest first)
-    for (int i = static_cast<int>(truncated_messages.size()) - 1; i >= 1; --i) {
-        result.push_back(truncated_messages[i]);
-    }
-    
-    std::string new_size_str = result.dump();
-    LOG_CERR(INFO,  "[INFO] Truncated from " << serialized.size() << " to " 
-              << new_size_str.size() << " bytes (" << result.size() << " messages)" << '\n');
-    
-    // Update internal messages
-    messages_ = result;
-    
-    return json::object({{"truncated", true}, {"original_size", serialized.size()}, {"new_size", new_size_str.size()}});
-}
-
 // ============================================================================
 // Tool Call Lifecycle Management (Single Source of Truth)
 // ============================================================================
@@ -1201,11 +953,14 @@ json Messages::sanitize_assistant_message(const json& msg,
                 }
             }
             
-            // CRITICAL FIX: Remove ORPHAN tool_calls (those with no
-            // matching tool result). These cause API 400 errors and
-            // infinite retry loops. Only check if tool_result_ids was
-            // provided (non-empty means we did the collection pass).
-            bool has_result = tool_result_ids.empty() || tool_result_ids.count(tc_id) > 0;
+            // Remove ORPHAN tool_calls (those with no matching tool result).
+            // These cause API 400 errors and infinite retry loops.
+            // When tool_result_ids is empty the collection pass hasn't run yet
+            // (e.g. truncate_if_needed during compression), so we skip orphan
+            // detection and keep all tool_calls. When non-empty, we did collect
+            // tool results and should discard any without a matching entry.
+            bool has_result = !tool_result_ids.empty() &&
+                              tool_result_ids.count(tc_id) > 0;
             if (!has_result) {
                 LOG_CERR(INFO,  "[Messages] Removing orphan tool_call (no result): " << tc_id << '\n');
                 continue;
@@ -1374,34 +1129,66 @@ size_t Messages::estimate_tokens_from_json(const json& j) const {
 
 void Messages::inject_context_stats(size_t current_tokens, size_t iteration, size_t max_iterations) {
     if (messages_.empty()) return;
-    
+
     json& system = messages_[0];
     if (system.value("role", "") != "system") return;
-    
+
     std::string content = system.value("content", "");
-    
-    // Update Context Information section
+
+    // Build the stats block. §B8 fix: append a sentinel line so we
+    // can find and erase exactly what we wrote instead of walking
+    // forward to the next same-level heading (the old behaviour
+    // dropped the trailing tail of the prompt when the stats block
+    // was the LAST section).
     std::ostringstream stats;
     stats << "\n\n## Context Status\n";
-    stats << "- **Token Usage**: " << current_tokens << "/" << config_.max_context_size 
+    stats << "- **Token Usage**: " << current_tokens << "/" << config_.max_context_size
           << " (" << static_cast<int>(get_compression_ratio(current_tokens) * 100) << "%)\n";
     stats << "- **Iterations**: " << iteration << "/" << max_iterations << "\n";
     stats << "- **Messages**: " << messages_.size() << "\n";
-    
-    // Find or append Context Status section
+    constexpr const char* kEndSentinel = "<!-- /daedalus-context-status -->\n";
+    stats << kEndSentinel;
+
+    // Find or append Context Status section.
     size_t ctx_pos = content.find("## Context Status");
     if (ctx_pos != std::string::npos) {
-        // Replace existing context status
-        size_t end_pos = content.find("\n## ", ctx_pos + 1);
-        if (end_pos == std::string::npos) {
-            content = content.substr(0, ctx_pos) + stats.str();
+        // Locate the previous block's end (sentinel) and erase up to
+        // and including it. If no sentinel (legacy pre-fix write),
+        // walk forward to the next same-level heading, or to the next
+        // blank line, but never to end-of-string.
+        size_t sentinel_pos = content.find(kEndSentinel, ctx_pos);
+        size_t end_pos;
+        if (sentinel_pos != std::string::npos) {
+            end_pos = sentinel_pos + std::strlen(kEndSentinel);
+            content = content.substr(0, ctx_pos)
+                    + stats.str()
+                    + content.substr(end_pos);
         } else {
-            content = content.substr(0, ctx_pos) + stats.str() + content.substr(end_pos);
+            size_t next_h = content.find("\n## ", ctx_pos + 1);
+            if (next_h != std::string::npos) {
+                end_pos = next_h;
+                content = content.substr(0, ctx_pos)
+                        + stats.str()
+                        + content.substr(end_pos);
+            } else {
+                // No sentinel and no same-level heading: erase to the
+                // next blank line (the stats block ended with one
+                // before fix); if no blank line, append the new block
+                // unchanged.
+                size_t blank = content.find("\n\n", ctx_pos);
+                if (blank != std::string::npos) {
+                    content = content.substr(0, ctx_pos)
+                            + stats.str()
+                            + content.substr(blank);
+                } else {
+                    content = content.substr(0, ctx_pos) + stats.str();
+                }
+            }
         }
     } else {
         content += stats.str();
     }
-    
+
     system["content"] = content;
 }
 
@@ -1411,4 +1198,134 @@ void Messages::write_debug_file(const std::string& filename, const std::string& 
         debug_file << content << '\n';
         debug_file.close();
     }
+}
+json Messages::truncate_if_needed(size_t max_size) {
+    // §B5 fix: rewrite of the backward tool-chain walk.
+    //
+    // Pre-fix bug: the inner `while (i >= 1)` loop read `prev_role`
+    // from `messages_[i]` BEFORE pushing, then checked it AFTER
+    // pushing - leaving the truncated chain with an orphan tool
+    // result on multi-step chains.
+    //
+    // New design: a helper `find_parent_assistant_for_tool_result`
+    // walks backward looking for the assistant whose `tool_calls`
+    // contains a matching `tool_call_id`. The outer loop accepts
+    // messages from the end; when it hits a tool result it asks the
+    // helper where the chain starts, includes everything in one go,
+    // and jumps the index past it.
+
+    std::function<void(json&)> sanitize_json_for_truncation;
+    sanitize_json_for_truncation = [&](json& j) {
+        if (j.is_object()) {
+            for (auto& [key, value] : j.items()) {
+                if (value.is_string()) {
+                    value = utf8_sanitize_replace_invalid(value.get<std::string>());
+                } else if (value.is_object() || value.is_array()) {
+                    sanitize_json_for_truncation(value);
+                }
+            }
+        } else if (j.is_array()) {
+            for (auto& item : j) {
+                if (item.is_string()) {
+                    item = utf8_sanitize_replace_invalid(item.get<std::string>());
+                } else if (item.is_object() || item.is_array()) {
+                    sanitize_json_for_truncation(item);
+                }
+            }
+        }
+    };
+    sanitize_json_for_truncation(messages_);
+
+    std::string serialized = messages_.dump();
+
+    if (serialized.size() <= max_size) {
+        return json::object();
+    }
+
+    LOG_CERR(WARNING, "[WARNING] Request payload ("
+              << serialized.size() << " bytes) exceeds max_request_size ("
+              << max_size << " bytes). Truncating oldest messages..." << '\n');
+
+    if (messages_.size() <= 1) {
+        LOG_ERROR("Cannot truncate - only system message present");
+        return json::object({{"warning", "Request too large even for single message"}});
+    }
+
+    json system_msg = messages_[0];
+    json truncated_messages = json::array();
+    truncated_messages.push_back(system_msg);
+
+    size_t current_size = system_msg.dump().size();
+    size_t target_size = max_size * 0.8;
+
+    auto find_parent_assistant_for_tool_result =
+        [&](const std::string& tool_call_id) -> size_t {
+        if (tool_call_id.empty()) return std::string::npos;
+        for (size_t j = messages_.size(); j-- > 0; ) {
+            const auto& m = messages_[j];
+            if (m.value("role", "") != "assistant") continue;
+            if (!m.contains("tool_calls") || !m["tool_calls"].is_array()) continue;
+            for (const auto& tc : m["tool_calls"]) {
+                if (tc.value("id", "") == tool_call_id) return j;
+            }
+        }
+        return std::string::npos;
+    };
+
+    for (size_t i = messages_.size(); i-- > 1; ) {
+        const std::string role = messages_[i].value("role", "");
+
+        if (role == "tool") {
+            const std::string tool_call_id =
+                messages_[i].value("tool_call_id", "");
+            const size_t parent =
+                find_parent_assistant_for_tool_result(tool_call_id);
+
+            if (parent == std::string::npos || parent < 1 || parent >= i) {
+                LOG_CERR(WARNING, "[WARNING] Truncating orphan tool "
+                          "result (tool_call_id='" << tool_call_id
+                          << "')" << '\n');
+            } else {
+                bool stopped_early = false;
+                for (size_t j = i; j >= parent + 1; --j) {
+                    std::string msg_str = messages_[j].dump();
+                    if (current_size + msg_str.size() > target_size) {
+                        LOG_CERR(WARNING, "[WARNING] Cannot keep complete "
+                                  "tool call chain - stopping here." << '\n');
+                        stopped_early = true;
+                        break;
+                    }
+                    truncated_messages.push_back(messages_[j]);
+                    current_size += msg_str.size();
+                }
+                if (!stopped_early) {
+                    i = parent + 1;
+                    continue;
+                }
+            }
+        }
+
+        std::string msg_str = messages_[i].dump();
+        if (current_size + msg_str.size() > target_size) {
+            break;
+        }
+        truncated_messages.push_back(messages_[i]);
+        current_size += msg_str.size();
+    }
+
+    json result = json::array();
+    result.push_back(system_msg);
+    for (size_t k = truncated_messages.size(); k-- > 1; ) {
+        result.push_back(truncated_messages[k]);
+    }
+
+    std::string new_size_str = result.dump();
+    LOG_CERR(INFO, "[INFO] Truncated from " << serialized.size() << " to "
+              << new_size_str.size() << " bytes (" << result.size()
+              << " messages)" << '\n');
+
+    messages_ = result;
+    return json::object({{"truncated", true},
+                        {"original_size", serialized.size()},
+                        {"new_size", new_size_str.size()}});
 }

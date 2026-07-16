@@ -165,7 +165,7 @@ inline void print_help(const char* program_name) {
     std::cout << "  --no-memory         Disable session memory for this session\n";
     std::cout << "  --clear-memory      Clear all session memory and exit\n";
     std::cout << "  --home DIR          Use DIR as the daedalus home\n";
-    std::cout << "  --model NAME        Use model NAME from settings.json\n";
+    std::cout << "  --model NAME        Use model NAME from the SQLite settings store\n";
     std::cout << "  --model-list        List available models and exit\n";
     std::cout << "  --agent-name NAME   Per-agent namespace for runtime state\n";
     std::cout << "  --threads N         Number of worker threads\n";

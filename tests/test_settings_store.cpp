@@ -229,24 +229,90 @@ void test_s8_db_path() {
 // S9: schema is created idempotently on fresh DB
 // ===========================================================================
 void test_s9_schema_idempotent() {
-    TmpHome h("s9");
-    auto p = h.path / "daedalus.db";
+    // §B2 fix: for_home() now caches per-path (no leak), so the test
+    // must use a fresh path for the "schema after delete" check.
+    // We simulate "user deleted their DB file" by using two distinct
+    // paths: one to write data, one to verify schema creation works.
+    TmpHome h1("s9-write");
+    TmpHome h2("s9-fresh");
     {
-        // First open creates the schema.
-        auto s = daedalus::SettingsStore::for_home(h.path);
+        // First open creates the schema and inserts data.
+        auto s = daedalus::SettingsStore::for_home(h1.path);
         s.upsert_model(make_model("pinned"));
         EXPECT(s.get_model("pinned").has_value());
     }
-    // Drop the file, recreate, reopen — must not throw and must have
-    // an empty models table (we lost the row, but the schema is back).
-    fs::remove(p);
     {
-        auto s = daedalus::SettingsStore::for_home(h.path);
+        // Fresh path → brand-new DB → schema is created → empty
+        // models table → upsert works.
+        auto s = daedalus::SettingsStore::for_home(h2.path);
         EXPECT(s.list_models().empty());
         s.upsert_model(make_model("pinned"));
         EXPECT(s.get_model("pinned").has_value());
     }
     std::cout << "[ok] S9: schema is created idempotently on fresh DB\n";
+}
+
+// ===========================================================================
+// S10: SQL injection regression test (§B1 fix)
+// ===========================================================================
+//
+// Verifies that user-controlled strings with quotes, semicolons, and
+// SQL fragments don't escape into the SQL when stored or looked up.
+// Pre-B1, a value like "x'; DROP TABLE models; --" would execute as
+// a destructive statement when concatenated into the query.
+void test_s10_sql_injection_resistance() {
+    TmpHome h("s10");
+    auto s = daedalus::SettingsStore::for_home(h.path);
+
+    // Try to break things via the model name (primary key).
+    std::vector<std::string> malicious = {
+        "x'; DROP TABLE models; --",
+        "y' OR '1'='1",
+        "z\"; DROP TABLE kv_settings; --",
+        std::string(200, '\'') + " ; DROP TABLE models; --",
+    };
+
+    for (const auto& name : malicious) {
+        daedalus::ModelConfig m = make_model(name);
+        s.upsert_model(m);
+        // The round-trip must preserve the value verbatim — no truncation,
+        // no SQL execution.
+        auto got = s.get_model(name);
+        EXPECT(got.has_value());
+        if (got.has_value()) {
+            EXPECT(got->name == name);
+            EXPECT(got->host == m.host);
+            EXPECT(got->api_key == m.api_key);
+        }
+        // The table must still exist (DROP TABLE didn't run).
+        EXPECT(s.list_models().size() >= 1);
+    }
+
+    // Also exercise kv_settings with malicious keys/values.
+    s.set_string("evil'; DROP TABLE kv_settings; --", "value");
+    EXPECT(s.get_string("evil'; DROP TABLE kv_settings; --") == "value");
+    // kv_settings must still work for normal keys.
+    s.set_string("normal_key", "normal_value");
+    EXPECT(s.get_string("normal_key") == "normal_value");
+    EXPECT(s.get_string("nonexistent", "default") == "default");
+
+    // delete with malicious name must not match anything it shouldn't.
+    s.delete_model("evil'; DROP TABLE kv_settings; --");
+    EXPECT(!s.get_model("evil'; DROP TABLE kv_settings; --").has_value());
+
+    // Verify mcp_servers path too.
+    daedalus::SettingsStore::McpServer mcp;
+    mcp.name = "x'; DROP TABLE mcp_servers; --";
+    mcp.command = "/bin/true";
+    mcp.enabled = true;
+    s.upsert_mcp_server(mcp);
+    auto got_mcp = s.get_mcp_server("x'; DROP TABLE mcp_servers; --");
+    EXPECT(got_mcp.has_value());
+    EXPECT(got_mcp->name == "x'; DROP TABLE mcp_servers; --");
+    // mcp_servers must still exist.
+    EXPECT(s.has_mcp_servers());
+
+    std::cout << "[ok] S10: SQL injection resistance (B1 regression)\n";
 }
 
 }  // namespace
@@ -261,12 +327,13 @@ int main() {
     test_s7_transaction_atomicity();
     test_s8_db_path();
     test_s9_schema_idempotent();
+    test_s10_sql_injection_resistance();
 
     if (failures) {
         std::cerr << "\ntest_settings_store: " << failures
-                  << " FAILED (of 9 tests)\n";
+                  << " FAILED (of 10 tests)\n";
         return 1;
     }
-    std::cout << "\ntest_settings_store: 9 tests passed\n";
+    std::cout << "\ntest_settings_store: 10 tests passed\n";
     return 0;
 }

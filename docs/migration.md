@@ -18,8 +18,8 @@ differences you should know about.
 | Mode flags | `--manager-mode`, `--sub-agent`, `--sub-agent-looping` | Removed; run `daedalus-manager` or `daedalus-subagent` instead |
 | MCP servers dir | `~/.daedalus/mcp/` | `~/.daedalus/mcp/` |
 
-Everything else (skills, memory format, model lookup in settings.json,
-the REPL keybindings) is identical.
+Everything else (skills, memory format, model lookup in the settings
+store, the REPL keybindings) is identical.
 
 ---
 
@@ -133,21 +133,29 @@ target_link_libraries(my_host PRIVATE daedalus::daedalus)
 
 ---
 
-## 5. settings.json (unchanged)
+## 5. settings.json (was — moved to SQLite in v0.4.0)
 
-The format of `settings.json` did not change. The library reads the
-same JSON shape, in the same location (now `~/.daedalus/settings/`
-instead of `~/.daedalus/settings/` — same file format, new directory).
+`settings.json` was the on-disk config in v0.3.x and earlier. From
+**v0.4.0** daedalus stores models, kv_settings, MCP servers, session
+memory, and messages in a single SQLite database at
+`$XDG_DATA_HOME/daedalus/daedalus.db` (default
+`~/.local/share/daedalus/daedalus.db`). See
+[`docs/settings.md`](settings.md) for the `daedalus::SettingsStore` API.
 
-If you have an existing `~/.daedalus/settings/settings.json`, copy it
-verbatim into `~/.daedalus/settings/settings.json`:
+The library auto-migrates `~/.daedalus/settings/settings.json` into
+the `daedalus.db` `models` and `kv_settings` tables on first run; the
+JSON file is kept on disk as a one-release-cycle read fallback.
+
+If for some reason you need to seed the DB manually:
 
 ```bash
-mkdir -p ~/.daedalus/settings
-cp ~/.daedalus/settings/settings.json ~/.daedalus/settings/settings.json
+mkdir -p ~/.local/share/daedalus
+# Run daedalus once (or use daedalus-cli) to create + migrate daedalus.db
+daedalus-cli /path/to/project
 ```
 
-`~/.daedalus/mcp/servers.json` follows the same pattern.
+`~/.daedalus/mcp/servers.json` follows the same pattern — auto-migrated
+into the `mcp_servers` table; JSON file kept as a read fallback.
 
 ---
 

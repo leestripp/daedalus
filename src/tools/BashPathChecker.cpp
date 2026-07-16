@@ -33,6 +33,168 @@ std::string BashPathChecker::privilege_escalation_message([[maybe_unused]] const
            "The Agent runs as a normal user and cannot use sudo.";
 }
 
+// ========== Standalone Ampersand (§B3 fix) ==========
+
+bool BashPathChecker::contains_standalone_ampersand(const std::string& command) {
+    // Quote-aware single-pass scan. Skips over characters inside:
+    //   - Single quotes  (')
+    //   - Double quotes  (")
+    //   - ANSI-C strings ($'...')
+    //   - Heredocs       (<<EOF ... EOF, <<-EOF ... EOF, <<'EOF' ... EOF)
+    // `&` outside any quoted/heredoc context is the background operator.
+    // Inside, it's just text and we ignore it.
+    //
+    // Then post-process each candidate to reject:
+    //   - `&&`            (logical AND — not background)
+    //   - fd redirections (`2>&1`, `&>file`, etc.)
+    enum class State { Normal, InSingleQuote, InDoubleQuote,
+                       InHeredoc, InHeredocIndented };
+    State state = State::Normal;
+    std::string heredoc_marker;
+
+    auto is_word_char = [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+               (c >= '0' && c <= '9') || c == '_' || c == '-';
+    };
+
+    for (size_t i = 0; i < command.size(); ++i) {
+        const char c = command[i];
+
+        switch (state) {
+        case State::Normal: {
+            // Heredoc detection: << EOF or <<-EOF (or quoted marker <<'EOF').
+            // Only recognised when `<<` appears at the start of a word
+            // boundary (preceded by whitespace or start of string).
+            // We treat the heredoc body as opaque text — no operator
+            // checks inside it.
+            if (c == '<' && i + 1 < command.size() && command[i + 1] == '<' &&
+                (i == 0 || command[i - 1] == ' ' || command[i - 1] == '\t' ||
+                 command[i - 1] == '\n' || command[i - 1] == '|')) {
+                // Consume "<<" and skip whitespace.
+                size_t j = i + 2;
+                bool indented = false;
+                if (j < command.size() && command[j] == '-') { indented = true; ++j; }
+                while (j < command.size() && (command[j] == ' ' ||
+                       command[j] == '\t')) ++j;
+                // Parse the marker (handle optional quoting).
+                if (j < command.size() && (command[j] == '\'' ||
+                                          command[j] == '"')) {
+                    char q = command[j++];
+                    size_t end = command.find(q, j);
+                    if (end == std::string::npos) return false; // malformed; bail safe
+                    heredoc_marker = command.substr(j, end - j);
+                    j = end + 1;
+                } else {
+                    size_t start = j;
+                    while (j < command.size() && is_word_char(command[j])) ++j;
+                    heredoc_marker = command.substr(start, j - start);
+                }
+                if (heredoc_marker.empty()) return false;
+                i = j - 1; // outer for-loop will ++
+                state = indented ? State::InHeredocIndented : State::InHeredoc;
+                continue;
+            }
+
+            // Single quote.
+            if (c == '\'') { state = State::InSingleQuote; continue; }
+            // Double quote.
+            if (c == '"')  { state = State::InDoubleQuote; continue; }
+            // Dollar-quote ($'...').
+            if (c == '$' && i + 1 < command.size() && command[i + 1] == '\'') {
+                ++i; // skip the $, advance past the quote below
+                state = State::InSingleQuote;
+                continue;
+            }
+
+            // The interesting character.
+            if (c == '&') {
+                // Skip && — logical AND.
+                if (i + 1 < command.size() && command[i + 1] == '&') {
+                    ++i; continue;
+                }
+
+                // fd redirection:
+                //   2>&1   -> &' preceded by a digit (the fd) and followed
+                //            by '1' or '2' or another digit; or followed by
+                //            '>' (&>file redirect).
+                //   &>file -> '&' followed by '>' (no fd before).
+                //   2&>1   -> '&' between fd and '>' (rare).
+                bool preceded_by_fd = (i > 0 && command[i - 1] >= '0' &&
+                                         command[i - 1] <= '9');
+                bool followed_by_fd_or_redir =
+                    (i + 1 < command.size() &&
+                     (command[i + 1] >= '0' && command[i + 1] <= '9')) ||
+                    (i + 1 < command.size() && command[i + 1] == '>') ||
+                    (i > 0 && command[i - 1] == '>');
+
+                if (preceded_by_fd || followed_by_fd_or_redir) continue;
+
+                // Reject when followed by a `>` (already covered) or by
+                // digit (already covered). Anything else — whitespace,
+                // EOF, another letter — is the background operator.
+                return true;
+            }
+            break;
+        }
+        case State::InSingleQuote:
+            if (c == '\'') state = State::Normal;
+            break;
+        case State::InDoubleQuote:
+            // `\&` doesn't escape & in double quotes — it stays a
+            // literal character. We don't have to special-case it.
+            if (c == '"') state = State::Normal;
+            // Backslash-escapes \$, \", \\, \`. An escaped \" doesn't close
+            // the string. This is enough for the bug at hand.
+            else if (c == '\\' && i + 1 < command.size() &&
+                     (command[i + 1] == '"' || command[i + 1] == '\\' ||
+                      command[i + 1] == '$' || command[i + 1] == '`' ||
+                      command[i + 1] == '\n')) {
+                ++i; // skip the escaped character
+            }
+            break;
+        case State::InHeredoc:
+        case State::InHeredocIndented: {
+            // Heredoc body. The marker line ends the body. For `<<-`,
+            // leading tabs are stripped on the marker line before
+            // comparison.
+            if (c == '\n') {
+                size_t line_start = i + 1;
+                std::string line = command.substr(line_start);
+                std::string cmp = line;
+                if (state == State::InHeredocIndented) {
+                    size_t k = 0;
+                    while (k < cmp.size() && cmp[k] == '\t') ++k;
+                    cmp = cmp.substr(k);
+                }
+                // Strip trailing newline if present (last line of heredoc
+                // before EOF still ends with one).
+                if (!cmp.empty() && cmp.back() == '\n') cmp.pop_back();
+                // Marker line must be exactly the marker (after the
+                // indentation strip).
+                if (cmp == heredoc_marker ||
+                    (cmp.size() > heredoc_marker.size() &&
+                     cmp.compare(0, heredoc_marker.size(), heredoc_marker) == 0 &&
+                     (cmp[heredoc_marker.size()] == '\n' ||
+                      cmp[heredoc_marker.size()] == '\r'))) {
+                    heredoc_marker.clear();
+                    state = State::Normal;
+                    i = line_start + cmp.size(); // skip past the marker
+                    continue;
+                }
+                // Otherwise we're still inside the body — `&` is data.
+                i = line_start + line.size(); // skip to end of line
+                continue;
+            }
+            // Inside the body (not at a newline) — just consume.
+            break;
+        }
+        } // switch
+    } // for
+
+    // No unquoted `&` found.
+    return false;
+}
+
 // ========== Dangerous Command Detection ==========
 
 bool BashPathChecker::is_dangerous_command(const std::string& command) {

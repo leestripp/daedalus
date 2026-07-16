@@ -7,16 +7,19 @@ plus four worked example hosts (`demos/`). Embed it in any C++23 host
 (CLI, web, IDE plugin, CI bot) and drive one or more `Agent` instances
 via the public API. See `docs/embedding.md` to get started.
 
-**Current tag: `0.2.5`** — stable library. See `CHANGELOG.md` for what's
-in each release. See `docs/storage.md` for the storage architecture.
+**Current tag: `0.4.1`** — stable library. See `CHANGELOG.md` for what's
+in each release. See `docs/storage.md` for the storage architecture,
+`docs/settings.md` for the SQLite-backed settings model (v0.4.0+).
 
 ## File Locations
 
 | Path | Contents |
 |------|----------|
-| `~/.config/daedalus/` | config.json, settings.json, mcp/ |
-| `~/.local/share/daedalus/skills/` | Agent skills |
+| `~/.local/share/daedalus/daedalus.db` | Settings store (models, key/value, MCP servers) — v0.4.0+ |
+| `~/.local/share/daedalus/skills/installed/` | Agent skills |
 | `~/.local/share/daedalus/memory/` | Session memory |
+| `<project>/.daedalus[-<agent_name>]/` | Per-project state for each `Agent` |
+| `/etc/xdg/daedalus/` (system) | System-wide defaults |
 
 ## Quick Start (Ubuntu)
 
@@ -100,11 +103,6 @@ public:
     }
     void on_log(daedalus::LogLevel lvl, std::string_view msg) noexcept override {
         std::cerr << "[" << daedalus::to_string(lvl) << "] " << msg << "\n";
-    }
-    std::string request_user_input(std::string_view prompt) override {
-        std::cerr << prompt << "\n> " << std::flush;
-        std::string line; std::getline(std::cin, line);
-        return line;
     }
     bool request_command_approval(std::string_view cmd) override {
         std::cerr << "Approve: " << cmd << " [y/N] " << std::flush;
@@ -241,10 +239,12 @@ cmake --build build --target cppcheck
 
 > **Where state lives (read this if you're new):** daedalus uses
 > [XDG-compliant](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
-> paths by default. LLM keys, model config, and MCP servers live
-> under `$XDG_CONFIG_HOME/daedalus/` (default `~/.config/daedalus/`).
-> Globally-installed skill packs live under `$XDG_DATA_HOME/daedalus/`
-> (default `~/.local/share/daedalus/`). Per-project state — **including
+> paths by default. LLM keys, model config, and MCP servers live in a
+> SQLite database at `$XDG_DATA_HOME/daedalus/daedalus.db` (default
+> `~/.local/share/daedalus/daedalus.db`) — see
+> [`docs/settings.md`](docs/settings.md) for the `SettingsStore` API.
+> Globally-installed skill packs live under `$XDG_DATA_HOME/daedalus/skills/`
+> (default `~/.local/share/daedalus/skills/`). Per-project state — **including
 > long-term memory** — lives under `<project_root>/.daedalus[-<agent_name>/]`.
 > See [`docs/storage.md`](docs/storage.md) for full details, env-var
 > resolution order, and a migration recipe (`daedalus-cli --migrate-data`).
@@ -254,63 +254,75 @@ cmake --build build --target cppcheck
 > it sees it. Run `daedalus-cli --migrate-data-apply` then `rm -rf ~/.daedalus`
 > to silence it.
 
-### Create Settings File
+### Adding Models
+
+As of v0.4.0 there is no hand-edited `config.json`. Models are
+configured through the `daedalus::SettingsStore` API (SQLite-backed)
+or from the CLI:
 
 ```bash
-mkdir -p ~/.config/daedalus
-nano ~/.config/daedalus/config.json
+# Interactive REPL picks the active model
+daedalus-cli --model-list             # list configured models
+daedalus-cli --model NAME             # use a specific model for this session
+
+# Direct DB seeding (for packagers / CI) — see docs/settings.md §3
+sqlite3 ~/.local/share/daedalus/daedalus.db \
+  "INSERT INTO models (name, host, api_key, model_id, max_context_size) \
+   VALUES ('minimax-m3', 'https://api.minimax.io', 'YOUR_API_KEY', 'MiniMax-M3', 500000);"
 ```
 
-### Example Configuration
+From C++ host code:
 
-```json
-{
-    "default_model": "minimax-m2.7",
-    "max_agent_iterations": 600,
-    "auto_approve": true,
-    "max_tool_result_size": 500000,
-    "max_request_size": 4000000,
-    "max_response_size": 5000000,
-    "models": {
-        "minimax-m2.7": {
-            "host": "https://api.minimax.io",
-            "api_key": "YOUR_API_KEY_HERE",
-            "model": "MiniMax-M2.7",
-            "max_context_size": 200000,
-            "endpoints": { "chat": "/v1/chat/completions" }
-        },
-        "minimax-m3": {
-            "host": "https://api.minimax.io",
-            "api_key": "YOUR_API_KEY_HERE",
-            "model": "MiniMax-M3",
-            "max_context_size": 500000,
-            "endpoints": { "chat": "/v1/chat/completions" }
-        },
-        "qwen-3.6-35b": {
-            "host": "http://localhost:1234",
-            "api_key": "lm-studio",
-            "model": "qwen/qwen3.6-35b-a3b",
-            "max_context_size": 128000,
-            "endpoints": { "chat": "/v1/chat/completions" }
-        }
-    }
-}
+```cpp
+#include <daedalus/settings.h>
+auto& store = daedalus::SettingsStore::instance();
+store.upsert_model(daedalus::ModelConfig{
+    .name      = "minimax-m3",
+    .host      = "https://api.minimax.io",
+    .api_key   = std::getenv("MINIMAX_API_KEY"),  // avoid hard-coding
+    .model_id  = "MiniMax-M3",
+    .max_context_size = 500000,
+});
+store.set_default_model_name("minimax-m3");
 ```
 
 Two real-world tips:
 
-- Set `"default_model"` to a model you've actually configured under
-  `"models"` (the library resolves it at session start). Switch at
-  runtime with `Agent::switch_model(name)`.
-- `auto_approve: true` skips the y/n prompt for bash commands. The
-  webui demo (`demos/daedalus-webui/`) sets this automatically.
+- Set the default model to one you've actually inserted (the library
+  resolves it at session start). Switch at runtime with
+  `Agent::switch_model(name)`.
+- The webui demo (`demos/daedalus-webui/`) defaults to `auto_approve`
+  on; the CLI flips it with `--auto`. `auto_approve` is a boolean
+  that lives in **both** `AgentConfig::auto_approve` (per-session) and
+  `SettingsStore::get_auto_approve()` (persistent) — the runtime
+  effective value is the OR of the two. See
+  [`docs/settings.md`](docs/settings.md) §2.4 for the store API.
 
 
 ## MCP Server Configuration
 
-daedalus supports connecting to MCP (Model Context Protocol) servers for extended capabilities like web search, image analysis, and more. MCP servers are configured via JSON in `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (default `~/.config/daedalus/mcp/servers.json`).
+daedalus supports connecting to MCP (Model Context Protocol) servers for extended capabilities like web search, image analysis, and more. v0.5.0+ stores MCP servers in the SQLite-backed `SettingsStore` (`mcp_servers` table). v0.4.x used a JSON file at `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` — that path is still supported as a one-release-cycle fallback. See [`docs/mcp_server.md`](docs/mcp_server.md) for full details.
 
-### Configuration File
+### Configuration (programmatic, recommended)
+
+From C++ host code or from the `daedalus::SettingsStore` API:
+
+```cpp
+#include <daedalus/settings.h>
+auto& store = daedalus::SettingsStore::instance();
+daedalus::SettingsStore::McpServer srv{
+    .name        = "minimax-web-search",
+    .command     = "uvx",
+    .args        = {"minimax-coding-plan-mcp", "web-search"},
+    .transport   = "stdio",
+    .description = "Web search using MiniMax MCP",
+};
+store.upsert_mcp_server(srv);
+```
+
+### Configuration (JSON, legacy — supported)
+
+The legacy file location is `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (default `~/.config/daedalus/mcp/servers.json`):
 
 ```bash
 mkdir -p ~/.config/daedalus/mcp
@@ -424,8 +436,8 @@ daedalus --auto /path/to/project
 | `--auto` | Auto-approve bash commands |
 | `--no-memory` | Disable session memory for this session |
 | `--clear-memory` | Clear all session memory |
-| `--model NAME` | Use the named model from `settings.json` |
-| `--model-list` | List available models from `settings.json` and exit |
+| `--model NAME` | Use the named model from the SQLite settings store |
+| `--model-list` | List available models from the SQLite settings store and exit |
 | `--threads N` | Number of worker threads (default: hardware concurrency) |
 
 ### Running Modes
@@ -539,10 +551,11 @@ can build any composition pattern on top of `run_one_turn()`. See the
   host, passed to the Agent.
 - **`daedalus::AgentState`** (`include/daedalus/types/AgentState.h`) —
   the state enum (Idle, Understanding, Planning, Acting, Verifying,
-  AwaitingUser, AwaitingApproval, Compressing, Done, Cancelled,
-  Error). Pure data; hosts format for display.
+  AwaitingApproval, Compressing, Done, Cancelled, Error). Pure data;
+  hosts format for display. (`AwaitingUser` was removed in v0.4.0
+  when `ask_user` was deleted.)
 - **PIMPL internals** (`src/library/AgentImpl.h/.cpp`) — owns the
-  `LLMClient`, `SettingsManager`, and the rest of the subsystems.
+  `LLMClient`, `SettingsStore`, and the rest of the subsystems.
   Hosts do not include these.
 
 Underlying infrastructure:
@@ -574,7 +587,10 @@ Underlying infrastructure:
 - **Developer-controlled Skill loading**: `cfg.skills_dirs` + `cfg.skills` — empty by default, opt in only to what the host needs. (§Phase 9.7)
 - **Sink Observability**: Every state transition fires `on_state_change` so hosts can render real-time status (busy indicator, progress bar, cancel button). (§Phase 9.6)
 - **Per-Agent Config Home**: `cfg.daedalus_home` lets multiple Agents in one process own separate settings/skills/memory dirs. (§Phase 8.5)
-- **Per-model Temperature**: Each model in `settings.json` can declare its own `temperature`, with a session-level override via `AgentConfig::temperature`. Resolution priority: session override → model → 0.0. (§Phase 8.7)
+- **Per-model Temperature**: Each model in the `SettingsStore` can
+  declare its own `temperature`, with a session-level override via
+  `AgentConfig::temperature`. Resolution priority: session override →
+  model → 0.0. (§Phase 8.7)
 - **clang++ + clang-tidy**: Builds with clang by default. Conservative clang-tidy ruleset wired into CMake targets (`cmake --build build --target daedalus_clang_tidy`). (§Phase 9.9)
 
 ---
@@ -647,7 +663,7 @@ AFTER:  [system, assistant(compress_context), tool(summary), msgN*0.7+1, ..., ms
 - `execute_bash` - with chained commands (`&&`, `||`, `;`) and process isolation
 
 ### User Interaction
-- `tell_user`, `ask_user`, `compress_context`, `stop`
+- `tell_user`, `compress_context`, `set_status`, `stop`
 
 ### Background
 - `background_process` - start, send, poll, stop, list

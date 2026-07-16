@@ -33,16 +33,28 @@ std::filesystem::path default_daedalus_home()
 	return Paths::global().user_root();
 }
 
+// v0.4.0: deprecated — settings moved to SQLite SettingsStore.
+// Retained for `daedalus-cli --migrate-data` (which still imports
+// legacy files) and as a one-release-cycle read-fallback helper.
+[[deprecated("v0.4.0: settings moved to SQLite (SettingsStore); "
+             "use SettingsStore::instance() instead. Will be "
+             "removed in v0.6.0.")]]
 std::filesystem::path default_settings_path()
 {
 	return Paths::global().config_file();
 }
 
+[[deprecated("v0.4.0: MCP servers moved to SQLite (SettingsStore); "
+             "use list_mcp_servers() / upsert_mcp_server() "
+             "instead. Will be removed in v0.6.0.")]]
 std::filesystem::path default_mcp_servers_path()
 {
 	return Paths::global().mcp_servers_file();
 }
 
+[[deprecated("v0.4.0: MCP env moved to SettingsStore::mcp_servers.env; "
+             "use list_mcp_servers() instead. Will be removed in "
+             "v0.6.0.")]]
 std::filesystem::path default_mcp_env_path()
 {
 	return Paths::global().mcp_env_file();

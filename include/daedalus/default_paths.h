@@ -44,13 +44,29 @@ namespace daedalus {
 /// $HOME/.daedalus (or $DAEDALUS_HOME, or $DAEDALUSLIB_HOME for testing)
 std::filesystem::path default_daedalus_home();
 
-/// ~/.daedalus/settings/settings.json
+/// @deprecated v0.4.0+: settings moved to SQLite. Use
+/// `daedalus::SettingsStore::instance()` and set
+/// `AgentConfig::daedalus_home` instead. Kept for the
+/// `daedalus-cli --migrate-data` one-shot which still imports
+/// legacy files.
+[[deprecated("v0.4.0: settings moved to SQLite (SettingsStore); "
+             "use SettingsStore::instance() instead. Will be "
+             "removed in v0.6.0.")]]
 std::filesystem::path default_settings_path();
 
-/// ~/.daedalus/mcp/servers.json
+/// @deprecated v0.4.0+: MCP servers moved to SQLite. Use
+/// `SettingsStore::list_mcp_servers()` / `upsert_mcp_server()`
+/// instead.
+[[deprecated("v0.4.0: MCP servers moved to SQLite (SettingsStore); "
+             "use list_mcp_servers() / upsert_mcp_server() "
+             "instead. Will be removed in v0.6.0.")]]
 std::filesystem::path default_mcp_servers_path();
 
-/// ~/.daedalus/mcp/.env
+/// @deprecated v0.4.0+: MCP env is no longer a separate file —
+/// secrets live in `SettingsStore::mcp_servers.env`.
+[[deprecated("v0.4.0: MCP env moved to SettingsStore::mcp_servers.env; "
+             "use list_mcp_servers() instead. Will be removed in "
+             "v0.6.0.")]]
 std::filesystem::path default_mcp_env_path();
 
 /// @brief Validate an agent_name string (§Phase 8.8).

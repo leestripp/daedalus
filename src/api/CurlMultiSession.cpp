@@ -288,28 +288,11 @@ void CurlMultiSession::process_completed() {
                 if (code >= 200 && code < 300) {
                     state->promise.set_value(std::move(state->response));
                 } else {
-                    // Non-2xx response: log the status and body so the caller
-                    // can diagnose the failure (e.g. LM Studio context-length
-                    // errors come back as HTTP 400 with a JSON error body).
-                    // Previously we discarded both, leaving only a generic
-                    // "HTTP error status" message.
-                    if (!state->response.body.empty()) {
-                        // Trim to one line for readability
-                        std::string preview = state->response.body;
-                        if (preview.size() > 500) preview = preview.substr(0, 500) + "...";
-                        // Collapse whitespace
-                        std::string single;
-                        single.reserve(preview.size());
-                        for (char c : preview) {
-                            single += (c == '\n' || c == '\r') ? ' ' : c;
-                        }
-                        LOG_CERR(INFO, "[curl] HTTP " << code << " body: " << single);
-                    } else {
-                        LOG_CERR(INFO, "[curl] HTTP " << code << " (no body)");
-                    }
-                    auto resp = std::move(state->response);
-                    state->promise.set_value(std::unexpected(CurlError::HttpStatus));
-                    (void)resp;
+                    // Non-2xx response: return the full response so callers can
+                    // inspect status_code and body (e.g. API error messages).
+                    // Previously we discarded the body and returned only the error tag.
+                    state->response.status_code = code;
+                    state->promise.set_value(std::move(state->response));
                 }
             } else if (msg->data.result == CURLE_OPERATION_TIMEDOUT) {
                 state->response.timed_out = true;

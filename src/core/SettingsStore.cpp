@@ -14,6 +14,10 @@
 //
 // Schema is created idempotently on first open. `schema_version` table
 // keeps migrations straightforward.
+//
+// §B1 fix: every public method that takes a string argument now uses a
+// prepared statement with `?` placeholders + `Statement::bind(...)`. No
+// user-controlled value is ever concatenated into a SQL string.
 
 #include "daedalus/settings.h"
 
@@ -81,9 +85,9 @@ int builtin_max_context_size(std::string_view model_name)
 }
 }  // anonymous namespace
 
-// ===========================================================================
+// ============================================================================
 // Schema
-// ===========================================================================
+// ============================================================================
 namespace {
 
 constexpr int kSchemaVersion = 2;
@@ -135,6 +139,8 @@ void migrate_to_v2(OmniNet::DB::Database& db)
 {
     // v2: add mcp_servers.description / bearer_token / enabled.
     // ALTER TABLE columns; idempotent (catch "duplicate column" errors).
+    // Column names are constants — no user input flows here, raw execute()
+    // is safe.
     auto add_col = [&](const std::string& col, const std::string& def) {
         try {
             db.execute("ALTER TABLE mcp_servers ADD COLUMN " + col + " " + def);
@@ -151,7 +157,8 @@ void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
 
-    // schema_version row
+    // schema_version row. The constants here are integer literals — no
+    // user input. Raw execute() is safe.
     int current_version = 0;
     auto row = db.queryOne("SELECT version FROM schema_version LIMIT 1");
     if (row.has_value() && !row->empty()) {
@@ -189,18 +196,90 @@ ModelConfig row_to_model(const std::vector<std::string>& r)
     m.api_key          = r[2];
     m.model_id         = r[3];
     m.chat_endpoint    = r[4];
-    m.max_context_size = std::stoi(r[5]);
-    m.temperature      = std::stod(r[6]);
+    try {
+        m.max_context_size = std::stoi(r[5]);
+        m.temperature      = std::stod(r[6]);
+    } catch (...) {
+        m.max_context_size = 0;
+        m.temperature      = 0.0;
+    }
     return m;
 }
 
 }  // anonymous namespace
 
-// ===========================================================================
+// ============================================================================
+// Prepared-statement helpers (§B1 fix)
+// ============================================================================
+//
+// Every public method on SettingsStore that takes a string parameter
+// routes through these helpers instead of concatenating into a SQL
+// string. Bind accepts int, int, double, std::string, std::string_view
+// — overloads on the argument type do the right thing.
+//
+// The fold expression `(stmt.bind(idx++, arg), ...)` expands left-to-right
+// so idx increments cleanly across positions 1..N.
+namespace {
+
+template <typename... Args>
+void bind_args(OmniNet::DB::Database::Statement& stmt, Args&&... args)
+{
+    int idx = 1;
+    (stmt.bind(idx++, std::forward<Args>(args)), ...);
+}
+
+/// Execute a prepared statement (no result rows). Used for INSERT /
+/// UPDATE / DELETE.
+template <typename... Args>
+void exec_prepared(OmniNet::DB::Database& db,
+                   const std::string& sql,
+                   Args&&... args)
+{
+    auto stmt = db.prepare(sql);
+    bind_args(stmt, std::forward<Args>(args)...);
+    stmt.step();  // INSERT/UPDATE/DELETE — discard the "no row" return.
+}
+
+/// Query first row via a prepared statement.
+template <typename... Args>
+std::optional<std::vector<std::string>>
+query_one_prepared(OmniNet::DB::Database& db,
+                   const std::string& sql,
+                   Args&&... args)
+{
+    auto stmt = db.prepare(sql);
+    bind_args(stmt, std::forward<Args>(args)...);
+    if (!stmt.step()) return std::nullopt;
+    std::vector<std::string> row;
+    for (int i = 0; i < stmt.columnCount(); ++i) {
+        row.push_back(stmt.columnText(i));
+    }
+    return row;
+}
+
+/// Query all rows via a prepared statement.
+std::vector<std::vector<std::string>>
+query_all_prepared(OmniNet::DB::Database& db, const std::string& sql)
+{
+    std::vector<std::vector<std::string>> rows;
+    auto stmt = db.prepare(sql);
+    while (stmt.step()) {
+        std::vector<std::string> row;
+        for (int i = 0; i < stmt.columnCount(); ++i) {
+            row.push_back(stmt.columnText(i));
+        }
+        rows.push_back(std::move(row));
+    }
+    return rows;
+}
+
+}  // anonymous namespace (prepared-statement helpers)
+
+// ============================================================================
 // Per-path singleton DB pool. One sqlite3 handle per unique db_path so
 // a SettingsStore copy (or two for_home(home) calls) shares the same
 // connection. Opens lazily on first use.
-// ===========================================================================
+// ============================================================================
 class DbPool
 {
 public:
@@ -237,9 +316,9 @@ private:
     std::unordered_map<fs::path, std::unique_ptr<OmniNet::DB::Database>> dbs_;
 };
 
-// ===========================================================================
+// ============================================================================
 // SettingsStore::Impl
-// ===========================================================================
+// ============================================================================
 struct SettingsStore::Impl
 {
     fs::path path;
@@ -268,9 +347,9 @@ SettingsStore::SettingsStore(fs::path db_path, bool /*is_default*/, bool auto_mi
     }
 }
 
-// ===========================================================================
+// ============================================================================
 // instance() / for_home()
-// ===========================================================================
+// ============================================================================
 fs::path default_db_path()
 {
     // XDG_DATA_HOME/daedalus/daedalus.db (default
@@ -292,49 +371,63 @@ SettingsStore& SettingsStore::instance()
 
 SettingsStore& SettingsStore::for_home(fs::path home)
 {
-    // Every call returns a fresh SettingsStore wrapper. The underlying
-    // sqlite3 handle is managed by DbPool (per db_path), so actual
-    // resource reuse happens there — we don't need to cache wrappers.
-    // This also means tests that delete the DB file and reopen can get
-    // a clean handle (DbPool detects the missing file and reopens).
+    // §B2: KNOWN LEAK — requires a wider refactor to fix.
     //
-    // auto_migrate=false: callers that want auto-migration should pass
-    // explicit paths to SettingsMigrator::run() themselves. for_home() is
-    // used by tests and per-agent DBs where the test/temp dir has no
-    // legacy JSON to migrate.
+    // The original v0.3.0 implementation returns a `new`-allocated
+    // SettingsStore that is never deleted; the underlying sqlite3
+    // handle lives forever in DbPool. This preserves that behaviour.
+    //
+    // A proper fix (return SettingsStore by value, change
+    // AgentImpl::Body::store from raw pointer to value, so the
+    // wrapper is destroyed by the caller's RAII container) is tracked
+    // in CodeMax.md §B2 as a v0.5.1 follow-up.
+    //
+    // Why not just cache the wrapper here and avoid the per-call
+    // `new`? Two reasons:
+    //   1. The cached wrapper's impl_->db points at the SQLite
+    //      handle that was open at first call. If the user deletes
+    //      and recreates the DB file between calls (which tests like
+    //      test_session_memory do across subcases), the cached
+    //      wrapper still talks to the old DB — stale data.
+    //   2. The v0.3.5 SQLite-mirror design (SessionMemory::save
+    //      writes the mirror in the destructor) relies on every
+    //      call constructing a fresh wrapper so the next call's
+    //      `load()` re-evaluates the on-disk file. Caching breaks
+    //      that with exactly the failure mode we're seeing in
+    //      session_memory_tests.
+    //
+    // Until the proper fix lands, accept the per-call leak.
+    // `make_unique` can't call our private ctor, so use raw `new`
+    // (the original pattern).
     fs::create_directories(home);
-    return *(new SettingsStore(home / "daedalus.db", /*is_default=*/false,
+    return *(new SettingsStore(home / "daedalus.db",
+                               /*is_default=*/false,
                                /*auto_migrate=*/false));
 }
 
-// ===========================================================================
+// ============================================================================
 // Read
-// ===========================================================================
+// ============================================================================
 std::optional<ModelConfig> SettingsStore::get_model(std::string_view name) const
 {
-    auto row = impl_->db->queryOne(
+    auto row = query_one_prepared(
+        *impl_->db,
         "SELECT name, host, api_key, model_id, chat_endpoint, "
-        "max_context_size, temperature FROM models WHERE name = '" +
-        std::string(name) + "'");
-        // NOTE: name is treated as a key (validated in API), not user input.
-        // For raw user input we'd use a prepared Statement::bind — the
-        // public API surface here is name/key lookups by trusted callers.
+        "max_context_size, temperature FROM models WHERE name = ?",
+        std::string(name));
     if (!row.has_value()) return std::nullopt;
     return row_to_model(*row);
 }
 
 std::vector<ModelConfig> SettingsStore::list_models() const
 {
-    // OmniNet 0.8.8+ (commit fbecf55) populates m_currentRow in the
-    // QueryResult constructor and honours m_atEnd in the Iterator
-    // constructor, so range-based iteration returns the correct number
-    // of rows in all cases — including the empty / post-DELETE /
-    // post-reopen edge cases that the old callback workaround
-    // papered over.
     std::vector<ModelConfig> out;
-    for (const auto& row : impl_->db->query(
-            "SELECT name, host, api_key, model_id, chat_endpoint, "
-            "max_context_size, temperature FROM models")) {
+    auto rows = query_all_prepared(
+        *impl_->db,
+        "SELECT name, host, api_key, model_id, chat_endpoint, "
+        "max_context_size, temperature FROM models");
+    out.reserve(rows.size());
+    for (const auto& row : rows) {
         out.push_back(row_to_model(row));
     }
     return out;
@@ -342,8 +435,10 @@ std::vector<ModelConfig> SettingsStore::list_models() const
 
 std::string SettingsStore::get_string(std::string_view key, std::string_view def) const
 {
-    auto row = impl_->db->queryOne(
-        "SELECT value FROM kv_settings WHERE key = '" + std::string(key) + "'");
+    auto row = query_one_prepared(
+        *impl_->db,
+        "SELECT value FROM kv_settings WHERE key = ?",
+        std::string(key));
     if (!row.has_value()) return std::string(def);
     return row->empty() ? std::string(def) : (*row)[0];
 }
@@ -362,37 +457,40 @@ int SettingsStore::get_int(std::string_view key, int def) const
     try { return std::stoi(v); } catch (...) { return def; }
 }
 
-// ===========================================================================
+// ============================================================================
 // Write
-// ===========================================================================
+// ============================================================================
 void SettingsStore::upsert_model(const ModelConfig& m)
 {
-    impl_->db->execute(
+    exec_prepared(
+        *impl_->db,
         "INSERT INTO models(name, host, api_key, model_id, chat_endpoint, "
-        "max_context_size, temperature) VALUES('" +
-        m.name + "','" + m.host + "','" + m.api_key + "','" +
-        m.model_id + "','" + m.chat_endpoint + "'," +
-        std::to_string(m.max_context_size) + "," +
-        std::to_string(m.temperature) +
-        ") ON CONFLICT(name) DO UPDATE SET "
+        "max_context_size, temperature) VALUES(?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET "
         "host=excluded.host, api_key=excluded.api_key, "
         "model_id=excluded.model_id, chat_endpoint=excluded.chat_endpoint, "
         "max_context_size=excluded.max_context_size, "
-        "temperature=excluded.temperature");
+        "temperature=excluded.temperature",
+        m.name, m.host, m.api_key, m.model_id, m.chat_endpoint,
+        static_cast<int64_t>(m.max_context_size),
+        m.temperature);
 }
 
 void SettingsStore::delete_model(std::string_view name)
 {
-    impl_->db->execute(
-        "DELETE FROM models WHERE name = '" + std::string(name) + "'");
+    exec_prepared(
+        *impl_->db,
+        "DELETE FROM models WHERE name = ?",
+        std::string(name));
 }
 
 void SettingsStore::set_string(std::string_view key, std::string_view value)
 {
-    impl_->db->execute(
-        "INSERT INTO kv_settings(key, value) VALUES('" +
-        std::string(key) + "','" + std::string(value) +
-        "') ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+    exec_prepared(
+        *impl_->db,
+        "INSERT INTO kv_settings(key, value) VALUES(?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        std::string(key), std::string(value));
 }
 
 void SettingsStore::set_bool(std::string_view key, bool value)
@@ -405,9 +503,9 @@ void SettingsStore::set_int(std::string_view key, int value)
     set_string(key, std::to_string(value));
 }
 
-// ===========================================================================
+// ============================================================================
 // Atomic
-// ===========================================================================
+// ============================================================================
 void SettingsStore::transaction(std::function<void(SettingsStore&)> fn)
 {
     // OmniNet::DB::Database::transaction takes a no-arg lambda but our
@@ -416,22 +514,22 @@ void SettingsStore::transaction(std::function<void(SettingsStore&)> fn)
     impl_->db->transaction([&self, &fn]() { fn(self); });
 }
 
-// ===========================================================================
+// ============================================================================
 // Introspection
-// ===========================================================================
+// ============================================================================
 fs::path SettingsStore::db_path() const noexcept { return impl_->path; }
 
 bool SettingsStore::has_data() const noexcept
 {
     if (!list_models().empty()) return true;
-    // Cheap kv_settings probe — one row, one column.
-    auto row = impl_->db->queryOne("SELECT 1 FROM kv_settings LIMIT 1");
-    return row.has_value();
+    // Cheap kv_settings probe — one row, one column, no bindings.
+    auto stmt = impl_->db->prepare("SELECT 1 FROM kv_settings LIMIT 1");
+    return stmt.step();
 }
 
-// ===========================================================================
+// ============================================================================
 // v0.3.5: per-project persistence (session memory + messages)
-// ===========================================================================
+// ============================================================================
 //
 // Both are stored as kv_settings under namespaced keys ("mem.<sid>",
 // "msg.<sid>") — same table as scalars, no schema change needed.
@@ -449,12 +547,10 @@ void SettingsStore::set_session_memory(std::string_view session_id, std::string_
 
 void SettingsStore::delete_session_memory(std::string_view session_id)
 {
-    // No delete-by-key API on kv_settings yet — use a literal DELETE via
-    // raw SQL through OmniNet. Cheaper than adding delete_kv() right now
-    // (only one caller, this one).
-    impl_->db->execute(
-        "DELETE FROM kv_settings WHERE key = 'mem." +
-        std::string(session_id) + "'");
+    exec_prepared(
+        *impl_->db,
+        "DELETE FROM kv_settings WHERE key = ?",
+        "mem." + std::string(session_id));
 }
 
 std::string SettingsStore::get_messages_json(std::string_view session_id) const
@@ -469,9 +565,10 @@ void SettingsStore::set_messages_json(std::string_view session_id, std::string_v
 
 void SettingsStore::delete_messages_json(std::string_view session_id)
 {
-    impl_->db->execute(
-        "DELETE FROM kv_settings WHERE key = 'msg." +
-        std::string(session_id) + "'");
+    exec_prepared(
+        *impl_->db,
+        "DELETE FROM kv_settings WHERE key = ?",
+        "msg." + std::string(session_id));
 }
 
 // ============================================================================
@@ -551,7 +648,14 @@ ServerErrorSettings SettingsStore::get_server_error_settings() const
     s.enabled = get_bool("server_error_enabled", s.enabled);
     s.initial_wait_seconds = get_int("server_error_initial_wait_seconds", s.initial_wait_seconds);
     s.max_wait_seconds = get_int("server_error_max_wait_seconds", s.max_wait_seconds);
-    s.backoff_multiplier = std::stod(get_string("server_error_backoff_multiplier", std::to_string(s.backoff_multiplier)));
+    // §B24 fix: stod on user-provided string can throw — guard it.
+    try {
+        s.backoff_multiplier = std::stod(
+            get_string("server_error_backoff_multiplier",
+                       std::to_string(s.backoff_multiplier)));
+    } catch (...) {
+        // Leave default value in place — settings were corrupt / unparseable.
+    }
     s.max_retries_per_call = get_int("server_error_max_retries_per_call", s.max_retries_per_call);
     return s;
 }
@@ -603,10 +707,11 @@ SettingsStore::McpServer row_to_mcp(const std::vector<std::string>& r)
 
 std::optional<SettingsStore::McpServer> SettingsStore::get_mcp_server(std::string_view name) const
 {
-    auto row = impl_->db->queryOne(
+    auto row = query_one_prepared(
+        *impl_->db,
         "SELECT name, transport, command, args_json, env_json, url, "
-        "bearer_token, description, enabled FROM mcp_servers WHERE name = '"
-        + std::string(name) + "'");
+        "bearer_token, description, enabled FROM mcp_servers WHERE name = ?",
+        std::string(name));
     if (!row.has_value()) return std::nullopt;
     return row_to_mcp(*row);
 }
@@ -614,9 +719,12 @@ std::optional<SettingsStore::McpServer> SettingsStore::get_mcp_server(std::strin
 std::vector<SettingsStore::McpServer> SettingsStore::list_mcp_servers() const
 {
     std::vector<McpServer> out;
-    for (const auto& row : impl_->db->query(
-            "SELECT name, transport, command, args_json, env_json, url, "
-            "bearer_token, description, enabled FROM mcp_servers ORDER BY name")) {
+    auto rows = query_all_prepared(
+        *impl_->db,
+        "SELECT name, transport, command, args_json, env_json, url, "
+        "bearer_token, description, enabled FROM mcp_servers ORDER BY name");
+    out.reserve(rows.size());
+    for (const auto& row : rows) {
         out.push_back(row_to_mcp(row));
     }
     return out;
@@ -626,31 +734,33 @@ void SettingsStore::upsert_mcp_server(const McpServer& s)
 {
     nlohmann::json args_j = s.args;
     nlohmann::json env_j  = s.env;
-    impl_->db->execute(
+    exec_prepared(
+        *impl_->db,
         "INSERT INTO mcp_servers(name, transport, command, args_json, env_json, "
-        "url, bearer_token, description, enabled) VALUES('" +
-        s.name + "','" + s.transport + "','" + s.command + "','" +
-        args_j.dump() + "','" + env_j.dump() + "','" +
-        s.url + "','" + s.bearer_token + "','" + s.description + "'," +
-        (s.enabled ? "1" : "0") +
-        ") ON CONFLICT(name) DO UPDATE SET "
+        "url, bearer_token, description, enabled) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET "
         "transport=excluded.transport, command=excluded.command, "
         "args_json=excluded.args_json, env_json=excluded.env_json, "
         "url=excluded.url, bearer_token=excluded.bearer_token, "
-        "description=excluded.description, enabled=excluded.enabled");
+        "description=excluded.description, enabled=excluded.enabled",
+        s.name, s.transport, s.command,
+        args_j.dump(), env_j.dump(),
+        s.url, s.bearer_token, s.description,
+        static_cast<int>(s.enabled));
 }
 
 void SettingsStore::delete_mcp_server(std::string_view name)
 {
-    impl_->db->execute(
-        "DELETE FROM mcp_servers WHERE name = '" + std::string(name) + "'");
+    exec_prepared(
+        *impl_->db,
+        "DELETE FROM mcp_servers WHERE name = ?",
+        std::string(name));
 }
 
 bool SettingsStore::has_mcp_servers() const noexcept
 {
-    auto row = impl_->db->queryOne(
-        "SELECT 1 FROM mcp_servers LIMIT 1");
-    return row.has_value();
+    auto stmt = impl_->db->prepare("SELECT 1 FROM mcp_servers LIMIT 1");
+    return stmt.step();
 }
 
 } // namespace daedalus

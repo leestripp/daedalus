@@ -6,6 +6,107 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed (2026-07-16, v0.4.2 prep — physical test pass)
+
+- **`print_banner` crash on long paths** (HIGH — F0).
+  `demos/daedalus-cli/banner.h` padded each field with
+  `std::string(WIDTH - s.size(), ' ')`. Whenever `s.size() > WIDTH`
+  (e.g. a 59-char `data_dir` on a long project path), the
+  subtraction underflowed and the constructor threw
+  `std::length_error`, `std::terminate`'d the demo, and aborted
+  with `[FATAL] basic_string::_M_create` before the LLM was
+  even contacted. Replaced the inline pad with a `pad_to(s, width)`
+  helper that clamps to 0 and truncates with ` …` for long values.
+  Found during the PT-1 physical test pass; all 4 demos now run
+  end-to-end with the live `minimax-m2.7` model.
+
+- **`daedalus-subagent --help` / `daedalus-manager --help` crash**
+  (HIGH — F2, open). Both demos treat `argv[1]` as `project_root`
+  and pass it to `Agent::initialize()` without a `--help` short-circuit;
+  the demo throws `std::invalid_argument("Project path does not
+  exist: --help")` and aborts. Same root cause in both; same
+  fix pattern as `daedalus-cli/main.cpp:52-60`. Tracked in
+  CodeMax.md F2 for follow-up.
+
+### Fixed (2026-07-15, v0.4.2 prep)
+
+- **Test fix:** `legacy_deprecation_warning_tests` case 2
+  (`$DAEDALUS_HOME set → no warning`) used `/opt/daedalus` as the
+  override path. That fails with `Permission denied` on systems
+  where the test runner is unprivileged (CI, podman container,
+  any non-root user). Replaced with a temp-dir path so the test
+  exercises the override-acknowledgement logic without depending
+  on `/opt` being writable. The behaviour assertion — "when
+  `$DAEDALUS_HOME` is set, no deprecation warning fires" — is
+  unchanged.
+
+- **Dead-code removal:** `matches_pattern()` in `src/core/FileIO.cpp`
+  (the simple-glob helper used by the old SettingsManager
+  load-ignore path) was never called — `FileIO` no longer takes
+  a `SettingsManager*`, the settings pipeline went through SQLite
+  in v0.4.0, and no SettingsManager/JSON-driven code reads the
+  result. Compiler `-Wunneeded-internal-declaration` flagged it
+  on every rebuild. Deleted.
+
+- **DEBUG block:** `LLMClient::run_agent_cycle` had a 35-line
+  "DEBUG: Log tool_calls" block gated on a specific `tc_id` and
+  `has_invalid_chars` check. Both branches were empty — only
+  local-variable assignments, no `LOG_*` call. Deleted.
+
+- **Constructor dead code:** `AgentImpl::AgentImpl` had a 17-line
+  block that defaulted `cfg_.settings_path`, `cfg_.mcp_servers_path`,
+  `cfg_.mcp_env_path`, `cfg_.memory_dir` from `cfg_.daedalus_home`
+  (or `default_*_path()`). Since v0.5.0 the SettingsStore reads
+  directly from `cfg_.daedalus_home`; those four `AgentConfig`
+  fields are now `[[deprecated]]` and only used as explicit
+  per-field overrides (the override read at line 320–324 still
+  works). The default-population block was pure write-only. Deleted.
+
+- **Deprecation warnings:** `default_settings_path()`,
+  `default_mcp_servers_path()`, `default_mcp_env_path()` now
+  carry `[[deprecated("…")]]` annotations pointing at
+  `SettingsStore::instance()` and `list_mcp_servers()`. Three
+  call sites inside the library still use them (the `migrate.cpp`
+  one-shot CLI, plus the daedalus-subagent / daedalus-manager
+  demos) — the migration is left for a future release. CMake
+  emits the warning cleanly; no errors.
+
+- **Documentation sweep (Readme.md, docs/embedding.md,
+  docs/mcp_server.md, docs/session_memory.md, docs/storage.md,
+  docs/tools.md, docs/how_compress_works.md,
+  docs/migration.md):**
+  - Readme.md `StdoutSink` example no longer references the
+    removed `AgentSink::request_user_input(std::string_view)`.
+  - Readme.md "Configuration" section replaced the hand-edited
+    `config.json` walkthrough with a programmatic example using
+    `SettingsStore::upsert_model()`, plus a `sqlite3` one-liner
+    for packagers.
+  - Readme.md "File Locations" table now shows the v0.4.0+ DB
+    path (`~/.local/share/daedalus/daedalus.db`).
+  - Readme.md "Current tag" bumped from 0.2.5 → 0.4.1.
+  - docs/embedding.md `Settings, memory, MCP paths` section
+    rewritten to describe the v0.4.0 SQLite model and explicitly
+    call out the removed `cfg.settings_path` / `cfg.mcp_*_path` /
+    `cfg.memory_dir` fields.
+  - docs/embedding.md state-machine table no longer lists
+    `AwaitingUser` (removed in v0.4.0 with the `ask_user` tool).
+  - docs/embedding.md `Wiring your own input source` section
+    no longer claims the agent calls `request_user_input` mid-turn.
+  - docs/mcp_server.md: added a "Configuration (v0.5.0+,
+    recommended)" section using `SettingsStore::upsert_mcp_server`,
+    kept the legacy JSON section as a fallback.
+  - docs/session_memory.md "Storage location" tree no longer
+    shows `settings.json` — settings live in `daedalus.db` now.
+  - docs/storage.md §2.2: removed the `agent_dir/config.json`
+    row (config moved to the user-tier SQLite DB).
+  - docs/tools.md §14: replaced the removed `ask_user` reference
+    with `set_status` (the actual current tool).
+  - docs/how_compress_works.md "Per-Model Context Size" now uses
+    `SettingsStore::upsert_model()` instead of a JSON snippet.
+  - docs/migration.md §5: notes that `settings.json` was moved
+    to SQLite in v0.4.0 (the migration guide previously claimed
+    "unchanged").
+
 ### Added (2026-07-15)
 
 - **Webui "Tool Calls" panel — structured cards** (§Phase D1).

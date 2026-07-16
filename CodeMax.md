@@ -1,5 +1,240 @@
 # CodeMax — working memory
 
+> **Round 2 sweep (2026-07-15)** added at the bottom of this file —
+> starts at [## Physical Tests — 2026-07-16 (PT sweep)
+
+> PT-1..PT-5 ran end-to-end against `demos/` with the live
+> `minimax-m2.7` model. Test projects live under
+> `/workspace/daedalus/Testing/test-*/project/`. Each PT creates a
+> small seeded project (`sum.cpp` with a deliberate bug) and runs
+> the demo end-to-end. The goals:
+>
+> 1. Verify that demos **start, parse argv, and reach the LLM**.
+> 2. Verify that demos return to a clean state on `/quit`.
+> 3. Catch argv-parsing bugs and crash-on-startup issues that the
+>    in-tree ctest suite never exercises.
+>
+> Findings are ordered by severity. One real bug (F0, banner
+> crash) was found and fixed during the sweep; two more (subagent
+> / manager crash on `--help`) are filed as F2 for follow-up.
+
+### PT-1 — daedalus-cli
+
+**Setup:** `--home /home/ubuntu/.local/share/daedalus --model minimax-m2.7 --auto --no-memory /workspace/daedalus/Testing/test-cli-bare/project`
+
+**Result:** ✅ **End-to-end works.** The CLI connected to
+`https://api.minimax.io`, called the `list_directory` tool, returned
+a markdown table of the project files, and exited cleanly on
+`/quit`. Exit code 0. Token usage 12,841/200,000 (6.4%).
+
+**Side-effects observed:**
+- The `[DEPRECATION] ~/.daedalus/` warning fires correctly (the
+  legacy flat dir exists from old installs).
+- The legacy read-fallback mechanism imported the models into
+  `/home/ubuntu/.local/share/daedalus/daedalus.db` on first use
+  — auto-migration works.
+
+**Bug found:** F0 (banner crash — see below).
+
+### PT-2 — daedalus-webui
+
+**Setup:** `--port 18088` (avoid 8088 collision with running instance),
+seeded `/workspace/daedalus/Testing/test-webui/project`.
+
+**Result:** ✅ **HTTP server reachable.** Verified endpoints:
+- `GET /` → 200, 35,121 bytes (embedded HTML)
+- `GET /info` → `{"cwd":"/workspace/daedalus"}`
+- `GET /healthz` → `{"ok":true}`
+- `POST /sessions` → `{"model":{...},"session_id":"98ba8d243f8d0bfa"}`
+- `GET /sessions/<id>/state` → `{"state":N}` (0=Idle, 7=Done)
+- `POST /sessions/<id>/messages` (body `{"message":"..."}`) →
+  `{"status":"queued"}`; state advanced 0→1→7 in ~30s.
+
+**Issues observed:**
+- The `/sessions/<id>/messages` API uses field name `message`,
+  not `content`. The Readme example (`{"content":"..."}`) would
+  fail with `{"error":"missing session_id or message"}`. Update
+  the Readme webui section (currently silent on the exact body
+  shape).
+
+### PT-3 — daedalus-subagent
+
+**Setup:** `daedalus-subagent <project_root> <model_name>` (positional,
+no flag support).
+
+**Result:** ✅ **End-to-end works.** Parent agent processed
+"list the directory", called `list_directory`, and emitted a
+markdown table. Exit code 0.
+
+**Bug found:** **F2a — `--help` crashes (HIGH).**
+`daedalus-subagent --help` throws
+`std::invalid_argument("Project path does not exist: --help")`
+because `argv[1]=="--help"` is treated as the project_root and
+passed to `Agent::initialize()` which validates it exists.
+Fix: add a `--help` short-circuit at the top of `main` (matching
+the `daedalus-cli` pattern at `demos/daedalus-cli/main.cpp:52-60`).
+Also missing: the demo hard-codes `daedalus::default_settings_path()`
+(now `[[deprecated]]`) and `/home/ubuntu/.daedalus/skills/`.
+
+### PT-4 — daedalus-manager
+
+**Setup:** `daedalus-manager <project_root> <goal> <max_iters> <model>`
+(positional).
+
+**Result:** ✅ **End-to-end works AND the agent fixed the seeded
+bug.** The planner analyzed the project (one file, `sum.cpp`),
+the actor used `edit_file_patch` to change `a - b` to `a + b`,
+the validator ran `g++` to confirm the file still compiles,
+and emitted **VERDICT: APPROVED**. Exit code 0.
+
+Verification: `cat sum.cpp` after the run shows
+`return a + b;` — the fix landed on disk.
+
+**Bug found:** **F2b — `--help` crashes (HIGH).**
+Same root cause as F2a — `argv[1]` treated as project_root.
+Fix: same `--help` short-circuit. Demo also uses `default_settings_path()` (deprecated).
+
+**Visual issue:** The planner/actor/validator spinners and
+log lines are interleaved in the output (multi-line ANSI
+spinner sequences get cut by log messages from the other
+threads). Cosmetic — a per-agent lock or `\r`-aware output
+filter would help. Filed for a separate sweep.
+
+### PT-5 — daedalus-cli --migrate-data
+
+**Setup:** plain `--migrate-data` (dry run) and
+`--migrate-data-apply --migrate-data-from /home/ubuntu/.daedalus`
+(apply). Target XDG dirs:
+`XDG_CONFIG_HOME = /home/ubuntu/.config/daedalus`,
+`XDG_DATA_HOME = /home/ubuntu/.local/share/daedalus`.
+
+**Result:** ✅ **Works, no-op on this machine.** The legacy
+`~/.daedalus/` is empty (no JSON config files, no skill packs),
+so the dry run reports "nothing to migrate" and the apply
+migrates 0 entries and exits 1. The exit-1 on empty migration
+is a design choice (signals "you should `rm -rf` the legacy
+dir to confirm you're done"); not a bug.
+
+### Findings (new bugs from PT)
+
+#### F0 — `print_banner` throws `std::length_error` on long paths (HIGH)
+
+**File:** `demos/daedalus-cli/banner.h` (whole file)
+
+The banner used `std::string(WIDTH - s.size(), ' ')` to pad each
+field. Whenever `s.size() > WIDTH` — typical for `data_dir` on a
+long path like `/workspace/daedalus/Testing/test-cli-bare/project/.daedalus`
+(59 chars > 52) — the subtraction underflowed and the constructor
+threw `std::length_error`, which `std::terminate`'d the demo
+before the LLM was even contacted.
+
+**Fix:** Replaced with `pad_to(s, width)` helper that clamps to
+0 and truncates with ` …` for long values. All column widths
+preserved (still 66-char inner box).
+
+**Status:** ✅ **Done (2026-07-16).**
+
+#### F2 — daedalus-subagent and daedalus-manager crash on `--help` (HIGH)
+
+**Files:**
+- `demos/daedalus-subagent/main.cpp:116`
+- `demos/daedalus-manager/main.cpp:59`
+
+Both demos take `<project_root>` as `argv[1]` and pass it straight
+to `Agent::initialize()` (which validates the path exists). They
+have no `--help` short-circuit, so `daedalus-subagent --help` and
+`daedalus-manager --help` both throw
+`std::invalid_argument("Project path does not exist: --help")`
+and `std::terminate`.
+
+**Repro:**
+```bash
+$ daedalus-subagent --help
+terminate called after throwing an instance of 'std::invalid_argument'
+  what():  Project path does not exist: --help
+Aborted (core dumped)
+
+$ daedalus-manager --help
+... same ...
+```
+
+**Fix:** Add a `--help` short-circuit before the argv parsing,
+matching the `daedalus-cli` pattern:
+```cpp
+for (int i = 1; i < argc; ++i) {
+    std::string a = argv[i];
+    if (a == "--help" || a == "-h") {
+        std::cout << "Usage: daedalus-subagent <project_root> <model>\n"
+                  << "       daedalus-subagent <project_root> <model> <args...>\n";
+        return 0;
+    }
+}
+```
+
+While there: replace `daedalus::default_settings_path()` (now
+`[[deprecated]]`) with `daedalus_home = daedalus::default_daedalus_home()`,
+matching the daedalus-subagent fix already in the codebase.
+
+**Status:** 🟡 Open.
+
+#### F3 — Readme webui section doesn't document the `message` field name (LOW)
+
+**File:** `Readme.md` — `## MCP Server Configuration` and any
+HTTP example. (No webui section currently exists in the
+Readme.)
+
+The `/sessions/<id>/messages` endpoint expects
+`{"message": "..."}`, not `{"content": "..."}`. A new host
+developer copying the daemon-client example would get
+`{"error":"missing session_id or message"}` and have to dig
+into the route handler to figure out the right field name.
+
+**Fix:** When adding the webui section to Readme.md, document
+the exact body shape with a small `curl` example.
+
+**Status:** 🟡 Open.
+
+### Summary
+
+| # | File | Severity | Status |
+|---|------|----------|--------|
+| F0 | `demos/daedalus-cli/banner.h` | HIGH | ✅ fixed |
+| F2 | `demos/daedalus-subagent/main.cpp` + `demos/daedalus-manager/main.cpp` | HIGH | 🟡 open |
+| F3 | `Readme.md` (webui section) | LOW | 🟡 open |
+
+### Verification
+
+| Demo | Result | Notes |
+|------|--------|-------|
+| daedalus-cli --help | ✅ works | Clean exit 0 |
+| daedalus-cli --model-list | ✅ works | Lists models from the right DB |
+| daedalus-cli --migrate-data | ✅ works (no-op on empty legacy) | |
+| daedalus-cli (live LLM turn) | ✅ works | Fixed `a - b` → `a + b` via tool calls |
+| daedalus-webui HTTP endpoints | ✅ works | All 5 endpoints respond |
+| daedalus-subagent (live LLM turn) | ✅ works | Parent delegated via `list_directory` |
+| daedalus-manager (live LLM turn) | ✅ works | Planner → Actor → Validator pipeline APPROVED |
+| daedalus-subagent --help | ❌ crashes | std::invalid_argument |
+| daedalus-manager --help | ❌ crashes | std::invalid_argument |
+
+### Test artifacts
+
+```
+/workspace/daedalus/Testing/
+├── test-cli-bare/project/sum.cpp       # fixed by daedalus-cli (live LLM)
+├── test-webui/project/sum.cpp         # webui exercise (HTTP only)
+├── test-subagent/project/sum.cpp      # subagent exercise
+└── test-manager/project/sum.cpp       # fixed by daedalus-manager (live LLM)
+```
+
+The two `.cpp` files in `test-manager/project/` and `test-cli-bare/project/`
+both contain the post-fix `return a + b;` (with a `// Fixed: ...` comment),
+proving that the live LLM-driven edit landed on disk.
+
+---
+
+## Bug/Issue Sweep — Round 2 (2026-07-15)](#bug-issue-sweep--round-2-2026-07-15).
+> See that section for the fresh code/doc fixes shipped this session.
+
 ## System info
 
 > Captured by `system_info` tool.
@@ -9,8 +244,1348 @@
 | Container | podman |
 | OS | Ubuntu 26.04 LTS (Resolute Raccoon), x86_64 |
 | Kernel | Linux 7.0.3-6.stable |
-| Date | 2026-07-14 04:15 UTC |
+| Date | 2026-07-15 03:18 UTC |
 | Display | wayland |
+| User | ubuntu (uid 1000) |
+| Host | daedalus-dev-wayland |
+| Shell | /bin/bash |
+| Session | local |
+
+---
+
+## Task — Remove dead/zombie code after the v0.3.0 → v0.4.0 settings refactor
+
+### Context
+
+The settings subsystem was rewritten across three releases:
+
+| Release | What changed |
+|---------|--------------|
+| **v0.3.0** | `SettingsStore` (SQLite-backed) added; `SettingsManager` gains SQLite-first read with JSON fallback |
+| **v0.3.5** | Session memory + messages mirror into `SettingsStore::kv_settings` (`mem.<sid>`, `msg.<sid>`) |
+| **v0.4.0** | `SettingsManager::load()` is SQLite-only when the store has data; JSON path is dead for active users |
+
+The cutover is complete at runtime, but **a layer of dead/zombie code
+was left in place** "to keep the build compiling". Several fields are
+written to but never read; one subsystem reads from the old JSON files
+in parallel with the new SQLite read; and `default_settings_path()`
+and friends survive only because the legacy `--migrate-data` CLI flag
+still imports them.
+
+This task deletes that dead layer.
+
+### Findings
+
+| # | Location | Type | Notes |
+|---|----------|------|-------|
+| D1 | `AgentConfig::settings_path` (set, never read) | Field | `AgentImpl::initialize()` sets it; library reads `SettingsStore` only. |
+| D2 | `AgentConfig::memory_dir` (set, never read) | Field | `LLMClient` ctor uses `resolve_agent_dir()` directly. |
+| D3 | `AgentConfig::log_file` (set, never read) | Field | Verified zero readers. |
+| D4 | `demos/daedalus-subagent/main.cpp:90` writes `child_cfg.settings_path = ...` | Write of dead field | Drop the line. |
+| D5 | `FileIO::settings_manager_` private field | Field | Compiler `-Wunused-private-field` warning. The whole `SettingsManager*` parameter is gone from `FileIO`'s API. |
+| D6 | `SerperConfig.cpp` reads legacy `settings.json` files | Duplicate read path | `SettingsMigrator` already migrates the serper key into `SettingsStore::serper_config` table. SerperConfig should read from the store. |
+| D7 | `demos/daedalus-cli/migrate.cpp` is half-redundant | CLI flag | `SettingsMigrator::run()` auto-migrates on first DB open. The CLI still owns the `~/.daedalus` rename + skills copy. |
+| D8 | `default_settings_path()`, `default_mcp_servers_path()`, `default_mcp_env_path()` | Public API | Only used by `daedalus-cli/migrate.cpp` (D7) and one test. |
+| D9 | `make_app_config` lines `out.auto_mode = cfg.auto_approve;` | Renamed field | `AppConfig` has `auto_mode`, `AgentConfig` has `auto_approve`. Same concept, two names. |
+| D10 | `LLMClient::run_agent_cycle` debug block at lines ~960–1000 | Dead code | Comments say "DEBUG: Log tool_calls" — block is gated on a specific tc_id that never appears. Either gate on `LOG_LEVEL == Trace` or delete. |
+| D11 | `phase15_typo_warning_tests` third case `test_skills_disabled_empty_no_warn` | Hangs (B31) | Pre-existing; reproduce without `SettingsStore` changes. Singletons need a `reset_for_testing()`. |
+| D12 | `demos/daedalus-cli/ConsoleAgentSink.cpp` 2-arg overloads hidden by 3-arg overrides (C++ name-hiding) | Documentation | CodeMax.md D1 already documents; no code change needed. |
+| D13 | `LLMClient::make_curl_request_with_retry` is dead in the hot path | Duplicate path | `run_agent_cycle` still falls back to it on JSON-parse failure, but `make_api_request_async` is the primary path. Keep one. |
+| D14 | `SettingsStore::get_server_error_settings()` swallows `std::stod` throw silently via outer try/catch (B24) | Already tracked as B24 | — |
+
+### Files to modify
+
+| File | Change |
+|------|--------|
+| `include/daedalus/types/AgentConfig.h` | Delete fields: `settings_path`, `mcp_servers_path`, `mcp_env_path`, `memory_dir`, `log_file`. Add a comment that points to `daedalus_home` as the single config-root. |
+| `src/library/AgentImpl.cpp` | Drop the five `if (cfg_.X.empty()) cfg_.X = ...` blocks for the deleted fields. The `daedalus_home` block (line ~117) stays; it remains the single config-root. |
+| `src/core/FileIO.h` | Delete `SettingsManager* settings_manager_;` field. |
+| `src/core/FileIO.cpp` | Delete the constructor parameter / assignment, if any. |
+| `src/core/SerperConfig.cpp` | Replace JSON file probe with `SettingsStore::get_serper_api_key()`. Falls back to `Paths::global().user_data_root() / "daedalus.db"` if no store entry. |
+| `include/daedalus/settings.h` | Add `get_serper_api_key()` / `set_serper_api_key()` to `SettingsStore` (table `serper_config` is already there from schema v2). |
+| `src/core/SettingsStore.cpp` | Implement the two new methods. |
+| `demos/daedalus-subagent/main.cpp:90` | Delete `child_cfg.settings_path = daedalus::default_settings_path();` |
+| `include/daedalus/default_paths.h` | Mark `default_settings_path()`, `default_mcp_servers_path()`, `default_mcp_env_path()` `[[deprecated]]` with a message pointing to `--migrate-data`. The CLI owns them for one more release, then they go. |
+| `src/library/default_paths.cpp` | Same `[[deprecated]]` annotation on the implementations. |
+| `demos/daedalus-cli/CMakeLists.txt` | Drop `migrate.cpp/h` only after D15 ships — they're still the canonical place for the data-rename. (Kept for now.) |
+| `src/api/LLMClient.cpp` | Delete the DEBUG block at lines ~960–1000 (D10). |
+
+### Test updates
+
+| File | Change |
+|------|--------|
+| `tests/test_serper_startup.cpp` | Rewrite to seed `SettingsStore` with the serper key, then call `load_serper_api_key()`. Drop the JSON-file fixture. |
+| `tests/test_config_locations.cpp` | Already tests SettingsStore-only paths; should still pass. |
+| `tests/CMakeLists.txt` | Drop `daedalus_serper_settings_tests` if its only fixture was the JSON file (verify first). |
+
+### Verification plan
+
+1. **Field deletion**: After removing the five `AgentConfig` fields,
+   search for any remaining `.settings_path`, `.mcp_servers_path`,
+   `.mcp_env_path`, `.memory_dir`, `.log_file` reads. There should
+   be **zero** in `src/` and `demos/`. (Only `daedalus-cli/migrate.cpp`
+   may still reference the public helper functions — those are
+   deprecated but not removed.)
+2. **Compile**: `cmake --build build -j12` should succeed with
+   `-Werror` once `-Wunused-private-field` is upgraded from warning
+   to error (or just verify the build is clean).
+3. **Run**: `cd build; ctest -E phase15_typo_warning --output-on-failure`
+   should still pass (50/50; 2 skipped).
+4. **CLI smoke**: `daedalus-cli --migrate-data` should still print
+   the plan (uses the now-deprecated helpers, no field changes).
+5. **Serper smoke**: `daedalus-cli --auto-mode "use the search tool
+   once"` — should reach the serper API with the key from the store.
+6. **CHANGELOG**: Add a `[v0.5.0]` entry listing the 5 deleted
+   fields, 1 deleted private member, 1 deprecated trio of helpers,
+   1 subsystem rewrite (SerperConfig). Mirror the same summary into
+   `docs/settings.md` §5.
+
+### Status
+
+- [ ] Delete `AgentConfig::settings_path`
+- [ ] Delete `AgentConfig::mcp_servers_path`
+- [ ] Delete `AgentConfig::mcp_env_path`
+- [ ] Delete `AgentConfig::memory_dir`
+- [ ] Delete `AgentConfig::log_file`
+- [x] Delete corresponding default-applications in `AgentImpl::initialize()` (v0.4.2 — 17-line constructor block deleted; the four fields are still present but no longer auto-defaulted, so the deprecation warnings show up at the one remaining call site in `daedalus-subagent/main.cpp` and `daedalus-manager/main.cpp`)
+- [x] Delete `FileIO::settings_manager_` private field (verified already gone — `grep settings_manager_ src/core/FileIO.{h,cpp}` returns nothing)
+- [x] Delete `child_cfg.settings_path = ...` in `daedalus-subagent/main.cpp` (v0.4.2 — replaced with `child_cfg.daedalus_home = daedalus::default_daedalus_home();` so the child reads `SettingsStore` from the user's standard location)
+- [ ] Add `SettingsStore::get_serper_api_key()` / `set_serper_api_key()`
+- [ ] Rewrite `SerperConfig.cpp` to read from `SettingsStore`
+- [ ] Rewrite `test_serper_startup.cpp` against the store
+- [x] Mark `default_{settings,mcp_servers,mcp_env}_path()` `[[deprecated]]` (v0.4.2 — annotations added in `include/daedalus/default_paths.h` and `src/library/default_paths.cpp` pointing at `SettingsStore::instance()` and `list_mcp_servers()`. The three call sites — `daedalus-cli/migrate.cpp`, `daedalus-subagent/main.cpp`, `daedalus-manager/main.cpp` — still use them and emit `-Wdeprecated-declarations`. OK for v0.4.2; the actual removal is v0.6.0 work.)
+- [x] Delete the DEBUG block in `LLMClient::run_agent_cycle` (v0.4.2 — the 35-line "DEBUG: Log tool_calls" block gated on a specific `tc_id` was deleted; both branches inside the gate were empty so removing it had no behavioural change)
+- [x] Build + run full ctest (excluding `phase15_typo_warning`) (59/61 pass + 2 live-LLM skipped; 0 failures)
+- [x] CHANGELOG + docs/settings.md update (v0.4.2 — CHANGELOG.md `## [Unreleased] / ### Fixed` block lists each fix; `docs/settings.md` is already accurate for v0.4.0+ (last-edited 2026-07-15) so no edit was needed)
+
+### Risk
+
+- **MEDIUM.** Touches the public `AgentConfig` struct. Hosts that
+  set the deleted fields will silently get defaults. The
+  `[[deprecated]]` step on the default-helpers softens this for
+  v0.5.0; the actual field deletion can ship in v0.5.1 with a
+  brief CHANGELOG note that maps old field names to `daedalus_home`.
+- The SerperConfig rewrite is the riskiest piece — the JSON read
+  has been there for many releases and hosts may rely on it.
+  Keep the JSON fallback behind a `#ifndef DAEDALUS_NO_JSON_FALLBACK`
+  for one release, gated by the env-var presence of
+  `$DAEDALUS_NO_JSON_FALLBACK=1`.
+
+---
+
+## Bug/Issue Sweep — 2026-07-15
+
+> Comprehensive sweep of `src/`, `demos/`, `include/`, `tests/` after the
+> clean build at the top of this session. Findings below are REAL bugs
+> (incorrect behaviour, security holes, resource leaks, UB risk) — not
+> style issues, not cosmetic. Each task is self-contained with file,
+> line, severity, repro, and a suggested fix.
+
+### Severity legend
+
+| Level | Meaning |
+|-------|---------|
+| **CRITICAL** | Security hole, data loss, crash in normal use |
+| **HIGH**     | Wrong behaviour in common path; large impact |
+| **MEDIUM**   | Wrong behaviour in edge case; manageable impact |
+| **LOW**      | Cosmetic-but-real (duplicate work, dead code, hidden trap) |
+
+---
+
+### B1 — SQL injection in `SettingsStore` (CRITICAL)
+
+**Files:**
+- `src/core/SettingsStore.cpp` — `get_model`, `delete_model`, `get_string`,
+  `set_string`, `set_bool`, `set_int`, `delete_session_memory`,
+  `get_messages_json`, `set_messages_json`, `delete_messages_json`,
+  `get_mcp_server`, `delete_mcp_server`, `upsert_model`,
+  `upsert_mcp_server` — every public method that takes a `key`/`name`/
+  `value` builds its SQL via raw string concatenation.
+
+**Repro:**
+```cpp
+SettingsStore::instance().set_string("x', '1'); DROP TABLE kv_settings; --",
+                                    "irrelevant");
+// -> kv_settings table gone.
+```
+
+**Why the comment in the code is wrong:**
+> `NOTE: name is treated as a key (validated in API), not user input.`
+> `For raw user input we'd use a prepared Statement::bind — the`
+> `public API surface here is name/key lookups by trusted callers.`
+
+`SettingsStore` is a **public** API (`include/daedalus/settings.h`).
+Hosts will pass through user-supplied model names, serper keys, MCP
+server names, session IDs — all of which flow into these queries.
+A single quote anywhere breaks the SQL. A crafted model name in a
+host that proxies user input can wipe the DB.
+
+**Fix:**
+- Use OmniNet's prepared-statement API (it has `Statement::bind`).
+- For the few methods that today take a `key` arg, change the
+  signature or call `db.prepare("... WHERE key = ?")` then `bind(1, key)`.
+- Same treatment for every column where the value comes from outside.
+- Add a regression test that inserts `O'Brien` as a model name and
+  round-trips it.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+Three helper functions added in an anonymous namespace of
+`src/core/SettingsStore.cpp`:
+
+```cpp
+template <typename... Args>
+void bind_args(OmniNet::DB::Database::Statement& stmt, Args&&... args);
+
+template <typename... Args>
+void exec_prepared(OmniNet::DB::Database& db, const std::string& sql,
+                   Args&&... args);
+
+template <typename... Args>
+std::optional<std::vector<std::string>>
+query_one_prepared(OmniNet::DB::Database& db, const std::string& sql,
+                   Args&&... args);
+
+std::vector<std::vector<std::string>>
+query_all_prepared(OmniNet::DB::Database& db, const std::string& sql);
+```
+
+Every public method on `SettingsStore` that takes a string parameter
+now uses `?` placeholders + `Statement::bind(...)`. Specifically:
+`get_model`, `delete_model`, `get_string`, `set_string`,
+`delete_session_memory`, `get_messages_json`, `set_messages_json`,
+`delete_messages_json`, `get_mcp_server`, `delete_mcp_server`,
+`upsert_model`, `upsert_mcp_server`, and `has_mcp_servers` /
+`has_data` (parameterless, but converted for consistency).
+
+Regression test `S10: SQL injection resistance (B1 regression)` added
+to `tests/test_settings_store.cpp`. It exercises four malicious
+strings (`x'; DROP TABLE models; --`, `y' OR '1'='1`,
+`z"; DROP TABLE kv_settings; --`, plus 200 quotes + `; DROP TABLE
+models; --`) as model names, kv_settings keys/values, and mcp_servers
+names. Each round-trip preserves the verbatim value AND verifies that
+the target table still exists. **10/10 tests pass.**
+
+Also fixed as a side-effect of the rewrite: `row_to_model` was
+throwing on a non-numeric `max_context_size` / `temperature` column;
+now uses `try/catch` and falls back to `0` (this had previously
+been a UB trap waiting for corrupt SQLite input).
+
+---
+
+### B2 — Memory leak in `SettingsStore::for_home` (CRITICAL)
+
+**File:** `src/core/SettingsStore.cpp` lines ~344–352
+
+```cpp
+SettingsStore& SettingsStore::for_home(fs::path home)
+{
+    fs::create_directories(home);
+    return *(new SettingsStore(home / "daedalus.db",
+                               /*is_default=*/false,
+                               /*auto_migrate=*/false));
+}
+```
+
+`new` with no matching `delete`. The caller gets a reference but has
+no way to free it. The DbPool deduplicates the underlying sqlite3
+handle (good), but the `SettingsStore` wrapper itself leaks on every
+call. `LLMClient`, `AgentImpl`, `Messages`, and `SessionMemory` all
+call this. Each iteration of the agent leaks one wrapper.
+
+**Fix:** Either
+- (a) Return by value (`SettingsStore` is currently copyable) so the
+  caller's stack owns it; or
+- (b) Keep a per-path static cache (`static std::unordered_map<path,
+  SettingsStore> cache`) so the same path returns the same wrapper.
+
+Option (b) is closer to the existing `instance()` model and preserves
+the `SettingsStore&` signature.
+
+**Status:** ⚠️ **Acknowledged, NOT fixed (2026-07-15).**
+
+The `for_home` rewrite required breaking both (a) and (b). Option (b)
+caches the wrapper, which keeps the `SettingsStore&` signature but
+breaks `test_session_memory` and `test_messages`: those tests rely on
+each `for_home()` call constructing a fresh wrapper whose
+`impl_->db` points at the current `DbPool` entry (which detects file
+changes / missing files). With caching, the wrapper persists across
+calls and points at a stale handle. Option (a) — return-by-value —
+changes the public API from `SettingsStore&` to `SettingsStore`, which
+breaks `AgentImpl::Body::store` (currently `SettingsStore*`) and
+forces a wider refactor of the AgentImpl / Body layout.
+
+The current implementation is identical to the pre-existing buggy
+code (`return *(new SettingsStore(...))`), with a long comment
+explaining the trade-off. A proper fix is tracked as a v0.5.1
+follow-up — see the next sub-task below.
+
+---
+
+### B3 — `BashTool` standalone-`&` check ignores quotes (HIGH)
+
+**File:** `src/tools/BashTool.cpp` lines ~131–152 (`Rule 3`)
+
+The `&` parser scans every `&` in the command string. It does NOT
+understand shell quoting, so commands like:
+
+```bash
+echo "hello & world"
+```
+
+get rejected with `Security: Background operator (&)`. The user
+sees a confusing error for a perfectly safe command. The library
+also rejects `printf 'a&b'`, `cat <<EOF\nfoo & bar\nEOF`, etc.
+
+**Fix:** Use a small tokenizer that tracks single/double-quote and
+heredoc state. Reject `&` only when it appears outside any quoted
+context. A 30-line state machine is sufficient — see
+`BashPathChecker::tokenize_command` for an existing tokenizer to
+mirror (or extend it).
+
+**Status:** ✅ **Done (2026-07-15).**
+
+Added `BashPathChecker::contains_standalone_ampersand(const std::string&)`
+in `src/tools/BashPathChecker.{h,cpp}`. Single-pass state-machine
+that correctly distinguishes:
+
+| Input | Verdict |
+|-------|---------|
+| `sleep 60 &`           | ❌ reject (background) |
+| `cmd1 & cmd2`          | ❌ reject |
+| `a && b`               | ✅ allow (`&&` is logical AND) |
+| `echo "hello & world"` | ✅ allow (double-quoted text) |
+| `echo 'a&b'`           | ✅ allow (single-quoted text) |
+| `echo $'a&b'`          | ✅ allow (ANSI-C quoting) |
+| `cmd 2>&1`             | ✅ allow (fd redirection) |
+| `cmd &> /dev/null`     | ✅ allow (`&>` redirect) |
+| `cmd >file 2>&1`       | ✅ allow (both fd redirects) |
+| `cat <<EOF\nfoo & bar\nEOF` | ✅ allow (heredoc body) |
+| `cat <<-EOF\n\tfoo & bar\n\tEOF` | ✅ allow (indented heredoc) |
+| `cat <<'EOF'\nfoo & bar\nEOF` | ✅ allow (quoted heredoc marker) |
+
+`BashTool::execute()` now calls `BashPathChecker::contains_standalone_ampersand(command)`
+instead of the old inline parser (the old code path was deleted,
+not just bypassed).
+
+Added regression test `BashPathChecker - contains_standalone_ampersand`
+in `tests/test_bash_path_checker.cpp` with 21 new assertions across
+7 SUBCASEs. All 76 assertions in the file pass.
+
+---
+
+### B4 — `BashTool::build_patterns` has duplicate `"make"` (LOW)
+
+**File:** `src/tools/BashTool.cpp` line 17
+
+```cpp
+std::vector<std::string> build_patterns = {
+    "cmake", "make", "g++", "gcc", "clang++", "clang",
+    "build", "compile", "make", "ninja",   // ← "make" appears twice
+    ...
+};
+```
+
+Harmless but means the trigger callback fires twice for any `make`
+invocation (once per match). Wastes one callback into the session
+memory layer.
+
+**Fix:** Remove the duplicate. While here, sort the list
+alphabetically — 30 entries unsorted is a maintenance trap.
+
+**Status:** ✅ Done (2026-07-15).
+
+---
+
+### B5 — `Messages::truncate_if_needed` tool-chain walk is inverted (HIGH)
+
+**File:** `src/core/Messages.cpp` lines ~625–695
+
+The function walks backward from a tool-result message looking for
+the parent `assistant` message with matching `tool_calls`. The
+inner `while` loop:
+
+1. Pushes `messages_[i]` (the candidate).
+2. **Then** reads `prev_role` from `messages_[i]` *before* the push —
+   but `prev_role` is initialised at the top of the loop body, so on
+   the **second** iteration it's looking at the message *one further
+   back*, not the one we just pushed.
+3. The `messages_[i+1].contains("tool_calls")` check is correct on
+   iteration 1 (just pushed) but stale on iteration 2 (i+1 now points
+   at the message *before* the just-pushed one).
+4. The `messages_[i].contains("tool_calls")` second branch is dead
+   code — i has already been decremented past the candidate.
+
+End result: when the chain spans more than one message back, the
+walk can stop at the wrong index, leaving an orphan tool-result in
+the truncated chain — exactly the thing the function is trying to
+prevent.
+
+**Repro:** Build a 50-message chain with a tool result at index 48,
+its assistant at index 46, and an earlier assistant at index 40.
+Call `truncate_if_needed` with `max_size` just small enough to
+require walking past the index-46 assistant. The current code
+breaks at the wrong place and emits a tool result without its
+parent — the very next LLM call then returns 400 with
+`tool call result does not follow tool call`.
+
+**Fix:** Restructure the walk: check `role == "assistant"` and
+`tool_calls` membership on the candidate *before* pushing, not after.
+Extract a helper `find_tool_call_parent(messages_, start_idx) →
+parent_idx` and use it from `truncate_if_needed`.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+`Messages::truncate_if_needed` rewritten at
+`src/core/Messages.cpp:1287`. New helper lambda
+`find_parent_assistant_for_tool_result(tool_call_id)` walks back
+through `messages_` looking for an assistant whose `tool_calls`
+contains an entry with the matching `id`. The outer loop now:
+1. Walks backward from the end (most-recent-first).
+2. On a `tool` message: asks the helper for the parent index.
+   - If no parent (orphan): keep the tool message alone with a
+     WARN log.
+   - If parent found: include `messages_[parent+1..i]` inclusive,
+     including any intervening messages, and jump the loop
+     index past the parent. Chain stays unbroken.
+3. On a plain message: size-check + push (unchanged).
+
+Orphan handling (parent missing or `parent >= i`) is a deliberate
+choice — keeping an orphan tool result is legal JSON and better
+than silently dropping it; the LLM replies with a clear error
+that's easy to handle, while a dropped tool result looks like a
+"ghost" completion.
+
+Added regression test `Messages - truncate_if_needed preserves
+multi-step tool chain (B5)` in `tests/test_messages.cpp`. It
+builds the precise scenario from the bug report — two
+`assistant(tool_calls)+tool_result` pairs where the truncation
+boundary falls between them, forcing the old code to orphan
+the second result — and asserts every remaining tool result has
+its parent assistant in the truncated chain. Test passes.
+
+55/55 `messages_tests` pass (was 54 + the new one).
+
+---
+
+### B6 — `Messages::sanitize_assistant_message` comment contradicts code (LOW)
+
+**File:** `src/core/Messages.cpp` lines ~840–890
+
+```cpp
+// CRITICAL FIX: Remove ORPHAN tool_calls (those with no
+// matching tool result). These cause API 400 errors and
+// infinite retry loops. Only check if tool_result_ids was
+// provided (non-empty means we did the collection pass).
+bool has_result = tool_result_ids.empty() || tool_result_ids.count(tc_id) > 0;
+```
+
+The comment says "non-empty means we did the collection pass"
+(implying empty → no check), but the code KEEPS all tool_calls
+when the set is empty (the `||` short-circuits to true). The
+behaviour is intentional ("if we have no tool results at all,
+nothing is orphaned"), but the comment lies.
+
+**Fix:** Rewrite the comment to match the code, or invert the
+check to make the intent explicit:
+```cpp
+const bool has_results = !tool_result_ids.empty();
+const bool is_orphan   = has_results &&
+                         tool_result_ids.count(tc_id) == 0;
+if (is_orphan) { LOG(...); continue; }
+```
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B7 — `LLMClient::run_one_turn` ignores `compress_after_done` (MEDIUM)
+
+**File:** `src/api/LLMClient.cpp` lines ~1507 (set) and ~1560 (check)
+
+`run_agent_cycle` sets `compress_after_done = true` when the agent
+calls the `compress_context` tool. But `run_one_turn`'s while loop
+checks only `at_threshold` and `result_state` — `compress_after_done`
+is **never read**. The agent's explicit compression request is
+silently dropped unless the auto-threshold also fires.
+
+**Repro:** Run an agent that calls `compress_context` while the
+token count is at 50% (below the 90% threshold). The function
+returns `{nullopt}` from `compress()` but the caller never knows
+the agent asked for it; the messages stay bloated.
+
+**Fix:** In `run_one_turn`:
+```cpp
+if (compress_after_done || at_threshold) {
+    // compress, then reset compress_after_done
+}
+```
+
+Or remove the flag entirely if the auto-threshold is now deemed
+sufficient.
+
+**Status:** 🟡 Open.
+
+---
+
+### B8 — `LLMClient::inject_context_stats` erases wrong region (HIGH)
+
+**File:** `src/api/LLMClient.cpp` lines ~1238–1278
+
+The function searches for `# Context Status` (H1) or `## Context Status`
+(H2), then erases from there to the next heading of the **same level**.
+
+**Bug:** When the H2 variant is matched and there is no `\n## `
+following it (the context stats were the last section), the code
+falls through to `content = content.substr(0, ctx_pos) +
+stats.str();` — dropping the trailing tail of the system prompt
+(usually the "Skill usage" and "Tooling" sections that come after
+the stats in SystemPromptBuilder's compose order).
+
+**Repro:** A system prompt where the Context Status block is the
+final H2. After the second `inject_context_stats` call, anything
+after the previous stats section is gone.
+
+**Fix:** When `context_end == npos`, append rather than truncate:
+```cpp
+if (context_end == std::string::npos) {
+    content = content.substr(0, ctx_pos) + stats.str()
+              + content.substr(ctx_pos + context_stats.size());
+} else {
+    content = content.substr(0, ctx_pos) + stats.str()
+              + content.substr(context_end);
+}
+```
+And same fix in `Messages::inject_context_stats`.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+Both `LLMClient::inject_context_stats` (`src/api/LLMClient.cpp:2203`)
+and `Messages::inject_context_stats` (`src/core/Messages.cpp:1247`)
+now use a sentinel-based approach:
+
+1. The stats block is **terminated by a unique sentinel line**:
+   ```
+   <!-- /daedalus-context-status -->
+   ```
+2. On update, the function searches for the sentinel starting at
+   `# Context Status` and erases inclusive of it. This works
+   regardless of what follows — heading, blank line, or end of
+   string.
+3. **Fallback path** for legacy pre-fix writes (no sentinel): the
+   old heading-based search is used as a secondary locator,
+   but the `content_end = content.size()` over-truncate is fixed
+   — when no same-level heading follows, we erase to the next
+   blank line (`\n\n`) instead of to end-of-string.
+
+The trailing tail of the system prompt is preserved across calls.
+
+Added regression test `Messages - inject_context_stats preserves
+trailing prompt (B8)` in `tests/test_messages.cpp`. It sets up a
+system prompt where the Context Status block is the LAST H2
+section (followed by `## Closing Notes` which would be wiped by
+the pre-fix code), runs `inject_context_stats`, then asserts
+that both `## Closing Notes` and the literal text "Always cite
+your sources" survive. Also asserts there's exactly one sentinel
+line (not two, which would mean a stale block was left behind).
+
+56/56 `messages_tests` pass (was 55 + the new one).
+
+---
+
+### B9 — `LLMClient::run_agent_cycle` repeats the "find last tool_call" loop 4× (LOW)
+
+**File:** `src/api/LLMClient.cpp` — fatal-error path, transient-error
+retry path, no-choices retry path, and final-fallback path each have
+their own ~12-line loop scanning `messages[]` backwards for the last
+`assistant` message with `tool_calls`, then digging out the last
+`tool_call` and extracting id/name/args.
+
+Each loop has slightly different handling (some skip non-array
+`tool_calls`, some assume shape differently). One bug here is
+repeated four times — when the shape assumptions diverge (e.g. a
+newer LLM emits `tool_calls` as an array of objects with different
+schema), three of the four paths will get the wrong id.
+
+**Fix:** Extract to a private helper:
+```cpp
+struct LastToolCall { std::string id, name, args; };
+static std::optional<LastToolCall> find_last_tool_call(const json& messages);
+```
+Call it from all four sites.
+
+**Status:** 🟡 Open.
+
+---
+
+### B10 — `CurlMultiSession::process_completed` discards non-2xx body (HIGH)
+
+**File:** `src/api/CurlMultiSession.cpp` lines ~234–257
+
+```cpp
+if (code >= 200 && code < 300) {
+    state->promise.set_value(std::move(state->response));
+} else {
+    // ... log the body to stderr ...
+    auto resp = std::move(state->response);  // ← discarded
+    state->promise.set_value(std::unexpected(CurlError::HttpStatus));
+    (void)resp;
+}
+```
+
+`resp` is moved out of `state->response` and dropped. The caller
+gets `unexpected(HttpStatus)` with **no body**, **no status code**,
+**no Content-Type**. They can't tell a 400 (`bad request`) from a
+503 (`service unavailable`) from a 401 (`auth failed`). Every
+caller that needs to inspect the body (LLMClient extracts error
+messages, MCP client needs to see tool-not-found responses) has
+to re-derive this from a side channel.
+
+The body is logged (good for ops) but unreachable from C++ (bad
+for callers).
+
+**Fix:** Make `CurlResponse` part of `expected` even on HttpStatus:
+```cpp
+struct CurlResponse {
+    long status_code = 0;
+    std::string body;
+    std::string content_type;
+    bool cancelled = false, timed_out = false;
+};
+using CurlResult = std::expected<CurlResponse, CurlError>;
+// Caller checks .error() for connection-level errors,
+// otherwise reads status_code + body for HTTP-level errors.
+```
+Adjust callers (`LLMClient::make_api_request_async`, `Messages::call_llm_for_summary`).
+
+**Status:** 🟡 Open.
+
+---
+
+### B11 — `LLMClient::sanitize_utf8` has dead code path (LOW)
+
+**File:** `src/api/LLMClient.cpp` lines ~52–143
+
+The function calls `iconv_open("UTF-8", "UTF-8")`. When iconv is
+present, the conversion is done. When iconv is missing, the
+fallback path is used. **Both paths duplicate the same
+state-machine sanitizer code**, 90 lines of identical logic in
+two places. The two copies have already drifted slightly (the
+fallback uses `fallback` instead of `result` for the variable name,
+and the iconv-failure path doesn't propagate the `result` past the
+iconv error — it returns the full input unchanged).
+
+**Fix:** Extract the state-machine sanitizer to a free function
+`static std::string utf8_replace_invalid(const std::string&)` and
+call it from both paths.
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B12 — `SessionMemory::sanitize_utf8` truncates on partial sequence (LOW)
+
+**File:** `src/core/SessionMemory.cpp` lines ~36–110
+
+```cpp
+// Invalid byte in sequence - replace the start byte
+result[sequence_start_pos] = '?';
+result.resize(sequence_start_pos + 1);  // ← truncates!
+```
+
+When an invalid byte is encountered mid-sequence, the function
+replaces the start byte with `?` AND discards every byte after it
+that was part of the in-flight sequence. For input `"abc\xE6\x97\xA5X"`
+(valid 3-byte sequence), if byte `\x97` is corrupted to `\x18`,
+the output is `"abc?"` — the `X` is gone.
+
+The intended behaviour is to replace just the start byte (`\xE6`),
+keep the following bytes as-is, and let the parser treat them as
+fresh single-byte starts. Most are ASCII so they survive; the few
+multi-byte continuations get their own `?` substitutions when the
+parser hits them.
+
+**Fix:** Replace `result.resize(sequence_start_pos + 1)` with
+`result.resize(sequence_start_pos + 1);` (same thing, but) keep
+the bytes appended AFTER the start in the result:
+```cpp
+result[sequence_start_pos] = '?';
+// do NOT resize — keep the trailing bytes already in result.
+// They're separate continuations from the corrupted start, so the
+// state machine will handle each on the next loop iteration.
+```
+Wait — they're already in `result`. The issue is the next iteration
+sets `sequence_start_pos = result.size()` AFTER appending `c`. So
+the new sequence starts at the right place. The bug is the resize
+truncating. Remove the resize; leave everything else alone.
+
+Same fix in the iconv fallback in LLMClient.cpp.
+
+**Status:** 🟡 Open.
+
+---
+
+### B13 — `Messages::split_messages` and `get_compression_indices` are duplicated (LOW)
+
+**File:** `src/core/Messages.cpp`
+
+Lines ~530–620 (`split_messages`) and ~660–730
+(`get_compression_indices`) both implement the same algorithm:
+1. Find tool_call ids in `[1, target_split]`.
+2. Extend `target_split` to include tool results anywhere in
+   `messages_` that reference those ids.
+3. Return the split point.
+
+The two copies are **already out of sync** — `split_messages`
+clamps to `total_non_system` and uses a slightly different inner
+loop ordering. Compression today calls `get_compression_indices`
+(via `compress()`), but `split_messages` is still called by
+`get_split_info`. Future bug fixes in one won't reach the other.
+
+**Fix:** Extract `compute_safe_split(target_ratio) → size_t` and
+call it from both. `split_messages` builds the three sub-arrays
+from the single index; `get_compression_indices` returns `(1, 1+idx)`.
+
+**Status:** 🟢 Refactor.
+
+---
+
+### B14 — `LLMClient::make_api_request_async` doesn't honour 4xx non-retry (MEDIUM)
+
+**File:** `src/api/LLMClient.cpp` lines ~480–560
+
+The function uses `CurlMultiSession::submit_cancellable` and
+checks `code >= 200 && code < 300`. On 4xx it logs and returns the
+body. On 5xx it logs and **loops** to retry. On `CurlError` it
+loops to retry.
+
+**Bug:** The retry loop's `if (attempt < max_retries &&
+server_error_settings.enabled && !stop_token.stop_requested())`
+gate uses `server_error_settings.enabled` to gate retry. But for
+connection errors (CurlError), retry is the right thing **even if
+`server_error_settings.enabled` is false** — a single network blip
+shouldn't drop the whole turn. Conversely, the gate doesn't
+respect HTTP 429 retry hints in the response headers.
+
+**Fix:** Split into two retry policies:
+- `retry_on_transport = true` (CurlError except Cancelled)
+- `retry_on_http_5xx = server_error_settings.enabled`
+
+And honour `Retry-After` from 429 responses when present.
+
+**Status:** 🟡 Open.
+
+---
+
+### B15 — `LLMClient::run_agent_cycle` payload-size mismatch (LOW)
+
+**File:** `src/api/LLMClient.cpp`
+
+The first API request uses `request_payload.dump(2)` (pretty-printed,
+2-space indent). The retry path inside the function uses
+`request_payload.dump()` (compact). For an 800-message session the
+size difference can be 15–20%. The `max_request_size_` check runs
+**before** the retry path, so a request that was fine when sent
+might fail JSON serialisation on the retry branch if the dump size
+differs from the size that was checked.
+
+**Fix:** Use `dump()` everywhere for the wire format, or use
+`dump(2)` everywhere for debuggability — pick one.
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B16 — `CurlMultiSession` shutdown can leak in-flight `RequestState` (MEDIUM)
+
+**File:** `src/api/CurlMultiSession.cpp` `event_loop` shutdown
+section, lines ~110–125
+
+```cpp
+while ((msg = curl_multi_info_read(multi_, &msgs_left)) != nullptr) {
+    if (msg->msg == CURLMSG_DONE) {
+        ...
+        delete state;
+    }
+}
+```
+
+`curl_multi_info_read` only returns completed transfers. **In-flight
+transfers never get a `CURLMSG_DONE`** — they're still running on
+their sockets when shutdown happens. Those `RequestState`s are
+never deleted, their `easy` handles never cleaned up, their futures
+never resolved.
+
+The promises stay un-set; the future `wait_for()` in
+`LLMClient::run_agent_cycle` will hang forever.
+
+**Fix:** Before draining `curl_multi_info_read`, walk the active
+transfers and `cancel` them, then drain. Or explicitly call
+`curl_multi_remove_handle` + `curl_easy_cleanup` on each and
+`set_value(unexpected(Cancelled))` on each promise.
+
+Better: keep a map `easy* → RequestState*` so you can iterate the
+still-active set at shutdown.
+
+**Status:** 🔴 Open.
+
+---
+
+### B17 — `AgentImpl::execute_tool` is a no-op stub (HIGH)
+
+**File:** `src/library/AgentImpl.cpp` lines ~770–778
+
+```cpp
+nlohmann::json AgentImpl::execute_tool(const std::string& name,
+                                       const nlohmann::json& args)
+{
+    if (!initialized_) initialize();
+    if (sink_) {
+        sink_->on_log(daedalus::LogLevel::Warn,
+                      "Agent::execute_tool() — Phase 1+ stub; "
+                      "direct tool dispatch will be wired through the "
+                      "host's tool path in Phase 7. ...");
+    }
+    (void)args;
+    return nlohmann::json{{"status", "error"},
+                          {"message", "Phase 1+ stub — see AgentImpl::execute_tool"}};
+}
+```
+
+The public `Agent::execute_tool(name, args)` API (declared in
+`include/daedalus/Agent.h`) returns an error JSON for every call,
+forever. The comment says "Phase 7 will wire it" but Phase 7 is
+months past. Hosts that want to programmatically invoke a tool
+(e.g. webui's "Run with these args" button, daedalus-manager's
+"--tool" CLI flag, sub-agent tooling) have to reach into the
+internal `LLMClient` instead of the public API.
+
+**Fix:** Route through `ToolHandler::execute_tool_call` with a
+synthesised `tool_call` JSON (same shape as the LLM emits):
+```cpp
+json tool_call = {
+    {"id", "host_" + std::to_string(next_id_++)},
+    {"type", "function"},
+    {"function", {{"name", name}, {"arguments", args.dump()}}}
+};
+json result = ToolHandler::execute_tool_call(tool_call,
+                                             *body_->file_io,
+                                             /*progress*/ nullptr);
+return result;
+```
+
+Need to expose `FileIO` through `Body`. Currently `file_io_` is
+inside `LLMClient`.
+
+**Status:** 🔴 Open.
+
+---
+
+### B18 — `AgentImpl::active_model` and `list_models` duplicate resolution (LOW)
+
+**File:** `src/library/AgentImpl.cpp`
+
+`active_model` has a 3-tier resolution (cfg.model_name → store
+default → first model). `list_models` builds the model list. Both
+construct `ModelInfo` from `ModelConfig` using the same logic.
+
+**Fix:** Extract `static ModelInfo to_model_info(const ModelConfig&,
+const SettingsStore&, std::string_view name)`. Saves ~40 lines and
+makes the two consistent (currently `active_model` uses `cfg.temperature`
+and `list_models` uses `cfg.temperature` — same field but easy to
+diverge in future).
+
+**Status:** 🟢 Refactor.
+
+---
+
+### B19 — `LLMClient::run_one_turn` overwrites the system message (LOW)
+
+**File:** `src/api/LLMClient.cpp` lines ~1393–1398
+
+```cpp
+if (messages.empty()) {
+    messages.push_back({{"role", "system"}, {"content", system_instruction}});
+}
+if (!user_message.empty()) {
+    messages.push_back({{"role", "user"}, {"content", user_message}});
+}
+```
+
+`messages` here is `messages_->get_messages()` (a reference into
+`messages_`'s internal vector). On every turn we push a new user
+message — that's correct. But if `messages_` was loaded from
+disk via `initialize()` and the last message is a `tool` result,
+the next turn pushes the user message **after** the tool result,
+which the LLM API will reject (`tool` result must follow
+`tool_call`, not be followed by `user`).
+
+**Repro:** Load a session that ended mid-tool-call (because the
+user pressed Ctrl-C). The next `run_one_turn` appends a user
+message after the dangling tool result → API 400.
+
+**Fix:** Either sanitize the loaded messages (drop trailing
+tool results without parents) on load, or refuse to push a user
+message if the last message is `tool` and emit a clean user
+message instead.
+
+**Status:** 🟡 Open.
+
+---
+
+### B20 — `BackgroundProcessManager::FIFO_TIMEOUT_MS` is unused (LOW)
+
+**File:** `src/core/BackgroundProcessManager.cpp` line 36
+
+Compiler warning confirmed: `unused variable 'FIFO_TIMEOUT_MS'`.
+Either use it (currently `BashCommandExecutor` and friends
+hard-code their own timeouts) or remove it.
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B21 — `BashTool` build-event double-fire (LOW)
+
+**File:** `src/tools/BashTool.cpp` line 17 (covered in B4) — same
+duplicate `"make"` causes `trigger_build_callback` to fire
+twice for `make` invocations. Each fire writes to session
+memory. Two identical build entries, only the second has the
+correct count.
+
+**Status:** 🟢 Trivial — fix with B4.
+
+---
+
+### B22 — `Messages::save` ignores load failure for SQLite mirror (MEDIUM)
+
+**File:** `src/core/Messages.cpp` lines ~280–330
+
+```cpp
+void Messages::save() const {
+    ...
+    // SQLite mirror — best-effort
+    try {
+        ...
+        store.set_messages_json(session_id_, mirror.dump());
+    } catch (const std::exception& e) {
+        LOG_WARNING(...);
+    }
+}
+```
+
+When the JSON file succeeds but the SQLite mirror fails, the
+`load()` path next time will load from JSON. OK. But `load()` also
+tries SQLite first — if the mirror is corrupt (partial write,
+truncated row), the JSON fallback never runs:
+
+```cpp
+auto blob = store.get_messages_json(session_id_);
+if (!blob.empty()) {
+    json saved = json::parse(blob);   // ← throws on corrupt
+    ...
+}
+```
+
+The catch block calls `LOG_WARNING` but **does NOT delete the
+corrupt mirror row**, so the next load also fails. The user is
+stuck on the corrupt mirror forever.
+
+**Fix:** In the catch block, delete the corrupt mirror and re-load
+from JSON:
+```cpp
+} catch (const std::exception& e) {
+    LOG_WARNING("Messages: SQLite mirror corrupt (" + std::string(e.what())
+                + "); deleting and falling back to JSON");
+    store.delete_messages_json(session_id_);
+    // ... fall through to JSON load ...
+}
+```
+Same fix in `SessionMemory::load()`.
+
+**Status:** 🟡 Open.
+
+---
+
+### B23 — `set_status` tool's `previous_state` is `-1` (HIGH)
+
+**File:** `src/api/LLMClient.cpp` lines ~1108–1120
+
+```cpp
+if (status == "set_state" && sink_ && result.contains("state") ...) {
+    auto new_state = daedalus::agent_state_from(...);
+    if (ok) {
+        // We don't have access to the previous public state here...
+        sink_->on_state_change(-1, static_cast<int>(new_state));
+    }
+}
+```
+
+The webui and CLI both rely on `on_state_change(prev, new)` to
+animate the state chip transition. With `prev = -1`, the chip
+"snaps" instead of transitioning. The comment says
+`LLMClient only tracks its own internal enum` — true, but
+`AgentImpl::state_` IS the public state, and we just came from
+there. We need to either:
+
+(a) `LLMClient` learns its own internal→public mapping (call
+`agent_state_from(internal_state_)`) and uses that as `prev`, or
+
+(b) Move the dispatch to `AgentImpl::run_one_turn`, which already
+maps internal → public via `map_from_internal`.
+
+Option (b) is cleaner — the LLMClient is internal, AgentImpl is
+the public surface that already has both states.
+
+**Status:** 🟡 Open.
+
+---
+
+### B24 — `SettingsStore::ServerErrorSettings::backoff_multiplier` throws on missing key (MEDIUM)
+
+**File:** `src/core/SettingsStore.cpp` lines ~552–559
+
+```cpp
+s.backoff_multiplier = std::stod(get_string(
+    "server_error_backoff_multiplier",
+    std::to_string(s.backoff_multiplier)));   // default value ignored!
+```
+
+`get_string(key, def)` — if `def` is non-empty, it's returned when
+the key is missing. But `std::to_string(s.backoff_multiplier)` is
+non-empty, so the second arg IS the default. Wait, that part is
+correct — when the key is missing, `get_string` returns the
+default. So `std::stod("2.0")` works.
+
+**The actual bug:** If the key IS present but has a non-numeric
+value (e.g. user typo'd `server_error_backoff_multiplier =
+"twox"`), `std::stod` throws `std::invalid_argument` with **no
+try/catch**, which propagates out of `get_server_error_settings`,
+which is called from `LLMClient::make_api_request_async` in a
+`try {} catch (...)` that **swallows it** silently — the user's
+retry behaviour becomes whatever the default `ServerErrorSettings`
+struct has (all zeros), meaning `wait_time = 0`, `max_retries = 0`,
+no retries at all.
+
+**Fix:** Wrap the `std::stod` in `try { ... } catch (...) { return
+defaults; }`:
+```cpp
+double parsed = s.backoff_multiplier;  // start with default
+try {
+    auto str = get_string("server_error_backoff_multiplier",
+                          std::to_string(s.backoff_multiplier));
+    parsed = std::stod(str);
+} catch (...) {
+    // leave default
+}
+s.backoff_multiplier = parsed;
+```
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B25 — `McpServerManager::load_env_file` not idempotent (MEDIUM)
+
+**File:** `src/mcp/McpServerManager.cpp` (need to verify) — based on
+`AgentImpl::initialize()` calling it once per Agent construction,
+but `McpServerManager` is reused across Agents in some host
+configurations. Each call may double-load env vars.
+
+**Repro:** Construct two `Agent`s in the same process with the
+same `daedalus_home`. The second `load_env_file` reads the file
+again and pushes env vars on top of the first load — child
+processes spawned via stdio MCP servers see the same `KEY` env var
+twice (or, if `load_env_file` does a `setenv` after the first
+push, the second load overwrites).
+
+**Fix:** Either clear-and-set semantics (`load_env_file` removes
+existing keys it owns before re-adding), or track already-loaded
+keys in a set and skip on second call.
+
+**Status:** 🟡 Open (needs verify).
+
+---
+
+### B26 — `LLMClient::make_api_request_async` callback fires on cancelled transfer (LOW)
+
+**File:** `src/api/LLMClient.cpp` lines ~510–525
+
+The `streaming_callback` is invoked from `CurlMultiSession::write_cb`
+for every chunk received. If the caller cancels mid-stream
+(stop_token fires), in-flight chunks from the kernel buffer can
+still trigger one more `on_chunk` call before `write_cb` sees
+`stop_requested()`. This causes one extra `on_assistant_delta`
+call after the user pressed Ctrl-C.
+
+**Fix:** Check `stop_token.stop_requested()` at the top of
+`streaming_callback` and drop the chunk silently. One-liner.
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B27 — `LLMClient` settings `enabled` flag not propagated to retry loop (LOW)
+
+**File:** `src/api/LLMClient.cpp` lines ~425–445
+
+`server_error_settings.enabled` controls whether the synchronous
+retry loop runs (`make_curl_request_with_retry` checks it). The
+async retry loop (`make_api_request_async`) ALSO checks it. But
+the SSE retry inside `run_agent_cycle` (the JSON-parse retry
+loop) **does not** — it always retries on parse failure, even
+when the user has disabled server-error retry via the settings
+store.
+
+**Fix:** Add `if (server_error_settings.enabled)` guard at the
+top of each retry block.
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B28 — `LLMClient::sanitize_utf8` regex drift between copies (LOW)
+
+**File:** `src/api/LLMClient.cpp` (iconv + fallback copies of the
+state machine) and `src/core/Messages.cpp::sanitize_utf8_simple`
+and `src/core/SessionMemory.cpp::sanitize_utf8`.
+
+**Four** copies of the same UTF-8 sanitiser, with subtle
+differences:
+- `LLMClient` iconv path: trims on iconv success.
+- `LLMClient` fallback: same logic as `SessionMemory`.
+- `Messages::sanitize_utf8_simple`: replaces per-byte but doesn't
+  track `expected_continuations` (so a `\xE6\x97\xA5` is treated
+  as three invalid bytes).
+- `SessionMemory::sanitize_utf8`: state-machine variant.
+
+A future Unicode test (e.g. emoji ZWJ sequences) will pass on one
+copy and fail on the other.
+
+**Fix:** Move all four to `core/Utf8Utils.{h,cpp}` with one
+implementation. Re-export from the existing callers for back-compat.
+
+**Status:** 🟡 Open.
+
+---
+
+### B29 — `BashCommandExecutor::execute` no timeout on synchronous read (MEDIUM)
+
+**File:** `src/tools/BashCommandExecutor.cpp` (need to verify) —
+`popen` + `fread` loop reads from the child stdout until EOF. If
+the child writes nothing and never exits (e.g. an interactive
+subshell that's waiting for stdin), the agent blocks forever.
+The `timeout_seconds` parameter on `BashTool` IS supposed to bound
+this, but the timeout must be implemented as `kill(pid, SIGKILL)`
+from a watchdog thread.
+
+**Repro:** `execute_bash` with `command: "bash -i"` — the bash
+subshell opens a prompt, reads from inherited stdin, never
+exits. Agent loop hangs until process killed externally.
+
+**Fix:** Spawn the watchdog inside `BashCommandExecutor::execute`,
+have it `kill(-pid, SIGKILL)` after `timeout_seconds`, then
+`waitpid`. Return a result with `timed_out: true`.
+
+**Status:** 🟡 Open (verify first).
+
+---
+
+### B30 — `Messages::extract_summary_text` strips `<answer>` but not `<thinking>` (LOW)
+
+**File:** `src/core/Messages.cpp` lines ~858–905
+
+The function strips `<answer>...</answer>` blocks and
+` ```markdown ``` ` blocks. It does NOT strip `<thinking>...</thinking>`
+blocks, which several models emit. The summary then begins with
+`<thinking>Okay, let me consider...</thinking>` — extra tokens
+waste context.
+
+**Fix:** Add the same `find`/`substr` pattern for `<thinking>`:
+```cpp
+size_t thk_start = content.find("<thinking>");
+if (thk_start != std::string::npos) {
+    size_t thk_end = content.find("</thinking>");
+    if (thk_end != std::string::npos) {
+        content.erase(thk_start, thk_end - thk_start + 11);
+    }
+}
+```
+
+**Status:** 🟢 Trivial.
+
+---
+
+### B31 — `phase15_typo_warning_tests` hangs in case 3 (MEDIUM — known)
+
+**File:** `tests/test_phase15_typo_warning.cpp`
+
+Pre-existing: the third test case `test_skills_disabled_empty_no_warn`
+hangs. Mentioned in the v0.5.0 status block of CodeMax.md as
+"reproduce without SettingsStore changes" but never tracked.
+
+**Likely cause:** a SkillManager singleton global state that
+the third case tries to re-initialise; the discovery loop or the
+typo-detection set construction deadlocks on a mutex held by a
+previous test.
+
+**Fix:** Add `SkillManager::reset_for_testing()` that clears the
+singleton's `cached_skills_`, `active_skills_`, and any
+in-flight discovery futures. Call it from a `TEST_CASE` setup
+fixture or each case's first line.
+
+**Status:** 🟡 Open — was noted, not fixed.
+
+---
+
+### B32 — `LLMClient::update_token_usage` warns twice per turn (LOW)
+
+**File:** `src/api/LLMClient.cpp` `update_token_usage`
+
+`update_token_usage` is called once after a successful response
+and logs `No 'usage' field in response` if the field is missing.
+The function is **also called for the SSE usage-only final chunk**
+in `run_agent_cycle` (line ~870). So during a streaming turn with
+`include_usage`, the SSE chunks without usage each warn, then the
+final usage chunk parses correctly. The user sees N warnings per
+turn.
+
+**Fix:** Track a per-turn flag (`got_usage_this_turn`) that
+suppresses the warning after the first warning fires, and resets
+at the start of each `run_agent_cycle`.
+
+**Status:** 🟢 Trivial.
+
+---
+
+### Summary
+
+| Severity | Open |
+|----------|------|
+| CRITICAL | 4  (B1, B2, B16, B17) |
+| HIGH     | 6  (B3, B5, B8, B10, B17, B19, B23) |
+| MEDIUM   | 7  (B7, B14, B22, B24, B25, B29, B31) |
+| LOW      | 14 (B4, B6, B9, B11, B12, B13, B15, B18, B20, B21, B26, B27, B28, B30, B32) |
+
+### Suggested fix order
+
+1. **B1** (SQL injection) — blocker for shipping. ✅ **DONE.**
+2. **B2** (SettingsStore leak) — long-running agents accumulate. ⚠️ **Acknowledged, de-scoped** to v0.5.1 (see sub-task below).
+3. **B16** (CurlMultiSession shutdown leak) — affects graceful shutdown.
+4. **B17** (execute_tool stub) — public API regression since v0.5.0.
+5. **B5** (truncate_if_needed tool chain) — silent 400 errors.
+6. **B10** (CurlMultiSession body drop) — every error path.
+7. **B22** (corrupt mirror recovery) — recovery-from-bad-state.
+8. Everything else, ordered by user-visible impact.
+
+---
+
+## Sub-task — B2 proper fix: return `SettingsStore` by value
+
+### Context
+
+The B2 leak in `for_home()` is real but its proper fix is wider than
+the bug report suggests. Two options exist; both break tests:
+
+| Option | Pros | Cons |
+|--------|------|------|
+| **(a)** Return `SettingsStore` by value (wrapper becomes cheap, lives on caller's stack) | Fixes the leak cleanly; no heap at all | Public API change: `for_home` returns `SettingsStore` instead of `SettingsStore&`. `AgentImpl::Body::store` is currently `SettingsStore*` and would need to change to `SettingsStore` (by value) or `std::optional<SettingsStore>`. |
+| **(b)** Static per-path cache (caches the wrapper, reuses across calls) | Preserves `SettingsStore&` API; one heap-alloc per unique path (finite) | Cached wrapper's `impl_->db` is stale across file deletes; breaks `test_session_memory` (`S9`-style behaviour: tests delete the DB file between calls expecting the next call to reopen it) and `test_messages` (SQLite mirror in save-destructor / next-load reads-from-file rounds). |
+
+`AgentImpl` is the only call site that takes the address of the
+returned `SettingsStore&`:
+
+```cpp
+body_->store = &daedalus::SettingsStore::for_home(cfg_.daedalus_home);
+```
+
+If we go with (a), this becomes:
+```cpp
+body_->store = daedalus::SettingsStore::for_home(cfg_.daedalus_home);
+```
+
+— one assignment. The agent lifetime owns the wrapper.
+
+`SessionMemory`, `Messages`, `LLMClient` all use `auto store =
+daedalus::SettingsStore::for_home(...);` which works as-is via move.
+
+### Plan
+
+1. **settings.h**: change `Impl* impl_` to two inline fields:
+   ```cpp
+   private:
+       std::filesystem::path path_;
+       OmniNet::DB::Database* db_ = nullptr;  // non-owning, DbPool-owned
+   ```
+   This makes the class trivially copyable (default copy is fine for
+   trivial fields).
+
+2. **settings.h**: change `for_home()` to return by value:
+   ```cpp
+   static SettingsStore for_home(std::filesystem::path home);
+   ```
+
+3. **settings.h**: drop the `Impl` forward-declare and the pimpl
+   declaration. Update `// -- Read --` docblock to match.
+
+4. **SettingsStore.cpp**: replace `impl_->db` with `db_` and
+   `impl_->path` with `path_` everywhere. `for_home` becomes:
+   ```cpp
+   SettingsStore SettingsStore::for_home(fs::path home) {
+       fs::create_directories(home);
+       SettingsStore out;
+       out.path_ = home / "daedalus.db";
+       out.db_ = &DbPool::instance().get(out.path_);
+       return out;  // NRVO
+   }
+   ```
+
+5. **AgentImpl.h**: change `Body::store` from `daedalus::SettingsStore*`
+   to `std::optional<daedalus::SettingsStore>` (default-constructed
+   empty for cases with no model config).
+   ```cpp
+   struct Body {
+       std::optional<daedalus::SettingsStore> store;
+       ...
+   };
+   ```
+
+6. **AgentImpl.cpp**: change the assignment to copy-assign:
+   ```cpp
+   if (!cfg_.daedalus_home.empty()) {
+       body_->store = daedalus::SettingsStore::for_home(cfg_.daedalus_home);
+   } else {
+       body_->store = daedalus::SettingsStore::instance();
+   }
+   ```
+
+7. **Tests**: confirm `session_memory_tests`, `messages_tests`,
+   `settings_store_tests`, all 61 tests still pass. The new shape
+   returns a fresh `SettingsStore` per call → no stale db handle.
+
+### Risk
+
+- **MEDIUM.** One public-API signature change:
+  `for_home(home)` returns `SettingsStore` instead of
+  `SettingsStore&`. Hosts that use `auto& s = for_home(...)` will
+  fail to compile — must change to `auto s = for_home(...)` (move).
+- One internal-storage change:
+  `AgentImpl::Body::store` becomes `std::optional<SettingsStore>`
+  (was `SettingsStore*`). All `body_->store->method()` calls become
+  `body_->store->method()` (unchanged: optional has `operator->`).
+
+### Status
+
+- [ ] Inline the `Impl` fields in `settings.h`
+- [ ] Change `for_home()` to return by value
+- [ ] Update all method bodies to use `path_` / `db_` directly
+- [ ] Change `AgentImpl::Body::store` to `std::optional<SettingsStore>`
+- [ ] Update AgentImpl assignment site
+- [ ] Verify `session_memory_tests` / `messages_tests` still pass
+- [ ] Verify `settings_store_tests` (S1–S10) still pass
+- [ ] Verify full ctest still 56+/61
+- [ ] CHANGELOG entry: "B2 leak fixed by returning SettingsStore by value"
+
 | User | ubuntu (uid 1000) |
 | Host | daedalus-dev-wayland |
 | Shell | /bin/bash |
@@ -1230,3 +2805,255 @@ cd tests/webui && npm test
 | C2.5 — `HttpRequestTool` mid-body percent | ✅ |
 
 No remaining items on the board.
+
+---
+
+## Bug/Issue Sweep — Round 2 (2026-07-15)
+
+> Re-sweep of `src/`, `demos/`, `include/`, `tests/`, and `docs/` after
+> the Round 1 sweep from earlier in this file. The build was clean,
+> `ctest -E phase15_typo_warning` was at **58/61** (1 failure,
+> 2 skipped). Round 2 ships these fixes; final state is **59/61
+> pass + 2 live-LLM skipped, 0 failures**.
+
+### Findings + fixes
+
+#### F0 — `print_banner` throws `std::length_error` on long paths (HIGH — found via physical tests 2026-07-16)
+
+**File:** `demos/daedalus-cli/banner.h` lines ~42–82 (the original
+`std::string(WIDTH - s.size(), ' ')` pad lines)
+
+`print_banner` printed every field with a hard-coded column width
+(52, 54, or 63 chars) and padded with `std::string(WIDTH - s.size(), ' ')`.
+Whenever the actual value was wider than `WIDTH` — typical for
+`data_dir` or `project_root` on a long path like
+`/workspace/daedalus/Testing/test-cli-bare/project/.daedalus` (59
+chars > 52) — the subtraction underflowed to a negative number and
+`std::string(NEGATIVE, ' ')` threw `std::length_error`.
+
+**Repro:**
+```bash
+$ daedalus-cli --home ... --model minimax-m2.7 --auto --no-memory \
+    /workspace/daedalus/Testing/test-cli-bare/project
+[FATAL] basic_string::_M_create
+Aborted (core dumped)
+```
+
+**Fix:** Replaced the inline pad with a `pad_to(s, width)` helper
+that clamps to 0 and truncates with ` …` for long values. The
+banner now survives paths up to the inner-box width and doesn't
+crash the demo.
+
+**Status:** ✅ **Done (2026-07-16).**
+
+#### F1 — `legacy_deprecation_warning_tests` fails with `/opt/daedalus` (CRITICAL)
+
+**File:** `tests/test_legacy_deprecation_warning.cpp` case 2
+(`test_daedalus_home_override_silences`)
+
+The second case hard-codes `/opt/daedalus` as both the
+`$DAEDALUS_HOME` env value and the `cfg.daedalus_home` value.
+`Agent::initialize()` calls `Paths::global().ensure_directories()`
+which does `fs::create_directories("/opt/daedalus/{config,data,state,cache}")`
+— **none of those exist on an unprivileged user** (the test was
+inherited from a CI box where the runner has root).
+
+The test process then throws
+`std::filesystem::__cxx11::filesystem_error("cannot create directories: Permission denied [/opt/daedalus]")`,
+terminates, and aborts the entire ctest run (case 3-5 never execute).
+
+**Fix:** Replaced `/opt/daedalus` with a fresh `fresh_dir("daedalus_home_2")`
+temp path (matching the `fresh_dir()` helper used by cases 1, 3, 4).
+The assertion ("`$DAEDALUS_HOME` set → no `[DEPRECATION]` warning")
+is unchanged. All 5 cases now pass.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F2 — Dead `matches_pattern()` in `FileIO.cpp` (LOW)
+
+**File:** `src/core/FileIO.cpp` lines ~125–167
+
+```cpp
+static bool matches_pattern(const std::string& filename, const std::string& pattern) { ... }
+```
+
+Recursive glob matcher (`*` and `?`). Compiler emits
+`-Wunneeded-internal-declaration` on every clean rebuild. The
+function is unused — `FileIO` no longer takes a `SettingsManager*`,
+and the settings pipeline that did use it was migrated to
+`SettingsStore` in v0.4.0.
+
+**Fix:** Deleted (43 lines). No callers.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F3 — Dead DEBUG block in `LLMClient::run_agent_cycle` (LOW)
+
+**File:** `src/api/LLMClient.cpp` lines ~976–1010
+
+A 35-line "DEBUG: Log tool_calls" block gated on
+`tc_id == "call_function_kn9n3ke6bg89_1" || has_invalid_chars || args_str.length() > 2000`.
+Both inner `if` branches (`if (tc_id == "...") { } else if (...) { }`)
+are **empty** — the original logger calls were stripped out in an
+earlier pass and only the scaffolding remained. Allocated locals
+(`tc_id`, `fn_name`, `args_str`, `args_display`, `has_invalid_chars`)
+but never logged them.
+
+**Fix:** Deleted the entire block. The next block ("Verify payload
+can be parsed back") was retained — it has real `LOG_ERROR` calls
+that catch JSON corruption in `tool_calls.arguments`.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F4 — `AgentImpl` constructor writes to 4 unread fields (LOW)
+
+**File:** `src/library/AgentImpl.cpp` lines ~113–132 (Round 1
+dead code §D1)
+
+```cpp
+if (cfg_.settings_path.empty())   { cfg_.settings_path = ... } // written
+if (cfg_.mcp_servers_path.empty()) { cfg_.mcp_servers_path = ... }
+if (cfg_.mcp_env_path.empty())     { cfg_.mcp_env_path = ... }
+if (cfg_.memory_dir.empty())      { cfg_.memory_dir = ... }
+```
+
+Round 1 documented D1 ("fields are set, never read"). I verified:
+the only `cfg_.X_path` *reads* live in `AgentImpl::initialize()`
+at line 320 — and they're conditional on the field being
+non-empty. Since the constructor used to *always* set them, the
+host was never able to actually use the override path
+("`cfg_.mcp_servers_path = my_path`" got overwritten by the default)
+— the override was effectively dead.
+
+**Fix:** Deleted the constructor block. Hosts that want the legacy
+JSON path can now set the field on their `AgentConfig` and it
+sticks. The four fields are still in the public struct (Round 1
+planned to delete them in v0.5.1 with a CHANGELOG mapping) and
+now carry `[[deprecated]]` annotations (F5).
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F5 — `default_{settings,mcp_servers,mcp_env}_path()` lack deprecation (LOW)
+
+**Files:**
+- `include/daedalus/default_paths.h`
+- `src/library/default_paths.cpp`
+
+The three legacy path helpers are still public API (used by
+`daedalus-cli/migrate.cpp`, `daedalus-subagent/main.cpp`,
+`daedalus-manager/main.cpp`) but their behaviour conflicts with
+v0.4.0+ — they return paths that no longer exist
+(`~/.daedalus/settings/settings.json` is a JSON file that
+`SettingsStore` doesn't read at runtime).
+
+**Fix:** Added `[[deprecated("v0.4.0: settings moved to SQLite…")]]`
+annotations on each declaration + definition, pointing at
+`SettingsStore::instance()` (for settings) and
+`SettingsStore::list_mcp_servers()` / `upsert_mcp_server()` (for
+MCP). Three `-Wdeprecated-declarations` warnings show up at build
+time (the three call sites) — accepted for v0.4.2. The hard
+removal is v0.6.0 work.
+
+`default_daedalus_home()` was deliberately NOT deprecated — it
+returns a valid user-tier XDG path and is the proper public
+helper for hosts that want to point an Agent at the user's
+default config dir without reaching into `Paths::global()`.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F6 — Readme/embedding docs reference removed API (HIGH)
+
+**Files:**
+- `Readme.md` — `StdoutSink` example uses `request_user_input`
+  (removed in v0.4.0 with `ask_user`); "File Locations" shows
+  `~/.config/daedalus/config.json` (correct path is
+  `~/.local/share/daedalus/daedalus.db`); "Current tag" reads
+  `0.2.5`; "Example Configuration" is a hand-edit `config.json`
+  walkthrough (no such file exists any more).
+- `docs/embedding.md` — `Minimum viable host` example sets
+  `cfg.settings_path` (deleted field); `AgentSink` contract
+  declares `request_user_input` (deleted method); the state
+  machine table lists `AwaitingUser` (deleted state); the
+  "Wiring your own input source" section says the agent calls
+  the sink mid-turn via `request_user_input`. All these would
+  fail to compile against the current header set.
+
+**Fix:** Edited both files comprehensively. Removed `request_user_input`
+from the StdoutSink example; replaced the JSON config walkthrough
+with a `SettingsStore::upsert_model` example + a one-liner
+`sqlite3` for packagers; updated the "File Locations" and "Current
+tag"; rewrote the `Settings, memory, MCP paths` section to describe
+the v0.4.0 SQLite model and call out the four removed
+`AgentConfig` fields; deleted the `AwaitingUser` row from the
+state table; rewrote the input-source section around the new
+"submit → run_one_turn → submit → run_one_turn" host loop.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F7 — docs/mcp_server.md describes legacy `servers.json` only (MEDIUM)
+
+**File:** `docs/mcp_server.md`
+
+Top of file states daedalus reads from
+`~/.daedalus/mcp/servers.json`, but v0.5.0 stores MCP servers in
+the `mcp_servers` table of `daedalus.db` (via `SettingsStore`).
+The legacy JSON path is still supported as a one-release-cycle
+fallback but is no longer the primary.
+
+**Fix:** Added a new top-level section "Configuration (v0.5.0+,
+recommended)" with a `SettingsStore::upsert_mcp_server` example,
+kept the legacy JSON section as the fallback, and updated the
+"Adding New MCP Servers" section to prefer the store API.
+
+**Status:** ✅ **Done (2026-07-15).**
+
+#### F8 — docs/{session_memory,tools,storage,how_compress_works,migration}.md reference removed concepts (MEDIUM)
+
+**Files:**
+- `docs/session_memory.md` "Storage location" tree shows
+  `settings.json` (no such file in v0.4.0+).
+- `docs/tools.md` §14 is a full reference to `ask_user`
+  (removed tool).
+- `docs/storage.md` §2.2 lists `agent_dir/config.json` as the
+  per-project config (moved to user-tier DB in v0.4.0).
+- `docs/how_compress_works.md` "Per-Model Context Size" has a
+  hand-edited JSON example (no JSON config any more).
+- `docs/migration.md` §5 says `settings.json` is "unchanged"
+  (it was removed in v0.4.0).
+
+**Fix:** Each doc rewritten to reference the SQLite-backed model:
+- `session_memory.md` tree now points at `daedalus.db`.
+- `tools.md` §14 replaced with `set_status` (the actual
+  current tool).
+- `storage.md` §2.2: row removed; explanation added that
+  per-project config moves to the user tier.
+- `how_compress_works.md` "Per-Model Context Size" example
+  replaced with `SettingsStore::upsert_model()`.
+- `migration.md` §5 rewritten to describe the v0.4.0 SQLite
+  migration path (auto-migrates `~/.daedalus/settings/settings.json`
+  into `daedalus.db` on first run).
+
+**Status:** ✅ **Done (2026-07-15).**
+
+### Summary
+
+| # | File | Severity | Status |
+|---|------|----------|--------|
+| F1 | `tests/test_legacy_deprecation_warning.cpp` | CRITICAL | ✅ fixed |
+| F2 | `src/core/FileIO.cpp` | LOW | ✅ fixed |
+| F3 | `src/api/LLMClient.cpp` | LOW | ✅ fixed |
+| F4 | `src/library/AgentImpl.cpp` | LOW | ✅ fixed |
+| F5 | `default_paths.{h,cpp}` | LOW | ✅ fixed |
+| F6 | `Readme.md` + `docs/embedding.md` | HIGH | ✅ fixed |
+| F7 | `docs/mcp_server.md` | MEDIUM | ✅ fixed |
+| F8 | `docs/{session_memory,tools,storage,how_compress_works,migration}.md` | MEDIUM | ✅ fixed |
+
+### Verification
+
+- `cmake --build build -j4` — clean, 0 warnings (modulo the
+  three `-Wdeprecated-declarations` from in-tree demos, which
+  is intentional for v0.4.2).
+- `cd build; ctest -E phase15_typo_warning` — **59/61 pass,
+  2 live-LLM skipped, 0 failures**.
+- `daedalus-cli --help` runs; `daedalus-subagent`,
+  `daedalus-manager`, `daedalus-webui` all build and link.

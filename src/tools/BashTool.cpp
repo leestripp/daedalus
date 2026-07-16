@@ -23,8 +23,8 @@ static void trigger_build_callback(const std::string& command, int exit_code) {
     if (!callback) return;
     
     std::vector<std::string> build_patterns = {
-        "cmake", "make", "g++", "gcc", "clang++", "clang", 
-        "build", "compile", "make", "ninja",
+        "cmake", "make", "g++", "gcc", "clang++", "clang",
+        "build", "compile", "ninja",
         "npm build", "npm install", "npm test",
         "cargo build", "cargo test", "cargo run",
         "go build", "go test",
@@ -137,33 +137,16 @@ json BashTool::execute(const json& args, FileIO& file_io, ToolProgressFn progres
             });
         }
         
-        // ===== Rule 3: Block standalone & (background operator) but allow && =====
-        // && is fine, but standalone & causes popen() to hang forever
-        bool has_standalone_ampersand = false;
-        size_t pos = 0;
-        while (pos < command.length()) {
-            size_t amp_pos = command.find('&', pos);
-            if (amp_pos == std::string::npos) break;
-            
-            // Check if this & is part of && (which is allowed)
-            bool is_part_of_double_amp = false;
-            if (amp_pos > 0 && command[amp_pos - 1] == '&') {
-                is_part_of_double_amp = true;
-            }
-            if (amp_pos < command.length() - 1 && command[amp_pos + 1] == '&') {
-                is_part_of_double_amp = true;
-            }
-            
-            if (!is_part_of_double_amp) {
-                has_standalone_ampersand = true;
-                break;
-            }
-            
-            pos = amp_pos + 1;
-        }
-        
-        if (has_standalone_ampersand) {
-            return json::object({{"status", "error"}, {"message", "Security: Background operator (&)"}});
+        // ===== Rule 3: Block standalone & (background operator) but allow &&
+        // ===== §B3 fix: use BashPathChecker::contains_standalone_ampersand
+        // which understands single/double quotes, heredocs, and fd
+        // redirections like 2>&1 or &>. The pre-fix inline parser
+        // rejected `&` everywhere, including safe quoted contexts.
+        if (BashPathChecker::contains_standalone_ampersand(command)) {
+            return json::object({
+                {"status", "error"},
+                {"message", "Security: Background operator (&) — popen() would hang forever waiting on the child. Use `&&` to chain commands instead, or run them sequentially."}
+            });
         }
 
         // ===== Rule 3.5: Ask host for approval (Phase 3) =====

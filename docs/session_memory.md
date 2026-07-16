@@ -25,14 +25,19 @@ The host can also write entries directly via the `remember()` tool.
 ## Storage location
 
 ```
-~/.daedalus/{agent_name}/
-├── settings.json
+~/.local/share/daedalus/{agent_name}/
+├── daedalus.db               ← SettingsStore (v0.4.0+)
+└── session_memory.db         ← SQLite database for memories
+
+# Per-project runtime state (separate from the user-level data above):
+<project_root>/.daedalus[-<agent_name>]/
 ├── messages.json
-└── session_memory.db    ← SQLite database
+└── (other session files)
 ```
 
-`agent_name` defaults to `"default"` if not specified in `AgentConfig`.
-The database is created automatically on first use.
+`agent_name` defaults to `""` (no namespace) when not specified in
+`AgentConfig`. The database is created automatically on first use;
+its parent directory is `cfg.daedalus_home/{agent_name}/`.
 
 ## Schema
 

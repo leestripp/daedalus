@@ -1,20 +1,55 @@
 # MCP Server Integration Guide
 
-This document explains how the Model Context Protocol (MCP) works and how daedalus integrates with MCP servers using the configuration in `~/.daedalus/mcp/servers.json`.
+This document explains how the Model Context Protocol (MCP) works and
+how daedalus integrates with MCP servers. **v0.5.0+:** server
+configuration is stored in the `mcp_servers` table of the SQLite-backed
+`SettingsStore` (alongside models, kv_settings, etc.). The legacy
+`servers.json` file is still supported as a one-release-cycle
+fallback so existing installs keep working — see
+[`docs/storage.md`](storage.md) for the migration recipe.
 
 ## Overview
 
 MCP is an open protocol that enables AI applications to connect to external data sources and tools. It uses JSON-RPC 2.0 for communication and supports two transport mechanisms:
 
 1. **Stdio Transport** - Server runs as a subprocess, communication via stdin/stdout
-2. **Streamable HTTP** - Server runs as an HTTP service (less common)
+2. **Streamable HTTP** - Server runs as an HTTP service
 
-## Configuration
+## Configuration (v0.5.0+, recommended)
 
-daedalus stores MCP server configurations in:
+MCP servers live in the `mcp_servers` table of the same SQLite database
+that holds models and kv_settings:
 
 ```
-~/.daedalus/mcp/
+$XDG_DATA_HOME/daedalus/daedalus.db    ← SettingsStore
+└── (tables: models, mcp_servers, kv_settings, …)
+```
+
+Use the `daedalus::SettingsStore` API to add a server:
+
+```cpp
+#include <daedalus/settings.h>
+auto& store = daedalus::SettingsStore::instance();
+daedalus::SettingsStore::McpServer srv{
+    .name        = "minimax-web-search",
+    .command     = "uvx",
+    .args        = {"minimax-coding-plan-mcp", "web-search"},
+    .transport   = "stdio",
+    .description = "Web search using MiniMax MCP",
+    .env         = { {"MINIMAX_API_HOST", "https://api.minimax.io"},
+                     {"MINIMAX_API_KEY", "${MINIMAX_API_KEY}"} },
+};
+store.upsert_mcp_server(srv);
+```
+
+Env-var substitution (`${VAR_NAME}`) happens at connect time, so a
+restart picks up the current value of `MINIMAX_API_KEY` without DB
+rewrite.
+
+## Configuration (legacy JSON, still supported)
+
+```
+$XDG_CONFIG_HOME/daedalus/mcp/
 ├── servers.json    # Server definitions
 ├── .env            # API keys and secrets
 └── .env.example    # Template for .env
@@ -49,7 +84,7 @@ Environment variables are referenced in `servers.json` using `${VAR_NAME}` synta
 
 ### Current Configuration
 
-daedalus currently has these servers configured in `~/.daedalus/mcp/servers.json`:
+daedalus currently has these servers registered by default:
 
 | Server | Package | Description |
 |--------|---------|-------------|
@@ -57,7 +92,7 @@ daedalus currently has these servers configured in `~/.daedalus/mcp/servers.json
 | `minimax-read-image` | `minimax-coding-plan-mcp` | Image understanding via MiniMax |
 | `wikipedia` | `mcp-server-wikipedia` | Wikipedia search |
 
-Example configuration:
+Example entry:
 
 ```json
 {
@@ -195,7 +230,24 @@ MINIMAX_API_KEY=xxx uvx minimax-coding-plan-mcp web-search
 
 ## Adding New MCP Servers
 
-To add a new MCP server, edit `~/.daedalus/mcp/servers.json`:
+**Preferred (v0.5.0+):** use the `SettingsStore` API to upsert a row
+into the `mcp_servers` table. The new server is picked up the next
+time `McpServerManager::load_from_store()` is called by your host:
+
+```cpp
+auto& store = daedalus::SettingsStore::instance();
+store.upsert_mcp_server(daedalus::SettingsStore::McpServer{
+    .name        = "github",
+    .command     = "uvx",
+    .args        = {"--from", "mcp-github", "github"},
+    .transport   = "stdio",
+    .description = "GitHub repository operations",
+    .env         = { {"GITHUB_TOKEN", "${GITHUB_TOKEN}"} },
+});
+```
+
+**Legacy (still supported):** edit
+`$XDG_CONFIG_HOME/daedalus/mcp/servers.json`:
 
 ```json
 {
@@ -217,7 +269,7 @@ To add a new MCP server, edit `~/.daedalus/mcp/servers.json`:
 }
 ```
 
-Then add the required environment variables to `~/.daedalus/mcp/.env`:
+Then add the required environment variables to `$XDG_CONFIG_HOME/daedalus/mcp/.env`:
 
 ```bash
 GITHUB_TOKEN=ghp_xxxxxxxxxxxx

@@ -95,6 +95,14 @@ private:
     int last_prompt_tokens_ = 0;
     int last_completion_tokens_ = 0;
 
+    // §B32: suppresses duplicate "no usage" warnings per turn.
+    bool warned_no_usage_this_turn_ = false;
+
+    // §B23: tracks the previous public AgentState so set_status tool can emit
+    // on_state_change(prev, current) instead of (-1, current).
+    int previous_public_state_ = 0;  // daedalus::AgentState int value
+    int current_public_state_ = 0;   // daedalus::AgentState int value
+
     // §Phase 5.1: cancellation flows through this stop_source.
     // Agent::cancel() → LLMClient::cancel() → cancel_source_.request_stop().
     // The API wait loop and the per-iteration check both consult

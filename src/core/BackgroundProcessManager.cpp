@@ -32,9 +32,6 @@
         _daedalus_msg << expr;                               \
         LOG_##level(_daedalus_msg.str());                    \
     } while (0)
-// Maximum time to wait for FIFO operations (milliseconds)
-static constexpr int FIFO_TIMEOUT_MS = 5000;
-
 // Helper - not used currently but kept for future
 // static void set_close_on_exec(int fd) { ... }
 

@@ -63,11 +63,18 @@ Assistant (with tool_calls) → ??? → Assistant (with new tool_calls) → tool
 
 ## What Can Break Tool Call Chains
 
-### 1. User Interruption (ESC key or ask_user cancel)
-When the user presses ESC during API wait, or cancels `ask_user` by pressing Enter without input:
+### 1. User Interruption (ESC key or cancel)
+
+When the user calls `agent.cancel()` (or fires the `stop_token` passed
+into `run_one_turn`) during an API wait:
+
 - The `assistant` message with `tool_calls` has already been added to messages
 - But no `tool` result messages exist yet
 - This leaves an orphaned tool call
+
+> **Removed in v0.4.0:** the `ask_user` tool. The agent no longer
+> blocks mid-turn for user input. Cancellation is the host's
+> responsibility (`agent.cancel()`).
 
 ### 2. Context Compression (50% Split)
 
@@ -769,25 +776,36 @@ Executes a shell command. Used for building (cmake, make), testing, or running g
 
 ---
 
-## 14. `ask_user`
+## 14. `set_status`
+
+> **Removed in v0.4.0:** `ask_user` and the sink-blocking
+> `request_user_input`. Replaced by `set_status` (see §14) for
+> the only host-loop interaction the agent still drives:
+> declaring its own state. Mid-turn user prompting was removed;
+> use `tell_user` (informational), `set_status` (state
+> machine), or cancel + restart for back-and-forth.
 
 ### Purpose
-Allows the agent to ask the user a question and pause execution until the user provides a response. Used when the agent needs clarification or additional information.
+
+Lets the agent declare its own `AgentState` mid-turn. Useful when
+the agent wants to surface progress phases (e.g. "I am now
+Verifying") without going through the implicit transitions the
+loop already drives. The agent's chosen state is propagated
+through the sink as `on_state_change(prev, new)` so hosts can
+re-render the status chip.
 
 ### Parameters
 
-| Name     | Type   | Required | Description                    |
-|----------|--------|----------|--------------------------------|
-| question | string | Yes      | The question to ask the user   |
+| Name  | Type   | Required | Description                                                  |
+|-------|--------|----------|--------------------------------------------------------------|
+| state | string | Yes      | One of `Idle`, `Understanding`, `Planning`, `Acting`, `Verifying`, `AwaitingApproval`, `Compressing`, `Done`, `Cancelled`, `Error`. Case-insensitive. |
 
 ### Example Usage
 
 ```json
 {
-  "name": "ask_user",
-  "arguments": {
-    "question": "Should I use the existing utility function or create a new one?"
-  }
+  "name": "set_status",
+  "arguments": { "state": "Verifying" }
 }
 ```
 

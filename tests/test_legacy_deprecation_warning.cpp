@@ -145,15 +145,16 @@ static void test_daedalus_home_override_silences()
 
 	auto project_root = fresh_dir( "p2" );
 	auto fake_home = fresh_dir( "h2" );
+	auto daedalus_home = fresh_dir( "daedalus_home_2" );
 	fs::create_directories( fake_home / ".daedalus" );  // legacy exists
 
-	ScopedEnv e_daedalus_home( "DAEDALUS_HOME", "/opt/daedalus" );
+	ScopedEnv e_daedalus_home( "DAEDALUS_HOME", daedalus_home.string() );
 	ScopedEnv e_xdg_data( "XDG_DATA_HOME", "" );
 	ScopedEnv e_home( "HOME", fake_home.string() );
 
 	auto sink = std::make_shared<CapturingSink>();
 	daedalus::AgentConfig cfg = make_minimal_cfg(
-		project_root, "/opt/daedalus" );
+		project_root, daedalus_home );
 
 	daedalus::Agent agent( std::move( cfg ), sink );
 	agent.initialize();
@@ -163,6 +164,7 @@ static void test_daedalus_home_override_silences()
 
 	fs::remove_all( project_root );
 	fs::remove_all( fake_home );
+	fs::remove_all( daedalus_home );
 }
 
 // =============================================================================

@@ -123,47 +123,6 @@ void FileIO::create_directory(const std::filesystem::path& dirPath) {
     }
 }
 
-// Simple glob pattern matching: * matches any sequence, ? matches single char
-static bool matches_pattern(const std::string& filename, const std::string& pattern) {
-    size_t pattern_pos = 0;
-    size_t filename_pos = 0;
-
-    while (pattern_pos < pattern.size() && filename_pos < filename.size()) {
-        if (pattern[pattern_pos] == '*') {
-            // * at end matches everything remaining
-            if (pattern_pos + 1 >= pattern.size()) {
-                return true;
-            }
-            // Try matching at each position
-            for (size_t i = filename_pos; i <= filename.size(); i++) {
-                if (matches_pattern(filename.substr(i), pattern.substr(pattern_pos + 1))) {
-                    return true;
-                }
-            }
-            return false;
-        } else if (pattern[pattern_pos] == '?') {
-            // ? matches any single character
-            pattern_pos++;
-            filename_pos++;
-        } else if (pattern[pattern_pos] == filename[filename_pos]) {
-            pattern_pos++;
-            filename_pos++;
-        } else {
-            return false;
-        }
-    }
-
-    // Handle remaining pattern chars
-    if (pattern_pos < pattern.size()) {
-        if (pattern[pattern_pos] == '*' && pattern_pos + 1 >= pattern.size()) {
-            return true;
-        }
-        return false;
-    }
-
-    return filename_pos >= filename.size();
-}
-
 // Getters
 const std::filesystem::path& FileIO::get_project_path() const {
     return project_path;

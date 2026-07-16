@@ -10,6 +10,7 @@
 #include "tools/ToolFactory.h"
 #include "tools/BashTool.h"
 #include "core/ThreadPool.h"
+#include "core/Utf8Utils.h"  // §B11/B28: shared utf8_sanitize_replace_invalid
 #include "daedalus/default_paths.h"   // §Phase 8.8 — resolve_agent_dir()
 #include "daedalus/types/AgentState.h"  // §State Machine — agent_state_from()
 #include "mcp/McpServerManager.h"  // §Phase 11 — injected via ctor
@@ -40,149 +41,27 @@
         LOG_##level(_daedalus_msg.str());                    \
     } while (0)
 
-// Helper function to sanitize strings to valid UTF-8
-// Replaces invalid UTF-8 bytes with a replacement character
+// Replaces invalid UTF-8 bytes with a replacement character.
+// §B11/B28: state-machine fallback uses shared utf8_sanitize_replace_invalid
+// from Utf8Utils.h (which also fixes the B12 truncation bug).
 static std::string sanitize_utf8(const std::string& input) {
-    // iconv conversion to ensure valid UTF-8
+    // Try iconv conversion to ensure valid UTF-8
     iconv_t cd = iconv_open("UTF-8", "UTF-8");
-    if (cd == (iconv_t)-1) {
-        // Fallback: use state machine for UTF-8 validation
-        int expected_continuations = 0;
-        size_t sequence_start_pos = 0;
-        std::string result;
-        result.reserve(input.size());
-        
-        for (unsigned char c : input) {
-            if (expected_continuations > 0) {
-                if ((c >= 0x80 && c <= 0xBF)) {
-                    result += static_cast<char>(c);
-                    expected_continuations--;
-                } else {
-                    // Invalid byte in sequence - replace the start byte
-                    result[sequence_start_pos] = '?';
-                    result.resize(sequence_start_pos + 1);
-                    expected_continuations = 0;
-                    if (c < 0x80) {
-                        result += static_cast<char>(c);
-                    } else if (c >= 0xC0 && c <= 0xDF) {
-                        sequence_start_pos = result.size();
-                        result += static_cast<char>(c);
-                        expected_continuations = 1;
-                    } else if (c >= 0xE0 && c <= 0xEF) {
-                        sequence_start_pos = result.size();
-                        result += static_cast<char>(c);
-                        expected_continuations = 2;
-                    } else if (c >= 0xF0 && c <= 0xF7) {
-                        sequence_start_pos = result.size();
-                        result += static_cast<char>(c);
-                        expected_continuations = 3;
-                    }
-                }
-            } else {
-                if (c < 0x80) {
-                    result += static_cast<char>(c);
-                } else if (c >= 0xC0 && c <= 0xDF) {
-                    sequence_start_pos = result.size();
-                    result += static_cast<char>(c);
-                    expected_continuations = 1;
-                } else if (c >= 0xE0 && c <= 0xEF) {
-                    sequence_start_pos = result.size();
-                    result += static_cast<char>(c);
-                    expected_continuations = 2;
-                } else if (c >= 0xF0 && c <= 0xF7) {
-                    sequence_start_pos = result.size();
-                    result += static_cast<char>(c);
-                    expected_continuations = 3;
-                } else {
-                    result += '?';
-                }
-            }
+    if (cd != (iconv_t)-1) {
+        char* in_ptr = const_cast<char*>(input.data());
+        size_t in_left = input.size();
+        std::string output(input.size() * 4, '\0');
+        char* out_ptr = &output[0];
+        size_t out_left = output.size();
+        size_t conv_result = iconv(cd, &in_ptr, &in_left, &out_ptr, &out_left);
+        iconv_close(cd);
+        if (conv_result != (size_t)-1 && in_left == 0) {
+            return output.c_str();  // conversion succeeded
         }
-        
-        // Handle trailing incomplete sequences
-        if (expected_continuations > 0) {
-            result[sequence_start_pos] = '?';
-            result.resize(sequence_start_pos + 1);
-        }
-        
-        return result;
+        // Fall through to state-machine path
     }
-    
-    // Use iconv for proper conversion
-    char* in_ptr = const_cast<char*>(input.data());
-    size_t in_left = input.size();
-    
-    // iconv needs more output space (worst case 4x for malformed)
-    std::string output(input.size() * 4, '\0');
-    char* out_ptr = &output[0];
-    size_t out_left = output.size();
-    
-    size_t conv_result = iconv(cd, &in_ptr, &in_left, &out_ptr, &out_left);
-    iconv_close(cd);
-    
-    if (conv_result == (size_t)-1) {
-        // Conversion failed, use fallback with state machine
-        int expected_continuations = 0;
-        size_t sequence_start_pos = 0;
-        std::string fallback;
-        fallback.reserve(input.size());
-        
-        for (unsigned char c : input) {
-            if (expected_continuations > 0) {
-                if ((c >= 0x80 && c <= 0xBF)) {
-                    fallback += static_cast<char>(c);
-                    expected_continuations--;
-                } else {
-                    fallback[sequence_start_pos] = '?';
-                    fallback.resize(sequence_start_pos + 1);
-                    expected_continuations = 0;
-                    if (c < 0x80) {
-                        fallback += static_cast<char>(c);
-                    } else if (c >= 0xC0 && c <= 0xDF) {
-                        sequence_start_pos = fallback.size();
-                        fallback += static_cast<char>(c);
-                        expected_continuations = 1;
-                    } else if (c >= 0xE0 && c <= 0xEF) {
-                        sequence_start_pos = fallback.size();
-                        fallback += static_cast<char>(c);
-                        expected_continuations = 2;
-                    } else if (c >= 0xF0 && c <= 0xF7) {
-                        sequence_start_pos = fallback.size();
-                        fallback += static_cast<char>(c);
-                        expected_continuations = 3;
-                    }
-                }
-            } else {
-                if (c < 0x80) {
-                    fallback += static_cast<char>(c);
-                } else if (c >= 0xC0 && c <= 0xDF) {
-                    sequence_start_pos = fallback.size();
-                    fallback += static_cast<char>(c);
-                    expected_continuations = 1;
-                } else if (c >= 0xE0 && c <= 0xEF) {
-                    sequence_start_pos = fallback.size();
-                    fallback += static_cast<char>(c);
-                    expected_continuations = 2;
-                } else if (c >= 0xF0 && c <= 0xF7) {
-                    sequence_start_pos = fallback.size();
-                    fallback += static_cast<char>(c);
-                    expected_continuations = 3;
-                } else {
-                    fallback += '?';
-                }
-            }
-        }
-        
-        // Handle trailing incomplete sequences
-        if (expected_continuations > 0) {
-            fallback[sequence_start_pos] = '?';
-            fallback.resize(sequence_start_pos + 1);
-        }
-        
-        return fallback;
-    }
-    
-    return std::string(output.data(), out_ptr - output.data());
+    // State-machine fallback via shared utility (fixes B12 truncation bug)
+    return utf8_sanitize_replace_invalid(input);
 }
 
 // §Phase 5.1: TerminalGuard removed. Library no longer touches the
@@ -501,7 +380,14 @@ std::future<std::string> LLMClient::make_api_request_async(
                 if (streaming_callback) {
                     req.headers.push_back("Accept: text/event-stream");
                     // Streaming: pass per-chunk callback to CurlMultiSession.
-                    req.stream_callback = streaming_callback;
+                    // Guard against stop_requested() so in-flight chunks from the
+                    // kernel buffer don't fire one more on_chunk after cancellation.
+                    auto safe_callback = [&streaming_callback,
+                                          &stop_token](std::string_view chunk) {
+                        if (stop_token.stop_requested()) return;
+                        streaming_callback(chunk);
+                    };
+                    req.stream_callback = safe_callback;
                 } else {
                     req.headers.push_back("Accept: application/json");
                 }
@@ -760,14 +646,21 @@ void LLMClient::update_token_usage(const json& response_json) {
     // (confirmed by /tmp/test_sse_raw.py). The non-streaming path gets real
     // counts. Log a warning so operators know why token counts are 0 during
     // SSE streaming — this is expected behaviour, not a bug.
+    // §B32: suppress duplicate warnings per turn (multiple SSE chunks without usage).
     if (!response_json.contains("usage")) {
-        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
-            "[LLM] No 'usage' field in response (SSE stream? — token counts are 0)");
+        if (!warned_no_usage_this_turn_) {
+            if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+                "[LLM] No 'usage' field in response (SSE stream? — token counts are 0)");
+            warned_no_usage_this_turn_ = true;
+        }
         return;
     }
     if (response_json["usage"].is_null()) {
-        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
-            "[LLM] 'usage' is null in SSE stream — token counts unavailable");
+        if (!warned_no_usage_this_turn_) {
+            if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+                "[LLM] 'usage' is null in SSE stream — token counts unavailable");
+            warned_no_usage_this_turn_ = true;
+        }
         return;
     }
     try {
@@ -1039,6 +932,8 @@ std::string LLMClient::extract_error_message(const std::string& response) const 
 AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                                           json& messages, const json& tool_defs,
                                           bool& compress_after_done) {
+    warned_no_usage_this_turn_ = false;  // §B32: reset per-turn
+
     // Build the request payload
     json request_payload = {
         {"model",     config_.model},
@@ -1077,45 +972,6 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
         }
         return AgentState::DONE;
     }
-    
-    // DEBUG: Log tool_calls in the actual payload being sent (to find the failing one)
-    {
-        auto msgs_array = request_payload["messages"];
-        for (size_t i = 0; i < msgs_array.size(); i++) {
-            const auto& msg = msgs_array[i];
-            if (msg.value("role", "") == "assistant" && msg.contains("tool_calls")) {
-                for (size_t j = 0; j < msg["tool_calls"].size(); j++) {
-                    const auto& tc = msg["tool_calls"][j];
-                    std::string tc_id = tc.value("id", "MISSING");
-                    std::string fn_name = tc.value("function", json::object()).value("name", "UNKNOWN");
-                    std::string args_str = tc.value("function", json::object()).value("arguments", "MISSING");
-                    
-                    // Truncate args for logging
-                    std::string args_display = args_str;
-                    if (args_display.length() > 100) {
-                        args_display = args_display.substr(0, 100) + "...";
-                    }
-                    
-                    // Check for null characters or control chars in args
-                    bool has_invalid_chars = false;
-                    for (char c : args_str) {
-                        if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
-                            has_invalid_chars = true;
-                            break;
-                        }
-                    }
-                    
-                    if (tc_id == "call_function_kn9n3ke6bg89_1" || has_invalid_chars || args_str.length() > 2000) {
-                        // Always log args for the specific failing ID
-                        if (tc_id == "call_function_kn9n3ke6bg89_1") {
-                        } else if (fn_name == "execute_bash" || has_invalid_chars) {
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
     // Verify payload can be parsed back (catch JSON corruption)
     try {
         json parsed_verify = json::parse(payload_str);
@@ -1234,7 +1090,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
         };
     }
     auto api_future = make_api_request_async(
-        api_url, request_payload.dump(2), cancel_token, streaming_callback);
+        api_url, request_payload.dump(), cancel_token, streaming_callback);
 
     // §Phase 5.1: wait for the API response. The host may call
     // Agent::cancel() (which fires cancel_source_) at any time; we
@@ -1268,6 +1124,16 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
     bool parse_success = false;
     json response_json;
 
+    // Load server_error_settings to gate the SSE retry loop (B27)
+    daedalus::ServerErrorSettings server_error_settings;
+    try {
+        if (settings_store_) {
+            server_error_settings = settings_store_->get_server_error_settings();
+        }
+    } catch (...) {
+        server_error_settings.enabled = true;
+    }
+
     for (int retry = 1; retry <= max_retries; retry++) {
         if (retry == 1 && !sse_parser.final_event().is_null()) {
             // First attempt: use the JSON from SSE streaming (has complete
@@ -1285,7 +1151,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
         if (retry >= 2 && config_.stream && sse_parser.final_event().is_null()) {
             try {
                 response_body = make_curl_request_with_retry(curl, api_url,
-                    request_payload.dump(2));
+                    request_payload.dump());
             } catch (const std::exception& api_e) {
                 std::ostringstream api_retry;
                 api_retry << "API request also failed: " << api_e.what();
@@ -1298,6 +1164,10 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             parse_success = true;
             break;  // Success, continue processing
         } catch (const json::parse_error& e) {
+            if (!server_error_settings.enabled) {
+                // User disabled server-error retry via settings store (B27)
+                break;
+            }
             if (retry < max_retries) {
                 int delay = 1 << (retry - 1);  // 1s, 2s, 4s...
                 std::ostringstream retry_msg;
@@ -1309,7 +1179,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                 // Try to get a fresh response from the API (non-streaming fallback)
                 try {
                     response_body = make_curl_request_with_retry(curl, api_url,
-                        request_payload.dump(2));
+                        request_payload.dump());
                 } catch (const std::exception& api_e) {
                     std::ostringstream api_retry;
                     api_retry << "API request also failed: " << api_e.what();
@@ -1438,7 +1308,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_curl_request_with_retry(curl, api_url, request_payload.dump(2));
+                response_body = make_curl_request_with_retry(curl, api_url, request_payload.dump());
                 response_json = json::parse(response_body);
                 
                 // Check if this response is valid
@@ -1568,7 +1438,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_curl_request_with_retry(curl, api_url, request_payload.dump(2));
+                response_body = make_curl_request_with_retry(curl, api_url, request_payload.dump());
                 response_json = json::parse(response_body);
                 
                 if (response_json.contains("choices") && !response_json["choices"].empty()) {
@@ -1792,13 +1662,12 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                     auto new_state = daedalus::agent_state_from(
                         result["state"].get<std::string>(), &ok);
                     if (ok) {
-                        // We don't have access to the previous public
-                        // state here (LLMClient only tracks its own
-                        // internal enum), so we just emit a transition
-                        // from "unknown" (-1).  Sinks are tolerant of
-                        // this — they only use the `to` value.
-                        sink_->on_state_change(-1,
-                                               static_cast<int>(new_state));
+                        // §B23 fix: track previous and current public state so we
+                        // can emit the correct on_state_change(prev, current) transition.
+                        auto prev = previous_public_state_;
+                        current_public_state_ = static_cast<int>(new_state);
+                        previous_public_state_ = current_public_state_;
+                        sink_->on_state_change(prev, current_public_state_);
                         LOG_INFO("State machine: set_status → "
                                  + std::string(daedalus::to_string(new_state)));
                     }
@@ -2203,7 +2072,7 @@ void LLMClient::display_manager_stats(int message_count) const {
 void LLMClient::inject_context_stats(json& messages) {
     // Build context statistics string
     std::ostringstream stats;
-    
+
     // Token usage
     float token_percent = 0.0f;
     bool at_threshold = false;
@@ -2211,7 +2080,7 @@ void LLMClient::inject_context_stats(json& messages) {
         token_percent = (static_cast<float>(last_total_tokens_) / get_max_context_size_value()) * 100.0f;
         at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
     }
-    
+
     // Add urgent warning if at 90% threshold - system handles compression automatically
     if (at_threshold) {
         stats << "\n🚨 **Context at 90% threshold** - SYSTEM will auto-compress\n\n";
@@ -2219,29 +2088,29 @@ void LLMClient::inject_context_stats(json& messages) {
         stats << "- Do NOT call any compression tool\n";
         stats << "- Just continue your work - system will compress when ready\n\n";
     }
-    
+
     stats << "# Context Status\n";
     stats << "<!-- This section is auto-updated each iteration -->\n";
     stats << "| Metric | Value |\n";
     stats << "|--------|-------|\n";
-    stats << "| Token Usage | " << last_total_tokens_ << "/" << get_max_context_size_value() 
+    stats << "| Token Usage | " << last_total_tokens_ << "/" << get_max_context_size_value()
           << " (" << std::fixed << std::setprecision(1) << token_percent << "%) |\n";
     stats << "| Messages | " << messages.size() << " |\n";
     stats << "| Iterations | " << iteration_count_ << "/" << max_iterations_ << " |\n";
-    
+
     // Compression status
     if (messages_) {
         float compress_ratio = messages_->get_compression_ratio(last_total_tokens_);
         stats << "| Context Pressure | " << std::fixed << std::setprecision(1) << (compress_ratio * 100) << "% |\n";
     }
-    
+
     // Session memory stats
     if (session_memory_) {
         auto mem_stats = session_memory_->get_stats();
         stats << "| Session Memory | " << mem_stats.resolved_errors << "/" << mem_stats.total_errors << " errors resolved |\n";
         stats << "| | " << mem_stats.total_builds << " builds, " << mem_stats.total_sessions << " sessions |\n";
     }
-    
+
     // Active skills
     SkillManager* skill_manager = SkillManager::get_instance();
     if (skill_manager) {
@@ -2257,44 +2126,68 @@ void LLMClient::inject_context_stats(json& messages) {
             stats << " |\n";
         }
     }
-    
-    stats << "\n";
-    
+
+    // §B8 fix: terminator sentinel. The block always ends with this
+    // unique line so we can find and erase exactly what we wrote
+    // instead of walking forward to the next same-level heading
+    // (which over-truncated the trailing tail of the system prompt
+    // when the stats block was the LAST section).
+    constexpr const char* kEndSentinel = "<!-- /daedalus-context-status -->\n";
+    stats << kEndSentinel;
+
     std::string context_stats = stats.str();
-    
+
     // Update or add the context stats to the system message
     if (messages.empty()) {
         return;  // No messages yet
     }
-    
+
     json& system_msg = messages[0];
     if (system_msg.value("role", "") != "system") {
         return;  // First message is not system
     }
-    
+
     std::string content = system_msg.value("content", "");
-    
-    // Remove old Context Status section if it exists
-    // NOTE: SystemPromptBuilder uses "# Context Status" (H1), but Messages::inject_context_stats
-    // uses "## Context Status" (H2). We must check for BOTH to handle all cases and prevent
-    // unbounded growth of the system message (which was causing the compress context bug).
+
+    // §B8 fix: locate the previous stats block by its sentinel and
+    // erase exactly that block (from `# Context Status` to the
+    // sentinel, inclusive). If the sentinel is missing — e.g. a
+    // leftover from an earlier pre-fix write — fall back to the old
+    // heading-based search so we don't leak the stats forever.
     size_t context_start = content.find("# Context Status");
     bool is_h2 = false;
     if (context_start == std::string::npos) {
-        // Try H2 variant
         context_start = content.find("## Context Status");
         is_h2 = true;
     }
     if (context_start != std::string::npos) {
-        // Find the next heading of the same level or end of string
-        std::string end_marker = is_h2 ? "\n## " : "\n# ";
-        size_t context_end = content.find(end_marker, context_start + 1);
-        if (context_end == std::string::npos) {
-            context_end = content.size();
+        // Try the new sentinel first (the precise block we wrote).
+        size_t sentinel_pos = content.find(kEndSentinel, context_start);
+        size_t context_end;
+        if (sentinel_pos != std::string::npos) {
+            // Sentinel found — erase inclusive of it.
+            context_end = sentinel_pos + std::strlen(kEndSentinel);
+        } else {
+            // Fallback: pre-fix compatibility. Find the next same-level
+            // heading or the next blank line, but never erase past
+            // the end of the content (the previous code did that
+            // and dropped the trailing tail of the prompt).
+            std::string end_marker = is_h2 ? "\n## " : "\n# ";
+            size_t next_heading = content.find(end_marker, context_start + 1);
+            if (next_heading != std::string::npos) {
+                context_end = next_heading;
+            } else {
+                // No same-level heading after. Erase to the next
+                // blank line (the stats block always ends with one).
+                // If none, just erase to end of string.
+                size_t blank = content.find("\n\n", context_start);
+                context_end = (blank != std::string::npos) ? blank + 2
+                                                           : content.size();
+            }
         }
         content.erase(context_start, context_end - context_start);
     }
-    
+
     // Append the new context stats before the first "\n# " or at the end
     size_t first_heading = content.find("\n# ");
     if (first_heading != std::string::npos) {
@@ -2302,7 +2195,7 @@ void LLMClient::inject_context_stats(json& messages) {
     } else {
         content += context_stats;
     }
-    
+
     system_msg["content"] = content;
 }
 
@@ -2708,11 +2601,16 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
 
         AgentState result_state = run_agent_cycle(curl, api_url, messages, tool_defs, compress_after_done);
 
-        // Auto-compress at 90% threshold
+        // Auto-compress at 90% threshold OR if the agent explicitly requested it
+        // via the compress_context tool (B7 fix)
         bool at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
-        // §Phase 5.1: route through Logger instead of std::cout.
-        if (at_threshold) {
-            LOG_INFO("[COMPRESS] Auto-triggering context compression at 90% threshold...");
+        if (at_threshold || compress_after_done) {
+            if (compress_after_done) {
+                LOG_INFO("[COMPRESS] Agent requested context compression...");
+                compress_after_done = false;
+            } else {
+                LOG_INFO("[COMPRESS] Auto-triggering context compression at 90% threshold...");
+            }
             if (messages_) {
                 const size_t before_tokens = last_total_tokens_;
                 messages_->set_messages(messages);

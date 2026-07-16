@@ -417,7 +417,11 @@ private:
     
     // Helper: Check if tool result is an error
     bool is_error_result(const std::string& id) const;
-    
+
+    // §B13: shared helper — computes the safe split index (see split_messages).
+    // Both split_messages and get_compression_indices use this to stay in sync.
+    size_t compute_safe_split() const;
+
     // Helper: Split messages into prefix, middle, suffix
     void split_messages(json& prefix, json& middle, json& suffix) const;
 

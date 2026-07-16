@@ -56,6 +56,48 @@ TEST_CASE("BashPathChecker - Privilege Escalation Detection") {
     }
 }
 
+TEST_CASE("BashPathChecker - contains_standalone_ampersand (B3)") {
+    SUBCASE("Rejects bare backgrounding `&`") {
+        CHECK(BashPathChecker::contains_standalone_ampersand("sleep 60 &") == true);
+        CHECK(BashPathChecker::contains_standalone_ampersand("cmd &") == true);
+        CHECK(BashPathChecker::contains_standalone_ampersand("cmd1 & cmd2") == true);
+        CHECK(BashPathChecker::contains_standalone_ampersand("&") == true);
+        CHECK(BashPathChecker::contains_standalone_ampersand("ls &\n") == true);
+    }
+    SUBCASE("Allows `&&` (logical AND)") {
+        CHECK(BashPathChecker::contains_standalone_ampersand("a && b") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("a&&b") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("a && b && c") == false);
+    }
+    SUBCASE("Allows `&` inside double quotes") {
+        CHECK(BashPathChecker::contains_standalone_ampersand("echo \"hello & world\"") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("printf \"a&b\"") == false);
+    }
+    SUBCASE("Allows `&` inside single quotes") {
+        CHECK(BashPathChecker::contains_standalone_ampersand("echo 'hello & world'") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("printf 'a&b'") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("echo $'a&b'") == false);
+    }
+    SUBCASE("Allows fd redirection `>&N` and `&>`") {
+        CHECK(BashPathChecker::contains_standalone_ampersand("cmd 2>&1") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("cmd 1>&2") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("cmd &> /dev/null") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand("cmd >file 2>&1") == false);
+    }
+    SUBCASE("Allows `&` inside heredocs") {
+        CHECK(BashPathChecker::contains_standalone_ampersand(
+            "cat <<EOF\nfoo & bar\nEOF") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand(
+            "cat <<-EOF\n\tfoo & bar\n\tEOF") == false);
+        CHECK(BashPathChecker::contains_standalone_ampersand(
+            "cat <<'EOF'\nfoo & bar\nEOF") == false);
+    }
+    SUBCASE("Rejects mixed: quoted `&` followed by real `&`") {
+        CHECK(BashPathChecker::contains_standalone_ampersand(
+            "echo \"x &\" &") == true);
+    }
+}
+
 TEST_CASE("BashPathChecker - privilege_escalation_message") {
     SUBCASE("Returns error message") {
         std::string msg = BashPathChecker::privilege_escalation_message("sudo rm -rf /");

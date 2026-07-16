@@ -33,6 +33,33 @@ public:
      */
     static std::string privilege_escalation_message(const std::string& command);
 
+    // ========== Standalone Background Operator ==========
+
+    /**
+     * §B3 fix: quote-aware check for a standalone `&` outside any
+     * quoted context or heredoc body. Only the bare background
+     * operator — the kind that hangs `popen()` forever — is flagged.
+     *
+     * Recognises and ALLOWS:
+     *   - `&&` (logical AND)
+     *   - `2>&1`, `2>&2`, `&>` etc. (file-descriptor redirection)
+     *   - `echo "hello & world"` (inside double quotes)
+     *   - `echo 'hello & world'` (inside single quotes)
+     *   - `printf 'a&b\n'` (literal text inside single quotes)
+     *   - Heredoc bodies (between `<<EOF` and the closing `EOF` marker
+     *     on its own line)
+     *
+     * Recognises and REJECTS:
+     *   - `sleep 60 &` (background, at end)
+     *   - `cmd1 & cmd2` (background in the middle)
+     *   - `cmd &` (background, trailing whitespace, then EOF)
+     *
+     * @param command The shell command to check
+     * @return true if a backgrounding `&` is present (unquoted, not
+     *         part of `&&` or fd-redirection), false otherwise.
+     */
+    static bool contains_standalone_ampersand(const std::string& command);
+
     // ========== Dangerous Command Detection ==========
 
     /**

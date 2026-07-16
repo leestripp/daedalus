@@ -1375,3 +1375,145 @@ TEST_SUITE("Compression Regression - Safe Split with Tool Calls") {
         cleanup_test_project(proj);
     }
 }
+
+// ===========================================================================
+// §B5 regression test: truncate_if_needed preserves the tool-call chain.
+//
+// Pre-fix, the inner `while (i >= 1)` block read `prev_role` from
+// messages_[i] BEFORE pushing, then checked it AFTER pushing. On
+// multi-step chains where the parent assistant sits more than one
+// position back, the walk stopped at the wrong index and emitted a
+// truncated chain with no tool_calls parent — the very next LLM
+// call returned 400 "tool call result does not follow tool call".
+//
+// This test sets up a chain of [assistant(tool_call), tool_result,
+// assistant(tool_call), tool_result] where the truncation point lands
+// between the two pairs (so the second tool_result's parent assistant
+// is at index >= 2 before the truncation walks past it). The new
+// code finds the parent assistant and pulls in the chain intact.
+// ===========================================================================
+TEST_CASE("Messages - truncate_if_needed preserves multi-step tool chain (B5)") {
+    fs::path proj = create_test_project();
+    Messages msgs(proj, {});
+    msgs.load();  // creates messages.json with []
+
+    // Build a chain that totals > 2000 bytes. Each tool result has
+    // enough padding to push us over the limit. Tool ids are "A1" and
+    // "B2" — the parent assistant must be present in the truncated
+    // chain for both, or the next LLM call fails with 400.
+    json test_msgs = json::array();
+    test_msgs.push_back({{"role", "user"},   {"content", "do step 1"}});
+    test_msgs.push_back({
+        {"role", "assistant"}, {"content", ""},
+        {"tool_calls", json::array({
+            {{"id", "A1"}, {"type", "function"},
+             {"function", {{"name", "do_tool"}, {"arguments", "{}"}}}}
+        })}});
+    std::string padding_a(800, 'x');
+    test_msgs.push_back({
+        {"role", "tool"}, {"tool_call_id", "A1"},
+        {"content", "tool-msg-A1-" + padding_a}});
+    test_msgs.push_back({{"role", "user"},   {"content", "ok now do step 2"}});
+    test_msgs.push_back({
+        {"role", "assistant"}, {"content", ""},
+        {"tool_calls", json::array({
+            {{"id", "B2"}, {"type", "function"},
+             {"function", {{"name", "do_tool"}, {"arguments", "{}"}}}}
+        })}});
+    std::string padding_b(800, 'y');
+    test_msgs.push_back({
+        {"role", "tool"}, {"tool_call_id", "B2"},
+        {"content", "tool-msg-B2-" + padding_b}});
+    test_msgs.push_back({{"role", "user"},   {"content", "thanks"}});
+    msgs.set_messages(test_msgs);
+
+    auto result = msgs.truncate_if_needed(2000);
+    CHECK(result.value("truncated", false) == true);
+
+    auto& arr = msgs.get_messages();
+    for (size_t i = 0; i < arr.size(); ++i) {
+        if (arr[i].value("role", "") != "tool") continue;
+        std::string tc_id = arr[i].value("tool_call_id", "");
+        INFO("Checking tool result at index " << i
+             << " (id='" << tc_id << "')");
+        // Walk backward looking for an assistant with matching id.
+        bool found = false;
+        for (size_t j = i; j-- > 0; ) {
+            if (arr[j].value("role", "") != "assistant") continue;
+            if (!arr[j].contains("tool_calls")) continue;
+            for (const auto& tc : arr[j]["tool_calls"]) {
+                if (tc.value("id", "") == tc_id) { found = true; break; }
+            }
+            if (found) break;
+        }
+        CHECK(found);
+    }
+
+    cleanup_test_project(proj);
+}
+
+// ===========================================================================
+// §B8 regression test: inject_context_stats does not drop the trailing
+// tail of the system prompt when the stats block is the LAST section.
+//
+// Pre-fix, the erase-from-`# Context Status`-to-next-heading logic
+// searched for `\n# ` (or `\n## `) AFTER the stats block. When the stats
+// block was the last section in the system prompt, no such heading
+// existed; the code fell through to `context_end = content.size()`
+// and `content.erase(ctx_start, content.size() - ctx_start)` —
+// wiping everything after the stats block, including the parts of
+// the system prompt that came after it.
+// ===========================================================================
+TEST_CASE("Messages - inject_context_stats preserves trailing prompt (B8)") {
+    fs::path proj = create_test_project();
+    Messages msgs(proj, {});
+
+    // System prompt where the Context Status block is the LAST section.
+    // (No H1/H2 heading follows it.)
+    std::string system_with_stats_last =
+        "# Role\n"
+        "You are a helpful assistant.\n"
+        "\n"
+        "## Context Status\n"
+        "- **Token Usage**: 100/1000 (10%)\n"
+        "- **Iterations**: 1/100\n"
+        "- **Messages**: 3\n"
+        "<!-- /daedalus-context-status -->\n"   // include sentinel for clean
+                                                // first-time write
+        "\n"
+        "## Closing Notes\n"
+        "Always cite your sources.\n";           // ← would be wiped by the bug
+
+    // Pre-fix blocks # Context Status body would be replaced
+    // wholesale; # Closing Notes would survive the H2 search but only
+    // by accident (it has the sentinel-friendly pattern). With the
+    // sentinel fix, we erase EXACTLY the prior sentinel block, leaving
+    // everything else intact.
+    msgs.get_messages().push_back({
+        {"role", "system"},
+        {"content", system_with_stats_last}});
+    msgs.get_messages().push_back({{"role", "user"}, {"content", "hi"}});
+    msgs.get_messages().push_back({{"role", "assistant"}, {"content", "hello"}});
+
+    // Run inject (uses the stats config).
+    msgs.inject_context_stats(500, 2, 100);
+
+    // Pull the post-injection content out and verify the trailing
+    // "Closing Notes" survived.
+    auto& arr = msgs.get_messages();
+    std::string post = arr[0].value("content", "");
+
+    CHECK(post.find("# Role") != std::string::npos);
+    CHECK(post.find("You are a helpful assistant") != std::string::npos);
+    CHECK(post.find("## Closing Notes") != std::string::npos);
+    CHECK(post.find("Always cite your sources") != std::string::npos);
+
+    // Exactly one sentinel line — not two (which would mean a stale
+    // pre-fix block was left behind).
+    size_t s1 = post.find("<!-- /daedalus-context-status -->");
+    REQUIRE(s1 != std::string::npos);
+    size_t s2 = post.find("<!-- /daedalus-context-status -->", s1 + 1);
+    CHECK(s2 == std::string::npos);
+
+    cleanup_test_project(proj);
+}

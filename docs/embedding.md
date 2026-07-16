@@ -37,10 +37,6 @@ public:
     void on_log(daedalus::LogLevel lvl, std::string_view msg) noexcept override {
         std::cerr << "[" << daedalus::to_string(lvl) << "] " << msg << "\n";
     }
-    std::string request_user_input(std::string_view prompt) override {
-        std::cerr << prompt << "\n> " << std::flush;
-        std::string line; std::getline(std::cin, line); return line;
-    }
     bool request_command_approval(std::string_view cmd) override {
         std::cerr << "Approve: " << cmd << " [y/N] " << std::flush;
         char c{}; std::cin.get(c);
@@ -52,7 +48,7 @@ public:
 int main() {
     daedalus::AgentConfig cfg;
     cfg.project_root = ".";
-    cfg.settings_path = daedalus::default_settings_path();
+    cfg.daedalus_home = daedalus::Paths::global().user_root();   // $XDG_DATA_HOME/daedalus
     cfg.session_id = "demo-session";
 
     auto sink = std::make_shared<StdoutSink>();
@@ -65,7 +61,7 @@ int main() {
         agent.run_one_turn();      // one user msg → loop → stop/cancel/error
         std::cout << '\n';
     }
-    // dtor calls cleanup() automatically; explicit call also fine.
+    // dtor calls shutdown() automatically; explicit call is also fine.
 }
 ```
 
@@ -77,9 +73,11 @@ Link with `-ldaedalus -lcurl -lpthread -lssl -lcrypto -lpng -lpoppler-cpp`
 | Step | Call | Notes |
 |------|------|-------|
 | Construct | `Agent(cfg, sink)` | Does not touch network/disk. |
-| Initialize | `agent.initialize()` | Loads settings, MCP, memory. Idempotent. |
+| Initialize | `agent.initialize()` | Opens `SettingsStore`, loads MCP, skills, memory. Idempotent. |
 | Drive a turn | `agent.submit_user_message(t)` then `agent.run_one_turn()` | Returns when agent emits `stop()`, errors, or is cancelled. |
 | Inspect state | `agent.state()`, `agent.stats()` | Read-only. |
+| Cancel | `agent.cancel()` (or `run_one_turn(stop_token)`) | Idempotent. |
+| Tear down | `agent.shutdown()` | Idempotent. Called by dtor. |
 
 ### The AgentSink Contract
 
@@ -112,7 +110,6 @@ struct daedalus::AgentSink {
                         std::string_view message) noexcept;
 
     // Host I/O requests (block the agent thread)
-    virtual std::string request_user_input(std::string_view prompt);
     virtual bool        request_command_approval(std::string_view command);
 
     // Optional notifications
@@ -147,8 +144,8 @@ calls — use the structured `on_tool_call` / `on_tool_result` events.
 **`on_tool_call` / `on_tool_result`**: The structured tool events.
 `on_tool_result`'s `result` JSON contains the tool's output (success or
 error — check for `result.contains("error")`). For blocking tools
-(`execute_bash`, `ask_user`), `request_command_approval` /
-`request_user_input` fires **between** the call and result.
+like `execute_bash`, `request_command_approval` fires **between**
+the call and result.
 
 **`on_state_change`**: `from` and `to` are integer values of the public
 `daedalus::AgentState` enum. Use
@@ -166,13 +163,15 @@ warnings). Route to a log window or file.
 | `Error` | Network failures, parse errors |
 | `Fatal` | Never seen — agent transitions to Error state |
 
-**`request_user_input`**: Called for `ask_user` tool. Blocks the agent
-thread until it returns. Return a sentinel (e.g. `"[cancelled]"`) if
-your UI doesn't support blocking.
-
 **`request_command_approval`**: Called for `execute_bash`. Return `true`
-to allow, `false` to deny. If `AgentConfig::auto_approve` is `true`,
+to allow, `false` to deny. If `AgentConfig::auto_approve` is `true`
+(effective value is OR with `SettingsStore::get_auto_approve()`),
 this callback is **not** called.
+
+> **Removed in v0.4.0:** `AgentSink::request_user_input(std::string_view)`
+> and the `ask_user` tool. The agent has no user-prompting path
+> mid-turn — use `tell_user` (informational only) or wait for the
+> turn to finish and prompt the host's loop.
 
 **`on_bell`**: Analog of a terminal bell. Fire a notification if your
 host supports it.
@@ -206,37 +205,35 @@ struct Gtksink : daedalus::AgentSink {
 
 ### Settings, memory, MCP paths
 
-The Agent reads its config from `cfg.settings_path` (highest priority).
-If empty, the default is `$DAEDALUS_HOME/settings/settings.json` if
-`$DAEDALUS_HOME` is set, else `$HOME/.daedalus/settings/settings.json`.
+> **v0.4.0+:** daedalus no longer reads `settings.json` at runtime —
+> the SQLite-backed `daedalus::SettingsStore` is the single source of
+> truth. The `AgentConfig` `daedalus_home` field points the Agent at
+> the store directory (`$XDG_DATA_HOME/daedalus/daedalus.db` by
+> default). The legacy `cfg.settings_path` /
+> `cfg.mcp_servers_path` / `cfg.mcp_env_path` / `cfg.memory_dir`
+> fields have been removed — see `docs/settings.md` for the new API.
 
-The same priority applies to `cfg.mcp_servers_path`, `cfg.mcp_env_path`,
-and `cfg.memory_dir`. Use `$DAEDALUS_HOME` for tests / CI / shared
-configs; use `AgentConfig` fields when the path is host-specific.
-
-**Note**: daedalus deliberately ignores the legacy `$DAEDALUS_HOME`
-env var. That belongs to the original daedalus agent (different project,
-different conventions); this library has its own `$DAEDALUS_HOME`.
+The same priority applies to the `daedalus_home` field. Use
+`$DAEDALUS_HOME` for tests / CI / shared configs; use
+`AgentConfig::daedalus_home` when the path is host-specific.
 
 ```cpp
-// Normal host: settings live under ~/.daedalus/
+// Normal host: settings live under $XDG_DATA_HOME/daedalus
 daedalus::AgentConfig cfg;
-cfg.settings_path = daedalus::default_settings_path();   // /home/me/.daedalus/settings/
+cfg.daedalus_home = daedalus::Paths::global().user_root();
 
 // Isolated test: settings live under /tmp/test-daedalus/
 daedalus::AgentConfig cfg;
-cfg.project_root = "/tmp/test-daedalus/project";
-// (no settings_path → falls back to $DAEDALUS_HOME if set, else $HOME/.daedalus)
-// To point at a specific settings dir without an env var:
-cfg.settings_path = "/tmp/test-daedalus/settings/settings.json";
+cfg.project_root  = "/tmp/test-daedalus/project";
+cfg.daedalus_home = "/tmp/test-daedalus";   // SettingsStore will look here
 ```
 
 #### `cfg.daedalus_home` — per-Agent config directory (§Phase 8.5)
 
-If you want a single Agent to have its own isolated settings/mcp/memory
-directory — without setting every path field individually — set
-`cfg.daedalus_home`. Empty derived fields (settings_path, mcp_servers_path,
-mcp_env_path, memory_dir) are then resolved relative to this directory.
+If you want a single Agent to have its own isolated
+settings/skills/memory directory — set `cfg.daedalus_home`. The Agent
+hands this path to `SettingsStore::for_home()` and gets a private
+DB without env-var gymnastics.
 
 ```cpp
 // Two Agents in one process, each with its own config:
@@ -246,8 +243,8 @@ cfg_a.daedalus_home = "/tmp/agent-a/.daedalus";
 daedalus::AgentConfig cfg_b;
 cfg_b.daedalus_home = "/tmp/agent-b/.daedalus";
 
-// Agent A reads /tmp/agent-a/.daedalus/settings/settings.json
-// Agent B reads /tmp/agent-b/.daedalus/settings/settings.json
+// Agent A reads /tmp/agent-a/.daedalus/daedalus.db
+// Agent B reads /tmp/agent-b/.daedalus/daedalus.db
 // They don't see each other's settings, MCP, or memory.
 daedalus::Agent agent_a(std::move(cfg_a), sink_a);
 daedalus::Agent agent_b(std::move(cfg_b), sink_b);
@@ -257,10 +254,9 @@ Resolution priority (highest first):
 
 | Priority | Source | Used for |
 |----------|--------|----------|
-| 1 | `cfg.settings_path`, `cfg.mcp_servers_path`, … | Explicit per-field override |
-| 2 | `cfg.daedalus_home` | Per-Agent config directory |
-| 3 | `$DAEDALUS_HOME` env var | Global override (CI / testing / shared) |
-| 4 | `$HOME/.daedalus` | Per-user default |
+| 1 | `cfg.daedalus_home` | Explicit per-Agent override |
+| 2 | `$DAEDALUS_HOME` env var | Global override (CI / testing / shared) |
+| 3 | `$XDG_DATA_HOME/daedalus` (or `$HOME/.daedalus` legacy) | Per-user default |
 
 Two Agents in one process can have entirely separate configurations
 without using environment variables.
@@ -310,15 +306,15 @@ A bad name throws `std::invalid_argument` from
 filesystem write happens.
 
 **Orthogonal to `daedalus_home`** (Phase 8.5): `daedalus_home` is
-the *config-source* axis (settings.json, mcp/, memory_dir).
-`agent_name` is the *runtime-state* axis (messages.json,
-memory.json inside the project). They don't combine into one
+the *config-source* axis (the `SettingsStore` DB, MCP servers, skills).
+`agent_name` is the *runtime-state* axis (`messages.json`,
+`memory.json` inside the project). They don't combine into one
 path.
 
 Namespaced: `messages.json`, `memory.json`, session files.
-NOT namespaced (project-shared): `skills/`, `mcp/servers.json`.
-`settings.json` is governed by `daedalus_home` (Phase 8.5), not
-by `agent_name` — a "bob" agent reads the same settings.json as
+NOT namespaced (project-shared): `skills/`.
+The `SettingsStore` DB path is governed by `daedalus_home` (Phase
+8.5), not by `agent_name` — a "bob" agent reads the same DB as
 any other agent in the project.
 
 Helper:
@@ -340,18 +336,18 @@ for the full field list. The most-used fields:
 | Field | Purpose |
 |-------|---------|
 | `project_root` | Working directory. The agent reads and writes under this. |
-| `model_name` | Looked up in `settings.json` → host / key / endpoint / model id. |
+| `daedalus_home` | Base directory for the SQLite settings store (and any per-Agent data). |
+| `model_name` | Looked up in `SettingsStore` → host / key / endpoint / model id. |
 | `api_key`, `api_host`, `chat_endpoint` | Optional overrides (skip settings lookup). |
-| `settings_path` | Path to `settings.json`. Defaults to `~/.daedalus/settings/settings.json`. |
-| `auto_approve` | If true, `request_command_approval` is never called. |
+| `auto_approve` | If true, `request_command_approval` is never called. OR'd with `SettingsStore::get_auto_approve()`. |
 | `max_agent_iterations` | Hard cap. The agent stops when this is reached. |
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
 | `session_id` | Opaque correlation id (logged, surfaced to sinks). |
 | `system_prompt` | Override the role the agent plays. See [`docs/agent_system_prompts.md`](./agent_system_prompts.md) — the library appends 9 more sections (tool defs, MCP status, skills, memory, context stats, and the two **always-on** `# State Machine` + `# Reserved Agent Directories` blocks) below your text. |
 | `stream` | `true` (default): SSE streaming — assistant text arrives token-by-token via `on_assistant_delta` (requires an SSE-capable sink). `false`: buffered — full reply arrives in one chunk. |
 | `temperature` | Sampling temperature. See "Temperature priority chain" below. |
-| `mcp_enabled` | `true` (default): load MCP servers from `mcp_servers_path`. `false`: skip MCP entirely (no servers spawned, no MCP tools registered, no `# Active MCP Servers` block). |
-| `mcp_servers_disabled` | Per-server gate. Set of server names (matching keys in `mcp_servers.json`) that the host has disabled. Empty = all enabled. Disabled servers never spawn, never enter the tool registry, and don't appear in the system prompt. See "Per-server MCP gate" below. |
+| `mcp_enabled` | `true` (default): load MCP servers from `SettingsStore::list_mcp_servers()` (or legacy JSON). `false`: skip MCP entirely (no servers spawned, no MCP tools registered, no `# Active MCP Servers` block). |
+| `mcp_servers_disabled` | Per-server gate. Set of server names (matching the `name` column in the `mcp_servers` table) that the host has disabled. Empty = all enabled. Disabled servers never spawn, never enter the tool registry, and don't appear in the system prompt. See "Per-server MCP gate" below. |
 | `skills_dirs` | Directories to scan for `SKILL.md` files. Default empty = no skills. |
 | `skills` | Names to pre-activate. Loaded from any dir in `skills_dirs`. |
 | `skills_disabled` | Per-skill gate. Set of skill names (matching `metadata.name`) that the host has disabled. Empty = all enabled. Disabled skills don't appear in the catalog, can't be pre-activated, and `load_skill <name>` fails at runtime. See "Per-skill gate" below. |
@@ -396,8 +392,9 @@ handling behaviour as the streaming path.
 names (matching the keys in `mcp_servers.json`). The disabled set
 filters at three layers:
 
-1. **`McpServerManager::load_config()`** drops disabled entries from
-   `configs_`, so the spawn step never even sees them.
+1. **`McpServerManager::load_from_store()`** (or `load_config()`) drops
+   disabled entries from `configs_`, so the spawn step never even sees
+   them.
 2. **`list_connected_servers()` / `get_all_tools()`** filter at the
    output boundary — defense-in-depth if `set_disabled_servers()` is
    called after `load_config()` (e.g., reload at runtime).
@@ -407,9 +404,8 @@ filters at three layers:
 
 ```cpp
 daedalus::AgentConfig cfg;
-// Default: load every server from servers.json.
+// Default: load every server from the SettingsStore registry.
 cfg.mcp_enabled             = true;
-cfg.mcp_servers_path        = "~/.daedalus/mcp/servers.json";
 
 // We want MCP enabled, but not the (costly) web-search server.
 cfg.mcp_servers_disabled    = { "minimax-web-search", "minimax-wiki" };
@@ -445,9 +441,9 @@ warn on missing names.
 
 ```cpp
 daedalus::AgentConfig cfg;
-cfg.skills_dirs = { "~/.daedalus/skills/" };     // discover
-cfg.skills      = { "memory-leak" };            // pre-activate
-cfg.skills_disabled = { "firefox" };             // but not this one
+cfg.skills_dirs = { daedalus::Paths::global().global_skills_dir() }; // discover
+cfg.skills      = { "memory-leak" };                                // pre-activate
+cfg.skills_disabled = { "firefox" };                                 // but not this one
 ```
 
 Empty `skills_disabled` (default) is fully backward-compatible —
@@ -461,11 +457,11 @@ when `cfg.system_prompt` is empty). Demo's text is the base; project
 text is concatenated after with a blank-line separator.
 
 ```
-~/.daedalus/                                     ← config (Phase 8.5)
-└── settings/settings.json
+$XDG_DATA_HOME/daedalus/                          ← user config & settings (v0.4.0+)
+└── daedalus.db                                  ← SettingsStore (SQLite)
 
-<project_root>/                                 ← runtime state
-└── .daedalus/
+<project_root>/                                  ← runtime state
+└── .daedalus[-<agent_name>]/
     ├── messages.json
     ├── memory.json
     └── system_prompt.txt      ← (NEW) merged into cfg.system_prompt
@@ -493,14 +489,21 @@ The sampling temperature sent on every LLM request is resolved from a
 1. **`cfg.temperature >= 0.0`** — explicit session override. Hosts set
    this in their `AgentConfig`. Use it to bias the model per-session
    (e.g. 0.7 for a creative-writing demo, 0.0 for a strict code review).
-2. **Model's value from `settings.json`** — set per model entry:
-   ```json
-   "models": {
-       "minimax-m3": { "model": "MiniMax-M3", "temperature": 0.7 },
-       "minimax-m2.7": { "model": "MiniMax-M2.7", "temperature": 0.0 }
-   }
+2. **Model's value from `SettingsStore`** — set per model entry via
+   `SettingsStore::upsert_model({ ..., .temperature = 0.7 })`:
+   ```cpp
+   store.upsert_model(daedalus::ModelConfig{
+       .name        = "minimax-m3",
+       .model_id    = "MiniMax-M3",
+       .temperature = 0.7,
+   });
+   store.upsert_model(daedalus::ModelConfig{
+       .name        = "minimax-m2.7",
+       .model_id    = "MiniMax-M2.7",
+       .temperature = 0.0,   // deterministic for code agents
+   });
    ```
-   Lets one settings.json serve multiple use cases: deterministic for
+   Lets one SettingsStore serve multiple use cases: deterministic for
    the code agent, exploratory for the brainstorming demo.
 3. **`0.0`** — library default. Deterministic (good for code agents).
 
@@ -515,7 +518,7 @@ cfg.temperature = 0.0;
 // Creative brainstorming session
 cfg.temperature = 0.7;
 
-// Use the model's settings.json value (default — omit the field)
+// Use the model's SettingsStore value (default — omit the field)
 cfg.temperature = -1.0;
 ```
 
@@ -536,12 +539,16 @@ via `agent.active_model().temperature` after `initialize()`.
 | `Planning` | Research / strategy. |
 | `Acting` | Running tools. |
 | `Verifying` | Build / test phase. |
-| `AwaitingUser` | `ask_user` in flight (sink blocked). |
 | `AwaitingApproval` | Bash approval in flight (sink blocked). |
 | `Compressing` | Context compression in progress. |
 | `Done` | Agent emitted `stop()` cleanly. |
 | `Cancelled` | Host cancelled (cancel() or stop_token). |
 | `Error` | Unrecoverable error. |
+
+> **Removed in v0.4.0:** `AwaitingUser`. The `ask_user` tool and the
+> sink-blocking `request_user_input` were removed; the agent has no
+> mid-turn user-prompting path. If your host needs to interrupt a
+> turn, call `agent.cancel()` and prompt the host's outer loop.
 
 See [`sink.md`](sink.md) for the events the sink receives as the
 state machine transitions.
@@ -579,23 +586,19 @@ The library never installs signal handlers. Hosts own signals
 
 The library is **input-source agnostic**. It never reads from
 `std::cin`, never installs signal handlers, never sets terminal
-raw mode. There are exactly two ways to feed input to a running
+raw mode. There is exactly one way to feed input to a running
 agent:
 
 1. **`Agent::submit_user_message(std::string)`** — push text into
    the agent's pending-message queue. The next `run_one_turn()`
    consumes it. Use this from any host (CLI, web, tests,
    background job) that has its own input pipeline.
-2. **`AgentSink::request_user_input(std::string_view prompt)`** —
-   the agent calls this when it wants to ask the user a question
-   mid-turn (typically via the `ask_user` tool). The host's sink
-   implementation blocks until it has an answer, returns the string
-   the user gave.
 
-If your host doesn't provide a sink AND the agent needs to ask a
-question, `LLMClient::run_agent_cycle` throws
-`std::runtime_error` with a clear message — the library will not
-silently reach for `std::cin` itself.
+> **Removed in v0.4.0:** `AgentSink::request_user_input(...)` and the
+> `ask_user` tool. The agent has no mid-turn user-prompting path.
+> If your host needs a back-and-forth, submit the next user message
+> in the host's outer loop between `run_one_turn()` calls (or call
+> `agent.cancel()` to interrupt the current turn first).
 
 ### Example: minimal std::getline host
 
@@ -603,12 +606,6 @@ silently reach for `std::cin` itself.
 struct StdcinSink : public daedalus::AgentSink {
     void on_log(daedalus::LogLevel, std::string_view msg) noexcept override {
         std::cerr << msg << '\n';
-    }
-    std::string request_user_input(std::string_view prompt) override {
-        std::cout << "\n[ask_user] " << prompt << "\n> " << std::flush;
-        std::string line;
-        std::getline(std::cin, line);
-        return line;
     }
     bool request_command_approval(std::string_view cmd) override {
         std::cout << "\nRun? " << cmd << " [y/n] " << std::flush;
@@ -628,10 +625,11 @@ daedalus library doesn't ship one. The pattern:
    (or [linenoise-ng](https://github.com/arangodb/linenoise-ng), or
    [readline](https://tiswww.case.edu/php/chet/readline/rltop.html),
    or your favourite equivalent) into **your host's** source tree.
-2. In your `AgentSink::request_user_input()`, call your input
-   library's line-editing function instead of `std::getline`.
-3. In your host's main loop, call the library's history-save
-   function on shutdown if you want persistent history.
+2. In your host's main loop, call your input library's line-editing
+   function and feed the result into `agent.submit_user_message()`
+   between `run_one_turn()` calls.
+3. On shutdown call your library's history-save function if you want
+   persistent history.
 
 The daedalus library doesn't care which input library you use, how
 you format the prompt, or whether you support multi-line edit —

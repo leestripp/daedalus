@@ -1,6 +1,7 @@
 #include "SessionMemory.h"
 #include "daedalus/settings.h"   // v0.3.5: SettingsStore mirror
 #include "Logger.h"
+#include "core/Utf8Utils.h"  // §B11/B28: shared utf8_sanitize_replace_invalid
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -25,78 +26,15 @@ using json = nlohmann::json;
 
 // ============================================================================
 // UTF-8 Sanitization Helpers (to prevent memory file corruption)
+// §B11/B28: uses shared utf8_sanitize_replace_invalid from Utf8Utils.h
 // ============================================================================
-
-// Sanitize a string to ensure it contains valid UTF-8
-// Replaces invalid bytes with '?'
-static std::string sanitize_utf8(const std::string& input) {
-    int expected_continuations = 0;
-    size_t sequence_start_pos = 0;
-    std::string result;
-    result.reserve(input.size());
-    
-    for (unsigned char c : input) {
-        if (expected_continuations > 0) {
-            if ((c >= 0x80 && c <= 0xBF)) {
-                result += static_cast<char>(c);
-                expected_continuations--;
-            } else {
-                // Invalid byte in sequence - replace the start byte
-                result[sequence_start_pos] = '?';
-                result.resize(sequence_start_pos + 1);
-                expected_continuations = 0;
-                if (c < 0x80) {
-                    result += static_cast<char>(c);
-                } else if (c >= 0xC0 && c <= 0xDF) {
-                    sequence_start_pos = result.size();
-                    result += static_cast<char>(c);
-                    expected_continuations = 1;
-                } else if (c >= 0xE0 && c <= 0xEF) {
-                    sequence_start_pos = result.size();
-                    result += static_cast<char>(c);
-                    expected_continuations = 2;
-                } else if (c >= 0xF0 && c <= 0xF7) {
-                    sequence_start_pos = result.size();
-                    result += static_cast<char>(c);
-                    expected_continuations = 3;
-                }
-            }
-        } else {
-            if (c < 0x80) {
-                result += static_cast<char>(c);
-            } else if (c >= 0xC0 && c <= 0xDF) {
-                sequence_start_pos = result.size();
-                result += static_cast<char>(c);
-                expected_continuations = 1;
-            } else if (c >= 0xE0 && c <= 0xEF) {
-                sequence_start_pos = result.size();
-                result += static_cast<char>(c);
-                expected_continuations = 2;
-            } else if (c >= 0xF0 && c <= 0xF7) {
-                sequence_start_pos = result.size();
-                result += static_cast<char>(c);
-                expected_continuations = 3;
-            } else {
-                result += '?';
-            }
-        }
-    }
-    
-    // Handle trailing incomplete sequences
-    if (expected_continuations > 0) {
-        result[sequence_start_pos] = '?';
-        result.resize(sequence_start_pos + 1);
-    }
-    
-    return result;
-}
 
 // Recursively sanitize string values in JSON to ensure valid UTF-8
 static void sanitize_json(json& j) {
     if (j.is_object()) {
         for (auto& [key, value] : j.items()) {
             if (value.is_string()) {
-                value = sanitize_utf8(value.get<std::string>());
+                value = utf8_sanitize_replace_invalid(value.get<std::string>());
             } else if (value.is_object() || value.is_array()) {
                 sanitize_json(value);
             }
@@ -104,7 +42,7 @@ static void sanitize_json(json& j) {
     } else if (j.is_array()) {
         for (auto& item : j) {
             if (item.is_string()) {
-                item = sanitize_utf8(item.get<std::string>());
+                item = utf8_sanitize_replace_invalid(item.get<std::string>());
             } else if (item.is_object() || item.is_array()) {
                 sanitize_json(item);
             }

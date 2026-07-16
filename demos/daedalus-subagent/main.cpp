@@ -87,7 +87,7 @@ public:
         child_cfg.system_prompt       = cfg_.child_system_prompt;
         child_cfg.max_agent_iterations = cfg_.max_iterations;
         child_cfg.session_id          = "subagent:";
-        child_cfg.settings_path       = daedalus::default_settings_path();
+        child_cfg.daedalus_home       = daedalus::default_daedalus_home();
         child_cfg.auto_approve       = true;   // child is read-only
         child_cfg.agent_name         = "child";
         child_cfg.skills_dirs         = { "/home/ubuntu/.daedalus/skills/" };

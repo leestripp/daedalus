@@ -315,6 +315,84 @@ inline bool is_ascii_only(const std::string& str) {
 /**
  * @brief Common UTF-8 test strings for testing
  */
+/**
+ * @brief Replace invalid UTF-8 bytes with '?' using a state-machine.
+ * Correctly handles multi-byte sequences: replaces only the start byte
+ * of an invalid sequence with '?', preserving any trailing bytes that
+ * are valid standalone bytes (they will be re-evaluated on the next
+ * iteration as fresh ASCII or new sequence starts).
+ * @param input The string to sanitize
+ * @return A new string with invalid bytes replaced by '?'
+ */
+inline std::string utf8_sanitize_replace_invalid(const std::string& input) {
+    int expected_continuations = 0;
+    size_t sequence_start_pos = 0;
+    std::string result;
+    result.reserve(input.size());
+
+    for (unsigned char c : input) {
+        if (expected_continuations > 0) {
+            if ((c >= 0x80 && c <= 0xBF)) {
+                // Valid continuation byte
+                result += static_cast<char>(c);
+                expected_continuations--;
+            } else {
+                // Invalid continuation byte: replace the sequence start with '?'
+                result[sequence_start_pos] = '?';
+                // §B12 fix: do NOT resize here — keep trailing bytes already
+                // appended after the sequence start. They are independent
+                // sequences that will be re-evaluated on the next loop iteration.
+                expected_continuations = 0;
+                // Re-evaluate current byte as a fresh start
+                if (c < 0x80) {
+                    result += static_cast<char>(c);
+                } else if (c >= 0xC0 && c <= 0xDF) {
+                    sequence_start_pos = result.size();
+                    result += static_cast<char>(c);
+                    expected_continuations = 1;
+                } else if (c >= 0xE0 && c <= 0xEF) {
+                    sequence_start_pos = result.size();
+                    result += static_cast<char>(c);
+                    expected_continuations = 2;
+                } else if (c >= 0xF0 && c <= 0xF7) {
+                    sequence_start_pos = result.size();
+                    result += static_cast<char>(c);
+                    expected_continuations = 3;
+                } else {
+                    result += '?';
+                }
+            }
+        } else {
+            if (c < 0x80) {
+                result += static_cast<char>(c);
+            } else if (c >= 0xC0 && c <= 0xDF) {
+                sequence_start_pos = result.size();
+                result += static_cast<char>(c);
+                expected_continuations = 1;
+            } else if (c >= 0xE0 && c <= 0xEF) {
+                sequence_start_pos = result.size();
+                result += static_cast<char>(c);
+                expected_continuations = 2;
+            } else if (c >= 0xF0 && c <= 0xF7) {
+                sequence_start_pos = result.size();
+                result += static_cast<char>(c);
+                expected_continuations = 3;
+            } else {
+                result += '?';
+            }
+        }
+    }
+
+    // Handle trailing incomplete sequences at end of input
+    if (expected_continuations > 0) {
+        result[sequence_start_pos] = '?';
+        // Do not resize — any trailing bytes after sequence_start_pos that
+        // were appended during the sequence are valid standalone bytes.
+    }
+
+    return result;
+}
+
 namespace utf8_test_strings {
     // ASCII strings
     inline const std::string empty = "";

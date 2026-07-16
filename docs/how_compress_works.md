@@ -365,21 +365,20 @@ By using a synthetic tool call pair, we:
 
 ### Per-Model Context Size
 
-Each model in `settings.json` can specify its own `max_context_size`.
-This is the only way to set context size (no global setting).
+Each model in the `daedalus::SettingsStore` can specify its own
+`max_context_size`. This is the only way to set context size (no
+global setting). See [`docs/settings.md`](settings.md) for the
+`upsert_model()` API.
 
-```json
-{
-  "models": {
-    "minimax-m3": {
-      "host": "https://api.minimax.io",
-      "api_key": "sk-cp-...",
-      "model": "MiniMax-M3",
-      "max_context_size": 1000000,
-      "endpoints": {"chat": "/v1/chat/completions"}
-    }
-  }
-}
+```cpp
+#include <daedalus/settings.h>
+auto& store = daedalus::SettingsStore::instance();
+store.upsert_model(daedalus::ModelConfig{
+    .name             = "minimax-m3",
+    .host             = "https://api.minimax.io",
+    .model_id         = "MiniMax-M3",
+    .max_context_size = 500000,
+});
 ```
 
 When you set a model as default, daedalus uses that model's

@@ -108,28 +108,13 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
     , body_(std::make_unique<Body>())
     , host_ctx_(std::make_shared<LibraryToolContext>(cfg_))
 {
-    // §Phase 8.5: resolve derived paths from `cfg.daedalus_home` if those
-    // path fields are empty. Priority (highest first):
-    //   1. cfg.settings_path etc. (explicit per-file)
-    //   2. cfg.daedalus_home (per-Agent root)
-    //   3. default_settings_path() (Plan.md §3.7 — honours
-    //      $DAEDALUS_HOME, $XDG_CONFIG_HOME, legacy $HOME/.daedalus)
-    if (cfg_.settings_path.empty()) {
-        if (!cfg_.daedalus_home.empty()) {
-            cfg_.settings_path = cfg_.daedalus_home / "config.json";
-        } else {
-            cfg_.settings_path = default_settings_path();
-        }
-    }
-    if (cfg_.mcp_servers_path.empty() && !cfg_.daedalus_home.empty()) {
-        cfg_.mcp_servers_path = cfg_.daedalus_home / "mcp" / "servers.json";
-    }
-    if (cfg_.mcp_env_path.empty() && !cfg_.daedalus_home.empty()) {
-        cfg_.mcp_env_path = cfg_.daedalus_home / "mcp" / ".env";
-    }
-    if (cfg_.memory_dir.empty() && !cfg_.daedalus_home.empty()) {
-        cfg_.memory_dir = cfg_.daedalus_home / "memory";
-    }
+    // §v0.5.0: settings moved to SQLite. AgentConfig::settings_path /
+    // mcp_servers_path / mcp_env_path / memory_dir are now deprecated
+    // ([[deprecated]] in default_paths.h) — the library reads from
+    // SettingsStore via cfg.daedalus_home. The legacy path-defaulting
+    // block that used to live here (assigning those four fields from
+    // cfg.daedalus_home or `default_*_path()` helpers) was deleted in
+    // v0.4.2: those fields were set, never read.
 
     // §v0.5.0: wire directly to SettingsStore instead of SettingsManager.
     // Use per-agent DB if daedalus_home is set, otherwise the global singleton.
@@ -631,6 +616,23 @@ std::vector<SkillInfo> AgentImpl::list_skills() const
     return out;
 }
 
+// §B18 refactor: shared helper to convert ModelConfig → ModelInfo.
+// Both list_models() and active_model() build ModelInfo from the same
+// ModelConfig fields; keeping the conversion in one place prevents divergence.
+static ModelInfo to_model_info(const daedalus::ModelConfig& cfg,
+                               const daedalus::SettingsStore& store) {
+    ModelInfo mi;
+    mi.name            = cfg.name;
+    mi.model_id        = cfg.model_id;
+    mi.host            = cfg.host;
+    mi.chat_endpoint   = cfg.chat_endpoint;
+    mi.max_context_size = (cfg.max_context_size == 0)
+                              ? store.get_max_context_size_for_model(cfg.name)
+                              : cfg.max_context_size;
+    mi.temperature = cfg.temperature;  // §Phase 8.7
+    return mi;
+}
+
 std::vector<ModelInfo> AgentImpl::list_models() const
 {
     std::vector<ModelInfo> out;
@@ -638,16 +640,7 @@ std::vector<ModelInfo> AgentImpl::list_models() const
     const auto models = body_->store->list_models();
     out.reserve(models.size());
     for (const auto& cfg : models) {
-        ModelInfo mi;
-        mi.name            = cfg.name;
-        mi.model_id        = cfg.model_id;
-        mi.host            = cfg.host;
-        mi.chat_endpoint   = cfg.chat_endpoint;
-        mi.max_context_size = (cfg.max_context_size == 0)
-                                ? body_->store->get_max_context_size_for_model(cfg.name)
-                                : cfg.max_context_size;
-        mi.temperature = cfg.temperature;  // §Phase 8.7
-        out.push_back(std::move(mi));
+        out.push_back(to_model_info(cfg, *body_->store));
     }
     return out;
 }
@@ -660,22 +653,13 @@ ModelInfo AgentImpl::active_model() const noexcept
     //   2. settings store default_model
     //   3. first model in settings store
     if (!body_->store) return {};
-    const auto models = body_->store->list_models();
+    const auto& store = *body_->store;
+    const auto models = store.list_models();
 
+    // §B18: uses shared to_model_info() helper.
     auto find_by_name = [&](const std::string& name) -> std::optional<ModelInfo> {
         for (const auto& cfg : models) {
-            if (cfg.name == name) {
-                ModelInfo mi;
-                mi.name = cfg.name;
-                mi.model_id = cfg.model_id;
-                mi.host = cfg.host;
-                mi.chat_endpoint = cfg.chat_endpoint;
-                mi.max_context_size = (cfg.max_context_size == 0)
-                    ? body_->store->get_max_context_size_for_model(name)
-                    : cfg.max_context_size;
-                mi.temperature = cfg.temperature;  // §Phase 8.7
-                return mi;
-            }
+            if (cfg.name == name) return to_model_info(cfg, store);
         }
         return std::nullopt;
     };
@@ -686,24 +670,14 @@ ModelInfo AgentImpl::active_model() const noexcept
     }
     // 2. default_model from settings store
     try {
-        auto default_name = body_->store->get_default_model_name();
+        auto default_name = store.get_default_model_name();
         if (!default_name.empty()) {
             if (auto m = find_by_name(default_name)) return *m;
         }
     } catch (...) { /* not fatal */ }
     // 3. first model in settings store
     if (!models.empty()) {
-        const auto& cfg = models.front();
-        ModelInfo mi;
-        mi.name = cfg.name;
-        mi.model_id = cfg.model_id;
-        mi.host = cfg.host;
-        mi.chat_endpoint = cfg.chat_endpoint;
-        mi.max_context_size = (cfg.max_context_size == 0)
-            ? body_->store->get_max_context_size_for_model(cfg.name)
-            : cfg.max_context_size;
-        mi.temperature = cfg.temperature;  // §Phase 8.7
-        return mi;
+        return to_model_info(models.front(), store);
     }
     return {};
 }
