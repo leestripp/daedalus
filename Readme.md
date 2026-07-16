@@ -521,6 +521,36 @@ To exercise the webui from a terminal (uses the Firefox BiDi skill):
 # Then open http://127.0.0.1:8088/ in Firefox, type a message.
 ```
 
+**§F3 — HTTP API contract.** The webui exposes these endpoints. Note
+the body shape: `/sessions/<id>/messages` expects `{"message": "..."}`,
+NOT `{"content": "..."}`.
+
+```bash
+# Health check
+curl -s http://127.0.0.1:8088/healthz
+# → {"ok":true}
+
+# Server info
+curl -s http://127.0.0.1:8088/info
+# → {"cwd":"/workspace/daedalus"}
+
+# Create a new session, get the session_id
+SID=$(curl -s -X POST http://127.0.0.1:8088/sessions \
+        | python3 -c 'import sys,json; print(json.load(sys.stdin)["session_id"])')
+
+# Check the agent's current state (0=Idle, 7=Done)
+curl -s http://127.0.0.1:8088/sessions/$SID/state
+
+# Submit a user message. NOTE: the field name is "message", not "content".
+curl -s -X POST http://127.0.0.1:8088/sessions/$SID/messages \
+        -H 'Content-Type: application/json' \
+        -d '{"message":"what is 2 + 2? reply with just the number."}'
+# → {"status":"queued"}
+```
+
+SSE events stream from `/sessions/<id>/events`. Open
+`http://127.0.0.1:8088/` in a browser to see them live in the UI.
+
 ---
 
 ## Architecture

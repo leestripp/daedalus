@@ -83,7 +83,7 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 
 ### F3 — Readme webui section doesn't document the `message` field name
 
-🟡 **Open.** `/sessions/<id>/messages` expects `{"message": "..."}`, not `{"content": "..."}`. Needs a `curl` example in the Readme webui section.
+✅ **Done (2026-07-16).** Added a curl-based HTTP API contract block to `Readme.md` documenting `POST /sessions/<id>/messages` with `{"message":"..."}` and the SSE event stream. Covers `/healthz`, `/info`, `/sessions`, `/sessions/<id>/state`, and `/sessions/<id>/messages`.
 
 ---
 
