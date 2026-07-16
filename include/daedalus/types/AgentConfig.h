@@ -66,17 +66,16 @@ struct AgentConfig {
     // ----- Filesystem overrides -----
     // All optional; helpers in <daedalus/default_paths.h> compute sensible defaults.
     //
-    // §Phase 8.5 (2026-07-10): each Agent can have its own codemax home.
+    // §Phase 8.5 (2026-07-10): each Agent can have its own daedalus home.
     // If set, this is the base for all derived paths below (settings,
     // mcp_servers, mcp_env, memory). If a derived field is explicitly
     // set, it wins over the daedalus_home default. Two Agents in one
     // process can now read different settings.json files, use different
     // MCP servers, and store memory in different places.
     //
-    // §Phase 10+: the empty default is $DAEDALUS_HOME (daedalus-lib's
-    // own env var) or $HOME/.daedalus. The legacy $DAEDALUS_HOME belongs
-    // to the original codemax agent and is NOT consulted by this library.
-    std::filesystem::path daedalus_home;      // empty = $DAEDALUS_HOME or $HOME/.daedalus
+    // §Phase 10+: the empty default is $DAEDALUS_HOME (this library's
+    // env var) or $HOME/.local/share/daedalus (XDG default).
+    std::filesystem::path daedalus_home;      // empty = $DAEDALUS_HOME or XDG default
     // §Plan.md v0.5.0 (settled): the per-field *_path overrides
     // (`settings_path`, `mcp_servers_path`, `mcp_env_path`, `memory_dir`,
     // `log_file`) are GONE. Hosts that want a custom path for any of these

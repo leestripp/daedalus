@@ -60,9 +60,8 @@ public:
 	// --- Agent namespace dir (the boundary) ---
 
 	/// `<project_root>/.daedalus/` (empty agent_name) or
-	/// `<project_root>/.daedalus-<name>/`.
-	/// Falls back to the legacy `.codemax[-<name>]/` path for READS
-	/// only when the new path doesn't exist (Phase 12 backward-compat).
+	/// `<project_root>/.daedalus-<name>/`. Returns the path
+	/// unconditionally — caller creates the directory on first write.
 	const std::filesystem::path& agent_dir() const noexcept;
 
 	// --- Concrete project-local file paths ---

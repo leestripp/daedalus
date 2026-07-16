@@ -2,13 +2,11 @@
  * @file project_paths.cpp
  * @brief Per-project, per-agent filesystem location resolver.
  *
- * Backward compat (§Phase 12 rename codemax → daedalus): the legacy
- * `<project_root>/.codemax[-<name>]/` path is honoured as a READ
- * fallback. Writes always go to the new `.daedalus[-<name>]/`
- * location. The selection rule matches the existing
- * `resolve_agent_dir()` logic in `src/library/default_paths.cpp` —
- * we just port it here so all per-project path resolution lives in
- * one place.
+ * Resolves `<project_root>/.daedalus[-<name>]/` for every
+ * (project_root, agent_name) pair. The same ProjectPaths logic
+ * is shared with the legacy `resolve_agent_dir()` helper in
+ * `src/library/default_paths.cpp` so all per-project path
+ * resolution lives in one place.
  */
 #include "daedalus/project_paths.h"
 
@@ -23,8 +21,6 @@ namespace fs = std::filesystem;
 namespace {
 constexpr std::string_view kAgentDirNewPrefix = ".daedalus";
 constexpr std::string_view kAgentDirNewNamedPrefix = ".daedalus-";
-constexpr std::string_view kAgentDirLegacyPrefix = ".codemax";
-constexpr std::string_view kAgentDirLegacyNamedPrefix = ".codemax-";
 
 fs::path resolve_agent_dir_impl(
 	const fs::path& project_root,
@@ -34,21 +30,8 @@ fs::path resolve_agent_dir_impl(
 	                        ? project_root / std::string( kAgentDirNewPrefix )
 	                        : project_root / ( std::string( kAgentDirNewNamedPrefix ) + std::string( agent_name ) );
 
-	std::error_code ec;
-	if ( fs::exists( new_path, ec ) ) {
-		return new_path;
-	}
-
-	// Legacy read-fallback for one release cycle.
-	fs::path legacy_path = agent_name.empty()
-	                           ? project_root / std::string( kAgentDirLegacyPrefix )
-	                           : project_root / ( std::string( kAgentDirLegacyNamedPrefix ) + std::string( agent_name ) );
-
-	if ( fs::exists( legacy_path, ec ) ) {
-		return legacy_path;  // read-only fallback
-	}
-
-	return new_path;  // neither exists — caller creates the new path on first write
+	// Caller creates the path on first write; we don't probe here.
+	return new_path;
 }
 }  // namespace
 

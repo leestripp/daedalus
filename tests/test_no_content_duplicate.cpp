@@ -32,7 +32,7 @@
 //   block isolates the actual answer from the model's reasoning.
 //
 // Run:
-//   ./build/tests/codemax_no_content_duplicate_tests
+//   ./build/tests/daedalus_no_content_duplicate_tests
 
 #include <cassert>
 #include <cerrno>

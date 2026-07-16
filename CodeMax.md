@@ -179,7 +179,146 @@ All listed bugs are now resolved; nothing actionable below.
 
 ## Active refactors
 
-(none — all planned refactors are done)
+### §B2-fix — Remove the legacy `.codemax[-<name>]/` read fallback
+
+**Status:** 🟡 In progress (started 2026-07-16)
+
+**Why this is being removed:** The legacy `.codemax[-<name>]/` paths
+in `resolve_agent_dir_impl()` are leftover from a previous rename
+(§Phase 12, when the project was apparently called codemax before
+becoming daedalus). `codemax` is NOT a previous name for daedalus —
+it's a different tool entirely. The "one release cycle read fallback"
+expired long ago; we're at v0.5.0+ now. The fallback is:
+1. **Dead code** — no users have legitimate `.codemax[-<name>]/`
+   data from this library (it was always supposed to expire).
+2. **Confusing** — fresh users might see `.codemax/` references and
+   think they need to migrate from a project they never used.
+3. **Risky** — if a separate tool named `codemax` happens to use
+   `.codemax/` for its own data, our library could read it.
+4. **Banned by user** (2026-07-16): "This App is NOT codemax, and
+   should never use any data from codemax. It should NOT be in
+   daedalus lib."
+
+**Do NOT touch any `.codemax[-<name>]/` directories on disk.** They
+belong to a different tool, possibly used by the user for testing.
+Only modify our source code, headers, tests, and docs.
+
+**Files to change:**
+
+| File | What to remove |
+|---|---|
+| `src/library/project_paths.cpp` | `kAgentDirLegacyPrefix` + `kAgentDirLegacyNamedPrefix` constants; the legacy-fallback branch in `resolve_agent_dir_impl()`. Update file header comment. |
+| `include/daedalus/project_paths.h` | Doc comment on `agent_dir()` mentioning the fallback. |
+| `include/daedalus/Agent.h` | Doc comment mentioning `.codemax/` legacy. |
+| `include/daedalus/types/AgentConfig.h` | Two comments referencing "codemax home". |
+| `src/library/default_paths.cpp` | Doc comment about the fallback. |
+| `tests/test_project_paths.cpp` | Test cases 4 (legacy `.codemax[-<name>]/` read-fallback) — DELETE; also clean up cases that depend on the legacy paths. |
+| `tests/CMakeLists.txt` | Comment "Also covers the legacy `.codemax[-<name>]/` read-fallback" on `daedalus_project_paths_tests`. |
+| `tests/test_no_content_duplicate.cpp` | Build/run instruction comment at line 35 (was `./build/tests/codemax_no_content_duplicate_tests`). |
+| `docs/storage.md` | Section "For one release cycle, the pre-rename `.codemax[-<name>]/` paths are honoured" — DELETE. Also the Q. "I have an old `~/.codemax/` from before the rename" — DELETE. |
+| `docs/migration.md` | The entire doc is about migrating FROM `codemax`. DELETE the file. |
+| `docs/index.md` | Update migration-guide description; remove or replace. |
+| `docs/network-tools.md` | Change `leestripp/codemax` GitHub URLs to `leestripp/daedalus` (3 occurrences). |
+
+**Files to leave alone** (false positives — they mention "codemax"
+but it's just an example pattern or external reference):
+
+- `demos/daedalus-cli/system_prompt.txt:103` — example `pkill -f`
+  pattern (`pkill -f codemax` is just a placeholder showing
+  the agent how to use pkill; "codemax" here is the user's
+  hypothetical process name, not our project).
+- `docs/agent_system_prompts.md:459` — references a skill name
+  `codemax-container-setup/` (a third-party skill, not our code).
+
+**Verification:** 60/62 tests pass + 2 live-LLM skipped, 0 failures
+(currently passes; goal is the same after the refactor).
+`test_project_paths_tests` will have fewer cases; that's fine.
+
+**Progress:**
+- [x] Audit all codemax references (grep across src/include/tests/docs)
+- [x] Remove legacy fallback in `src/library/project_paths.cpp`
+       (constants `kAgentDirLegacyPrefix` / `kAgentDirLegacyNamedPrefix`
+       and the legacy-fallback branch are gone — uncommitted in
+       working tree, will commit when §B2-fix2 below finishes)
+- [x] Update doc comments in `include/daedalus/{project_paths.h,Agent.h,types/AgentConfig.h}`
+- [x] Update doc comment in `src/library/default_paths.cpp`
+- [x] Delete legacy-fallback tests in `tests/test_project_paths.cpp`
+       (`test_legacy_fallback()` and its call site gone)
+- [x] Update `tests/CMakeLists.txt` and `tests/test_no_content_duplicate.cpp` comments
+- [ ] Delete codemax sections in `docs/storage.md`
+- [ ] Delete `docs/migration.md` (replace with stub or remove from index)
+- [ ] Update `docs/index.md` and `docs/network-tools.md`
+- [ ] Verify: `grep -rn codemax src/ include/ tests/ demos/ CMakeLists.txt` → no hits in our code
+- [ ] Run `ctest` → 60/62 + 2 live-LLM skipped, 0 failures
+
+---
+
+### §B2-fix2 — Remove leftover `.codemax[-<name>]/` dead comments (Settings)
+
+**Status:** 🟡 In progress (started 2026-07-16, requested by user)
+
+**Why this matters:** §B2-fix above already removed the *code* for
+the legacy `.codemax[-<name>]/` read-fallback, but the cleanup
+left behind a handful of **dead comments** that still reference
+`.codemax[-<name>]/`. These are confusing — fresh readers might
+think the fallback still exists somewhere — and the user explicitly
+banned any `.codemax` references in the daedalus library
+("This App is NOT codemax, and should never use any data from
+codemax. It should NOT be in daedalus lib.").
+
+**Strictly scoped to source code (not docs):** the user's request
+was about "old legacy code in our Settings system...from the old
+`.codemax` folder location". This task targets the leftover comments
+in the project-paths layer (which underpins Settings). The docs
+cleanup items in §B2-fix above are a separate concern.
+
+**Files to change (3):**
+
+| File | Lines | What to remove |
+|---|---|---|
+| `src/library/project_paths.cpp` | 11–17 | File-header `§B2-fix` paragraph that explains what was deleted |
+| `src/library/project_paths.cpp` | 39–42 | Inline comment in `resolve_agent_dir_impl()` about the removed fallback |
+| `tests/test_project_paths.cpp` | 102–107 | Placeholder block "4. (removed) Legacy .codemax[-<name>]/ read-fallback — DELETED ..." |
+| `tests/CMakeLists.txt` | 1221 | Comment "Note: legacy `.codemax[-<name>]/` read-fallback was removed 2026-07-16 ..." |
+
+**Files to leave alone (false positives):**
+
+- `demos/daedalus-cli/system_prompt.txt:103` — example `pkill -f
+  codemax` for the LLM; "codemax" here is the user's hypothetical
+  process name, not our project.
+- `demos/daedalus-cli/system_prompt.txt` is the **system prompt**
+  shown to the LLM, so we want the example to remain representative.
+- `CHANGELOG.md`, `docs/migration.md`, `docs/storage.md`,
+  `docs/index.md`, `docs/network-tools.md`, `docs/agent_system_prompts.md`
+  — these are **historical / external docs**, not Settings code.
+  They are addressed by the separate §B2-fix docs subtask above.
+
+**Verification:**
+- `grep -rn "codemax" src/ include/ tests/ CMakeLists.txt` →
+  zero hits (outside of the build/ tree and the .daedalus* dirs)
+- Build: `cmake --build build --target daedalus` → no new warnings
+- Tests: `cmake --build build --target daedalus_project_paths_tests
+   && ./build/tests/daedalus_project_paths_tests` → 4 cases pass
+
+**Progress:**
+- [x] Strip `.codemax` dead comments from `src/library/project_paths.cpp` (file header + inline)
+- [x] Strip `.codemax` dead comments from `tests/test_project_paths.cpp` (placeholder block)
+- [x] Strip `.codemax` dead comment from `tests/CMakeLists.txt`
+- [x] Verify: `grep -rn codemax src/ include/ tests/ CMakeLists.txt` → 0 hits
+       (only `demos/daedalus-cli/system_prompt.txt:103` `pkill -f codemax`
+       example remains — false positive, documented as "leave alone")
+- [x] Build daedalus + run `daedalus_project_paths_tests` → pass
+       (project_paths_tests: 7 cases pass — 1, 2, 3, 5, 6, 7. Full ctest:
+       61/61 pass + 2 live-LLM skipped, 0 failures.)
+- [x] Commit
+
+**Done (2026-07-16).** Stripped 11 lines of dead `.codemax[-<name>]/`
+references from the project-paths layer. The only remaining
+`codemax` hit in our source tree is the `pkill -f codemax` example
+in `demos/daedalus-cli/system_prompt.txt`, which is a teaching
+example for the LLM (false positive).
+
+---
 
 ### §B2-fix — Return `SettingsStore` by value ✅ Done (2026-07-16)
 

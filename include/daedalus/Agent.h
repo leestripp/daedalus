@@ -95,11 +95,9 @@ public:
 
     /// @brief Read-only view of the per-agent namespace (§Phase 8.8).
     ///        Empty string means "no namespace; runtime state lives
-    ///        under `<project_root>/.daedalus/`" (backward-compat
-    ///        default — the legacy `.codemax/` is still honoured as a
-    ///        read fallback for one release cycle; see Plan.md §1.1). Non-empty values are validated in
-    ///        initialize() — if you see a non-empty value here it
-    ///        has passed `is_valid_agent_name()`.
+    ///        under `<project_root>/.daedalus/`". Non-empty values
+    ///        are validated in initialize() — if you see a non-empty
+    ///        value here it has passed `is_valid_agent_name()`.
     [[nodiscard]] std::string_view agent_name() const noexcept;
 
     [[nodiscard]] std::vector<ToolInfo>  list_tools()  const;

@@ -1218,7 +1218,6 @@ add_test(NAME xdg_paths_tests COMMAND daedalus_xdg_paths_tests)
 # Verifies the cardinal rule from Plan.md §1.1: two Agent instances in
 # the same project with different agent_name values get different
 # agent_dir() (and therefore different memory_dir() / memory_file()).
-# Also covers the legacy `.codemax[-<name>]/` read-fallback.
 # ============================================================================
 add_executable(daedalus_project_paths_tests
     test_project_paths.cpp

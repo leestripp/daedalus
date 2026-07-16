@@ -74,8 +74,7 @@ std::filesystem::path resolve_agent_dir(
 	std::string_view agent_name )
 {
 	// Same algorithm as ProjectPaths::agent_dir() — we delegate so
-	// the legacy `.codemax[-<name>]/` read-fallback is honoured in
-	// one place (ProjectPaths ctor + cache).
+	// all per-project path resolution lives in one place.
 	ProjectPaths pp( project_root, std::string( agent_name ) );
 	return pp.agent_dir();
 }

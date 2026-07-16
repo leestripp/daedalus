@@ -101,31 +101,6 @@ static void test_two_projects_isolation()
 }
 
 // =============================================================================
-// 4. Legacy .codemax[-<name>]/ read-fallback
-// =============================================================================
-static void test_legacy_fallback()
-{
-	std::cout << "[4] Legacy .codemax[-<name>]/ read-fallback... ";
-	auto root = fresh_dir( "legacy" );
-
-	// Only the legacy path exists.
-	fs::create_directories( root / ".codemax" );
-	fs::create_directories( root / ".codemax-planner" );
-
-	daedalus::ProjectPaths default_agent( root );
-	daedalus::ProjectPaths planner( root, "planner" );
-
-	assert( default_agent.agent_dir() == root / ".codemax" );
-	assert( planner.agent_dir() == root / ".codemax-planner" );
-
-	// New path takes priority when both exist.
-	fs::create_directories( root / ".daedalus" );
-	assert( daedalus::ProjectPaths( root ).agent_dir() == root / ".daedalus" );
-
-	std::cout << "ok\n";
-}
-
-// =============================================================================
 // 5. Validation: invalid agent_name → throws
 // =============================================================================
 static void test_invalid_name_throws()
@@ -231,7 +206,7 @@ int main()
 	test_agent_dir_mapping();
 	test_two_agents_isolation();
 	test_two_projects_isolation();
-	test_legacy_fallback();
+	// test_legacy_fallback removed — see §B2-fix in CodeMax.md
 	test_invalid_name_throws();
 	test_skills_search_path();
 	test_session_subdir();
