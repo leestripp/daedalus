@@ -102,7 +102,10 @@ std::string McpServerManager::get_env_file_path() const {
 bool McpServerManager::load_env_file(const std::string& env_path) {
     env_vars_.clear();
 
-    std::ifstream file(env_path);
+    // §Plan.md v0.5.0: derive default path when not supplied.
+    std::string actual_path = env_path.empty() ? get_env_file_path() : env_path;
+
+    std::ifstream file(actual_path);
     if (!file.is_open()) {
         return false;  // .env file is optional
     }

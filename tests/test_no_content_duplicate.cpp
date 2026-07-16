@@ -104,7 +104,6 @@ int main() {
     cfg.project_root  = "/tmp";
     cfg.session_id    = "no-dup-test";
     cfg.model_name    = "minimax-m2.7";
-    cfg.settings_path = "/home/ubuntu/.daedalus/settings/settings.json";
     cfg.auto_approve  = true;
 
     auto sink = std::make_shared<DedupSink>();

@@ -94,7 +94,6 @@ int main() {
     cfg.project_root  = "/tmp";
     cfg.session_id    = "token-count-test";
     cfg.model_name    = "minimax-m2.7";   // matches settings.json entry
-    cfg.settings_path = "/home/ubuntu/.daedalus/settings/settings.json";
     cfg.auto_approve  = true;             // no interactive approval
 
     auto sink = std::make_shared<TokenCountSink>();

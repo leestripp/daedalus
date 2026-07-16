@@ -221,7 +221,7 @@ public:
     ~McpServerManager();
 
     // Load environment variables from .env file (needed by AgentImpl)
-    bool load_env_file(const std::string& env_path);
+    bool load_env_file(const std::string& env_path = "");
 
 private:
 

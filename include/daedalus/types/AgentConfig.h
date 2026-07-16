@@ -77,11 +77,12 @@ struct AgentConfig {
     // own env var) or $HOME/.daedalus. The legacy $DAEDALUS_HOME belongs
     // to the original codemax agent and is NOT consulted by this library.
     std::filesystem::path daedalus_home;      // empty = $DAEDALUS_HOME or $HOME/.daedalus
-    std::filesystem::path settings_path;     // empty = ${daedalus_home}/settings/settings.json
-    std::filesystem::path mcp_servers_path;  // empty = ${daedalus_home}/mcp/servers.json
-    std::filesystem::path mcp_env_path;      // empty = ${daedalus_home}/mcp/.env
-    std::filesystem::path memory_dir;        // empty = ${daedalus_home}/memory
-    std::filesystem::path log_file;          // empty = no file logging
+    // §Plan.md v0.5.0 (settled): the per-field *_path overrides
+    // (`settings_path`, `mcp_servers_path`, `mcp_env_path`, `memory_dir`,
+    // `log_file`) are GONE. Hosts that want a custom path for any of these
+    // supply it via the SettingsStore (or pass it directly to the relevant
+    // subsystem); the AgentConfig struct now has a single source of truth,
+    // `daedalus_home`.
 
     // ----- Behaviour flags -----
     bool auto_approve = false;

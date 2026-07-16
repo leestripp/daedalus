@@ -95,7 +95,6 @@ int main(int argc, char* argv[]) {
     daedalus::AgentConfig base;
     base.project_root  = project_root;
     base.model_name    = model_name;
-    base.settings_path = daedalus::default_settings_path();
     base.auto_approve = true;          // demo: no bash-approval prompts
     base.skills_dirs   = { "/home/ubuntu/.daedalus/skills/" };
     base.stream        = true;

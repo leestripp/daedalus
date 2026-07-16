@@ -142,7 +142,6 @@ int main(int argc, char* argv[]) {
     daedalus::AgentConfig parent_cfg;
     parent_cfg.project_root  = project_root;
     parent_cfg.model_name    = (argc > 2) ? argv[2] : "";
-    parent_cfg.settings_path = daedalus::default_settings_path();
     parent_cfg.max_agent_iterations = 100;
     parent_cfg.auto_approve  = true;
     parent_cfg.session_id    = "subagent-demo-parent";

@@ -319,12 +319,13 @@ void AgentImpl::initialize()
             // §Phase 15: install the per-server gate before load_config()
             // so disabled servers never enter configs_ in the first place.
             body_->mcp->set_disabled_servers(cfg_.mcp_servers_disabled);
-            if (!cfg_.mcp_servers_path.empty()) {
-                body_->mcp->load_config(cfg_.mcp_servers_path);
-            }
-            if (!cfg_.mcp_env_path.empty()) {
-                body_->mcp->load_env_file(cfg_.mcp_env_path);  // §Phase 11: was load_env
-            }
+            // §Plan.md v0.5.0: load_config() and load_env_file() now use
+            // their default paths (Paths::global() / McpServerManager's
+            // own discovery) — the per-field overrides in AgentConfig
+            // (settings_path / mcp_servers_path / mcp_env_path / memory_dir
+            // / log_file) are gone.
+            body_->mcp->load_config();
+            body_->mcp->load_env_file();
         }
 
         // §Phase 11: inject McpServerManager* into ToolFactory BEFORE
