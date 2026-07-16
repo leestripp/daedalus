@@ -22,18 +22,46 @@ escape sequences, and breaks mouse/keystroke routing. Once any
 library call leaks a single `\n` into a raw-mode terminal, the host
 is dead in the water until it `stty sane`s the user.
 
+**The output architecture (who is allowed to write where):**
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ libdaedalus.a                                                │
+│   • sink_->on_log(...)     ← library → host's callback       │
+│   • LOG_INFO/WARNING/ERROR ← library → file (daedalus.log)   │
+│   • NEVER std::cout / std::cerr                              │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼  sink_->on_log callback fires
+┌──────────────────────────────────────────────────────────────┐
+│ Host executable (daedalus-cli, daedalus-webui, TUI app, …)   │
+│   • Terminal app → host writes to std::cout / std::cerr      │
+│   • TUI app → host writes to ncurses / ratatui / blessed     │
+│   • Headless → host writes to log file / journald / etc.     │
+│                                                              │
+│ This is where stdio belongs. The host owns the terminal;     │
+│ its sink implementation decides how each log line is routed.  │
+└──────────────────────────────────────────────────────────────┘
+```
+
+So the `daedalus-cli` console output you see in the terminal is
+**the demo's sink writing to stdio**, NOT the library. Proof
+(2026-07-16): a tiny test program that overrides `std::cout` and
+`std::cerr` with `stringstream` captures, then runs a full
+`Agent::initialize() → run_one_turn() → shutdown()` cycle, ends up
+with **0 bytes** in either capture buffer.
+
 **Output channels the library MAY use:**
 1. **`AgentSink`** (host-controlled callback) — primary I/O path for
    user-visible text. Hosts wire this to their own stdout, a log
    file, an in-memory buffer, whatever fits the host's I/O model.
 2. **`core/Logger.h`** — `LOG_INFO` / `LOG_WARNING` / `LOG_ERROR`
-   macros for internal diagnostics. Routes to `AgentSink::on_log` so
-   the host sees it; falls back to a log file when no sink is set.
+   macros for internal diagnostics. Writes to a per-project log
+   file under `<project>/.daedalus/logs/`. Does NOT touch stdio.
 
 **Output channels the library MUST NOT use:**
 - `std::cout`, `std::cerr`, `std::clog`, `std::cin`
 - `printf`, `fprintf(stderr, ...)`, `fputs(..., stderr)`, `puts`, `write(1, ...)`, `write(2, ...)`
-- `LOG_INFO`/etc. directly to a raw fd (these should go through sink)
 
 **File I/O is fine** — `fopen(path, "rb")`, `fopen(temp_path, "wb")`
 in `core/ImageProcessor.cpp` etc. read/write *files*, not the
@@ -45,19 +73,26 @@ host's stdio. `<cstdio>` for that is OK.
 through pipes. The library never writes to those fds itself; it
 shuttles them to pipes for child processes.
 
+**Note on `LOG_CERR` in `Logger.cpp`** — the macro is misleadingly
+named; it expands to `LOG_INFO(...)` (a recursive Logger call, not
+a stderr write). The comment "Also output to stderr for ERROR level"
+on line ~114 is stale documentation — the actual code just writes
+to the file a second time. This is correct (no stdio) but the
+naming is confusing; consider renaming `LOG_CERR` → `LOG_REDUNDANT`
+in a future cleanup.
+
 **Current state (2026-07-16):** Library is clean. Verified by:
-```
-grep -rn "std::cout\|std::cerr\|std::cin" src/library src/api src/mcp
-grep -rn "printf(\|fprintf(\|fputs(\|puts(" src/library src/api src/mcp
-```
-No matches outside of comments / docstring examples. Phase 5.1
-cleanup already removed all historical `std::cout` calls (banner,
-tool separators, token-usage line) in favour of `sink_->on_log` /
-`LOG_INFO`.
+- `grep -rn "std::cout\|std::cerr\|std::cin" src/library src/api src/mcp`
+  → no matches outside of comments / docstring examples
+- `grep -rn "printf(\|fprintf(\|fputs(\|puts(" src/library src/api src/mcp`
+  → no matches
+- Runtime test: override `std::cout` / `std::cerr` rdbuf, run full
+  agent lifecycle → **0 bytes written** (proof above)
 
 **Any new code I write in the library must NOT touch stdio.** If you
 find yourself reaching for `std::cerr` in `src/api/` or `src/core/`,
-stop and use `LOG_ERROR` instead — `Logger` routes through the sink.
+stop and use `LOG_ERROR` instead — `Logger` routes through the file,
+not stdio.
 
 ---
 
