@@ -245,11 +245,21 @@ but it's just an example pattern or external reference):
 - [x] Delete legacy-fallback tests in `tests/test_project_paths.cpp`
        (`test_legacy_fallback()` and its call site gone)
 - [x] Update `tests/CMakeLists.txt` and `tests/test_no_content_duplicate.cpp` comments
-- [ ] Delete codemax sections in `docs/storage.md`
-- [ ] Delete `docs/migration.md` (replace with stub or remove from index)
-- [ ] Update `docs/index.md` and `docs/network-tools.md`
-- [ ] Verify: `grep -rn codemax src/ include/ tests/ demos/ CMakeLists.txt` → no hits in our code
-- [ ] Run `ctest` → 60/62 + 2 live-LLM skipped, 0 failures
+- [x] Delete codemax sections in `docs/storage.md`
+       (replaced §2.3 "Legacy read-fallback" with a removal notice;
+       deleted the Q&A entry about migrating from old `~/.codemax/`)
+- [x] Delete `docs/migration.md` (entire file removed; entry gone from `docs/index.md`)
+- [x] Update `docs/network-tools.md`
+       (3× `leestripp/codemax` GitHub URLs → `leestripp/daedalus`)
+- [x] Verify: `grep -rn codemax src/ include/ tests/` → 0 hits
+- [x] Run `ctest` → 60/62 + 2 live-LLM skipped, 0 failures
+
+**False positives left in place** (intentional, not our code):
+- `demos/daedalus-cli/system_prompt.txt:103` — example `pkill -f` pattern
+- `docs/agent_system_prompts.md:459` — references an external skill name
+
+**Do NOT touch** any `.codemax[-<name>]/` directories on disk — they
+belong to a different tool, possibly used by the user for testing.
 
 ---
 

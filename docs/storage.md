@@ -165,12 +165,12 @@ get different `agent_dir()` paths, so:
 > is purely the conversation + memory + skill overrides; config
 > lives at the user tier.
 
-### 2.3 Legacy read-fallback (Phase 12 rename)
+### 2.3 (Removed 2026-07-16)
 
-For one release cycle, the pre-rename `.codemax[-<name>]/` paths are honoured
-as a read-fallback. NEW writes always go to the new `.daedalus*` location.
-Migration is a manual `mv` (or `daedalus-cli --migrate-data` if you want the
-library to do it).
+The previous "legacy `.codemax[-<name>]/` read-fallback" section has
+been removed. The library never reads from `.codemax[-<name>]/` —
+`codemax` is a different tool, not a previous name for daedalus.
+See `CodeMax.md §B2-fix` in the project repo for the rationale.
 
 ---
 
@@ -352,14 +352,6 @@ enforces this. See [`settings.md`](settings.md) §3 for the DB schema.
 Use `--agent-name` (CLI) or `cfg.agent_name` (API). Each name gets its own
 subdir under `<project_root>/`. See `daedalus-manager` for the canonical
 3-agent composition.
-
-### Q. I have an old `~/.codemax/` from before the rename — what happens?
-
-The library reads from `.codemax[-<name>]/` as a fallback if `.daedalus[-<name>]/`
-doesn't exist (Phase 12 backward-compat). NEW writes go to the new
-`.daedalus*` path. To migrate manually: `mv ~/.codemax ~/.daedalus` (or
-`mv <project>/.codemax <project>/.daedalus`). The `--migrate-data` CLI
-handles only the user tier; project-tier rename is a manual `mv`.
 
 ### Q. Why is `~/.daedalus/` deprecated?
 

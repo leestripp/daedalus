@@ -47,7 +47,6 @@ embedding `libdaedalus.a` and for core contributors.
 |------|----------|-------------|
 | [`../containers/README.md`](../containers/README.md) | **DevOps / packagers** | Reference Dockerfile + docker-compose.yml implementing the XDG-clean deployment from `docs/storage.md` §4.4. |
 | [`webui_testing.md`](webui_testing.md) | **Core contributors** | Firefox BiDi end-to-end testing recipe for browser-based hosts. |
-| [`migration.md`](migration.md) | **Upgraders** | `codemax` → `daedalus` migration guide: env vars, paths, removed flags, embedder API renames. |
 
 ## Legacy (deleted in Phase 10)
 

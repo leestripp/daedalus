@@ -36,7 +36,7 @@ All tools are registered automatically — the LLM sees them in the system promp
 
 ```json
 {
-  "url": "https://api.github.com/repos/leestripp/codemax",
+  "url": "https://api.github.com/repos/leestripp/daedalus",
   "method": "GET",
   "headers": {
     "Accept": "application/json"
@@ -60,7 +60,7 @@ Response on success:
   "body": "{\"stargazers_count\": 42, ...}",
   "body_truncated": false,
   "body_bytes": 1234,
-  "final_url": "https://api.github.com:443/repos/leestripp/codemax",
+  "final_url": "https://api.github.com:443/repos/leestripp/daedalus",
   "elapsed_ms": 187
 }
 ```
@@ -332,7 +332,7 @@ When the peer closes the connection cleanly, you get `{status: "closed"}` instea
 
 ```jsonc
 {"tool": "http_request", "args": {
-  "url": "https://api.github.com/repos/leestripp/codemax",
+  "url": "https://api.github.com/repos/leestripp/daedalus",
   "method": "GET",
   "headers": {"Accept": "application/vnd.github+json"}
 }}
