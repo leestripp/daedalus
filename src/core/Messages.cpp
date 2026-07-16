@@ -166,7 +166,7 @@ Messages::Messages(std::filesystem::path data_dir,
 
 Messages::~Messages() = default;
 
-// Default move semantics are fine now that we no longer own a CURL*
+// Default move semantics
 Messages::Messages(Messages&&) noexcept = default;
 Messages& Messages::operator=(Messages&&) noexcept = default;
 
