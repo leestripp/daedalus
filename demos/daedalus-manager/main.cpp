@@ -57,6 +57,25 @@ make_agent(const AgentSpec& spec,
 }
 
 int main(int argc, char* argv[]) {
+    // §F2 fix: --help short-circuit before argv parsing.
+    // Without this, `daedalus-manager --help` treats "--help" as project_root
+    // and Agent::initialize() throws std::invalid_argument("Project path
+    // does not exist: --help") → std::terminate.
+    for (int i = 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--help" || a == "-h") {
+            std::cout << "Usage: daedalus-manager <project_root> <goal> <max_iters> <model>\n"
+                      << "\n"
+                      << "  --help, -h     Show this message and exit\n"
+                      << "  --version, -v  Show version\n";
+            return 0;
+        }
+        if (a == "--version" || a == "-v") {
+            std::cout << "daedalus-manager (libdaedalus)\n";
+            return 0;
+        }
+    }
+
     fs::path project_root = (argc > 1) ? argv[1] : ".";
     std::string goal = (argc > 2)
         ? argv[2]

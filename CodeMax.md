@@ -27,18 +27,18 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 | B3 | `BashTool` standalone-`&` check ignores quotes | ✅ Done (2026-07-15) — state-machine tokenizer in `BashPathChecker` |
 | B5 | `Messages::truncate_if_needed` tool-chain walk is inverted (orphans tool results → API 400) | ✅ Done (2026-07-15) — rewritten with `find_parent_assistant_for_tool_result` |
 | B8 | `LLMClient::inject_context_stats` erases wrong region when stats block is last H2 | ✅ Done (2026-07-15) — sentinel-based replacement |
-| B10 | `CurlMultiSession::process_completed` discards non-2xx body (callers can't distinguish 400/401/503) | 🟡 Open |
+| B10 | `CurlMultiSession::process_completed` discards non-2xx body (callers can't distinguish 400/401/503) | ✅ Done (2026-07-16) — `CurlResponse` (with status_code + body) is returned even on non-2xx; `LLMClient` extracts `result->status_code` and branches on 401 / 4xx / 5xx (lines 406-419) |
 | B19 | `LLMClient::run_one_turn` appends user message after dangling tool result → API 400 | ✅ Done (2026-07-16) — check added before pushing user message; refuses if last message is `tool` role, logs warning instead |
-| B23 | `set_status` tool fires `sink_->on_state_change(-1, new)` instead of mapping internal→public state | 🟡 Open |
+| B23 | `set_status` tool fires `sink_->on_state_change(-1, new)` instead of mapping internal→public state | ✅ Done (2026-07-16) — tracks `previous_public_state_` / `current_public_state_`; emits correct `on_state_change(prev, current)` transition |
 
 ### MEDIUM
 
 | # | Summary | Status |
 |---|---------|--------|
-| B7 | `compress_after_done` flag set but never read in `run_one_turn` (explicit compression request silently dropped) | 🟡 Open |
+| B7 | `compress_after_done` flag set but never read in `run_one_turn` (explicit compression request silently dropped) | ✅ Done (2026-07-16) — `run_one_turn` checks `at_threshold || compress_after_done` (LLMClient.cpp:2623); explicit `compress_context` tool calls now trigger compression |
 | B14 | HTTP 4xx not honoured as non-retry; 429 Retry-After header ignored | 🟡 Open |
 | B22 | Corrupt SQLite mirror row not deleted on load → user stuck forever | ✅ Done (2026-07-16) — `SessionMemory::load()` now wraps `json::parse(blob)` in its own try/catch; corrupt rows deleted and falls through to JSON. (Messages.cpp was already fixed.) |
-| B24 | `std::stod` throws on non-numeric `backoff_multiplier` value, swallowed silently by outer `catch(...)` | 🟢 Trivial — see §B24 fix |
+| B24 | `std::stod` throws on non-numeric `backoff_multiplier` value, swallowed silently by outer `catch(...)` | ✅ Done (2026-07-16) — SettingsStore.cpp:649 wraps `std::stod` in try/catch |
 | B25 | `McpServerManager::load_env_file` not idempotent (double-load on two `Agent`s in same process) | 🟡 Open (needs verify) |
 | B29 | `BashCommandExecutor::execute` has no timeout on synchronous read (`popen` + `fread` hangs on empty-interactive child) | 🟡 Open (needs verify) |
 | B31 | `phase15_typo_warning_tests` hangs in case 3 (`test_skills_disabled_empty_no_warn`) — SkillManager singleton mutex | 🟡 Open — was noted, not fixed |
@@ -50,17 +50,18 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 | B4 | `BashTool::build_patterns` has duplicate `"make"` (callback fires twice) | ✅ Done (2026-07-15) — duplicate removed, list sorted |
 | B6 | `sanitize_assistant_message` comment contradicts code | 🟢 Trivial |
 | B9 | "Find last tool_call" loop repeated 4× in `run_agent_cycle` with divergent shape assumptions | 🟢 Refactor |
-| B11 | `sanitize_utf8` iconv + fallback paths duplicate the same 90-line state machine | 🟢 Trivial |
-| B12 | `SessionMemory::sanitize_utf8` truncates on partial UTF-8 sequence (loses bytes after `?`) | 🟡 Open — remove the `resize` call |
+| B11 | `sanitize_utf8` iconv + fallback paths duplicate the same 90-line state machine | ✅ Done (2026-07-16) — all four copies consolidated to `core/Utf8Utils.h::utf8_sanitize_replace_invalid` |
+| B12 | `SessionMemory::sanitize_utf8` truncates on partial UTF-8 sequence (loses bytes after `?`) | ✅ Done (2026-07-16) — fixed in `Utf8Utils.h::utf8_sanitize_replace_invalid` (line 342: "do NOT resize here"); all callers use the shared utility |
 | B13 | `split_messages` and `get_compression_indices` duplicate the same algorithm | 🟢 Refactor |
 | B15 | `run_agent_cycle` uses `dump(2)` for first request, `dump()` for retry (size mismatch vs `max_request_size_` check) | 🟢 Trivial |
 | B18 | `active_model` and `list_models` duplicate `ModelConfig` → `ModelInfo` construction | 🟢 Refactor |
 | B20 | `BackgroundProcessManager::FIFO_TIMEOUT_MS` is unused | 🟢 Trivial |
 | B21 | `BashTool` build-event double-fire (same as B4) | ✅ Done with B4 |
+| B24 | `std::stod` throws on non-numeric `backoff_multiplier` value, swallowed silently by outer `catch(...)` | ✅ Done (2026-07-16) — SettingsStore.cpp:649 wraps `std::stod` in try/catch; default value preserved |
 | B26 | `streaming_callback` fires one extra `on_assistant_delta` after cancellation | 🟢 Trivial |
 | B27 | SSE JSON-parse retry loop ignores `server_error_settings.enabled` | 🟢 Trivial |
-| B28 | Four copies of UTF-8 sanitizer with subtle drift (LLMClient×2, Messages, SessionMemory) | 🟡 Open — consolidate into `Utf8Utils.{h,cpp}` |
-| B30 | `extract_summary_text` strips `<answer>` but not `<thinking>` | 🟢 Trivial |
+| B28 | Four copies of UTF-8 sanitizer with subtle drift (LLMClient×2, Messages, SessionMemory) | ✅ Done (2026-07-16) — see B11 |
+| B30 | `extract_summary_text` strips `<answer>` but not `<thinking>` | ✅ Done (2026-07-16) — `<thinking>...</thinking>` strip added in Messages.cpp:653-661 |
 | B32 | `update_token_usage` warns twice per turn (SSE without usage each warn) | 🟢 Trivial |
 
 ---
@@ -78,7 +79,7 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 
 ### F2 — `daedalus-subagent` / `daedalus-manager` crash on `--help`
 
-🟡 **Open.** Both demos treat `argv[1]` as `project_root` and pass it to `Agent::initialize()` with no `--help` short-circuit. Fix: add `--help` short-circuit matching the `daedalus-cli` pattern.
+✅ **Done (2026-07-16).** Added `--help` / `-h` / `--version` / `-v` short-circuit at the top of both `main()` functions, matching the `daedalus-cli` pattern.
 
 ### F3 — Readme webui section doesn't document the `message` field name
 
@@ -226,8 +227,8 @@ from all files. Tests updated. Build clean.
 
 | Summary | Status |
 |---------|--------|
-| B10: non-2xx body discarded — fix: make `CurlResponse` part of `expected` on HttpStatus | 🟡 Open |
-| B16: in-flight `RequestState` leaked on shutdown | 🟡 Open |
+| B10: non-2xx body discarded — fix: make `CurlResponse` part of `expected` on HttpStatus | ✅ Done (2026-07-16) |
+| B16: in-flight `RequestState` leaked on shutdown | ✅ Done (2026-07-16) |
 
 ---
 
