@@ -97,7 +97,12 @@ private:
     // can be destroyed at the AgentImpl instantiation point (PIMPL needs the
     // complete type visible to the deleter).
     struct Body {
-        daedalus::SettingsStore* store = nullptr;   // §v0.5.0: wired directly to SettingsStore
+        // §B2 fix (v0.5.1): stored by value. SettingsStore is now copyable
+        // (Impl fields inlined), so the optional holds the owned instance.
+        // LLMClient receives std::addressof(*store) — the pointer is stable
+        // for the lifetime of Body (LLMClient is destroyed before store in
+        // shutdown()).
+        std::optional<daedalus::SettingsStore> store;
         std::unique_ptr<mcp::McpServerManager> mcp;   // §Phase 11: owned; nullptr when mcp_enabled=false
         std::unique_ptr<LLMClient>             client;
         std::stop_source                       cancel_source;

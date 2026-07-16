@@ -69,8 +69,9 @@ daedalus::ModelConfig make_model(const std::string& name) {
 // S1: instance() is a singleton
 // ===========================================================================
 void test_s1_instance_singleton() {
-    auto& a = daedalus::SettingsStore::instance();
-    auto& b = daedalus::SettingsStore::instance();
+    // instance() returns by value but the underlying static is stable.
+    const auto& a = daedalus::SettingsStore::instance();
+    const auto& b = daedalus::SettingsStore::instance();
     EXPECT(&a == &b);
     std::cout << "[ok] S1: instance() is a singleton\n";
 }

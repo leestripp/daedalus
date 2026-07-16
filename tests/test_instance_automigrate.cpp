@@ -60,7 +60,9 @@ int main() {
     }
 
     // Touching instance() for the first time must auto-migrate.
-    auto& store = daedalus::SettingsStore::instance();
+    // instance() returns SettingsStore& (true singleton). Use const ref —
+    // the test only reads from the store.
+    const auto& store = daedalus::SettingsStore::instance();
 
     int failures = 0;
 

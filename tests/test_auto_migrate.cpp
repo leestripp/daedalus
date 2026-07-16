@@ -13,6 +13,9 @@
 //        legacy JSON → no-op (no error).
 //   AM5. KV scalars (auto_approve, max_*) auto-migrate.
 //   AM6. Auto-migration handles corrupt JSON gracefully (no crash).
+//
+// §B2 fix (v0.5.1): for_home() returns by value — tests use `auto store`
+// instead of `auto& store`.
 
 #include <cassert>
 #include <chrono>
@@ -58,35 +61,37 @@ struct TmpHome {
 // for the auto-migration constructor we do the same by setting HOME-like
 // env vars. But to keep this fully isolated from the global instance(),
 // we use a SettingsStore created via SettingsMigrator::run() directly.
-void run_auto_migration(const fs::path& db_path,
+// §B2 fix: for_home() returns by value — use `auto store` not `auto& store`.
+void run_auto_migration(const fs::path& data_root,
                         const fs::path& config_root,
                         const fs::path& config_json,
                         const fs::path& mcp_servers_json,
                         bool mark_files)
 {
-    auto& store = daedalus::SettingsStore::for_home(db_path);
     // Mirrors what SettingsMigrator::run() does when given explicit paths.
     if (!config_json.empty() && fs::exists(config_json)) {
         // The migrator's needs_migration() gates on store.list_models()
         // being empty. We force a clean DB by removing it first.
         std::error_code ec;
-        fs::remove(db_path / "daedalus.db", ec);
+        fs::remove(data_root / "daedalus.db", ec);
         // Reopen the store after wiping the file. (DbPool detects the
         // missing file and reopens, so the in-memory handle is stale until
         // we touch it.)
+        auto store = daedalus::SettingsStore::for_home(data_root);
         daedalus::SettingsMigrator::run(store, config_json, mcp_servers_json, mark_files);
     }
 }
 
 // We replicate what SettingsStore's auto-migrate constructor does —
 // but against a per-test temp path so tests don't share the global singleton.
-void run_automigrate_for_test(const fs::path& db_dir,
+void run_automigrate_for_test(const fs::path& data_root,
                               const fs::path& config_root)
 {
     // Mimic SettingsStore::SettingsStore(auto_migrate=true) but for a
     // per-test dir. The store IS the constructor.
-    fs::create_directories(db_dir);
-    auto& store = daedalus::SettingsStore::for_home(db_dir);
+    fs::create_directories(data_root);
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(data_root);
     // `for_home` returns a wrapper backed by the per-path DbPool handle —
     // same as constructor's auto_migrate=true. The wrapper itself doesn't
     // re-migrate, but for_home enables auto_migrate in our implementation.
@@ -133,7 +138,8 @@ void test_am1_auto_migrate_models() {
     fs::path cfg = h.config_root() / "config.json";
     write_legacy_config(cfg, "auto-model", "real-key-not-placeholder");
 
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
     daedalus::SettingsMigrator::run(store, cfg, {}, /*mark_files=*/true);
 
     auto m = store.get_model("auto-model");
@@ -153,7 +159,8 @@ void test_am2_files_marked_migrated() {
     fs::path cfg = h.config_root() / "config.json";
     write_legacy_config(cfg, "marked-model", "real-key-not-placeholder");
 
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
     daedalus::SettingsMigrator::run(store, cfg, {}, /*mark_files=*/true);
     (void)store.get_model("marked-model");
 
@@ -170,14 +177,16 @@ void test_am3_idempotent() {
     fs::path cfg = h.config_root() / "config.json";
     write_legacy_config(cfg, "idempotent-model", "real-key-not-placeholder");
 
-    auto& s1 = daedalus::SettingsStore::for_home(h.data_root());
+    // §B2 fix: for_home() returns by value.
+    auto s1 = daedalus::SettingsStore::for_home(h.data_root());
     daedalus::SettingsMigrator::run(s1, cfg, {}, /*mark_files=*/true);
     auto m1 = s1.get_model("idempotent-model");
     EXPECT(m1.has_value());
 
     s1.set_max_agent_iterations(999);
 
-    auto& s2 = daedalus::SettingsStore::for_home(h.data_root());
+    // Same home → same DbPool handle (stable across calls).
+    auto s2 = daedalus::SettingsStore::for_home(h.data_root());
     auto m2 = s2.get_model("idempotent-model");
     EXPECT(m2.has_value());
     EXPECT(s2.get_max_agent_iterations() == 999);  // not overwritten
@@ -189,7 +198,8 @@ void test_am3_idempotent() {
 // ===========================================================================
 void test_am4_no_legacy_noop() {
     TmpHome h("am4");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
     // No migrator call needed — store should be empty.
     EXPECT(store.list_models().empty());
     EXPECT(store.get_default_model_name() == "");
@@ -209,7 +219,8 @@ void test_am5_scalars_auto_migrate() {
     fs::path cfg = h.config_root() / "config.json";
     write_legacy_config(cfg, "scalar-model", "real-key-not-placeholder");
 
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
     daedalus::SettingsMigrator::run(store, cfg, {}, /*mark_files=*/true);
 
     EXPECT(store.get_default_model_name() == "scalar-model");
@@ -229,7 +240,8 @@ void test_am6_corrupt_json_handled() {
         f << "{this is not valid JSON, at all,,,";
     }
 
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
     daedalus::SettingsMigrator::run(store, cfg, {}, /*mark_files=*/true);
 
     EXPECT(store.list_models().empty());
@@ -244,7 +256,9 @@ void test_am7_needs_migration_gating() {
     fs::path cfg  = h.config_root() / "config.json";
     fs::path mcp  = h.config_root() / "mcp/servers.json";
     fs::create_directories(h.config_root() / "mcp");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+
+    // §B2 fix: for_home() returns by value.
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     // Fresh DB + no legacy JSONs (config.json AND mcp/servers.json) → false
     EXPECT(!daedalus::SettingsMigrator::needs_migration(

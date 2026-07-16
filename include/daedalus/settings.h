@@ -30,6 +30,11 @@
 #include <string_view>
 #include <vector>
 
+// §B2 fix (v0.5.1): OmniNet::DB::Database is now referenced directly in
+// the class body (no pimpl), so the full type must be visible here.
+#include <db/Database.h>
+
+
 namespace daedalus {
 
 /// Server error retry/backoff configuration. Mirrors
@@ -62,19 +67,32 @@ struct ModelConfig
 ///   - `SettingsStore::instance()`     — global default, one DB per user
 ///   - `SettingsStore::for_home(path)` — per-Agent DB under `path`
 ///
-/// Copying the handle is cheap and shares the underlying connection.
-/// Destruction does NOT close the DB — the process keeps one connection
-/// per unique db_path. (Singleton-per-path.)
+/// The handle is cheap to copy. All copies share the same underlying
+/// SQLite connection (singleton-per-path via DbPool). The dtor does NOT
+/// close the DB — the process keeps one connection per unique path.
+///
+/// §B2 fix (v0.5.1): previously `for_home()` returned `SettingsStore&`
+/// via a leaked `*(new SettingsStore)`. Now it returns by value, so the
+/// wrapper is destroyed by the caller's RAII container. The underlying
+/// sqlite3 handle lives in DbPool as before.
 class SettingsStore
 {
 public:
     /// Global default. Singleton. First call opens the DB lazily.
+    /// Returns by reference because the underlying static is a true
+    /// singleton — the address is stable for the process lifetime.
     static SettingsStore& instance();
 
-    /// Per-agent settings root. Pass the same `home` and you get the same
-    /// handle (reference to the singleton per-path). Pass a different `home`
-    /// and you get a distinct DB under `<home>/daedalus.db`.
-    static SettingsStore& for_home(std::filesystem::path home);
+    /// Per-agent settings root. Pass the same `home` and you get a handle
+    /// that shares the same DbPool connection as any prior call with the
+    /// same `home`. Pass a different `home` and you get a distinct DB under
+    /// `<home>/daedalus.db`.
+    ///
+    /// §B2 fix: returns by value (move-constructed from the internal
+    /// temporary). The DbPool entry stays alive for the process duration;
+    /// only the lightweight wrapper is destroyed when the returned value
+    /// goes out of scope.
+    static SettingsStore for_home(std::filesystem::path home);
 
     // -- Read --
     std::optional<ModelConfig> get_model(std::string_view name) const;
@@ -221,7 +239,7 @@ public:
     // v0.5.0: MCP server registry. The `mcp_servers` table replaces
     // `~/.config/daedalus/mcp/servers.json` — see SettingsMigrator for the
     // auto-migration path.
-    // -----------------------------------------------------------------------
+    // ----------------------------------------------------------------------
 
     /// One MCP server config. Mirrors the McpServerConfig struct but lives
     /// in the public API so hosts can read/write the registry directly.
@@ -254,13 +272,19 @@ public:
     bool has_mcp_servers() const noexcept;
 
 private:
-    SettingsStore() = default;
+    // §B2 fix (v0.5.1): Impl fields are now inlined directly into the class
+    // (not pimpl'd). This makes SettingsStore copyable/movable so
+    // for_home() can return by value without leaking.
+    //
+    // db_ is non-owning — the actual sqlite3 handle is owned by DbPool
+    // (singleton-per-path). Multiple SettingsStore instances can share the
+    // same db_ pointer safely because SQLite runs in serialized mode.
+    std::filesystem::path path_;
+    OmniNet::DB::Database* db_ = nullptr;
+
     /// Internal ctor. `auto_migrate=true` runs SettingsMigrator::run()
     /// once on first open; `false` skips it (used by `for_home()` and tests).
-    SettingsStore(std::filesystem::path db_path, bool is_default,
-                  bool auto_migrate = false);
-    struct Impl;
-    Impl* impl_ = nullptr;        // pimpl'd; opaque to API users
+    SettingsStore(std::filesystem::path db_path, bool auto_migrate = false);
 };
 
 } // namespace daedalus

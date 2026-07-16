@@ -15,6 +15,8 @@ namespace fs = std::filesystem;
 int main() {
     // Stage 1: put a model into the SQLite store via the PUBLIC API.
     {
+        // §B2 fix (v0.5.1): instance() returns by reference (true singleton).
+        // Writes here propagate to the singleton directly.
         auto& store = daedalus::SettingsStore::instance();
         daedalus::ModelConfig m;
         m.name             = "store-e2e";

@@ -18,6 +18,10 @@
 // §B1 fix: every public method that takes a string argument now uses a
 // prepared statement with `?` placeholders + `Statement::bind(...)`. No
 // user-controlled value is ever concatenated into a SQL string.
+//
+// §B2 fix (v0.5.1): SettingsStore is no longer pimpl'd. The Impl fields
+// (path_ + db_) are inlined into the class, making it copyable/movable.
+// for_home() returns by value; the DbPool entry outlives all copies.
 
 #include "daedalus/settings.h"
 
@@ -317,26 +321,23 @@ private:
 };
 
 // ============================================================================
-// SettingsStore::Impl
+// SettingsStore ctor
 // ============================================================================
-struct SettingsStore::Impl
-{
-    fs::path path;
-    OmniNet::DB::Database* db = nullptr;   // non-owning — owned by DbPool
-};
 
-SettingsStore::SettingsStore(fs::path db_path, bool /*is_default*/, bool auto_migrate)
-    : impl_(new Impl)
+// §B2 fix (v0.5.1): Impl fields (path_ + db_) are now inlined into the
+// class. This constructor directly initialises those members instead of
+// allocating a separate Impl struct.
+SettingsStore::SettingsStore(fs::path db_path, bool auto_migrate)
 {
-    impl_->path = std::move(db_path);
-    impl_->db   = &DbPool::instance().get(impl_->path);
+    path_ = std::move(db_path);
+    db_   = &DbPool::instance().get(path_);
 
     // §v0.5.0: Auto-migrate legacy JSON on first DB open.
     // Idempotent — SettingsMigrator::run() short-circuits if the store
     // is already populated or no legacy JSON exists. Failure is
     // non-fatal: the JSON fallback still works.
     //
-    // Tests opt out via the third constructor arg so unit tests with
+    // Tests opt out via the second constructor arg so unit tests with
     // temp paths don't accidentally trigger user-data migration.
     if (auto_migrate) {
         try {
@@ -364,45 +365,28 @@ SettingsStore& SettingsStore::instance()
     // auto_migrate=true: first call on the user's real DB will migrate
     // any legacy JSON config. Subsequent calls hit the static (singleton)
     // so the migration runs exactly once per process.
-    static SettingsStore s(default_db_path(), /*is_default=*/true,
-                           /*auto_migrate=*/true);
+    //
+    // Returns by reference — the static `s` is a true singleton, so all
+    // callers get the same address. Unlike for_home(), this does NOT
+    // leak: the static lives for the program duration.
+    static SettingsStore s(default_db_path(), /*auto_migrate=*/true);
     return s;
 }
 
-SettingsStore& SettingsStore::for_home(fs::path home)
+SettingsStore SettingsStore::for_home(fs::path home)
 {
-    // §B2: KNOWN LEAK — requires a wider refactor to fix.
+    // §B2 fix (v0.5.1): return by value instead of leaking a heap allocation.
     //
-    // The original v0.3.0 implementation returns a `new`-allocated
-    // SettingsStore that is never deleted; the underlying sqlite3
-    // handle lives forever in DbPool. This preserves that behaviour.
+    // The DbPool entry (the actual sqlite3 handle) lives for the process
+    // duration. The returned SettingsStore wrapper is move-constructed from
+    // the local temporary; when the caller's variable goes out of scope,
+    // only the lightweight path_+db_ pair is destroyed — the DbPool entry
+    // is untouched.
     //
-    // A proper fix (return SettingsStore by value, change
-    // AgentImpl::Body::store from raw pointer to value, so the
-    // wrapper is destroyed by the caller's RAII container) is tracked
-    // in CodeMax.md §B2 as a v0.5.1 follow-up.
-    //
-    // Why not just cache the wrapper here and avoid the per-call
-    // `new`? Two reasons:
-    //   1. The cached wrapper's impl_->db points at the SQLite
-    //      handle that was open at first call. If the user deletes
-    //      and recreates the DB file between calls (which tests like
-    //      test_session_memory do across subcases), the cached
-    //      wrapper still talks to the old DB — stale data.
-    //   2. The v0.3.5 SQLite-mirror design (SessionMemory::save
-    //      writes the mirror in the destructor) relies on every
-    //      call constructing a fresh wrapper so the next call's
-    //      `load()` re-evaluates the on-disk file. Caching breaks
-    //      that with exactly the failure mode we're seeing in
-    //      session_memory_tests.
-    //
-    // Until the proper fix lands, accept the per-call leak.
-    // `make_unique` can't call our private ctor, so use raw `new`
-    // (the original pattern).
+    // auto_migrate=false: tests that call for_home() on temp paths must
+    // not accidentally migrate user-data JSON files.
     fs::create_directories(home);
-    return *(new SettingsStore(home / "daedalus.db",
-                               /*is_default=*/false,
-                               /*auto_migrate=*/false));
+    return SettingsStore(home / "daedalus.db", /*auto_migrate=*/false);
 }
 
 // ============================================================================
@@ -411,7 +395,7 @@ SettingsStore& SettingsStore::for_home(fs::path home)
 std::optional<ModelConfig> SettingsStore::get_model(std::string_view name) const
 {
     auto row = query_one_prepared(
-        *impl_->db,
+        *db_,
         "SELECT name, host, api_key, model_id, chat_endpoint, "
         "max_context_size, temperature FROM models WHERE name = ?",
         std::string(name));
@@ -423,7 +407,7 @@ std::vector<ModelConfig> SettingsStore::list_models() const
 {
     std::vector<ModelConfig> out;
     auto rows = query_all_prepared(
-        *impl_->db,
+        *db_,
         "SELECT name, host, api_key, model_id, chat_endpoint, "
         "max_context_size, temperature FROM models");
     out.reserve(rows.size());
@@ -436,7 +420,7 @@ std::vector<ModelConfig> SettingsStore::list_models() const
 std::string SettingsStore::get_string(std::string_view key, std::string_view def) const
 {
     auto row = query_one_prepared(
-        *impl_->db,
+        *db_,
         "SELECT value FROM kv_settings WHERE key = ?",
         std::string(key));
     if (!row.has_value()) return std::string(def);
@@ -463,7 +447,7 @@ int SettingsStore::get_int(std::string_view key, int def) const
 void SettingsStore::upsert_model(const ModelConfig& m)
 {
     exec_prepared(
-        *impl_->db,
+        *db_,
         "INSERT INTO models(name, host, api_key, model_id, chat_endpoint, "
         "max_context_size, temperature) VALUES(?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(name) DO UPDATE SET "
@@ -479,7 +463,7 @@ void SettingsStore::upsert_model(const ModelConfig& m)
 void SettingsStore::delete_model(std::string_view name)
 {
     exec_prepared(
-        *impl_->db,
+        *db_,
         "DELETE FROM models WHERE name = ?",
         std::string(name));
 }
@@ -487,7 +471,7 @@ void SettingsStore::delete_model(std::string_view name)
 void SettingsStore::set_string(std::string_view key, std::string_view value)
 {
     exec_prepared(
-        *impl_->db,
+        *db_,
         "INSERT INTO kv_settings(key, value) VALUES(?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
         std::string(key), std::string(value));
@@ -511,19 +495,19 @@ void SettingsStore::transaction(std::function<void(SettingsStore&)> fn)
     // OmniNet::DB::Database::transaction takes a no-arg lambda but our
     // API needs to pass `*this` so the callback can chain. Trampoline.
     SettingsStore& self = *this;
-    impl_->db->transaction([&self, &fn]() { fn(self); });
+    db_->transaction([&self, &fn]() { fn(self); });
 }
 
 // ============================================================================
 // Introspection
 // ============================================================================
-fs::path SettingsStore::db_path() const noexcept { return impl_->path; }
+fs::path SettingsStore::db_path() const noexcept { return path_; }
 
 bool SettingsStore::has_data() const noexcept
 {
     if (!list_models().empty()) return true;
     // Cheap kv_settings probe — one row, one column, no bindings.
-    auto stmt = impl_->db->prepare("SELECT 1 FROM kv_settings LIMIT 1");
+    auto stmt = db_->prepare("SELECT 1 FROM kv_settings LIMIT 1");
     return stmt.step();
 }
 
@@ -548,7 +532,7 @@ void SettingsStore::set_session_memory(std::string_view session_id, std::string_
 void SettingsStore::delete_session_memory(std::string_view session_id)
 {
     exec_prepared(
-        *impl_->db,
+        *db_,
         "DELETE FROM kv_settings WHERE key = ?",
         "mem." + std::string(session_id));
 }
@@ -566,7 +550,7 @@ void SettingsStore::set_messages_json(std::string_view session_id, std::string_v
 void SettingsStore::delete_messages_json(std::string_view session_id)
 {
     exec_prepared(
-        *impl_->db,
+        *db_,
         "DELETE FROM kv_settings WHERE key = ?",
         "msg." + std::string(session_id));
 }
@@ -638,8 +622,8 @@ int SettingsStore::get_mcp_tool_schema_soft_cap_percent() const
 
 void SettingsStore::set_max_agent_iterations(int v)        { set_int("max_agent_iterations", v); }
 void SettingsStore::set_max_tool_result_size(size_t v)    { set_int("max_tool_result_size", static_cast<int>(v)); }
-void SettingsStore::set_max_request_size(size_t v)        { set_int("max_request_size", static_cast<int>(v)); }
-void SettingsStore::set_max_response_size(size_t v)       { set_int("max_response_size", static_cast<int>(v)); }
+void SettingsStore::set_max_request_size(size_t v)         { set_int("max_request_size", static_cast<int>(v)); }
+void SettingsStore::set_max_response_size(size_t v)        { set_int("max_response_size", static_cast<int>(v)); }
 void SettingsStore::set_mcp_tool_schema_soft_cap_percent(int v) { set_int("mcp_tool_schema_soft_cap_percent", v); }
 
 ServerErrorSettings SettingsStore::get_server_error_settings() const
@@ -665,10 +649,10 @@ ServerErrorSettings SettingsStore::get_server_error_settings() const
 // ============================================================================
 
 std::string SettingsStore::get_serper_api_key() const {
-    if (!impl_ || !impl_->db) return {};
+    if (!db_) return {};
     try {
         // Singleton row (id=1); if missing, return empty.
-        auto result = query_one_prepared(*impl_->db,
+        auto result = query_one_prepared(*db_,
             "SELECT api_key FROM serper_config WHERE id = 1");
         if (!result || result->empty()) return {};
         return (*result)[0];
@@ -680,9 +664,9 @@ std::string SettingsStore::get_serper_api_key() const {
 }
 
 void SettingsStore::set_serper_api_key(std::string_view api_key) {
-    if (!impl_ || !impl_->db) return;
+    if (!db_) return;
     try {
-        exec_prepared(*impl_->db,
+        exec_prepared(*db_,
             "INSERT INTO serper_config(id, api_key) VALUES (1, ?) "
             "ON CONFLICT(id) DO UPDATE SET api_key = excluded.api_key",
             std::string(api_key));
@@ -740,7 +724,7 @@ SettingsStore::McpServer row_to_mcp(const std::vector<std::string>& r)
 std::optional<SettingsStore::McpServer> SettingsStore::get_mcp_server(std::string_view name) const
 {
     auto row = query_one_prepared(
-        *impl_->db,
+        *db_,
         "SELECT name, transport, command, args_json, env_json, url, "
         "bearer_token, description, enabled FROM mcp_servers WHERE name = ?",
         std::string(name));
@@ -752,7 +736,7 @@ std::vector<SettingsStore::McpServer> SettingsStore::list_mcp_servers() const
 {
     std::vector<McpServer> out;
     auto rows = query_all_prepared(
-        *impl_->db,
+        *db_,
         "SELECT name, transport, command, args_json, env_json, url, "
         "bearer_token, description, enabled FROM mcp_servers ORDER BY name");
     out.reserve(rows.size());
@@ -767,7 +751,7 @@ void SettingsStore::upsert_mcp_server(const McpServer& s)
     nlohmann::json args_j = s.args;
     nlohmann::json env_j  = s.env;
     exec_prepared(
-        *impl_->db,
+        *db_,
         "INSERT INTO mcp_servers(name, transport, command, args_json, env_json, "
         "url, bearer_token, description, enabled) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(name) DO UPDATE SET "
@@ -784,14 +768,14 @@ void SettingsStore::upsert_mcp_server(const McpServer& s)
 void SettingsStore::delete_mcp_server(std::string_view name)
 {
     exec_prepared(
-        *impl_->db,
+        *db_,
         "DELETE FROM mcp_servers WHERE name = ?",
         std::string(name));
 }
 
 bool SettingsStore::has_mcp_servers() const noexcept
 {
-    auto stmt = impl_->db->prepare("SELECT 1 FROM mcp_servers LIMIT 1");
+    auto stmt = db_->prepare("SELECT 1 FROM mcp_servers LIMIT 1");
     return stmt.step();
 }
 

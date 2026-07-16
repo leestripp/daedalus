@@ -45,7 +45,7 @@ int main() {
     fs::create_directories(path);
     {
         std::error_code ec;
-        auto& store = daedalus::SettingsStore::for_home(path);
+        auto store = daedalus::SettingsStore::for_home(path);
 
         // ML1: stdio server
         daedalus::SettingsStore::McpServer s1;

@@ -6,13 +6,16 @@
 //
 // Bug: The webui demo set cfg.daedalus_home to "/home/ubuntu/.daedalus"
 // which caused AgentImpl to use SettingsStore::for_home() instead of
-// instance(). For_home() opens a fresh DB at <path>/daedalus.db which
+// instance(). for_home() opens a DB at <path>/daedalus.db which
 // doesn't have the user's models - they're in the instance() DB.
 //
 // This test ensures:
 //   1. instance() returns the global singleton with real user data
 //   2. for_home() opens a fresh DB at the specified path
-//   3. They are NOT the same store
+//   3. They are NOT the same store (different db_path())
+//
+// §B2 fix (v0.5.1): for_home() returns by value. instance() still returns
+// by reference (static local). Tests updated accordingly.
 
 #include <cassert>
 #include <iostream>
@@ -27,7 +30,10 @@ int main() {
     
     // S1: instance() has models, for_home("/nonexistent") does not
     {
-        auto& inst = daedalus::SettingsStore::instance();
+        // instance() still returns by value (static local). Bind to const
+        // ref so we keep the static's stable address for the
+        // comparison below.
+        const daedalus::SettingsStore& inst = daedalus::SettingsStore::instance();
         auto models_inst = inst.list_models();
         std::cout << "[S1] instance() has " << models_inst.size() << " models\n";
         
@@ -36,16 +42,17 @@ int main() {
         fs::remove_all(tmp);
         fs::create_directories(tmp);
         
-        auto& fh = daedalus::SettingsStore::for_home(tmp);
+        // §B2 fix: for_home() returns by value now.
+        auto fh = daedalus::SettingsStore::for_home(tmp);
         auto models_fh = fh.list_models();
         std::cout << "[S1] for_home(temp) has " << models_fh.size() << " models\n";
         
         // Cleanup
         fs::remove_all(tmp);
         
-        // They should be different
-        if (&inst == &fh) {
-            std::cerr << "[S1] FAIL: instance() and for_home() returned same object!\n";
+        // They should be different (different db_path).
+        if (inst.db_path() == fh.db_path()) {
+            std::cerr << "[S1] FAIL: instance() and for_home() returned same path!\n";
             ++failures;
         } else {
             std::cout << "[S1] OK: instance() and for_home() are distinct stores\n";
@@ -67,13 +74,15 @@ int main() {
         std::cout << "[S2] Checking if config and legacy homes are different...\n";
         
         if (fs::exists(config_home)) {
-            auto& config_store = daedalus::SettingsStore::for_home(config_home);
+            // §B2 fix: for_home() returns by value.
+            auto config_store = daedalus::SettingsStore::for_home(config_home);
             auto config_models = config_store.list_models();
             std::cout << "[S2] " << config_home << " has " << config_models.size() << " models\n";
         }
         
         if (fs::exists(legacy_home)) {
-            auto& legacy_store = daedalus::SettingsStore::for_home(legacy_home);
+            // §B2 fix: for_home() returns by value.
+            auto legacy_store = daedalus::SettingsStore::for_home(legacy_home);
             auto legacy_models = legacy_store.list_models();
             std::cout << "[S2] " << legacy_home << " has " << legacy_models.size() << " models\n";
         } else {

@@ -239,7 +239,9 @@ SerperApiKeyResult load_from_settings_store(const std::filesystem::path& db_path
     SerperApiKeyResult r;
     r.settings_path = db_path;  // point at the DB so error messages are useful
     try {
-        auto& store = daedalus::SettingsStore::for_home(db_path.parent_path());
+        // §B2 fix (v0.5.1): for_home() returns by value. The local copy
+        // shares the DbPool connection — safe to move around.
+        auto store = daedalus::SettingsStore::for_home(db_path.parent_path());
         std::string key = store.get_serper_api_key();
         if (key.empty()) {
             r.status = SerperApiKeyResult::Status::MISSING_BLOCK;
@@ -297,7 +299,8 @@ SerperApiKeyResult load_serper_api_key() {
                 // Promote the JSON key into the store so future loads
                 // don't need the fallback path.
                 try {
-                    auto& store = daedalus::SettingsStore::for_home(db_dir);
+                    // §B2 fix (v0.5.1): for_home() returns by value — use auto.
+                auto store = daedalus::SettingsStore::for_home(db_dir);
                     store.set_serper_api_key(json_r.api_key);
                 } catch (...) {
                     // Non-fatal: next start will try the same fallback.

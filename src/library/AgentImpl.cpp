@@ -59,15 +59,15 @@ constexpr AgentState map_from_internal(::AgentState s) noexcept {
 }
 
 AppConfig make_app_config(const AgentConfig& cfg,
-                          daedalus::SettingsStore* store)
+                          const daedalus::SettingsStore& store)
 {
     AppConfig out;
     out.target_directory = cfg.project_root.empty()
                             ? std::filesystem::current_path()
                             : cfg.project_root;
     out.agent_name = cfg.agent_name;        // §Phase 8.8
-    if (store && !cfg.model_name.empty()) {
-        auto m = store->get_model(cfg.model_name);
+    if (!cfg.model_name.empty()) {
+        auto m = store.get_model(cfg.model_name);
         if (m.has_value()) {
             out.base_url      = m->host;
             out.api_key       = m->api_key;
@@ -120,10 +120,13 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
 
     // §v0.5.0: wire directly to SettingsStore instead of SettingsManager.
     // Use per-agent DB if daedalus_home is set, otherwise the global singleton.
+    // §B2 fix (v0.5.1): for_home() and instance() now return by value;
+    // emplace into the optional so the stored copy is stable for the
+    // lifetime of Body (and LLMClient, which takes a pointer to it).
     if (!cfg_.daedalus_home.empty()) {
-        body_->store = &daedalus::SettingsStore::for_home(cfg_.daedalus_home);
+        body_->store.emplace(daedalus::SettingsStore::for_home(cfg_.daedalus_home));
     } else {
-        body_->store = &daedalus::SettingsStore::instance();
+        body_->store.emplace(daedalus::SettingsStore::instance());
     }
 }
 
@@ -307,7 +310,8 @@ void AgentImpl::initialize()
     }
 
     if (has_explicit_creds) {
-        AppConfig app = make_app_config(cfg_, body_->store);
+        // Pass address of the contained SettingsStore (stable for Body lifetime).
+        AppConfig app = make_app_config(cfg_, *body_->store);
 
         // §Phase 11: construct McpServerManager if mcp_enabled (default true).
         // Pass the raw pointer into LLMClient — it replaces all ::instance()
@@ -336,7 +340,7 @@ void AgentImpl::initialize()
         }
 
         body_->client = std::make_unique<LLMClient>(
-            app, body_->store, body_->mcp.get());
+            app, std::addressof(*body_->store), body_->mcp.get());
         if (sink_) {
             body_->client->set_sink(sink_);
         }

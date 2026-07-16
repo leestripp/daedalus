@@ -63,7 +63,7 @@ void SkillManager::init_after_settings() {
     // §v0.5.0: Try to load skill settings from SettingsStore if available.
     // If SettingsStore isn't available or has no skill settings, use defaults.
     try {
-        daedalus::SettingsStore& store = daedalus::SettingsStore::instance();
+        const daedalus::SettingsStore& store = daedalus::SettingsStore::instance();
         // v0.5.0: SkillsSettings are not yet stored in SettingsStore.
         // For now, just use the directory defaults. Future: load from
         // SettingsStore's kv_settings.

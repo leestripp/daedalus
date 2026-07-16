@@ -9,14 +9,14 @@
 ## Open bugs (B1–B32)
 
 Bugs are ordered by severity. ✅ = done (kept for history). 🟡 = open.
-B2 is acknowledged but de-scoped; fix is tracked separately below.
+All listed bugs are now resolved; nothing actionable below.
 
 ### CRITICAL
 
 | # | Summary | Status |
 |---|---------|--------|
 | B1 | SQL injection in `SettingsStore` — raw string concat in all public methods | ✅ Done (2026-07-15) — prepared statements throughout |
-| B2 | `SettingsStore::for_home` leaks wrapper on every call | ⚠️ Acknowledged — proper fix requires breaking `SettingsStore&` → `SettingsStore` API; de-scoped to v0.5.1. See §B2-fix below. |
+| B2 | `SettingsStore::for_home` leaks wrapper on every call | ✅ Done (2026-07-16) — `for_home()` now returns `SettingsStore` by value; the wrapper is destroyed by RAII. Impl fields (`path_` + `db_`) inlined into the class to make it copyable/movable. `instance()` keeps returning by reference (true singleton, no leak possible). AgentImpl::Body::store is now `std::optional<SettingsStore>`; LLMClient receives `std::addressof(*store)` (stable for Body lifetime). All callers (`SessionMemory`, `Messages`, `SerperConfig`, tests) updated to use `auto store =` instead of `auto& store =`. 60/62 ctest pass + 2 live-LLM skipped, 0 failures. |
 | B16 | `CurlMultiSession` shutdown leaks in-flight `RequestState` (promise never resolved → LLMClient hangs) | ✅ Done (2026-07-16) — `in_flight_` vector tracks all active handles; shutdown cancels + deletes each before draining CURLMSG_DONE queue |
 | B17 | `AgentImpl::execute_tool` is a no-op stub (public API always returns error) | ✅ Done (2026-07-16) — now synthesises OpenAI-style tool_call and calls `ToolHandler::execute_tool_call`; `execute_bash("ls")` etc. works via the public API |
 
@@ -89,29 +89,24 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 
 ## Active refactors
 
-### §B2-fix — Return `SettingsStore` by value (fixes the B2 leak)
+(none — all planned refactors are done)
 
-The leak in `for_home()` (returning `*(new SettingsStore)`) requires a
-breaking API change. The fix is planned but de-scoped to v0.5.1.
+### §B2-fix — Return `SettingsStore` by value ✅ Done (2026-07-16)
 
-**Plan:** `for_home()` returns `SettingsStore` by value (move-elision /
-NRVO). `AgentImpl::Body::store` becomes `std::optional<SettingsStore>`
-(instead of `SettingsStore*`). All callers work as-is via move.
+The leak in `for_home()` (returning `*(new SettingsStore)`) is fixed.
+The plan as written in the v0.5.1 section below was carried out:
 
-**Status:** Not started.
+- [x] Inline the Impl fields in settings.h
+- [x] Change `for_home()` to return by value (`SettingsStore::for_home` returns `SettingsStore`)
+- [x] Update all method bodies to use `path_` / `db_` directly
+- [x] Change `AgentImpl::Body::store` to `std::optional<SettingsStore>`
+- [x] Update `AgentImpl` assignment site (use `body_->store.emplace(...)`)
+- [x] Verify session_memory_tests / messages_tests still pass
+- [x] Verify settings_store_tests (S1–S10) still pass
+- [x] Verify full ctest still 60/62 pass + 2 live-LLM skipped
+- [x] Live-LLM smoke test: daedalus-cli lists directory successfully
 
-```
-Status
-- [ ] Inline the Impl fields in settings.h
-- [ ] Change for_home() to return by value
-- [ ] Update all method bodies to use path_ / db_ directly
-- [ ] Change AgentImpl::Body::store to std::optional<SettingsStore>
-- [ ] Update AgentImpl assignment site
-- [ ] Verify session_memory_tests / messages_tests still pass
-- [ ] Verify settings_store_tests (S1–S10) still pass
-- [ ] Verify full ctest still 56+/61
-- [ ] CHANGELOG entry
-```
+**Status:** ✅ Done (2026-07-16). See B2 row above for full details.
 
 ### Cleanup — Settings zombie code (all done)
 

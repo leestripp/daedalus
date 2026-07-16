@@ -60,7 +60,7 @@ int failures = 0;
 // MS1: stdio server round-trip
 void test_ms1_stdio_roundtrip() {
     TmpHome h("ms1");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     daedalus::SettingsStore::McpServer s;
     s.name        = "fs-server";
@@ -96,7 +96,7 @@ void test_ms1_stdio_roundtrip() {
 // MS2: HTTP server with bearer_token
 void test_ms2_http_roundtrip() {
     TmpHome h("ms2");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     daedalus::SettingsStore::McpServer s;
     s.name         = "remote-mcp";
@@ -120,7 +120,7 @@ void test_ms2_http_roundtrip() {
 // MS3: empty args/env
 void test_ms3_empty_args_env() {
     TmpHome h("ms3");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     daedalus::SettingsStore::McpServer s;
     s.name      = "min";
@@ -142,7 +142,7 @@ void test_ms3_empty_args_env() {
 // MS4: list_mcp_servers returns all
 void test_ms4_list_all() {
     TmpHome h("ms4");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     EXPECT(store.list_mcp_servers().empty());
     EXPECT(!store.has_mcp_servers());
@@ -164,7 +164,7 @@ void test_ms4_list_all() {
 // MS5: delete removes
 void test_ms5_delete() {
     TmpHome h("ms5");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     daedalus::SettingsStore::McpServer s;
     s.name      = "to-delete";
@@ -182,7 +182,7 @@ void test_ms5_delete() {
 // MS6: upsert replaces
 void test_ms6_upsert_replaces() {
     TmpHome h("ms6");
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
 
     daedalus::SettingsStore::McpServer s1;
     s1.name = "dup";
@@ -225,7 +225,7 @@ void test_ms7_migrator_writes_table() {
     };
     std::ofstream(h.mcp_json()) << j.dump(2);
 
-    auto& store = daedalus::SettingsStore::for_home(h.data_root());
+    auto store = daedalus::SettingsStore::for_home(h.data_root());
     daedalus::SettingsMigrator::run(
         store, h.config_json(), h.mcp_json(), /*mark_files=*/false);
 

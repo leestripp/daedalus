@@ -25,7 +25,8 @@ int main() {
     
     // S1: SettingsStore::instance() can list models (sanity check)
     {
-        auto& store = daedalus::SettingsStore::instance();
+        // instance() is a true singleton (returns SettingsStore&) — use const ref.
+        const auto& store = daedalus::SettingsStore::instance();
         auto models = store.list_models();
         std::cout << "[S1] SettingsStore::instance() has " << models.size() << " models\n";
         if (models.empty()) {
@@ -100,7 +101,8 @@ int main() {
         std::cout << "  model_id: '" << m.model_id << "'\n";
         
         // If the store has models but active_model returned empty, that's a bug
-        auto& store = daedalus::SettingsStore::instance();
+        // instance() returns SettingsStore& — use const ref for read-only.
+        const auto& store = daedalus::SettingsStore::instance();
         auto models = store.list_models();
         if (!models.empty() && m.name.empty()) {
             std::cerr << "[S3] FAIL: store has " << models.size() << " models but active_model() returned empty!\n";
