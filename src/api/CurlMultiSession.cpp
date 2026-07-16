@@ -5,6 +5,7 @@
 
 #include "CurlMultiSession.h"
 
+#include <algorithm>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -138,18 +139,42 @@ void CurlMultiSession::event_loop(std::stop_token st) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
-    // On shutdown, cancel all in-flight requests
+    // §B16 fix: cancel all in-flight handles BEFORE the CURLMSG_DONE drain.
+    // curl_multi_info_read only returns completed (CURLMSG_DONE) transfers.
+    // Any handle still in-flight would leak its RequestState forever.
+    {
+        std::lock_guard<std::mutex> lock(in_flight_mutex_);
+        for (RequestState* state : in_flight_) {
+            if (state->easy) {
+                // Remove from curl_multi first, then cleanup
+                if (state->in_multi) {
+                    curl_multi_remove_handle(multi_, state->easy);
+                    state->in_multi = false;
+                }
+                curl_easy_cleanup(state->easy);
+                state->easy = nullptr;
+            }
+            if (state->headers) {
+                curl_slist_free_all(state->headers);
+                state->headers = nullptr;
+            }
+            state->response.cancelled = true;
+            state->promise.set_value(std::unexpected(CurlError::Cancelled));
+            active_count_.fetch_sub(1, std::memory_order_relaxed);
+            delete state;
+        }
+        in_flight_.clear();
+    }
+
+    // Drain any requests that completed during cancellation above.
     CURLMsg* msg = nullptr;
     int msgs_left = 0;
     while ((msg = curl_multi_info_read(multi_, &msgs_left)) != nullptr) {
         if (msg->msg == CURLMSG_DONE) {
             CURL* easy = msg->easy_handle;
-            // Find the request state via curl_easy_getinfo
             RequestState* state = nullptr;
             curl_easy_getinfo(easy, CURLINFO_PRIVATE, &state);
             if (state != nullptr) {
-                state->response.cancelled = true;
-                state->promise.set_value(std::unexpected(CurlError::Cancelled));
                 curl_multi_remove_handle(multi_, easy);
                 curl_easy_cleanup(easy);
                 if (state->headers != nullptr) curl_slist_free_all(state->headers);
@@ -257,6 +282,10 @@ void CurlMultiSession::add_to_multi(RequestState* state) {
     state->start_time = std::chrono::steady_clock::now();
     active_count_.fetch_add(1, std::memory_order_relaxed);
     total_count_.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(in_flight_mutex_);
+        in_flight_.push_back(state);
+    }
 }
 
 // ============================================================================
@@ -306,6 +335,11 @@ void CurlMultiSession::process_completed() {
         curl_multi_remove_handle(multi_, easy);
         curl_easy_cleanup(easy);
         if (state->headers) curl_slist_free_all(state->headers);
+        {
+            std::lock_guard<std::mutex> lock(in_flight_mutex_);
+            auto it = std::find(in_flight_.begin(), in_flight_.end(), state);
+            if (it != in_flight_.end()) in_flight_.erase(it);
+        }
         delete state;
 
         active_count_.fetch_sub(1, std::memory_order_relaxed);
@@ -322,6 +356,11 @@ void CurlMultiSession::remove_from_multi(RequestState* state, CurlError error) {
     }
     if (state->headers) {
         curl_slist_free_all(state->headers);
+    }
+    {
+        std::lock_guard<std::mutex> lock(in_flight_mutex_);
+        auto it = std::find(in_flight_.begin(), in_flight_.end(), state);
+        if (it != in_flight_.end()) in_flight_.erase(it);
     }
     state->promise.set_value(std::unexpected(error));
     delete state;

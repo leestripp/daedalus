@@ -221,6 +221,11 @@ private:
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::queue<std::unique_ptr<RequestState>> pending_;
+    /// §B16 fix: tracks RequestState* for every handle currently in curl_multi.
+    /// Used at shutdown to cancel all in-flight requests — curl_multi_info_read
+    /// only returns CURLMSG_DONE (completed), so in-flight handles would leak.
+    std::vector<RequestState*> in_flight_;
+    std::mutex in_flight_mutex_;
 
     std::atomic<bool> stop_{false};
     std::atomic<size_t> active_count_{0};

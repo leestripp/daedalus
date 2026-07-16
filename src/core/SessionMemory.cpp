@@ -372,40 +372,48 @@ void SessionMemory::load() {
         auto store = daedalus::SettingsStore::for_home(memory_dir_path_);
         auto blob = store.get_session_memory(session_id_);
         if (!blob.empty()) {
-            json j = json::parse(blob);
-            // (mirror of the JSON parse body below — keep them in sync)
-            version_ = j.value("version", "1.0");
-            updated_at_ = iso_to_time_point(j.value("updated_at", ""));
-            builds_.clear();
-            if (j.contains("builds"))
-                for (const auto& b : j["builds"]) builds_.push_back(BuildEntry::from_json(b));
-            errors_.clear();
-            if (j.contains("errors"))
-                for (const auto& e : j["errors"]) errors_.push_back(ErrorEntry::from_json(e));
-            preferences_.clear();
-            if (j.contains("preferences"))
-                for (const auto& p : j["preferences"]) preferences_.push_back(PreferenceEntry::from_json(p));
-            patterns_.clear();
-            if (j.contains("patterns"))
-                for (const auto& p : j["patterns"]) patterns_.push_back(PatternEntry::from_json(p));
-            sessions_.clear();
-            if (j.contains("sessions"))
-                for (const auto& s : j["sessions"]) sessions_.push_back(SessionSummary::from_json(s));
-            if (j.contains("project")) project_info_ = ProjectInfo::from_json(j["project"]);
-            if (j.contains("config")) {
-                const auto& cfg = j["config"];
-                config_.enabled                = cfg.value("enabled", true);
-                config_.max_total_size_kb      = cfg.value("max_total_size_kb", 100);
-                config_.max_entries_per_category = cfg.value("max_entries_per_category", 50);
-                config_.max_session_history    = cfg.value("max_session_history", 20);
-                config_.memory_age_days        = cfg.value("memory_age_days", 30);
-                config_.auto_detect_errors     = cfg.value("auto_detect_errors", true);
-                config_.auto_detect_preferences = cfg.value("auto_detect_preferences", true);
-                config_.auto_learn_builds      = cfg.value("auto_learn_builds", true);
+            // §B22 fix: wrap blob parse in its own try/catch so corrupt
+            // rows are deleted and the next load doesn't try the same bad blob.
+            try {
+                json j = json::parse(blob);
+                // (mirror of the JSON parse body below — keep them in sync)
+                version_ = j.value("version", "1.0");
+                updated_at_ = iso_to_time_point(j.value("updated_at", ""));
+                builds_.clear();
+                if (j.contains("builds"))
+                    for (const auto& b : j["builds"]) builds_.push_back(BuildEntry::from_json(b));
+                errors_.clear();
+                if (j.contains("errors"))
+                    for (const auto& e : j["errors"]) errors_.push_back(ErrorEntry::from_json(e));
+                preferences_.clear();
+                if (j.contains("preferences"))
+                    for (const auto& p : j["preferences"]) preferences_.push_back(PreferenceEntry::from_json(p));
+                patterns_.clear();
+                if (j.contains("patterns"))
+                    for (const auto& p : j["patterns"]) patterns_.push_back(PatternEntry::from_json(p));
+                sessions_.clear();
+                if (j.contains("sessions"))
+                    for (const auto& s : j["sessions"]) sessions_.push_back(SessionSummary::from_json(s));
+                if (j.contains("project")) project_info_ = ProjectInfo::from_json(j["project"]);
+                if (j.contains("config")) {
+                    const auto& cfg = j["config"];
+                    config_.enabled                = cfg.value("enabled", true);
+                    config_.max_total_size_kb      = cfg.value("max_total_size_kb", 100);
+                    config_.max_entries_per_category = cfg.value("max_entries_per_category", 50);
+                    config_.max_session_history    = cfg.value("max_session_history", 20);
+                    config_.memory_age_days        = cfg.value("memory_age_days", 30);
+                    config_.auto_detect_errors     = cfg.value("auto_detect_errors", true);
+                    config_.auto_detect_preferences = cfg.value("auto_detect_preferences", true);
+                    config_.auto_learn_builds      = cfg.value("auto_learn_builds", true);
+                }
+                LOG_INFO("SessionMemory: Loaded from SQLite mirror | Builds: "
+                         + std::to_string(builds_.size()));
+                return;
+            } catch (const json::parse_error&) {
+                // Corrupt mirror: delete it and fall through to JSON (B22)
+                LOG_WARNING("SessionMemory: SQLite mirror corrupt; deleting and falling back to JSON");
+                store.delete_session_memory(session_id_);
             }
-            LOG_INFO("SessionMemory: Loaded from SQLite mirror | Builds: "
-                     + std::to_string(builds_.size()));
-            return;
         }
     } catch (const std::exception& e) {
         // Mirror unavailable — fall through to JSON.

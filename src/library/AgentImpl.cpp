@@ -11,6 +11,7 @@
  */
 #include "AgentImpl.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -21,6 +22,7 @@
 #include "daedalus/paths.h"
 #include "daedalus/settings.h"
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
+#include "core/FileIO.h"             // for execute_tool FileIO construction
 #include "core/SessionMemory.h"      // internal subsystem (src/core/)
 #include "core/SkillManager.h"       // internal subsystem (src/core/)
 #include "tools/ToolHandler.h"       // internal subsystem (src/tools/)
@@ -709,15 +711,34 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
                                        const nlohmann::json& args)
 {
     if (!initialized_) initialize();
+
+    // §B17 fix: route through ToolHandler so the public API actually works.
+    // Synthesise an OpenAI-style tool_call so ToolHandler understands it.
+    static std::atomic<int> next_id{0};
+    std::string call_id = "host_" + std::to_string(next_id.fetch_add(1));
+
+    nlohmann::json tool_call = {
+        {"id",     call_id},
+        {"type",   "function"},
+        {"function", {
+            {"name",      name},
+            {"arguments", args.is_string() ? args.get<std::string>()
+                                          : args.dump()}
+        }}
+    };
+
+    // FileIO needs a base path — use the current working directory.
+    FileIO file_io(std::filesystem::current_path());
+
+    nlohmann::json result = ToolHandler::execute_tool_call(tool_call, file_io);
+
     if (sink_) {
-        sink_->on_log(daedalus::LogLevel::Warn,
-                      "Agent::execute_tool() — Phase 1+ stub; "
-                      "direct tool dispatch will be wired through the "
-                      "host's tool path in Phase 7. (tool: " + name + ")");
+        sink_->on_log(daedalus::LogLevel::Info,
+                      "Agent::execute_tool(" + name + ") → "
+                      + result.value("status", "unknown"));
     }
-    (void)args;
-    return nlohmann::json{{"status", "error"},
-                          {"message", "Phase 1+ stub — see AgentImpl::execute_tool"}};
+
+    return result;
 }
 
 void AgentImpl::register_tool(std::unique_ptr<HostTool> tool)

@@ -2555,7 +2555,23 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         messages.push_back({{"role", "system"}, {"content", system_instruction}});
     }
     if (!user_message.empty()) {
-        messages.push_back({{"role", "user"}, {"content", user_message}});
+        // §B19 fix: refuse to push a user message after a dangling tool result.
+        // If the last message is a tool result, the previous turn ended mid-cycle
+        // (e.g. user pressed Ctrl-C). The next run_one_turn would push a user
+        // message after the tool result, causing the API to reject with
+        // "tool call result does not follow tool call".
+        if (!messages.empty() && messages.back().value("role", "") == "tool") {
+            LOG_WARNING("run_one_turn: last message is a dangling tool result; "
+                         "refusing to append user message. "
+                         "Host should reload the session or handle this state.");
+            if (sink_) {
+                sink_->on_log(daedalus::LogLevel::Warn,
+                              "run_one_turn: dangling tool result at end of "
+                              "messages; cannot append user message.");
+            }
+        } else {
+            messages.push_back({{"role", "user"}, {"content", user_message}});
+        }
     }
 
     // Reset per-turn state
