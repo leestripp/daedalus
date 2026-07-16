@@ -3,7 +3,11 @@
 #include "core/FileIO.h"
 #include "api/CurlMultiSession.h"
 
-#include <curl/curl.h>
+#include <OmniNet.h>
+#include <http/HttpClient.h>
+#include <http/HttpResponse.h>
+#include <utils/Utils.h>
+
 #include <array>
 #include <filesystem>
 #include <fstream>
@@ -637,8 +641,10 @@ json WikiSearchTool::execute(const json& args, FileIO& file_io) {
     }
 
     try {
-        // URL-encode the query (manual encoder; CurlMultiSession doesn't
-        // expose the raw handle for curl_easy_escape)
+        // URL-encode the query (manual encoder; the previous libcurl
+        // path needed curl_easy_escape, but OmniNet::urlEncode also
+        // exists — kept the local copy for now to minimise churn in
+        // tests that exercise this exact encoding).
         auto url_encode = [](const std::string& s) -> std::string {
             std::string out;
             for (char c : s) {
@@ -658,31 +664,35 @@ json WikiSearchTool::execute(const json& args, FileIO& file_io) {
         std::string url = "https://api.wikimedia.org/core/v1/wikipedia/en/search/page?q="
                         + url_encode(query) + "&limit=" + std::to_string(limit);
 
-        // Use CurlMultiSession for the actual HTTP request
-        using daedalus::net::CurlRequest;
-        using daedalus::net::CurlMultiSession;
-        CurlRequest req;
-        req.url = url;
-        req.method = "GET";
-        req.timeout_seconds = 30;
-        req.follow_redirects = true;
-        req.user_agent = "daedalus/1.0 (https://github.com/daedalus; contact@example.com)";
+        // §NC-4: Wikipedia search via OmniNet::HTTP::Client (was CurlMultiSession).
+        OmniNet::HTTP::ClientRequest req;
+        req.url(url);
+        req.method("GET");
+        req.header("User-Agent",
+                   "daedalus/1.0 (https://github.com/daedalus; contact@example.com)");
 
-        auto fut = CurlMultiSession::get_instance().submit(req);
-        auto result = fut.get();
+        OmniNet::HTTP::ClientConfig cfg;
+        cfg.connect_timeout = std::chrono::seconds(10);
+        cfg.request_timeout = std::chrono::seconds(30);
+        cfg.follow_redirects = true;
 
-        if (!result) {
-            return json::object({{"status", "error"}, {"message", "Wikipedia request failed"}});
+        auto result = OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg);
+
+        if (!result.has_value()) {
+            return json::object({{"status", "error"},
+                                 {"message", std::string("Wikipedia transport error: ") +
+                                                OmniNet::HTTP::clientErrorName(result.error())}});
         }
-        if (result->status_code != 200) {
+        const auto& resp = result.value();
+        if (resp.statusCode() != 200) {
             return json::object({
                 {"status", "error"},
-                {"message", "Wikipedia API returned HTTP " + std::to_string(result->status_code)}
+                {"message", "Wikipedia API returned HTTP " + std::to_string(resp.statusCode())}
             });
         }
 
         // Parse the JSON response
-        json api_response = json::parse(result->body);
+        json api_response = json::parse(resp.bodyAsString());
 
         // Extract results from the Wikimedia REST API format
         json results = json::array();
@@ -723,13 +733,6 @@ json WikiSearchTool::execute(const json& args, FileIO& file_io) {
 }
 
 // ========== SerperSearchTool ==========
-
-// Callback to handle the data received from Serper API
-static size_t serper_write_callback(void* contents, size_t size, size_t nmemb, std::string* userp) {
-    size_t realsize = size * nmemb;
-    userp->append((char*)contents, realsize);
-    return realsize;
-}
 
 // Helper function to get the Serper API key from settings.
 // Delegates to the shared SerperConfig helper, which is the single source
@@ -796,83 +799,59 @@ json SerperSearchTool::execute(const json& args, FileIO& file_io) {
     }
 
     try {
-        // Initialize cURL
-        CURL* curl = curl_easy_init();
-        if (!curl) {
-            return json::object({{"status", "error"}, {"message", "Failed to initialize cURL"}});
-        }
+        // §NC-4 (2026-07-16): Serper search migrated from libcurl to
+        // OmniNet::HTTP::Client. URL encoding via OmniNet::urlEncode();
+        // POST via OmniNet::HTTP::Client::send_blocking() with explicit
+        // Content-Type + X-API-Key + User-Agent headers.
+        std::string encoded_query = OmniNet::Utils::urlEncode(query);
 
-        // URL encode the query
-        char* encoded_query = curl_easy_escape(curl, query.c_str(), (int)query.length());
-        if (!encoded_query) {
-            curl_easy_cleanup(curl);
-            return json::object({{"status", "error"}, {"message", "Failed to URL encode the query"}});
-        }
-
-        // Build the URL
-        std::string url = "https://google.serper.dev/search?q=";
-        url += encoded_query;
-        
-        curl_free(encoded_query);
+        // Build the URL (the `q=…` parameter is informational; the
+        // POST body's `q` field is what Serper actually uses).
+        const std::string url = "https://google.serper.dev/search?q=" + encoded_query;
 
         // Set up the POST body
         json post_body = json::object({
             {"q", query},
             {"num", 10}
         });
-        std::string post_body_str = post_body.dump();
+        const std::string post_body_str = post_body.dump();
 
-        // Set cURL options
-        std::string response_buffer;
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, post_body_str.c_str());
-        
-        // Set headers
-        struct curl_slist* headers = NULL;
-        std::string x_api_key = "X-API-Key: " + api_key;
-        headers = curl_slist_append(headers, "Content-Type: application/json");
-        headers = curl_slist_append(headers, x_api_key.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        
-        // Set User-Agent
-        curl_easy_setopt(curl, CURLOPT_USERAGENT, "daedalus/1.0");
-        
-        // Follow redirects
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
-        
-        // Set timeout
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
-        
-        // Set write callback
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, serper_write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response_buffer);
+        // Build the request.
+        OmniNet::HTTP::ClientRequest req;
+        req.url(url);
+        req.method("POST");
+        req.body(post_body_str);
+        req.header("Content-Type", "application/json");
+        req.header("X-API-Key",     api_key);
+        req.header("User-Agent",    "daedalus/1.0");
 
-        // Perform the request
-        CURLcode res = curl_easy_perform(curl);
-        
-        // Clean up headers
-        curl_slist_free_all(headers);
-        
-        if (res != CURLE_OK) {
-            curl_easy_cleanup(curl);
-            return json::object({{"status", "error"}, {"message", std::string("cURL error: ") + curl_easy_strerror(res)}});
+        // 30s timeout — matches the old curl setting.
+        OmniNet::HTTP::ClientConfig cfg;
+        cfg.connect_timeout = std::chrono::seconds(10);
+        cfg.request_timeout = std::chrono::seconds(30);
+        cfg.follow_redirects = true;
+        cfg.verify_tls       = true;
+
+        // Perform the request (sync).
+        auto result = OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg);
+
+        if (!result.has_value()) {
+            return json::object({
+                {"status",  "error"},
+                {"message", std::string("transport error: ") +
+                                OmniNet::HTTP::clientErrorName(result.error())}});
         }
 
-        // Check response code
-        long response_code;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
-        curl_easy_cleanup(curl);
-
-        if (response_code != 200) {
+        const auto& resp = result.value();
+        const int code = resp.statusCode();
+        if (code != 200) {
             return json::object({
-                {"status", "error"},
-                {"message", "Serper API returned HTTP " + std::to_string(response_code)}
-            });
+                {"status",  "error"},
+                {"message", "Serper API returned HTTP " + std::to_string(code)}});
         }
 
         // Parse the JSON response
-        json api_response = json::parse(response_buffer);
+        json api_response = json::parse(resp.bodyAsString());
         
         // Extract results from Serper API format
         json results = json::array();

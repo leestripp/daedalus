@@ -11,7 +11,7 @@
  * Why this exists:
  * - Replaces ad-hoc std::async(launch::async, ...) which creates a fresh
  *   thread per call (footgun, no thread reuse, no cancellation).
- * - Provides a shared pool for async I/O (curl_multi, MCP, file ops).
+ * - Provides a shared pool for async I/O (OmniNet HTTP/MCP, file ops).
  * - Centralizes thread management for cleaner shutdown.
  *
  * Thread-safety: All public methods are safe to call from any thread.

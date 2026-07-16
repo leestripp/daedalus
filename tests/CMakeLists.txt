@@ -493,6 +493,19 @@ target_link_libraries(daedalus_json_utf8_tests PRIVATE
 )
 add_test(NAME json_utf8_tests COMMAND daedalus_json_utf8_tests)
 
+# §NC-2 (2026-07-16): SSE parser test — pure header-only test that
+# exercises the WHATWG SSE wire format. No external deps.
+add_executable(daedalus_sse_parser_tests
+    test_sse_parser.cpp
+)
+target_include_directories(daedalus_sse_parser_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_sse_parser_tests PRIVATE
+    doctest::doctest
+)
+add_test(NAME sse_parser_tests COMMAND daedalus_sse_parser_tests)
+
 # Create Session Memory test
 add_executable(daedalus_session_memory_tests
     test_session_memory.cpp

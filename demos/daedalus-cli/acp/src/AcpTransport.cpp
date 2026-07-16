@@ -1,210 +1,206 @@
 /**
  * @file demos/daedalus-cli/acp/src/AcpTransport.cpp
- * @brief ACP Transport implementation using libcurl
+ * @brief ACP Transport implementation using OmniNet (NOT libcurl)
+ *
+ * §NC-1 (2026-07-16): replaced the entire libcurl implementation with
+ * OmniNet::HTTP::Client. No direct libcurl anywhere in the daedalus
+ * codebase — see CodeMax.md "§NOMORE-CURL" for the full migration plan.
+ *
+ * Sync GET/POST → OmniNet::HTTP::Client::send_blocking(req, cfg).
+ * Streaming     → OmniNet::HTTP::Client::send_streaming(req, cfg).
+ *
+ * The SSE parser (used by stream_events) lives in
+ * <daedalus/net/SseParser.h> — see NC-2.
  */
 
 #include "acp/AcpClient.h"
-#include <curl/curl.h>
-#include <cstring>
+
+#include <daedalus/net/SseParser.h>
+
+#include <OmniNet.h>
+#include <http/HttpClient.h>
+#include <http/HttpResponse.h>
+#include <utils/Utils.h>
+
 #include <sstream>
 #include <iostream>
 
+namespace acp {
+
 namespace {
 
-// Helper class for curl easy handle RAII
-class CurlGlobal {
-public:
-    CurlGlobal() {
-        curl_global_init(CURL_GLOBAL_DEFAULT);
-    }
-    ~CurlGlobal() {
-        curl_global_cleanup();
-    }
-};
-
-// Static initialization
-static CurlGlobal g_curl_global;
-
-size_t write_callback(void* contents, size_t size, size_t nmemb, void* userp) {
-    size_t realsize = size * nmemb;
-    std::string* str = static_cast<std::string*>(userp);
-    str->append(static_cast<char*>(contents), realsize);
-    return realsize;
+// Build a request with common JSON headers + the JSON-Content-Type
+// pre-set. Caller adds method/url/body before sending.
+OmniNet::HTTP::ClientRequest make_request(const std::string& url) {
+    OmniNet::HTTP::ClientRequest req;
+    req.url(url);
+    req.header("Content-Type", "application/json");
+    req.header("Accept",       "application/json");
+    return req;
 }
 
-size_t header_callback(char* buffer, size_t size, size_t nitems, void* userdata) {
-    size_t len = size * nitems;
-    std::string* headers = static_cast<std::string*>(userdata);
-    headers->append(buffer, len);
-    return len;
-}
-
-/// RAII wrapper for CURL* handles — calls curl_easy_cleanup() in dtor.
-struct CurlHandle {
-    CURL* handle;
-    explicit CurlHandle(CURL* h = nullptr) noexcept : handle(h) {}
-    ~CurlHandle() { if (handle) curl_easy_cleanup(handle); }
-    CurlHandle(const CurlHandle&) = delete;
-    CurlHandle& operator=(const CurlHandle&) = delete;
-    CurlHandle(CurlHandle&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
-    CurlHandle& operator=(CurlHandle&& other) noexcept {
-        if (this != &other) {
-            if (handle) curl_easy_cleanup(handle);
-            handle = other.handle;
-            other.handle = nullptr;
-        }
-        return *this;
+/// Convert an OmniNet Result into our Response. We always return a
+/// Response (never throw); success populates status_code + body,
+/// failure populates transport_error.
+IAcpTransport::Response to_response(const OmniNet::Result<OmniNet::HTTP::ClientResponse, OmniNet::HTTP::ClientError>& r,
+                                     const std::string& method_path) {
+    IAcpTransport::Response out;
+    if (!r.has_value()) {
+        out.transport_error = std::string("omninet: ") +
+                              OmniNet::HTTP::clientErrorName(r.error());
+        std::cerr << "[AcpTransport] " << method_path
+                  << " failed: " << out.transport_error << "\n";
+        return out;
     }
-    operator CURL*() const noexcept { return handle; }
-};
-
-/// Build a fresh handle pre-configured with the common options (timeouts,
-/// write callback, follow redirects, JSON headers). One per request —
-/// simpler than curl_easy_duphandle and matches what is_connected already
-/// does. The returned handle is owned by the caller.
-CurlHandle make_request_handle(const std::string& url,
-                               std::string& response,
-                               std::string& response_headers,
-                               struct curl_slist* headers) {
-    CurlHandle h(curl_easy_init());
-    if (!h) return h;
-    curl_easy_setopt(h, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(h, CURLOPT_WRITEDATA, &response);
-    curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, header_callback);
-    curl_easy_setopt(h, CURLOPT_HEADERDATA, &response_headers);
-    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
-    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
-    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 10L);
-    return h;
-}
-
-/// Perform a request, returning a TransportResponse with body + status
-/// (and an error message on transport / non-2xx / parse failure). Never
-/// throws — callers should inspect Response::transport_error and
-/// Response::status_code to decide what went wrong.
-acp::IAcpTransport::Response perform_and_parse(CURL* curl,
-                                                const std::string& method_path,
-                                                const std::string& response_body) {
-    acp::IAcpTransport::Response r;
-    r.body = nlohmann::json{};   // default-construct in case of early return
-
-    CURLcode res = curl_easy_perform(curl);
-    long http_code = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-    r.status_code = http_code;
-
-    if (res != CURLE_OK) {
-        r.transport_error = std::string("curl: ") + curl_easy_strerror(res);
-        std::cerr << "[CurlTransport] " << method_path
-                  << " failed: " << curl_easy_strerror(res) << "\n";
-        return r;
-    }
-    if (http_code < 200 || http_code >= 300) {
-        r.transport_error = "HTTP " + std::to_string(http_code);
-        std::cerr << "[CurlTransport] " << method_path
-                  << " HTTP " << http_code << "\n";
-        return r;
+    const auto& resp = r.value();
+    out.status_code = resp.statusCode();
+    const auto& bytes = resp.body();
+    if (bytes.empty()) {
+        // Successful response with no body — return an empty JSON object
+        // so callers can still iterate keys without crashing.
+        out.body = nlohmann::json::object();
+        return out;
     }
     try {
-        r.body = nlohmann::json::parse(response_body);
+        out.body = nlohmann::json::parse(resp.bodyAsString());
     } catch (const nlohmann::json::parse_error& e) {
-        r.transport_error = std::string("JSON parse: ") + e.what();
-        std::cerr << "[CurlTransport] " << method_path
+        out.transport_error = std::string("JSON parse: ") + e.what();
+        std::cerr << "[AcpTransport] " << method_path
                   << " JSON parse error: " << e.what() << "\n";
     }
-    return r;
+    return out;
 }
 
 } // anonymous namespace
 
-namespace acp {
+namespace {
 
 // ============================================================================
-// CurlTransport implementation
+// OmninetTransport — uses OmniNet::HTTP::Client for sync GET/POST
+// and send_streaming for SSE.
 // ============================================================================
 
-class CurlTransport : public IAcpTransport {
+class OmninetTransport : public IAcpTransport {
 public:
-    CurlTransport(const std::string& base_url)
-        : base_url_(base_url)
+    explicit OmninetTransport(std::string base_url)
+        : base_url_(std::move(base_url))
     {
-        // Shared JSON headers; passed by pointer into each request handle.
-        // We own this slist and free it on destruction.
-        headers_ = curl_slist_append(nullptr, "Content-Type: application/json");
-        headers_ = curl_slist_append(headers_,  "Accept: application/json");
+        cfg_.connect_timeout    = std::chrono::seconds(10);
+        cfg_.request_timeout    = std::chrono::seconds(30);
+        cfg_.follow_redirects   = true;
+        cfg_.verify_tls         = true;
     }
 
-    ~CurlTransport() override {
-        if (headers_) curl_slist_free_all(headers_);
+    Response get(const std::string& path) override {
+        auto req = make_request(base_url_ + path);
+        req.method("GET");
+        return to_response(
+            OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg_),
+            "GET " + path);
     }
 
-    IAcpTransport::Response get(const std::string& path) override {
-        std::string url      = base_url_ + path;
-        std::string response;
-        std::string headers;
-        auto h = make_request_handle(url, response, headers, headers_);
-        if (!h) return {};
-        return perform_and_parse(h, "GET " + path, response);
+    Response post(const std::string& path, const nlohmann::json& body) override {
+        auto req = make_request(base_url_ + path);
+        req.method("POST");
+        req.body(body.dump());
+        return to_response(
+            OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg_),
+            "POST " + path);
     }
 
-    IAcpTransport::Response post(const std::string& path, const nlohmann::json& body) override {
-        std::string url      = base_url_ + path;
-        std::string response;
-        std::string headers;
-        auto h = make_request_handle(url, response, headers, headers_);
-        if (!h) return {};
-
-        std::string body_str = body.dump();
-        curl_easy_setopt(h, CURLOPT_POST, 1L);
-        curl_easy_setopt(h, CURLOPT_POSTFIELDS, body_str.c_str());
-        curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(body_str.size()));
-        return perform_and_parse(h, "POST " + path, response);
-    }
-
-    void stream_events(const RunId& run_id, IRunEventHandler& handler) override {
-        std::cerr << "[CurlTransport] Stream events for run " << run_id << "\n";
-        // TODO: Implement SSE streaming with libcurl
-        // For now, this is a stub
-        (void)handler;
-    }
+    void stream_events(const RunId& run_id, IRunEventHandler& handler) override;
 
     bool is_connected() const override {
-        CurlHandle h(curl_easy_init());
-        if (!h) return false;
-
-        std::string url = base_url_ + "/v1/ping";
-        std::string response;
-        std::string headers;
-        curl_easy_setopt(h, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers_);
-        curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(h, CURLOPT_WRITEDATA, &response);
-        curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, header_callback);
-        curl_easy_setopt(h, CURLOPT_HEADERDATA, &headers);
-        curl_easy_setopt(h, CURLOPT_NOBODY, 1L);
-        curl_easy_setopt(h, CURLOPT_TIMEOUT, 5L);
-        curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 3L);
-
-        CURLcode res = curl_easy_perform(h);
-        long code = 0;
-        curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
-
-        return res == CURLE_OK && code >= 200 && code < 300;
+        auto req = make_request(base_url_ + "/v1/ping");
+        req.method("GET");
+        auto r = OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg_);
+        return r.has_value() &&
+               r.value().statusCode() >= 200 &&
+               r.value().statusCode() <  300;
     }
 
 private:
     std::string base_url_;
-    struct curl_slist* headers_ = nullptr;
+    OmniNet::HTTP::ClientConfig cfg_;
 };
 
 // ============================================================================
-// Transport factory
+// SSE → IRunEventHandler dispatch.
+//
+// §NC-3 STUB: all events pass through on_generic with the raw JSON,
+// so the caller can inspect the structure. Detailed dispatch
+// (on_run_*, on_message_*, on_error) requires adding matching callbacks
+// to IRunEventHandler first.
+// ============================================================================
+
+void dispatch_sse_event(const RunId& run_id,
+                        const daedalus::net::SseEvent& event,
+                        IRunEventHandler& handler) {
+    nlohmann::json data;
+    try {
+        data = nlohmann::json::parse(event.data);
+    } catch (const std::exception&) {
+        data = nlohmann::json{{"raw", event.data}};
+    }
+    if (!event.event.empty()) data["event_type"] = event.event;
+    if (!event.id.empty())    data["event_id"]   = event.id;
+    handler.on_generic(run_id, data);
+}
+
+// §NC-3: SSE streaming using OmniNet::HTTP::Client::send_streaming +
+// SseParser. Runs on a background thread and joins at end-of-stream
+// so the IAcpTransport contract stays synchronous.
+void OmninetTransport::stream_events(const RunId& run_id,
+                                     IRunEventHandler& handler) {
+    const std::string url = base_url_ + "/v1/runs/" + run_id + "/events";
+    OmniNet::HTTP::ClientRequest req;
+    req.url(url);
+    req.method("GET");
+    req.header("Accept", "text/event-stream");
+
+    std::thread worker([this, req, run_id, &handler]() {
+        auto r = OmniNet::HTTP::Client::get_instance().send_streaming(req, cfg_);
+        if (!r.has_value()) {
+            handler.on_error(run_id, make_error(
+                std::string("omninet: ") + OmniNet::HTTP::clientErrorName(r.error()),
+                -1));
+            return;
+        }
+        auto& stream = *r.value();
+        daedalus::net::SseParser parser;
+        while (true) {
+            auto chunk = stream.read_some();
+            if (!chunk) break;          // EOF
+            if (chunk->empty()) continue;
+            const char* data = reinterpret_cast<const char*>(chunk->data());
+            parser.feed(std::string_view(data, chunk->size()));
+            // Drain parsed events; dispatch.
+            for (;;) {
+                auto event = parser.try_pop();
+                if (!event) break;
+                dispatch_sse_event(run_id, *event, handler);
+            }
+        }
+        parser.finish();  // flush any trailing in-flight event
+    });
+    worker.join();
+}
+
+} // anonymous namespace
+
+// ============================================================================
+// Transport factory — OmniNet only. No libcurl in this translation unit.
 // ============================================================================
 
 std::unique_ptr<IAcpTransport> create_curl_transport(const std::string& base_url) {
-    return std::make_unique<CurlTransport>(base_url);
+    (void)base_url;
+    // Kept for ABI compatibility — names say "curl" but the implementation
+    // is OmniNet. New code should call create_transport() below.
+    return std::make_unique<OmninetTransport>(base_url);
+}
+
+std::unique_ptr<IAcpTransport> create_transport(const std::string& base_url) {
+    return std::make_unique<OmninetTransport>(base_url);
 }
 
 } // namespace acp

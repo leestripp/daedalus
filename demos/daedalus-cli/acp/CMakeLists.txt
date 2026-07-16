@@ -1,12 +1,14 @@
 # ACP Client Library CMakeLists.txt
-# Agent Communication Protocol C++23 client implementation
+# Agent Communication Protocol C++23 client implementation.
+#
+# §NC-1 (2026-07-16): NO direct libcurl. Uses OmniNet::HTTP::Client.
 
 cmake_minimum_required(VERSION 3.28)
 
 # ACP library
 set(ACP_LIB_NAME acp)
 
-# Find uuid + curl via pkg-config (we need PkgConfig before pkg_check_modules).
+# Find uuid via pkg-config (we need PkgConfig before pkg_check_modules).
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(UUID REQUIRED uuid)
 
@@ -35,11 +37,13 @@ target_include_directories(${ACP_LIB_NAME} PUBLIC
 # C++23
 target_compile_features(${ACP_LIB_NAME} PRIVATE cxx_std_23)
 
-# Dependencies
+# Dependencies — OmniNet::HTTP::Client for sync GET/POST/streaming,
+# nlohmann_json for request/response bodies, daedalus for SseParser
+# (NC-2; lives in src/library/net/).
 target_link_libraries(${ACP_LIB_NAME} PRIVATE
     nlohmann_json::nlohmann_json
-    CURL::libcurl
-    ${UUID_LIBRARIES}
+    OmniNet
+    daedalus
 )
 
 # Warning flags

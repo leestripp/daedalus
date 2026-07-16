@@ -535,6 +535,98 @@ ACP server to integration-test against).
 
 ---
 
+## §NOMORE-CURL — Remove every direct libcurl usage from daedalus (2026-07-16)
+
+**Trigger:** ACP code review surfaced that I (the agent) wrote a new
+`demos/daedalus-cli/acp/AcpTransport.cpp` using `curl/curl.h` directly.
+User pointed out that **the entire daedalus project must use OmniNet
+for all HTTP/SSE — there must be NO direct libcurl anywhere**.
+
+A grep confirms this isn't just my new code — libcurl is sprinkled
+across the daemon-side too. The user's intent is that we should be
+migrating this code to OmniNet, not adding new instances.
+
+### Audit — every file that touches libcurl
+
+| File | Lines | What it does | Migration difficulty |
+|------|-------|--------------|----------------------|
+| `demos/daedalus-cli/acp/src/AcpTransport.cpp` | 196 | Sync GET/POST to ACP server; SSE streaming stub. (NEW — my fault.) | **Easy** — replace with OmniNet::HTTP::Client + write an SSE parser using OmniNet's stream consumer. |
+| `demos/daedalus-cli/acp/include/acp/AcpClient.h` | 182 | Public interface only, mentions curl via AcpTransport. | No code change. |
+| `demos/daedalus-cli/acp/CMakeLists.txt` | 58 | `target_link_libraries(... CURL::libcurl ...)` | **Easy** — drop the curl dep. |
+| `src/api/CurlHandle.h` | 181 | RAII wrapper for CURL* | **Delete** — OmniNet has its own RAII internally. |
+| `src/api/CurlMultiSession.h` | 240 | Async HTTP client wrapper using `curl_multi_*` | **Replace** with OmniNet::HTTP::Client async API (`send()`). |
+| `src/api/CurlMultiSession.cpp` | 501 | Implementation | **Replace**. |
+| `src/api/LLMClient.cpp` | 2696 | Main LLM API client — uses CurlMultiSession for streaming + retries + stop_token. Plus `make_curl_request_with_retry(CURL*, ...)` and `run_agent_cycle(CURL*, ...)` take raw CURL* | **Hard** — must preserve: SSE streaming, Retry-After header capture, stop_token cancellation, exponential backoff, 429/5xx vs 4xx retry routing. Best done in its own session. |
+| `src/api/LLMClient.h` | 287 | Declares run_agent_cycle(CURL*, ...) + make_curl_request_with_retry(CURL*, ...) | **Replace** with OmniNet equivalents. |
+| `src/core/utils.cpp` | 1025 | Some helper — `grep` confirms it does direct curl | TBD. |
+| `src/core/ThreadPool.h` | — | Only a comment mentioning "curl_multi" — no code change needed, just a comment update. | **Easy**. |
+| `src/tools/SearchTool.cpp` | 923 | Serper API client: `curl_easy_init`, URL escape, POST. Sync. | **Easy** — OmniNet::HTTP::Client::send_blocking covers it. URL encode → `OmniNet::urlEncode()`. |
+| `tests/test_curl_handle.cpp` | 217 | Unit tests for CurlHandle | **Delete** with CurlHandle. |
+| `tests/test_curl_multi_session.cpp` | 374 | Unit tests for CurlMultiSession | **Replace** with tests against OmniNet-backed transport. |
+| `tests/CMakeLists.txt` | — | `find_package(CURL REQUIRED)` + `CURL::libcurl` link in 7 places | **Update**. |
+| `CMakeLists.txt` (top-level) | — | `find_package(CURL REQUIRED)` + `CURL::libcurl` link in `daedalus` target | **Update**. |
+
+### What OmniNet provides
+
+- `OmniNet::HTTP::Client` — singleton with:
+  - **Sync:** `send_blocking(req)` → `Result<ClientResponse, ClientError>`
+  - **Async (Phase 2):** `send(req)` → `std::future<Result<ClientResponse, ClientError>>`
+  - **Streaming (Phase 7):** `send_streaming(req)` → `Result<unique_ptr<ClientResponseStream>, ClientError>`; pull `read_some()` for chunks
+  - **Cancellation:** every variant takes a `std::stop_token`
+  - **TLS:** built-in via `net::TLSSocket`
+  - **Redirects:** auto-follow with hop limit
+  - **Timeouts:** per-request
+- `OmniNet::urlEncode()` / `urlEncodePath()` / `urlDecode()` in `utils/Utils.h`
+- `OmniNet::JSON` (via nlohmann_json transitive)
+- `OmniNet::HTTP::StatusCode` enum (200, 201, 401, 404, 429, 500, …)
+- `OmniNet::thread::ThreadPool` — already in use as `daedalus::concurrent::ThreadPool`
+
+### What OmniNet does NOT provide (today)
+
+- **Client-side SSE parser** — only `SSEHandler` (server-side emitter). We
+  need a `client::SseParser` that consumes a `ClientResponseStream` and
+  emits `Event{id, event, data, retry}` records. ~150 lines; lives in
+  the daedalus lib (or the ACP sub-lib) since it's small and self-contained.
+- **`Retry-After` header capture as an int** — `ClientResponse` exposes
+  `headers()` as `map<string,string>`. Caller parses it.
+- **Auto-retry / exponential backoff** — not in OmniNet (Phase 8 deferred).
+  Caller composes. That's fine — the existing LLMClient::make_api_request
+  retry loop can be kept; we just replace the transport primitive.
+- **`write_callback`-style streaming POST** — Phase 7 supports
+  `set_body_writer` for chunked uploads, which is enough.
+
+### Tasks — ordered for safe incremental migration
+
+| # | Task | Severity | Status |
+|---|------|----------|--------|
+| NC-1 | **Replace libcurl in ACP transport** with `OmniNet::HTTP::Client`. Drop `CURL::libcurl` from `demos/daedalus-cli/acp/CMakeLists.txt`. | CRITICAL (correctness — user mandate) | ✅ Done (2026-07-16) — `AcpTransport.cpp` rewritten on top of `OmniNet::HTTP::Client::send_blocking` / `send_streaming`. Tests show `[AcpTransport] ... failed: omninet: ConnectFailed` instead of `curl: Could not connect to server`. |
+| NC-2 | Implement **client-side SSE parser** using `OmniNet::HTTP::ClientResponseStream` (no libcurl). Lives in `src/library/net/SseParser.h` (no stdio — library-safe). | HIGH | ✅ Done (2026-07-16) — `<daedalus/net/SseParser.h>` lives in public include path. Header-only, WHATWG-compliant. 17 cases / 47 assertions in `daedalus_sse_parser_tests`. Covers: single/multi-line data, CRLF+LF endings, comments, chunk-boundary splits, finish() flush, retry field parsing, leading-space stripping, unknown-field ignoring, event-without-data skipping. |
+| NC-3 | Implement **ACP-7 SSE streaming** using the new SseParser + `send_streaming`. Dispatches to `IRunEventHandler::on_*`. | HIGH | ✅ Done (2026-07-16) — `OmninetTransport::stream_events` uses `send_streaming` + `SseParser`. Structured dispatch through `on_run_*/on_message_*/on_error` callbacks is currently a stub that routes everything to `on_generic`; proper dispatch requires adding the missing callbacks (`on_tool_call`, `on_tool_call_output`, `on_await`) to `IRunEventHandler` first. |
+| NC-4 | Replace libcurl in `SearchTool.cpp` with `OmniNet::HTTP::Client::send_blocking`. Use `OmniNet::urlEncode()` instead of `curl_easy_escape`. | HIGH | ✅ Done (2026-07-16) — both Serper and Wikipedia paths migrated. Removed dead `serper_write_callback`. |
+| NC-12 | Update `ThreadPool.h` comment that mentions `curl_multi`. | TRIVIAL | ✅ Done (2026-07-16) — "curl_multi" → "OmniNet HTTP/MCP". |
+
+**Scope of THIS session:** NC-1, NC-2, NC-3, NC-4, NC-12. LLMClient
+migration (NC-6..NC-8) is a multi-session refactor — too risky to do
+in one shot without breaking the live LLM smoke tests.
+
+**Progress:**
+- [x] Audit every file that touches libcurl
+- [x] Catalogue what OmniNet provides vs. what we need to write
+- [x] Pick a scope that fits one session (ACP + SearchTool + SseParser)
+- [x] NC-1: replace libcurl in ACP transport with OmniNet
+- [x] NC-2: client-side SSE parser in `<daedalus/net/SseParser.h>` + tests
+- [x] NC-3: ACP SSE streaming via send_streaming + SseParser (structured dispatch stubbed)
+- [x] NC-4: replace libcurl in SearchTool.cpp (Serper + Wikipedia)
+- [x] NC-12: ThreadPool.h comment update
+
+**Verification:**
+- ACP builds clean (no warnings from new code).
+- `test_acp_basic` → 25 cases / 84 assertions, all pass.
+- `daedalus_sse_parser_tests` → 17 cases / 47 assertions, all pass.
+- `ctest -E phase15_typo_warning` → **63/63 pass**, 2 live-LLM skipped, 0 failures.
+
+---
+
 ## Project layout
 
 - `/workspace/daedalus` — C++ agent library + demos (CMake build)
