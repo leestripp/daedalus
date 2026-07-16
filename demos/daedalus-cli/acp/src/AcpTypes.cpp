@@ -54,6 +54,15 @@ void from_json(const nlohmann::json& j, Run& r) {
     if (j.contains("updated_at")) r.updated_at = j.at("updated_at").get<std::string>();
 }
 
+void from_json(const nlohmann::json& j, Session& s) {
+    if (j.contains("session_id")) s.session_id = j.at("session_id").get<std::string>();
+    if (j.contains("agent_name")) s.agent_name = j.at("agent_name").get<std::string>();
+    if (j.contains("messages") && j["messages"].is_array()) {
+        s.messages = j.at("messages").get<std::vector<Message>>();
+    }
+    if (j.contains("created_at")) s.created_at = j.at("created_at").get<std::string>();
+}
+
 // ============================================================================
 // Status <-> wire string
 // ============================================================================

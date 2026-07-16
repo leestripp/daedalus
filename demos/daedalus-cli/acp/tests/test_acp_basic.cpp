@@ -195,3 +195,67 @@ TEST_CASE("RunCreateRequest serializes mode correctly") {
         CHECK(j["mode"] == expected);
     }
 }
+
+// ============================================================================
+// Regression: Session messages parsing (ACP-12).
+// ============================================================================
+
+TEST_CASE("from_json(Session) parses session_id, agent_name, created_at") {
+    json j = {
+        {"session_id", "sess-abc"},
+        {"agent_name", "test-agent"},
+        {"created_at", "2026-07-16T12:00:00Z"},
+        {"messages",   json::array()}
+    };
+    Session s;
+    from_json(j, s);
+    CHECK(s.session_id == "sess-abc");
+    CHECK(s.agent_name == "test-agent");
+    REQUIRE(s.created_at.has_value());
+    CHECK(*s.created_at == "2026-07-16T12:00:00Z");
+    CHECK(s.messages.empty());
+}
+
+TEST_CASE("from_json(Session) parses message history") {
+    json j = {
+        {"session_id", "sess-1"},
+        {"agent_name", "test-agent"},
+        {"messages", json::array({
+            {
+                {"role", "user"},
+                {"parts", json::array({
+                    {{"content_type", "text/plain"}, {"content", "hi"}}
+                })}
+            },
+            {
+                {"role", "agent"},
+                {"parts", json::array({
+                    {{"content_type", "text/plain"}, {"content", "hello!"}}
+                })}
+            }
+        })}
+    };
+    Session s;
+    from_json(j, s);
+    REQUIRE(s.messages.size() == 2);
+    CHECK(s.messages[0].role == "user");
+    CHECK(s.messages[1].role == "agent");
+    REQUIRE(s.messages[1].parts.size() == 1);
+    CHECK(*s.messages[1].parts[0].content == "hello!");
+}
+
+TEST_CASE("from_json(Session) tolerates missing fields") {
+    json j = json::object();
+    Session s;
+    REQUIRE_NOTHROW(from_json(j, s));
+    CHECK(s.session_id.empty());
+    CHECK(s.agent_name.empty());
+    CHECK(s.messages.empty());
+}
+
+TEST_CASE("from_json(Session) ignores non-array messages field") {
+    json j = {{"messages", "not-an-array"}};
+    Session s;
+    REQUIRE_NOTHROW(from_json(j, s));
+    CHECK(s.messages.empty());
+}

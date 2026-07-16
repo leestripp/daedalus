@@ -205,15 +205,15 @@ void AcpClient::stream_run_events(const RunId& run_id, IRunEventHandler& handler
 Session AcpClient::get_session(const SessionId& session_id) {
     std::string path = "/v1/sessions/" + session_id;
     nlohmann::json response = transport_->get(path);
-    
+
     if (!is_valid_response(response)) {
         return {};
     }
-    
+
     Session session;
-    session.session_id = session_id;
-    session.agent_name = response.value("agent_name", "");
-    
+    from_json(response, session);
+    // Preserve the requested session_id if the server didn't echo it back.
+    if (session.session_id.empty()) session.session_id = session_id;
     return session;
 }
 

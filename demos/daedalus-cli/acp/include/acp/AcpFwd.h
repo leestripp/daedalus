@@ -201,6 +201,8 @@ void to_json(nlohmann::json& j, const Message& m);
 void from_json(const nlohmann::json& j, Run& r);
 void to_json(nlohmann::json& j, const RunCreateRequest& req);
 
+void from_json(const nlohmann::json& j, Session& s);
+
 /// Parse a kebab-case ACP status string ("created", "in-progress",
 /// "awaiting", "completed", "cancelled", "failed") into the RunStatus
 /// enum. Unknown values map to Created.

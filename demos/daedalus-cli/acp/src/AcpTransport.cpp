@@ -1,5 +1,5 @@
 /**
- * @file src/acp/src/AcpTransport.cpp
+ * @file demos/daedalus-cli/acp/src/AcpTransport.cpp
  * @brief ACP Transport implementation using libcurl
  */
 
@@ -39,6 +39,74 @@ size_t header_callback(char* buffer, size_t size, size_t nitems, void* userdata)
     return len;
 }
 
+/// RAII wrapper for CURL* handles — calls curl_easy_cleanup() in dtor.
+struct CurlHandle {
+    CURL* handle;
+    explicit CurlHandle(CURL* h = nullptr) noexcept : handle(h) {}
+    ~CurlHandle() { if (handle) curl_easy_cleanup(handle); }
+    CurlHandle(const CurlHandle&) = delete;
+    CurlHandle& operator=(const CurlHandle&) = delete;
+    CurlHandle(CurlHandle&& other) noexcept : handle(other.handle) { other.handle = nullptr; }
+    CurlHandle& operator=(CurlHandle&& other) noexcept {
+        if (this != &other) {
+            if (handle) curl_easy_cleanup(handle);
+            handle = other.handle;
+            other.handle = nullptr;
+        }
+        return *this;
+    }
+    operator CURL*() const noexcept { return handle; }
+};
+
+/// Build a fresh handle pre-configured with the common options (timeouts,
+/// write callback, follow redirects, JSON headers). One per request —
+/// simpler than curl_easy_duphandle and matches what is_connected already
+/// does. The returned handle is owned by the caller.
+CurlHandle make_request_handle(const std::string& url,
+                               std::string& response,
+                               std::string& response_headers,
+                               struct curl_slist* headers) {
+    CurlHandle h(curl_easy_init());
+    if (!h) return h;
+    curl_easy_setopt(h, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(h, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, header_callback);
+    curl_easy_setopt(h, CURLOPT_HEADERDATA, &response_headers);
+    curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(h, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 10L);
+    return h;
+}
+
+/// Perform a request, returning parsed JSON or empty on any failure.
+/// Logs a one-line diagnostic on transport error / non-2xx / parse error.
+nlohmann::json perform_and_parse(CURL* curl,
+                                 const std::string& method_path,
+                                 const std::string& response) {
+    long http_code = 0;
+    CURLcode res = curl_easy_perform(curl);
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    if (res != CURLE_OK) {
+        std::cerr << "[CurlTransport] " << method_path
+                  << " failed: " << curl_easy_strerror(res) << "\n";
+        return {};
+    }
+    if (http_code < 200 || http_code >= 300) {
+        std::cerr << "[CurlTransport] " << method_path
+                  << " HTTP " << http_code << "\n";
+        return {};
+    }
+    try {
+        return nlohmann::json::parse(response);
+    } catch (const nlohmann::json::parse_error& e) {
+        std::cerr << "[CurlTransport] " << method_path
+                  << " JSON parse error: " << e.what() << "\n";
+        return {};
+    }
+}
+
 } // anonymous namespace
 
 namespace acp {
@@ -51,138 +119,74 @@ class CurlTransport : public IAcpTransport {
 public:
     CurlTransport(const std::string& base_url)
         : base_url_(base_url)
-        , curl_(curl_easy_init())
-        , headers_(nullptr)
     {
-        if (curl_) {
-            // Common options
-            curl_easy_setopt(curl_, CURLOPT_WRITEFUNCTION, write_callback);
-            curl_easy_setopt(curl_, CURLOPT_HEADERFUNCTION, header_callback);
-            curl_easy_setopt(curl_, CURLOPT_FOLLOWLOCATION, 1L);
-            curl_easy_setopt(curl_, CURLOPT_TIMEOUT, 30L);
-            curl_easy_setopt(curl_, CURLOPT_CONNECTTIMEOUT, 10L);
-            
-            // Headers for JSON
-            headers_ = curl_slist_append(headers_, "Content-Type: application/json");
-            headers_ = curl_slist_append(headers_, "Accept: application/json");
-        }
+        // Shared JSON headers; passed by pointer into each request handle.
+        // We own this slist and free it on destruction.
+        headers_ = curl_slist_append(nullptr, "Content-Type: application/json");
+        headers_ = curl_slist_append(headers_,  "Accept: application/json");
     }
-    
+
     ~CurlTransport() override {
-        if (headers_) {
-            curl_slist_free_all(headers_);
-        }
-        if (curl_) {
-            curl_easy_cleanup(curl_);
-        }
+        if (headers_) curl_slist_free_all(headers_);
     }
-    
+
     nlohmann::json get(const std::string& path) override {
+        std::string url      = base_url_ + path;
         std::string response;
         std::string headers;
-        long http_code = 0;
-        
-        CURL* curl = curl_easy_duphandle(curl_);
-        if (!curl) return {};
-        
-        std::string url = base_url_ + path;
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers_);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &headers);
-        
-        CURLcode res = curl_easy_perform(curl);
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-        curl_easy_cleanup(curl);
-        
-        if (res != CURLE_OK) {
-            std::cerr << "[CurlTransport] GET " << path << " failed: " << curl_easy_strerror(res) << "\n";
-            return {};
-        }
-        
-        if (http_code >= 400) {
-            std::cerr << "[CurlTransport] GET " << path << " HTTP " << http_code << "\n";
-            return {};
-        }
-        
-        try {
-            return nlohmann::json::parse(response);
-        } catch (const nlohmann::json::parse_error& e) {
-            std::cerr << "[CurlTransport] JSON parse error: " << e.what() << "\n";
-            return {};
-        }
+        auto h = make_request_handle(url, response, headers, headers_);
+        if (!h) return {};
+        return perform_and_parse(h, "GET " + path, response);
     }
-    
+
     nlohmann::json post(const std::string& path, const nlohmann::json& body) override {
+        std::string url      = base_url_ + path;
         std::string response;
-        std::string headers_str;
-        long http_code = 0;
-        
-        CURL* curl = curl_easy_duphandle(curl_);
-        if (!curl) return {};
-        
-        std::string url = base_url_ + path;
+        std::string headers;
+        auto h = make_request_handle(url, response, headers, headers_);
+        if (!h) return {};
+
         std::string body_str = body.dump();
-        
-        // POST data setup (no need to modify shared headers list)
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers_);
-        curl_easy_setopt(curl, CURLOPT_POST, 1L);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body_str.c_str());
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, body_str.size());
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
-        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &headers_str);
-        
-        CURLcode res = curl_easy_perform(curl);
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
-        curl_easy_cleanup(curl);
-        
-        if (res != CURLE_OK) {
-            std::cerr << "[CurlTransport] POST " << path << " failed: " << curl_easy_strerror(res) << "\n";
-            return {};
-        }
-        
-        if (http_code >= 400) {
-            std::cerr << "[CurlTransport] POST " << path << " HTTP " << http_code << "\n";
-            return {};
-        }
-        
-        try {
-            return nlohmann::json::parse(response);
-        } catch (const nlohmann::json::parse_error& e) {
-            std::cerr << "[CurlTransport] JSON parse error: " << e.what() << "\n";
-            return {};
-        }
+        curl_easy_setopt(h, CURLOPT_POST, 1L);
+        curl_easy_setopt(h, CURLOPT_POSTFIELDS, body_str.c_str());
+        curl_easy_setopt(h, CURLOPT_POSTFIELDSIZE, static_cast<long>(body_str.size()));
+        return perform_and_parse(h, "POST " + path, response);
     }
-    
+
     void stream_events(const RunId& run_id, IRunEventHandler& handler) override {
         std::cerr << "[CurlTransport] Stream events for run " << run_id << "\n";
         // TODO: Implement SSE streaming with libcurl
         // For now, this is a stub
+        (void)handler;
     }
-    
+
     bool is_connected() const override {
-        CURL* curl = curl_easy_init();
-        if (!curl) return false;
-        
+        CurlHandle h(curl_easy_init());
+        if (!h) return false;
+
         std::string url = base_url_ + "/v1/ping";
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 5L);
-        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 3L);
-        
-        CURLcode res = curl_easy_perform(curl);
+        std::string response;
+        std::string headers;
+        curl_easy_setopt(h, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(h, CURLOPT_HTTPHEADER, headers_);
+        curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, write_callback);
+        curl_easy_setopt(h, CURLOPT_WRITEDATA, &response);
+        curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, header_callback);
+        curl_easy_setopt(h, CURLOPT_HEADERDATA, &headers);
+        curl_easy_setopt(h, CURLOPT_NOBODY, 1L);
+        curl_easy_setopt(h, CURLOPT_TIMEOUT, 5L);
+        curl_easy_setopt(h, CURLOPT_CONNECTTIMEOUT, 3L);
+
+        CURLcode res = curl_easy_perform(h);
         long code = 0;
-        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
-        curl_easy_cleanup(curl);
-        
-        return res == CURLE_OK && code < 500;
+        curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &code);
+
+        return res == CURLE_OK && code >= 200 && code < 300;
     }
 
 private:
     std::string base_url_;
-    CURL* curl_;
-    struct curl_slist* headers_;
+    struct curl_slist* headers_ = nullptr;
 };
 
 // ============================================================================
