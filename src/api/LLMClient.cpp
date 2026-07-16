@@ -177,6 +177,43 @@ static ErrorCategory classify_api_error(const std::string& error_type, const std
     return ErrorCategory::FATAL;
 }
 
+// §B9 refactor: extract "find last tool_call" walk into a single helper.
+// Used by both the FATAL error path (with args for debugging) and the
+// retry-fatal path (id + name only).
+struct LastToolCall {
+    std::string id;
+    std::string name;
+    std::string args;  // optional; empty if not requested
+};
+
+static LastToolCall find_last_tool_call(const json& messages,
+                                        bool want_args = false) {
+    LastToolCall out;
+    for (int i = static_cast<int>(messages.size()) - 1; i >= 0; i--) {
+        if (!messages[i].is_object()) continue;
+        if (messages[i].value("role", "") != "assistant") continue;
+        if (!messages[i].contains("tool_calls") ||
+            !messages[i]["tool_calls"].is_array()) continue;
+        auto& tcs = messages[i]["tool_calls"];
+        if (tcs.empty() || !tcs[tcs.size() - 1].is_object()) continue;
+        auto& last_tc = tcs[tcs.size() - 1];
+        out.id = last_tc.value("id", "UNKNOWN");
+        if (last_tc.contains("function") && last_tc["function"].is_object()) {
+            out.name = last_tc["function"].value("name", "UNKNOWN");
+            if (want_args &&
+                last_tc["function"].contains("arguments") &&
+                last_tc["function"]["arguments"].is_string()) {
+                out.args = last_tc["function"]["arguments"].get<std::string>();
+                if (out.args.length() > 200) {
+                    out.args = out.args.substr(0, 200) + "...";
+                }
+            }
+        }
+        break;
+    }
+    return out;
+}
+
 
 
 // Implementation of LLMClient methods
@@ -1258,34 +1295,12 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             }
         }
 
-        // Find the last tool_call in messages for debugging
-        std::string last_tool_call_id = "UNKNOWN";
-        std::string last_tool_name = "UNKNOWN";
-        std::string last_tool_args = "";
-        try {
-            for (int i = static_cast<int>(messages.size()) - 1; i >= 0; i--) {
-                if (!messages[i].is_object()) continue;
-                if (messages[i].value("role", "") != "assistant") continue;
-                if (!messages[i].contains("tool_calls") || !messages[i]["tool_calls"].is_array()) continue;
-                auto& tcs = messages[i]["tool_calls"];
-                if (tcs.empty() || !tcs[tcs.size() - 1].is_object()) continue;
-                auto& last_tc = tcs[tcs.size() - 1];
-                last_tool_call_id = last_tc.value("id", "UNKNOWN");
-                if (last_tc.contains("function") && last_tc["function"].is_object()) {
-                    last_tool_name = last_tc["function"].value("name", "UNKNOWN");
-                    if (last_tc["function"].contains("arguments") && last_tc["function"]["arguments"].is_string()) {
-                        last_tool_args = last_tc["function"]["arguments"].get<std::string>();
-                        if (last_tool_args.length() > 200) {
-                            last_tool_args = last_tool_args.substr(0, 200) + "...";
-                        }
-                    }
-                }
-                break;
-            }
-        } catch (const std::exception& e) {
-            LOG_DEBUG(std::string("Error extracting tool call info: ") + e.what());
-        }
-        
+        // §B9: extract the "find last tool_call" walk once and reuse it.
+        LastToolCall last = find_last_tool_call(messages, /*want_args=*/true);
+        const std::string& last_tool_call_id = last.id;
+        const std::string& last_tool_name   = last.name;
+        const std::string& last_tool_args   = last.args;
+
         // Classify error and decide whether to retry
         ErrorCategory category = classify_api_error(error_type, error_message);
         
@@ -1356,24 +1371,10 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
                     std::string retry_error_msg = retry_error.value("message", "Unknown error");
                     if (classify_api_error(retry_error_type, retry_error_msg) == ErrorCategory::FATAL) {
                         LOG_ERROR("Fatal error during retry: " + retry_error_type);
-                        // Find the last tool call for debugging
-                        std::string last_tool_name = "UNKNOWN";
-                        std::string last_tool_id = "UNKNOWN";
-                        try {
-                            for (int i = static_cast<int>(messages.size()) - 1; i >= 0; i--) {
-                                if (!messages[i].is_object()) continue;
-                                if (messages[i].value("role", "") != "assistant") continue;
-                                if (!messages[i].contains("tool_calls") || !messages[i]["tool_calls"].is_array()) continue;
-                                auto& tcs = messages[i]["tool_calls"];
-                                if (tcs.empty() || !tcs[tcs.size()-1].is_object()) continue;
-                                if (!tcs[tcs.size()-1].contains("function") || !tcs[tcs.size()-1]["function"].is_object()) continue;
-                                last_tool_id = tcs[tcs.size()-1].value("id", "UNKNOWN");
-                                last_tool_name = tcs[tcs.size()-1]["function"].value("name", "UNKNOWN");
-                                break;
-                            }
-                        } catch (const std::exception& e) {
-                            LOG_DEBUG(std::string("Error extracting tool call: ") + e.what());
-                        }
+                        // §B9: reuse the shared helper.
+                        LastToolCall last_retry = find_last_tool_call(messages);
+                        const std::string& last_tool_id   = last_retry.id;
+                        const std::string& last_tool_name = last_retry.name;
                         // CRITICAL FIX: Add a tool result for the failed call
                         // to keep conversation state valid (no orphan tool_calls)
                         if (!last_tool_id.empty() && last_tool_id != "UNKNOWN") {

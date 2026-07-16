@@ -49,10 +49,10 @@ B2 is acknowledged but de-scoped; fix is tracked separately below.
 |---|---------|--------|
 | B4 | `BashTool::build_patterns` has duplicate `"make"` (callback fires twice) | ✅ Done (2026-07-15) — duplicate removed, list sorted |
 | B6 | `sanitize_assistant_message` comment contradicts code | ✅ Done (already in place) — uses explicit `!tool_result_ids.empty() && count > 0` pattern (Messages.cpp:962-963) |
-| B9 | "Find last tool_call" loop repeated 4× in `run_agent_cycle` with divergent shape assumptions | 🟢 Refactor |
+| B9 | "Find last tool_call" loop repeated 4× in `run_agent_cycle` with divergent shape assumptions | ✅ Done (2026-07-16) — extracted `find_last_tool_call()` helper at LLMClient.cpp:182; FATAL error path uses `want_args=true`, retry-fatal path uses default (id+name only) |
 | B11 | `sanitize_utf8` iconv + fallback paths duplicate the same 90-line state machine | ✅ Done (2026-07-16) — all four copies consolidated to `core/Utf8Utils.h::utf8_sanitize_replace_invalid` |
 | B12 | `SessionMemory::sanitize_utf8` truncates on partial UTF-8 sequence (loses bytes after `?`) | ✅ Done (2026-07-16) — fixed in `Utf8Utils.h::utf8_sanitize_replace_invalid` (line 342: "do NOT resize here"); all callers use the shared utility |
-| B13 | `split_messages` and `get_compression_indices` duplicate the same algorithm | 🟢 Refactor |
+| B13 | `split_messages` and `get_compression_indices` duplicate the same algorithm | ✅ Done (already in place) — `compute_safe_split()` at Messages.cpp:404 is called by both `split_messages()` (line 473) and `get_compression_indices()` (line 497) |
 | B15 | `run_agent_cycle` uses `dump(2)` for first request, `dump()` for retry (size mismatch vs `max_request_size_` check) | ✅ Done (already consistent) — all call sites use `request_payload.dump()` |
 | B18 | `active_model` and `list_models` duplicate `ModelConfig` → `ModelInfo` construction | ✅ Done (already in place) — shared `to_model_info()` helper at AgentImpl.cpp:625 |
 | B20 | `BackgroundProcessManager::FIFO_TIMEOUT_MS` is unused | ✅ Done (already removed) |
@@ -229,36 +229,6 @@ from all files. Tests updated. Build clean.
 |---------|--------|
 | B10: non-2xx body discarded — fix: make `CurlResponse` part of `expected` on HttpStatus | ✅ Done (2026-07-16) |
 | B16: in-flight `RequestState` leaked on shutdown | ✅ Done (2026-07-16) |
-
----
-
-## Trivial fix helpers
-
-These are small, self-contained bugs. Fix in one sitting.
-
-### §B24 fix
-
-```cpp
-double parsed = s.backoff_multiplier;  // start with default
-try {
-    auto str = get_string("server_error_backoff_multiplier",
-                          std::to_string(s.backoff_multiplier));
-    parsed = std::stod(str);
-} catch (...) {
-    // leave default
-}
-s.backoff_multiplier = parsed;
-```
-
-### §B12 fix
-
-Remove `result.resize(sequence_start_pos + 1)` — keep the trailing
-bytes in `result`; the state machine handles each as a fresh start.
-
-### §B30 fix
-
-Add `<thinking>...</thinking>` strip alongside the existing
-`<answer>` strip in `Messages::extract_summary_text`.
 
 ---
 
