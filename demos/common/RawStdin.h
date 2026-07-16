@@ -133,7 +133,8 @@ private:
         enter_terminal_mode();
 
         std::string line;
-        std::cout << "\n" << prompt_ << std::flush;
+        // The prompt is printed by the main loop before every next_line() call,
+        // not by this thread. The main loop is the single canonical site.
 
         while (!stop_.load(std::memory_order_acquire)) {
             char c = 0;
@@ -180,7 +181,8 @@ private:
                 std::cout << "\r\n" << std::flush;
                 push(std::move(line));
                 line.clear();
-                std::cout << prompt_ << std::flush;
+                // Do NOT print the prompt here — the main loop prints it
+                // before every next_line() call (single canonical site).
                 continue;
             }
 
@@ -195,10 +197,11 @@ private:
 
             // ---- Ctrl+C (0x03) ----------------------------------
             // The SIGINT handler does the real work (sets
-            // g_shutting_down + cancel()). Here we just flush the
-            // current line so the prompt stays clean.
+            // g_shutting_down + cancel()). Here we just echo ^C
+            // and clear the partial line. The main loop prints "> "
+            // on the next iteration.
             if (c == 0x03) {
-                std::cout << "^C\r\n" << prompt_ << std::flush;
+                std::cout << "^C\r\n" << std::flush;
                 line.clear();
                 continue;
             }

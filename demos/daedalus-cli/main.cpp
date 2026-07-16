@@ -166,6 +166,10 @@ int main(int argc, char* argv[]) {
         daedalus_cli::RawStdinWatcher watcher(agent, "> ");
 
         while (!g_shutting_down.load() && !watcher.esc_seen()) {
+            // Single canonical site for the prompt — printed just before
+            // reading, never after. The watcher handles its own input
+            // echoing and does not print the prompt.
+            std::cout << "> " << std::flush;
             auto line_opt = watcher.next_line();
             if (!line_opt) break;          // EOF / Ctrl+D / shutdown
 
@@ -235,12 +239,7 @@ int main(int argc, char* argv[]) {
             // Actual user input — drive one agent turn.
             agent.submit_user_message(std::move(line));
             agent.run_one_turn();
-
-            // After each turn, re-print the prompt so the user knows
-            // we're ready for input again (the watcher continues
-            // printing "> " but we re-assert it for clarity after
-            // a turn that ended via cancel/timeout).
-            std::cout << "> " << std::flush;
+            // The next iteration prints the prompt before next_line().
         }
 
         // Distinguish "user pressed ESC" from "user typed /quit" so

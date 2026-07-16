@@ -466,6 +466,75 @@ from all files. Tests updated. Build clean.
 
 ---
 
+## ACP (Agent Communication Protocol) — code review (2026-07-16)
+
+**Location:** `demos/daedalus-cli/acp/` — standalone sub-library that links
+into the daedalus-cli demo. Does NOT live in `src/` (would violate the
+no-stdio library rule; uses `std::cerr` for diagnostics).
+
+**Docs:** `docs/acp-protocol.md`, `docs/acp-openapi.yaml`
+
+**Source tree:**
+```
+acp/
+├── CMakeLists.txt                       (58 lines — standalone build)
+├── include/acp/
+│   ├── AcpFwd.h                         (204 lines — types + enums)
+│   └── AcpClient.h                      (182 lines — client API)
+├── src/
+│   ├── AcpClient.cpp                    (234 lines — client logic)
+│   ├── AcpTransport.cpp                 (196 lines — libcurl transport)
+│   └── AcpTypes.cpp                     (71 lines — JSON serialization)
+└── tests/
+    ├── CMakeLists.txt                   (8 lines)
+    └── test_acp_basic.cpp               (51 lines — smoke test)
+```
+
+**Status as of 2026-07-16:** Folder exists but NOT wired into the demo
+build (`demos/daedalus-cli/CMakeLists.txt` has no `add_subdirectory(acp)`),
+so none of it is compiled. Standalone build fails immediately.
+
+### Tasks — ordered by priority
+
+| # | Task | Severity | Status |
+|---|------|----------|--------|
+| ACP-1 | Fix standalone `CMakeLists.txt` — missing `find_package(PkgConfig REQUIRED)` before `pkg_check_modules` | CRITICAL (build-blocker) | ✅ Done (2026-07-16) |
+| ACP-2 | Wire ACP into the demo build — `add_subdirectory(acp)` in `demos/daedalus-cli/CMakeLists.txt` behind option `DAEDALUS_CLI_ACP` (default OFF until stable) | CRITICAL (build-blocker) | ✅ Done (2026-07-16) — option default OFF; set `-DDAEDALUS_CLI_ACP=ON` to enable |
+| ACP-3 | Fix `AcpClient::get_run` status-string mismatch — protocol says `created` / `in-progress` / `awaiting` / `completed` / `cancelled` / `failed` (kebab-case); code checked `queued` / `in_progress` / `awaiting_input` (snake-case). Renamed enum values (`Queued`→`Created`, `AwaitingInput`→`Awaiting`) and added shared `parse_run_status` / `run_status_to_string` in AcpTypes.cpp. | HIGH (silent bug) | ✅ Done (2026-07-16) |
+| ACP-4 | Complete `from_json(const nlohmann::json& j, Run& r)` — previously never parsed `run_id` from response (always empty). Also `status`, `session_id`, `created_at`, `updated_at` skipped. Refactored into shared `parse_run_response` helper used by `create_run`/`get_run`/`resume_run`/`cancel_run`. | HIGH (silent bug) | ✅ Done (2026-07-16) |
+| ACP-5 | Complete `from_json(Message&)` — `created_at` is now read from JSON. Also fixed `to_json(Message)` to write `created_at` (caught by the round-trip test). | MEDIUM | ✅ Done (2026-07-16) |
+| ACP-6 | Stop using `{}` as the universal error sentinel — `AcpClient` methods return default-constructed values on transport failure; callers can't distinguish "no agents" from "server down". Use `Result<T, AcpError>` (variant) or throw on transport failure. | HIGH (silent failure) | 🟡 Todo |
+| ACP-7 | Implement `CurlTransport::stream_events` — currently a stub. Need libcurl SSE parsing + dispatch to `IRunEventHandler::on_*`. Whole async story depends on this. | CRITICAL (feature-blocker) | 🟡 Todo |
+| ACP-8 | Decide on `libuuid` dependency — `AcpFwd.h` includes `<uuid.h>` and CMake pulls in `pkg_check_modules(UUID REQUIRED uuid)`, but no code generates UUIDs. Either generate UUIDs client-side for `RunId`/`SessionId` or drop the dep. | LOW | 🟡 Todo |
+| ACP-9 | Decide on stdio policy — `AcpClient.cpp` and `AcpTransport.cpp` use `std::cerr` (8 + 4 sites). Fine for CLI demo (host owns terminal), but a future TUI host wrapping ACP will be corrupted. Either keep `std::cerr` (demos-only) or migrate to a `LogFn` callback (matching `AgentSink` pattern). | LOW | 🟡 Todo |
+| ACP-10 | Switch test to doctest — converted from raw `assert()` to doctest; added 13 test cases / 50 assertions covering the regressions fixed above. | LOW | ✅ Done (2026-07-16) |
+| ACP-11 | `AcpClient::create_run` hardcodes `run.status = RunStatus::Queued` ignoring the server's actual response status. | MEDIUM | ✅ Done (2026-07-16) — now goes through `parse_run_response` |
+| ACP-12 | `AcpClient::get_session` doesn't parse `messages` — half the value of fetching a session is the history. | MEDIUM | 🟡 Todo |
+| ACP-13 | `CurlTransport::is_connected` treats 404 as connected (`code < 500`). Should check 2xx. | LOW | 🟡 Todo |
+| ACP-14 | `AcpClient::get_agent` of a nonexistent agent returns an `AgentManifest` with the requested name echoed back, no exception — hidden failure mode. | MEDIUM | 🟡 Todo |
+| ACP-15 | `CurlTransport::get`/`post` use `curl_easy_duphandle` for one-shot calls; `is_connected` uses `curl_easy_init`. Pick one. | LOW | 🟡 Todo |
+
+**Progress:**
+- [x] Read `docs/acp-protocol.md` + `docs/acp-openapi.yaml`
+- [x] Read all 7 ACP source files
+- [x] Audit for issues — see table above (15 items)
+- [x] Confirm `acp/` is NOT currently in the build (no `add_subdirectory` from parent)
+- [x] Confirm standalone build fails (`pkg_check_modules` before `find_package(PkgConfig)`)
+- [x] Fix standalone CMakeLists (ACP-1)
+- [x] Wire ACP into demo build via `DAEDALUS_CLI_ACP` option (ACP-2)
+- [x] Rename enum + fix kebab-case status mapping (ACP-3)
+- [x] Add `parse_run_response` shared helper for `create_run`/`get_run`/`resume_run`/`cancel_run` (ACP-4, ACP-11)
+- [x] Fix `from_json(Message&)` + `to_json(Message&)` for `created_at` (ACP-5)
+- [x] Convert test to doctest; add 13 cases / 50 assertions (ACP-10)
+- [x] Verify: `ctest` → **62/62 pass**, 2 live-LLM skipped, 0 failures
+- [x] Verify: full `daedalus-cli` build clean (no new warnings from ACP code)
+
+**Still open:** ACP-6 (Result type), ACP-7 (SSE), ACP-8 (uuid decision),
+ACP-9 (stdio policy), ACP-12 (session messages), ACP-13 (is_connected 2xx),
+ACP-14 (get_agent 404), ACP-15 (handle consistency).
+
+---
+
 ## Project layout
 
 - `/workspace/daedalus` — C++ agent library + demos (CMake build)
