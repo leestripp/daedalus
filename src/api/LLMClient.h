@@ -3,7 +3,6 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include <filesystem>
-#include <curl/curl.h>
 #include <memory>
 #include <atomic>
 #include <cstdint>
@@ -124,7 +123,9 @@ private:
     bool mcp_tools_refresh_pending_ = true;
 
     // State machine methods
-    AgentState run_agent_cycle(CURL* curl, const std::string& api_url, json& messages, const json& tool_defs, bool& compress_after_done);
+    // §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
+    // path now uses OmniNet::HTTP::Client internally.
+    AgentState run_agent_cycle(const std::string& api_url, json& messages, const json& tool_defs, bool& compress_after_done);
     [[nodiscard]] std::string get_state_name(AgentState state) const;
     [[nodiscard]] std::string extract_error_message(const std::string& response) const;
 
@@ -187,7 +188,9 @@ public:
     void refresh_mcp_tools();
 
     // API interaction functions
-    std::string make_curl_request_with_retry(CURL* curl, const std::string& url, const std::string& payload, int max_retries = 3);
+    // §NC-8 (2026-07-16): CURL* parameter dropped. Implementation
+    // uses OmniNet::HTTP::Client::send_blocking.
+    std::string make_curl_request_with_retry(const std::string& url, const std::string& payload, int max_retries = 3);
 
     // Async API request using CurlMultiSession with optional cancellation.
     // Returns a future to the response body string. Throws std::runtime_error

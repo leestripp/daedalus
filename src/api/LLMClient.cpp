@@ -15,6 +15,10 @@
 #include "daedalus/types/AgentState.h"  // §State Machine — agent_state_from()
 #include "mcp/McpServerManager.h"  // §Phase 11 — injected via ctor
 
+#include <OmniNet.h>
+#include <http/HttpClient.h>
+#include <http/HttpResponse.h>
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
@@ -71,50 +75,9 @@ static std::string sanitize_utf8(const std::string& input) {
 
 // Helper functions (moved from main.cpp)
 
-// Struct to hold response buffer with size limit
-// F6.3: Refactored to use std::span<const char> for safer buffer handling.
-// The libcurl callback signature is fixed (void*, size_t, size_t, void*),
-// but internally we can use std::span to make buffer handling safer.
-struct WriteBuffer {
-    std::string* buffer;
-    size_t max_size;
-    size_t current_size = 0;
-    bool truncated = false;
-
-    WriteBuffer(std::string* buf, size_t max) : buffer(buf), max_size(max) {}
-};
-
-static size_t write_callback(void* contents, size_t size, size_t nmemb, WriteBuffer* write_buf) {
-    const size_t realsize = size * nmemb;
-    // Cast to std::span<const char> for safer buffer access (C++23)
-    const std::span<const char> data_span(static_cast<const char*>(contents), realsize);
-
-    // If already truncated, consume but don't append
-    if (write_buf->truncated) {
-        return realsize;
-    }
-
-    // Check if adding this data would exceed the limit
-    if (write_buf->current_size + realsize > write_buf->max_size) {
-        const size_t available = write_buf->max_size - write_buf->current_size;
-        if (available > 0) {
-            // Append available portion via span
-            write_buf->buffer->append(data_span.data(), available);
-            write_buf->current_size += available;
-        }
-        write_buf->truncated = true;
-        write_buf->buffer->append("\n[Response truncated - exceeded max_response_size]");
-        LOG_WARNING("Response buffer truncated from "
-                  + std::to_string(write_buf->current_size + realsize)
-                  + " to " + std::to_string(write_buf->max_size) + " bytes");
-        return realsize;
-    }
-
-    // Normal case: append the full span
-    write_buf->buffer->append(data_span.data(), realsize);
-    write_buf->current_size += realsize;
-    return realsize;
-}
+// §NC-8 (2026-07-16): WriteBuffer / write_callback removed. The
+// sync fallback path now uses OmniNet::HTTP::Client::send_blocking,
+// which fills response_buffer directly — no manual write callback.
 
 // ============================================================================
 // Error Handling and Retry Helpers
@@ -517,7 +480,19 @@ std::future<std::string> LLMClient::make_api_request_async(
         });
 }
 
-std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::string& url, const std::string& payload, int max_retries) {
+// §NC-8 (2026-07-16): make_curl_request_with_retry rewritten on
+// OmniNet::HTTP::Client. The CURL* parameter is dropped — callers
+// no longer need to manage a curl handle.
+//
+// Retry policy is preserved:
+//   - 2xx → return body
+//   - 401 → log + return body (no retry, auth won't fix itself)
+//   - 4xx (other) → log + return body (no retry, client error)
+//   - 5xx → log + exponential backoff via server_error_settings
+//   - Transport error → log + exponential backoff (if enabled)
+std::string LLMClient::make_curl_request_with_retry(
+    const std::string& url, const std::string& payload, int max_retries)
+{
     std::string response_buffer;
 
     // Get server error settings for configurable retry behavior
@@ -536,84 +511,83 @@ std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::strin
         server_error_settings.max_retries_per_call = 3;
     }
 
-    // Create WriteBuffer with size limit for response
-    WriteBuffer write_buf(&response_buffer, max_response_size_);
-
-    // Setup Headers
-    struct curl_slist* headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    headers = curl_slist_append(headers, "Accept: application/json");
-
-    // Use API key from config (loaded from environment variable)
-    if (!config_.api_key.empty()) {
-        std::string auth_header = "Authorization: Bearer " + config_.api_key;
-        headers = curl_slist_append(headers, auth_header.c_str());
-    }
-
     int attempt = 0;
     int wait_time = server_error_settings.initial_wait_seconds;
 
     while (attempt < max_retries) {
         attempt++;
 
-        // Reset buffer for retry
         response_buffer.clear();
-        write_buf.current_size = 0;
-        write_buf.truncated = false;
 
-        // Setup curl options
-        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, payload.c_str());
-        curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, payload.length());
-        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &write_buf);
-        curl_easy_setopt(curl, CURLOPT_TIMEOUT, 900L); // Increased timeout to 15 minutes (900 seconds)
-        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L); // Follow redirects
+        // Build the OmniNet request.
+        OmniNet::HTTP::ClientRequest req;
+        req.url(url);
+        req.method("POST");
+        req.body(payload);
+        req.header("Content-Type", "application/json");
+        req.header("Accept",       "application/json");
+        if (!config_.api_key.empty()) {
+            req.header("Authorization",
+                       std::string("Authorization: Bearer ") + config_.api_key);
+        }
 
-        CURLcode res = curl_easy_perform(curl);
+        OmniNet::HTTP::ClientConfig cfg;
+        cfg.connect_timeout = std::chrono::seconds(10);
+        cfg.request_timeout = std::chrono::seconds(900);  // 15 minutes
+        cfg.follow_redirects = true;
+        cfg.verify_tls       = true;
 
-        if (res == CURLE_OK) {
-            // Check HTTP response code
-            long response_code;
-            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+        // Execute synchronously (this is the sync fallback path used
+        // when SSE parsing fails).
+        auto result = OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg);
 
-            if (response_code >= 200 && response_code < 300) {
+        if (result.has_value()) {
+            const auto& resp = result.value();
+            response_buffer = resp.bodyAsString();
+            // Enforce response size cap (matches old WriteBuffer::max_size).
+            if (response_buffer.size() > max_response_size_) {
+                response_buffer.resize(max_response_size_);
+                std::ostringstream trunc;
+                trunc << "Response was truncated to " << max_response_size_ << " bytes";
+                if (sink_) sink_->on_log(daedalus::LogLevel::Warn, trunc.str());
+            }
+
+            const long code = resp.statusCode();
+            if (code >= 200 && code < 300) {
                 break; // Success
-            } else if (response_code == 401) {
+            } else if (code == 401) {
                 // Don't retry on authentication errors - they won't succeed
                 if (sink_) {
                     std::ostringstream e401;
-                    e401 << "HTTP " << response_code
+                    e401 << "HTTP " << code
                          << " (authentication failed, not retrying)\n"
                          << "Response body: " << response_buffer;
                     sink_->on_log(daedalus::LogLevel::Error, e401.str());
                 } else {
-                    // §Phase 5.1: route via Logger instead of std::cerr.
-                    LOG_ERROR("HTTP error " + std::to_string(response_code)
+                    LOG_ERROR("HTTP error " + std::to_string(code)
                               + " (authentication failed, not retrying). "
                               + "Response body: " + response_buffer);
                 }
                 break;
-            } else if (response_code >= 400 && response_code < 500) {
+            } else if (code >= 400 && code < 500) {
                 // Client error - no point retrying
                 if (sink_) {
                     std::ostringstream e4xx;
-                    e4xx << "HTTP " << response_code
+                    e4xx << "HTTP " << code
                          << " (client error, not retrying)\n"
                          << "Response body: " << response_buffer;
                     sink_->on_log(daedalus::LogLevel::Error, e4xx.str());
                 } else {
-                    LOG_ERROR("HTTP error " + std::to_string(response_code)
+                    LOG_ERROR("HTTP error " + std::to_string(code)
                               + " (client error, not retrying). "
                               + "Response body: " + response_buffer);
                 }
                 break;
-            } else if (response_code >= 500) {
+            } else if (code >= 500) {
                 // Server error - retry with exponential backoff if enabled
                 if (sink_) {
                     std::ostringstream e5xx;
-                    e5xx << "HTTP " << response_code << " (server error";
+                    e5xx << "HTTP " << code << " (server error";
                     if (server_error_settings.enabled) {
                         e5xx << ", retrying in " << wait_time << "s";
                     }
@@ -622,7 +596,7 @@ std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::strin
                     sink_->on_log(daedalus::LogLevel::Warn, e5xx.str());
                 } else {
                     std::ostringstream msg;
-                    msg << "HTTP " << response_code << " (server error";
+                    msg << "HTTP " << code << " (server error";
                     if (server_error_settings.enabled) {
                         msg << ", retrying in " << wait_time << "s";
                     }
@@ -632,22 +606,20 @@ std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::strin
                 }
             }
         } else {
+            // Transport-level failure (OmniNet::HTTP::ClientError).
+            const char* err_name = OmniNet::HTTP::clientErrorName(result.error());
             if (sink_) {
-                // §No-stdio rule: this is a std::ostringstream buffer
-                // (NOT std::cerr), routed through the sink. Renamed
-                // from `cerr` to `msg` so the next person reading
-                // this code doesn't mistake it for console output.
                 std::ostringstream msg;
-                msg << "cURL error on attempt " << attempt
-                    << ": " << curl_easy_strerror(res);
+                msg << "transport error on attempt " << attempt
+                    << ": " << err_name;
                 if (server_error_settings.enabled) {
                     msg << " (retrying in " << wait_time << "s)";
                 }
                 sink_->on_log(daedalus::LogLevel::Error, msg.str());
             } else {
                 std::ostringstream msg;
-                msg << "cURL error on attempt " << attempt
-                    << ": " << curl_easy_strerror(res);
+                msg << "transport error on attempt " << attempt
+                    << ": " << err_name;
                 if (server_error_settings.enabled) {
                     msg << " (retrying in " << wait_time << "s)";
                 }
@@ -662,26 +634,17 @@ std::string LLMClient::make_curl_request_with_retry(CURL* curl, const std::strin
             if (sink_) sink_->on_log(daedalus::LogLevel::Info, wait.str());
             std::this_thread::sleep_for(std::chrono::seconds(wait_time));
             // Exponential backoff: multiply by backoff_multiplier, cap at max_wait
-            wait_time = std::min(static_cast<int>(wait_time * server_error_settings.backoff_multiplier), 
+            wait_time = std::min(static_cast<int>(wait_time * server_error_settings.backoff_multiplier),
                                  server_error_settings.max_wait_seconds);
         }
     }
-
-    // Cleanup headers
-    curl_slist_free_all(headers);
 
     if (attempt == max_retries && !response_buffer.empty()) {
         // We exhausted retries but still got a response, return it
         return response_buffer;
     } else if (attempt == max_retries) {
-        throw std::runtime_error("cURL request failed after " + std::to_string(max_retries) + " attempts");
-    }
-
-    // Check if response was truncated
-    if (write_buf.truncated) {
-        std::ostringstream trunc;
-        trunc << "Response was truncated to " << max_response_size_ << " bytes";
-        if (sink_) sink_->on_log(daedalus::LogLevel::Warn, trunc.str());
+        throw std::runtime_error("API request failed after "
+                                 + std::to_string(max_retries) + " attempts");
     }
 
     // Extract and store token usage (via shared helper)
@@ -995,7 +958,9 @@ std::string LLMClient::extract_error_message(const std::string& response) const 
 }
 
 // Run a single agent cycle (one LLM call + tool execution)
-AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
+// §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
+// path now uses OmniNet::HTTP::Client internally.
+AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                                           json& messages, const json& tool_defs,
                                           bool& compress_after_done) {
     warned_no_usage_this_turn_ = false;  // §B32: reset per-turn
@@ -1216,7 +1181,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
         // retry instead of trying to json::parse an empty response_body.
         if (retry >= 2 && config_.stream && sse_parser.final_event().is_null()) {
             try {
-                response_body = make_curl_request_with_retry(curl, api_url,
+                response_body = make_curl_request_with_retry( api_url,
                     request_payload.dump());
             } catch (const std::exception& api_e) {
                 std::ostringstream api_retry;
@@ -1244,7 +1209,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
 
                 // Try to get a fresh response from the API (non-streaming fallback)
                 try {
-                    response_body = make_curl_request_with_retry(curl, api_url,
+                    response_body = make_curl_request_with_retry( api_url,
                         request_payload.dump());
                 } catch (const std::exception& api_e) {
                     std::ostringstream api_retry;
@@ -1352,7 +1317,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_curl_request_with_retry(curl, api_url, request_payload.dump());
+                response_body = make_curl_request_with_retry( api_url, request_payload.dump());
                 response_json = json::parse(response_body);
                 
                 // Check if this response is valid
@@ -1468,7 +1433,7 @@ AgentState LLMClient::run_agent_cycle(CURL* curl, const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_curl_request_with_retry(curl, api_url, request_payload.dump());
+                response_body = make_curl_request_with_retry( api_url, request_payload.dump());
                 response_json = json::parse(response_body);
                 
                 if (response_json.contains("choices") && !response_json["choices"].empty()) {
@@ -2572,11 +2537,9 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
 
     std::string system_instruction = prompt_header + SystemPromptBuilder::compose(options);
 
-    // Init curl (Phase 3 will move curl handle into the AgentImpl).
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        throw std::runtime_error("Failed to initialize cURL");
-    }
+    // §NC-8 (2026-07-16): CURL handle removed. The sync fallback path
+    // inside run_agent_cycle now uses OmniNet::HTTP::Client directly;
+    // the async path always used CurlMultiSession (now also OmniNet).
 
     json& messages = messages_->get_messages();
 
@@ -2645,7 +2608,7 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             tool_defs = json::parse(ToolHandler::get_tool_definitions());
         }
 
-        AgentState result_state = run_agent_cycle(curl, api_url, messages, tool_defs, compress_after_done);
+        AgentState result_state = run_agent_cycle(api_url, messages, tool_defs, compress_after_done);
 
         // Auto-compress at 90% threshold OR if the agent explicitly requested it
         // via the compress_context tool (B7 fix)
@@ -2691,6 +2654,5 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         break;
     }
 
-    curl_easy_cleanup(curl);
     return final_state;
 }
