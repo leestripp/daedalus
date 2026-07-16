@@ -11,6 +11,7 @@
 #include <variant>
 #include <chrono>
 #include <cstdint>
+#include <expected>
 #include <uuid.h>
 #include <nlohmann/json.hpp>
 
@@ -24,6 +25,36 @@ using AgentName = std::string;           // RFC 1123 DNS label
 using SessionId = std::string;          // UUID v4 string
 using RunId = std::string;              // UUID v4 string
 using ContentType = std::string;        // MIME type
+
+// ============================================================================
+// Error / Result types
+// ============================================================================
+
+/// One error returned by the ACP client. Carries enough info for callers
+/// to decide whether to retry (network errors), surface to the user
+/// (validation errors), or escalate (auth errors).
+struct AcpError {
+    int code = 0;                       // HTTP status, or 0 for transport-level
+    std::string message;                // human-readable; e.g. "HTTP 404", "Connection refused"
+    std::optional<std::string> cause;   // exception text or extra context
+};
+
+/// Result type for ACP operations. Holds either the success value or an
+/// AcpError. Use `.value()`, `.error()`, `.has_value()`, or comparison
+/// with `bool`. Pattern matches std::expected<std::expected, AcpError>.
+template <typename T>
+using AcpResult = std::expected<T, AcpError>;
+
+/// Convenience constructor: build an AcpError with just a message.
+inline AcpError make_error(std::string msg,
+                           int code = 0,
+                           std::optional<std::string> cause = std::nullopt) {
+    AcpError e;
+    e.code    = code;
+    e.message = std::move(msg);
+    e.cause   = std::move(cause);
+    return e;
+}
 
 // ============================================================================
 // Enums
@@ -140,12 +171,6 @@ struct AgentManifest {
 // ============================================================================
 // Event types
 // ============================================================================
-
-struct AcpError {
-    int code;
-    std::string message;
-    std::optional<std::string> cause_message;
-};
 
 struct MessageEvent {
     Message message;

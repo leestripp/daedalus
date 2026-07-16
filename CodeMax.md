@@ -503,7 +503,7 @@ so none of it is compiled. Standalone build fails immediately.
 | ACP-3 | Fix `AcpClient::get_run` status-string mismatch — protocol says `created` / `in-progress` / `awaiting` / `completed` / `cancelled` / `failed` (kebab-case); code checked `queued` / `in_progress` / `awaiting_input` (snake-case). Renamed enum values (`Queued`→`Created`, `AwaitingInput`→`Awaiting`) and added shared `parse_run_status` / `run_status_to_string` in AcpTypes.cpp. | HIGH (silent bug) | ✅ Done (2026-07-16) |
 | ACP-4 | Complete `from_json(const nlohmann::json& j, Run& r)` — previously never parsed `run_id` from response (always empty). Also `status`, `session_id`, `created_at`, `updated_at` skipped. Refactored into shared `parse_run_response` helper used by `create_run`/`get_run`/`resume_run`/`cancel_run`. | HIGH (silent bug) | ✅ Done (2026-07-16) |
 | ACP-5 | Complete `from_json(Message&)` — `created_at` is now read from JSON. Also fixed `to_json(Message)` to write `created_at` (caught by the round-trip test). | MEDIUM | ✅ Done (2026-07-16) |
-| ACP-6 | Stop using `{}` as the universal error sentinel — `AcpClient` methods return default-constructed values on transport failure; callers can't distinguish "no agents" from "server down". Use `Result<T, AcpError>` (variant) or throw on transport failure. | HIGH (silent failure) | 🟡 Todo |
+| ACP-6 | Stop using `{}` as the universal error sentinel — `AcpClient` methods return default-constructed values on transport failure; callers can't distinguish "no agents" from "server down". Use `Result<T, AcpError>` (variant) or throw on transport failure. | HIGH (silent failure) | ✅ Done (2026-07-16) — `AcpResult<T> = std::expected<T, AcpError>`; transport interface returns `IAcpTransport::Response { status_code, body, transport_error }`. All `AcpClient` methods now return `AcpResult<T>`. Transport-level errors get code `-1`; HTTP errors get the actual status code. |
 | ACP-7 | Implement `CurlTransport::stream_events` — currently a stub. Need libcurl SSE parsing + dispatch to `IRunEventHandler::on_*`. Whole async story depends on this. | CRITICAL (feature-blocker) | 🟡 Todo |
 | ACP-8 | Decide on `libuuid` dependency — `AcpFwd.h` includes `<uuid.h>` and CMake pulls in `pkg_check_modules(UUID REQUIRED uuid)`, but no code generates UUIDs. Either generate UUIDs client-side for `RunId`/`SessionId` or drop the dep. | LOW | 🟡 Todo |
 | ACP-9 | Decide on stdio policy — `AcpClient.cpp` and `AcpTransport.cpp` use `std::cerr` (8 + 4 sites). Fine for CLI demo (host owns terminal), but a future TUI host wrapping ACP will be corrupted. Either keep `std::cerr` (demos-only) or migrate to a `LogFn` callback (matching `AgentSink` pattern). | LOW | 🟡 Todo |
@@ -529,9 +529,10 @@ so none of it is compiled. Standalone build fails immediately.
 - [x] Verify: `ctest` → **62/62 pass**, 2 live-LLM skipped, 0 failures
 - [x] Verify: full `daedalus-cli` build clean (no new warnings from ACP code)
 
-**Still open:** ACP-6 (Result type), ACP-7 (SSE), ACP-8 (uuid decision),
-ACP-9 (stdio policy), ACP-12 (session messages), ACP-13 (is_connected 2xx),
-ACP-14 (get_agent 404), ACP-15 (handle consistency).
+**Still open:** ACP-7 (SSE), ACP-8 (uuid decision),
+ACP-9 (stdio policy), ACP-14 (get_agent 404 detection — partially
+addressed by ACP-6, but the agent-not-found case still returns a
+default manifest).
 
 ---
 

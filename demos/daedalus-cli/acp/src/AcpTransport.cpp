@@ -80,31 +80,41 @@ CurlHandle make_request_handle(const std::string& url,
     return h;
 }
 
-/// Perform a request, returning parsed JSON or empty on any failure.
-/// Logs a one-line diagnostic on transport error / non-2xx / parse error.
-nlohmann::json perform_and_parse(CURL* curl,
-                                 const std::string& method_path,
-                                 const std::string& response) {
-    long http_code = 0;
+/// Perform a request, returning a TransportResponse with body + status
+/// (and an error message on transport / non-2xx / parse failure). Never
+/// throws — callers should inspect Response::transport_error and
+/// Response::status_code to decide what went wrong.
+acp::IAcpTransport::Response perform_and_parse(CURL* curl,
+                                                const std::string& method_path,
+                                                const std::string& response_body) {
+    acp::IAcpTransport::Response r;
+    r.body = nlohmann::json{};   // default-construct in case of early return
+
     CURLcode res = curl_easy_perform(curl);
+    long http_code = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_code);
+    r.status_code = http_code;
+
     if (res != CURLE_OK) {
+        r.transport_error = std::string("curl: ") + curl_easy_strerror(res);
         std::cerr << "[CurlTransport] " << method_path
                   << " failed: " << curl_easy_strerror(res) << "\n";
-        return {};
+        return r;
     }
     if (http_code < 200 || http_code >= 300) {
+        r.transport_error = "HTTP " + std::to_string(http_code);
         std::cerr << "[CurlTransport] " << method_path
                   << " HTTP " << http_code << "\n";
-        return {};
+        return r;
     }
     try {
-        return nlohmann::json::parse(response);
+        r.body = nlohmann::json::parse(response_body);
     } catch (const nlohmann::json::parse_error& e) {
+        r.transport_error = std::string("JSON parse: ") + e.what();
         std::cerr << "[CurlTransport] " << method_path
                   << " JSON parse error: " << e.what() << "\n";
-        return {};
     }
+    return r;
 }
 
 } // anonymous namespace
@@ -130,7 +140,7 @@ public:
         if (headers_) curl_slist_free_all(headers_);
     }
 
-    nlohmann::json get(const std::string& path) override {
+    IAcpTransport::Response get(const std::string& path) override {
         std::string url      = base_url_ + path;
         std::string response;
         std::string headers;
@@ -139,7 +149,7 @@ public:
         return perform_and_parse(h, "GET " + path, response);
     }
 
-    nlohmann::json post(const std::string& path, const nlohmann::json& body) override {
+    IAcpTransport::Response post(const std::string& path, const nlohmann::json& body) override {
         std::string url      = base_url_ + path;
         std::string response;
         std::string headers;

@@ -39,14 +39,24 @@ public:
 class IAcpTransport {
 public:
     virtual ~IAcpTransport() = default;
-    
+
+    /// Result of one HTTP round-trip. Transport-level errors populate
+    /// `transport_error` (CURLE failure); HTTP errors populate `status_code`
+    /// (still a valid response, just non-2xx). Successful responses have
+    /// status_code 2xx, empty transport_error, and a parsed JSON body.
+    struct Response {
+        long status_code = 0;              // HTTP status (0 if request never reached server)
+        nlohmann::json body;               // parsed JSON (may be null on transport error)
+        std::string transport_error;       // non-empty if curl_easy_perform failed
+    };
+
     // Synchronous operations
-    virtual nlohmann::json get(const std::string& path) = 0;
-    virtual nlohmann::json post(const std::string& path, const nlohmann::json& body) = 0;
-    
+    virtual Response get(const std::string& path) = 0;
+    virtual Response post(const std::string& path, const nlohmann::json& body) = 0;
+
     // Streaming
     virtual void stream_events(const RunId& run_id, IRunEventHandler& handler) = 0;
-    
+
     // Connection check
     virtual bool is_connected() const = 0;
 };
@@ -69,94 +79,84 @@ public:
     // ========================================================================
     // Agent operations
     // ========================================================================
-    
+
     /**
      * @brief List available agents
      * @param limit Maximum agents to return (1-1000, default 10)
      * @param offset Number to skip for pagination
-     * @return List of agent manifests
+     * @return List of agent manifests, or AcpError on transport/HTTP failure.
+     *         An empty list is a valid success result (the server has no agents).
      */
-    std::vector<AgentManifest> list_agents(int limit = 10, int offset = 0);
-    
+    AcpResult<std::vector<AgentManifest>> list_agents(int limit = 10, int offset = 0);
+
     /**
      * @brief Get manifest for specific agent
      * @param name Agent name (RFC 1123)
-     * @return Agent manifest
-     * @throws AcpError if agent not found
+     * @return Agent manifest, or AcpError if not found / transport failed.
      */
-    AgentManifest get_agent(const AgentName& name);
-    
+    AcpResult<AgentManifest> get_agent(const AgentName& name);
+
     // ========================================================================
     // Run operations
     // ========================================================================
-    
+
     /**
      * @brief Create and start a new agent run
-     * @param agent Agent name to run
-     * @param input Messages to send
-     * @param mode Sync/Async/Stream
-     * @param session_id Optional session ID for stateful runs
-     * @return Run object
+     * @return Run object with server-assigned run_id + initial status, or AcpError.
      */
-    Run create_run(
+    AcpResult<Run> create_run(
         const AgentName& agent,
         std::vector<Message> input,
         RunMode mode = RunMode::Sync,
         std::optional<SessionId> session_id = std::nullopt
     );
-    
+
     /**
      * @brief Get run status
-     * @param run_id Run identifier
-     * @return Current run state
+     * @return Current run state, or AcpError if run_id unknown / transport failed.
      */
-    Run get_run(const RunId& run_id);
-    
+    AcpResult<Run> get_run(const RunId& run_id);
+
     /**
      * @brief Resume an awaiting run
-     * @param run_id Run to resume
-     * @param resume_data Data to resume with (from await_request)
-     * @param mode Sync/Async/Stream
-     * @return Updated run
+     * @return Updated run, or AcpError.
      */
-    Run resume_run(
+    AcpResult<Run> resume_run(
         const RunId& run_id,
         const nlohmann::json& resume_data,
         RunMode mode = RunMode::Sync
     );
-    
+
     /**
      * @brief Cancel a run
-     * @param run_id Run to cancel
-     * @return Updated run (status should be Cancelled)
+     * @return Updated run (status Cancelled), or AcpError.
      */
-    Run cancel_run(const RunId& run_id);
-    
+    AcpResult<Run> cancel_run(const RunId& run_id);
+
     /**
      * @brief Stream run events via SSE
-     * @param run_id Run to watch
-     * @param handler Event callbacks
+     * @return AcpResult<void> — success once the stream ends; error on
+     *         transport failure or if the server rejected the request.
      */
-    void stream_run_events(const RunId& run_id, IRunEventHandler& handler);
-    
+    AcpResult<void> stream_run_events(const RunId& run_id, IRunEventHandler& handler);
+
     // ========================================================================
     // Session operations
     // ========================================================================
-    
+
     /**
-     * @brief Get session details
-     * @param session_id Session identifier
-     * @return Session with history URIs
+     * @brief Get session details (history included)
+     * @return Session with messages, or AcpError if not found / transport failed.
      */
-    Session get_session(const SessionId& session_id);
-    
+    AcpResult<Session> get_session(const SessionId& session_id);
+
     // ========================================================================
     // Utility
     // ========================================================================
-    
+
     /**
      * @brief Ping the server
-     * @return true if server responds
+     * @return true if server responds with 2xx, false otherwise.
      */
     bool ping();
     

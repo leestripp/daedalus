@@ -9,6 +9,7 @@
  *   - Run JSON deserialization (run_id, status, session_id, timestamps)
  *   - Message JSON deserialization (created_at)
  *   - Mode string round-trip (sync/async/stream)
+ *   - AcpResult<T> error propagation (was the silent-failure bug ACP-6)
  */
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -23,7 +24,7 @@ using json = nlohmann::json;
 using namespace acp;
 
 // ============================================================================
-// Smoke: client construction (used to crash on non-existent server).
+// Smoke: client construction + graceful failure on unreachable server.
 // ============================================================================
 
 TEST_CASE("acp::create_client constructs successfully") {
@@ -32,9 +33,75 @@ TEST_CASE("acp::create_client constructs successfully") {
     CHECK(client->base_url() == "http://localhost:9999");
 }
 
-TEST_CASE("acp::ping fails gracefully on unreachable server") {
+TEST_CASE("acp::ping returns false on unreachable server") {
     auto client = acp::create_client("http://localhost:1");  // unreachable port
     CHECK_FALSE(client->ping());
+}
+
+// ============================================================================
+// Regression: AcpResult<T> error propagation (ACP-6 — was silent failure).
+// ============================================================================
+
+TEST_CASE("list_agents returns AcpError when transport fails") {
+    auto client = acp::create_client("http://localhost:1");
+    auto result = client->list_agents();
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code != 0);     // some non-zero code
+    CHECK_FALSE(result.error().message.empty());
+}
+
+TEST_CASE("get_agent returns AcpError when transport fails") {
+    auto client = acp::create_client("http://localhost:1");
+    auto result = client->get_agent("test-agent");
+    REQUIRE_FALSE(result.has_value());
+}
+
+TEST_CASE("create_run returns AcpError when transport fails") {
+    auto client = acp::create_client("http://localhost:1");
+    Message m;
+    m.role = "user";
+    MessagePart p;
+    p.content_type = "text/plain";
+    p.content = "hi";
+    m.parts.push_back(p);
+
+    auto result = client->create_run("test-agent", {m});
+    REQUIRE_FALSE(result.has_value());
+}
+
+TEST_CASE("get_run returns AcpError when transport fails") {
+    auto client = acp::create_client("http://localhost:1");
+    auto result = client->get_run("nonexistent");
+    REQUIRE_FALSE(result.has_value());
+}
+
+TEST_CASE("get_session returns AcpError when transport fails") {
+    auto client = acp::create_client("http://localhost:1");
+    auto result = client->get_session("nonexistent");
+    REQUIRE_FALSE(result.has_value());
+}
+
+TEST_CASE("stream_run_events returns AcpError 501 (not implemented yet)") {
+    auto client = acp::create_client("http://localhost:1");
+    // Even on a real server this would fail until ACP-7 is done. We
+    // don't pass a handler — using a do-nothing lambda for completeness.
+    struct NopHandler : IRunEventHandler {
+        void on_message_created(const RunId&, Message) override {}
+        void on_message_part(const RunId&, MessagePart) override {}
+        void on_message_completed(const RunId&, Message) override {}
+        void on_run_created(const RunId&, Run) override {}
+        void on_run_in_progress(const RunId&, Run) override {}
+        void on_run_awaiting(const RunId&, Run) override {}
+        void on_run_completed(const RunId&, Run) override {}
+        void on_run_cancelled(const RunId&, Run) override {}
+        void on_run_failed(const RunId&, Run) override {}
+        void on_error(const RunId&, AcpError) override {}
+        void on_generic(const RunId&, const nlohmann::json&) override {}
+    } handler;
+
+    auto result = client->stream_run_events("test", handler);
+    REQUIRE_FALSE(result.has_value());
+    CHECK(result.error().code == 501);
 }
 
 // ============================================================================
