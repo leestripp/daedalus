@@ -23,6 +23,7 @@
 #include <string>
 
 #include <daedalus.h>
+#include <daedalus/paths.h>
 #include <daedalus/default_paths.h>
 
 #include "ThinkingSpinner.h"
@@ -87,7 +88,14 @@ public:
         child_cfg.system_prompt       = cfg_.child_system_prompt;
         child_cfg.max_agent_iterations = cfg_.max_iterations;
         child_cfg.session_id          = "subagent:";
-        child_cfg.daedalus_home       = daedalus::default_daedalus_home();
+        // §B2-fix (2026-07-16): use user_data_root() (XDG pure path),
+        // not default_daedalus_home(). The latter wraps user_root() which
+        // honors legacy `~/.daedalus/` as a fallback — but that dir can
+        // exist (empty) on migrated users whose real models live in the
+        // XDG data path. Same bug daedalus-cli just hit; same fix.
+        // Users who need the single-root override (`$DAEDALUS_HOME=...`)
+        // should pass `--home` explicitly to the parent daemon.
+        child_cfg.daedalus_home       = daedalus::Paths::global().user_data_root();
         child_cfg.auto_approve       = true;   // child is read-only
         child_cfg.agent_name         = "child";
         child_cfg.skills_dirs         = { "/home/ubuntu/.daedalus/skills/" };
