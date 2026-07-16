@@ -86,7 +86,21 @@ int main(int argc, char* argv[]) {
     }
 
     if (args.daedalus_home.empty()) {
-        cfg.daedalus_home = daedalus::Paths::global().user_config_root();
+        // Use user_data_root() (XDG $XDG_DATA_HOME/daedalus/,
+        // default $HOME/.local/share/daedalus/) — NOT user_config_root().
+        // The SettingsStore DB lives at <daedalus_home>/daedalus.db,
+        // and that DB is rooted at the XDG *data* hierarchy per Plan.md
+        // §3.2 (and `default_daedalus_home()` in default_paths.cpp uses
+        // `user_root()` which also resolves here when no legacy
+        // override exists).
+        //
+        // Bug (2026-07-16): previously this used `user_config_root()`
+        // which returned $HOME/.config/daedalus. That path never holds
+        // the DB — the user's models live under the *data* path, so
+        // `daedalus-cli --model-list` reported "(none configured)"
+        // unless the user passed `--home /home/ubuntu/.local/share/daedalus`
+        // explicitly.
+        cfg.daedalus_home = daedalus::Paths::global().user_data_root();
     }
 
     // §Phase 14: load the demo's system_prompt.txt (or override file)
