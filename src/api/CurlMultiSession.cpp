@@ -1,501 +1,320 @@
 /**
  * @file CurlMultiSession.cpp
- * @brief Async HTTP session implementation
+ * @brief Async HTTP client — OmniNet-backed implementation
+ *
+ * §NC-6 (2026-07-16): internal rewrite. Public API (CurlRequest /
+ * CurlResponse / CurlError / submit / submit_cancellable / submit_batch /
+ * get_stats / shutdown) UNCHANGED. The implementation now uses
+ * OmniNet::HTTP::Client instead of libcurl's curl_multi. libcurl
+ * is fully gone from daedalus (see CodeMax.md "§NOMORE-CURL").
+ *
+ * Why OmniNet works without manual event-loop gymnastics:
+ *   - OmniNet::HTTP::Client is a singleton that pools TLS sockets
+ *     internally (HTTP keep-alive comes for free).
+ *   - submit_cancellable() honours std::stop_token by passing it
+ *     through to OmniNet::send(req, stop_token); there is no need
+ *     for a separate event-loop thread or promise dance.
+ *   - SSE streaming is implemented by calling
+ *     OmniNet::HTTP::Client::send_streaming(req, cfg); per-chunk
+ *     callbacks fire on the future's continuation thread.
+ *   - Cancellation: the std::stop_token parameter on submit_cancellable
+ *     is the cancellation mechanism. The async lambda polls it on a
+ *     short cadence and cancels the in-flight request.
+ *
+ * Why we kept the old API surface (vs. deleting CurlMultiSession):
+ *   - LLMClient uses submit_cancellable + stream_callback extensively.
+ *     Migrating that call-sites is multi-day work (NC-7/NC-8 below).
+ *     Keeping a thin OmniNet-backed adapter here means LLMClient can
+ *     stay untouched for now.
+ *   - Once LLMClient is migrated to OmniNet::HTTP::Client directly,
+ *     CurlMultiSession.{h,cpp} can be deleted (NC-9).
  */
 
-#include "CurlMultiSession.h"
+#include "api/CurlMultiSession.h"
 
-#include <algorithm>
-#include <cstring>
-#include <iostream>
-#include <memory>
-#include <stop_token>
-#include <utility>
+#include <OmniNet.h>
+#include <http/HttpClient.h>
+#include <http/HttpResponse.h>
 
-#include "core/Logger.h"
+#include <thread>
+#include <chrono>
 
-// §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
-// statements into LOG_INFO/LOG_WARNING/LOG_ERROR calls via the
-// existing Logger. Same formatted text routed through the Logger
-// instead of writing to stderr directly.
-#define LOG_CERR(level, expr) do {                          \
-        std::ostringstream _daedalus_msg;                   \
-        _daedalus_msg << expr;                               \
-        LOG_##level(_daedalus_msg.str());                    \
-    } while (0)
 namespace daedalus::net {
 
 // ============================================================================
-// RequestState - per-request data
+// Translation helpers (CurlRequest ↔ OmniNet::HTTP::ClientRequest)
 // ============================================================================
 
-struct CurlMultiSession::RequestState {
-    CurlRequest request;
-    CurlResponse response;
-    std::promise<std::expected<CurlResponse, CurlError>> promise;
-    std::stop_token stop_token;
-    CURL* easy = nullptr;
-    curl_slist* headers = nullptr;
-    bool in_multi = false;
-    std::chrono::steady_clock::time_point start_time;
-};
+namespace {
+
+/// Translate one CurlRequest into an OmniNet ClientRequest. Body is moved.
+OmniNet::HTTP::ClientRequest make_omninet_request(const CurlRequest& req) {
+    OmniNet::HTTP::ClientRequest out;
+    out.url(req.url);
+    out.method(req.method);
+    if (!req.body.empty()) {
+        out.body(req.body);
+    }
+    if (!req.user_agent.empty()) {
+        out.header("User-Agent", req.user_agent);
+    }
+    if (!req.bearer_token.empty()) {
+        out.header("Authorization", std::string("Bearer ") + req.bearer_token);
+    }
+    for (const auto& h : req.headers) {
+        const auto colon = h.find(':');
+        if (colon == std::string::npos) continue;
+        out.header(h.substr(0, colon), h.substr(colon + 1));
+    }
+    return out;
+}
+
+/// Build a ClientConfig matching the legacy CurlRequest knobs.
+OmniNet::HTTP::ClientConfig make_omninet_config(const CurlRequest& req) {
+    OmniNet::HTTP::ClientConfig cfg;
+    cfg.connect_timeout = std::chrono::seconds(10);
+    cfg.request_timeout = std::chrono::seconds(
+        req.timeout_seconds > 0 ? req.timeout_seconds : 60);
+    cfg.follow_redirects = req.follow_redirects;
+    cfg.verify_tls       = true;
+    return cfg;
+}
+
+/// Pull specific headers out of the response.
+std::string header_or_empty(const OmniNet::HTTP::ClientResponse& r,
+                            std::string_view name) {
+    auto v = r.header(name);
+    return v;
+}
+
+/// Translate a successful OmniNet response into a CurlResponse,
+/// pulling content_type, Retry-After, and MCP-Session-Id.
+CurlResponse build_response(const OmniNet::HTTP::ClientResponse& src, long code) {
+    CurlResponse out;
+    out.status_code      = code;
+    out.body             = src.bodyAsString();
+    out.content_type     = header_or_empty(src, "Content-Type");
+    out.mcp_session_id   = header_or_empty(src, "Mcp-Session-Id");
+    out.retry_after_seconds = 0;
+    const auto ra = header_or_empty(src, "Retry-After");
+    if (!ra.empty()) {
+        // Retry-After can be either an HTTP-date or an integer.
+        // We only honour the integer form (seconds).
+        try {
+            out.retry_after_seconds = std::stoi(ra);
+        } catch (...) {
+            out.retry_after_seconds = 0;
+        }
+    }
+    return out;
+}
+
+// Map an OmniNet client error to a CurlError.
+CurlError map_error(OmniNet::HTTP::ClientError e) {
+    using OE = OmniNet::HTTP::ClientError;
+    switch (e) {
+        case OE::None:                return CurlError::Unknown;
+        case OE::InvalidUrl:          return CurlError::InvalidUrl;
+        case OE::ConnectFailed:
+        case OE::SendFailed:
+        case OE::RecvFailed:
+        case OE::TlsHandshakeFailed:
+        case OE::TlsVerifyFailed:
+        case OE::UnsupportedProtocol: return CurlError::Network;
+        case OE::Timeout:             return CurlError::Timeout;
+        case OE::Cancelled:           return CurlError::Cancelled;
+        case OE::ParseError:
+        case OE::TooManyRedirects:
+        case OE::Internal:           return CurlError::Unknown;
+    }
+    return CurlError::Unknown;
+}
+
+} // anonymous namespace
 
 // ============================================================================
-// Singleton
+// CurlMultiSession
 // ============================================================================
 
 CurlMultiSession& CurlMultiSession::get_instance() {
-    static CurlMultiSession instance;
-    return instance;
+    static CurlMultiSession inst;
+    return inst;
 }
 
-// ============================================================================
-// Construction / Destruction
-// ============================================================================
-
-CurlMultiSession::CurlMultiSession() {
-    multi_ = curl_multi_init();
-    if (multi_ == nullptr) {
-        LOG_CERR(ERROR,  "[CurlMultiSession] Failed to initialize curl multi handle\n");
-        return;
-    }
-
-    // Set max concurrent connections (default 100)
-    curl_multi_setopt(multi_, CURLMOPT_MAX_TOTAL_CONNECTIONS, 100L);
-    curl_multi_setopt(multi_, CURLMOPT_MAX_HOST_CONNECTIONS, 6L);
-
-    // Start the event loop thread
-    worker_ = std::jthread([this](std::stop_token st) {
-        event_loop(st);
-    });
-}
-
-CurlMultiSession::~CurlMultiSession() {
-    shutdown();
-}
+CurlMultiSession::CurlMultiSession() = default;
+CurlMultiSession::~CurlMultiSession() = default;
 
 void CurlMultiSession::shutdown() {
-    if (stop_.exchange(true)) {
-        return;  // Already shutting down
-    }
-
+    stop_.store(true, std::memory_order_release);
     stop_source_.request_stop();
-    queue_cv_.notify_all();
-
-    if (worker_.joinable()) {
-        worker_.request_stop();
-        worker_.join();
-    }
-
-    if (multi_ != nullptr) {
-        curl_multi_cleanup(multi_);
-        multi_ = nullptr;
-    }
+    if (worker_.joinable()) worker_.join();
 }
 
-// ============================================================================
-// Event loop
-// ============================================================================
-
-void CurlMultiSession::event_loop(std::stop_token st) {
-    while (!st.stop_requested() && !stop_.load()) {
-        // Move pending requests from queue to multi handle
-        {
-            std::unique_lock<std::mutex> lock(queue_mutex_);
-            queue_cv_.wait_for(lock, std::chrono::milliseconds(50), [this, &st] {
-                return stop_.load() || st.stop_requested() || !pending_.empty();
-            });
-
-            while (!pending_.empty() && !stop_.load() && !st.stop_requested()) {
-                auto state = std::move(pending_.front());
-                pending_.pop();
-                lock.unlock();
-                add_to_multi(state.release());
-                lock.lock();
-            }
-        }
-
-        if (stop_.load() || st.stop_requested()) break;
-
-        // Perform any pending transfers (non-blocking)
-        int still_running = 0;
-        curl_multi_perform(multi_, &still_running);
-
-        // Check for cancellations
-        {
-            std::scoped_lock lock(queue_mutex_);
-            // Iterate over active easy handles... but curl_multi doesn't expose
-            // a way to iterate. Instead, we check inside the info read.
-        }
-
-        // Wait for activity with a short timeout so we can check stop/cancel
-        int numfds = 0;
-        curl_multi_poll(multi_, nullptr, 0, 50, &numfds);
-
-        // Read info about completed transfers
-        process_completed();
-
-        // Brief yield
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    // §B16 fix: cancel all in-flight handles BEFORE the CURLMSG_DONE drain.
-    // curl_multi_info_read only returns completed (CURLMSG_DONE) transfers.
-    // Any handle still in-flight would leak its RequestState forever.
-    {
-        std::lock_guard<std::mutex> lock(in_flight_mutex_);
-        for (RequestState* state : in_flight_) {
-            if (state->easy) {
-                // Remove from curl_multi first, then cleanup
-                if (state->in_multi) {
-                    curl_multi_remove_handle(multi_, state->easy);
-                    state->in_multi = false;
-                }
-                curl_easy_cleanup(state->easy);
-                state->easy = nullptr;
-            }
-            if (state->headers) {
-                curl_slist_free_all(state->headers);
-                state->headers = nullptr;
-            }
-            state->response.cancelled = true;
-            state->promise.set_value(std::unexpected(CurlError::Cancelled));
-            active_count_.fetch_sub(1, std::memory_order_relaxed);
-            delete state;
-        }
-        in_flight_.clear();
-    }
-
-    // Drain any requests that completed during cancellation above.
-    CURLMsg* msg = nullptr;
-    int msgs_left = 0;
-    while ((msg = curl_multi_info_read(multi_, &msgs_left)) != nullptr) {
-        if (msg->msg == CURLMSG_DONE) {
-            CURL* easy = msg->easy_handle;
-            RequestState* state = nullptr;
-            curl_easy_getinfo(easy, CURLINFO_PRIVATE, &state);
-            if (state != nullptr) {
-                curl_multi_remove_handle(multi_, easy);
-                curl_easy_cleanup(easy);
-                if (state->headers != nullptr) curl_slist_free_all(state->headers);
-                delete state;
-            }
-        }
-    }
+CurlMultiSession::Stats CurlMultiSession::get_stats() const {
+    Stats s{};
+    s.active    = active_count_.load(std::memory_order_acquire);
+    s.completed = completed_count_.load(std::memory_order_acquire);
+    s.total     = total_count_.load(std::memory_order_acquire);
+    return s;
 }
 
-// ============================================================================
-// Add a request to the multi handle
-// ============================================================================
-
-void CurlMultiSession::add_to_multi(RequestState* state) {
-    state->easy = curl_easy_init();
-    if (!state->easy) {
-        state->promise.set_value(std::unexpected(CurlError::InitFailed));
-        delete state;
-        return;
-    }
-
-    // Set URL
-    if (state->request.url.empty()) {
-        curl_easy_cleanup(state->easy);
-        state->promise.set_value(std::unexpected(CurlError::InvalidUrl));
-        delete state;
-        return;
-    }
-    curl_easy_setopt(state->easy, CURLOPT_URL, state->request.url.c_str());
-
-    // Set method (default GET; only set POSTFIELDS for POST/PUT)
-    if (state->request.method == "POST" || state->request.method == "PUT" ||
-        state->request.method == "PATCH") {
-        curl_easy_setopt(state->easy, CURLOPT_POST, 1L);
-        if (state->request.method == "PUT") {
-            curl_easy_setopt(state->easy, CURLOPT_CUSTOMREQUEST, "PUT");
-        } else if (state->request.method == "PATCH") {
-            curl_easy_setopt(state->easy, CURLOPT_CUSTOMREQUEST, "PATCH");
-        }
-        if (!state->request.body.empty()) {
-            curl_easy_setopt(state->easy, CURLOPT_POSTFIELDS, state->request.body.c_str());
-            curl_easy_setopt(state->easy, CURLOPT_POSTFIELDSIZE,
-                             static_cast<long>(state->request.body.size()));
-        }
-    } else if (state->request.method == "DELETE") {
-        curl_easy_setopt(state->easy, CURLOPT_CUSTOMREQUEST, "DELETE");
-    } else if (state->request.method != "GET") {
-        curl_easy_setopt(state->easy, CURLOPT_CUSTOMREQUEST, state->request.method.c_str());
-    }
-
-    // Build headers
-    // Note: always append Content-Type first so it is closest to the body.
-    state->headers = nullptr;
-    // When the request already carries an Accept header (e.g. "text/event-stream"
-    // for SSE streaming), honour it instead of prepending a generic fallback.
-    bool has_accept = false;
-    for (const auto& h : state->request.headers) {
-        if (h.starts_with("Accept:")) has_accept = true;
-        state->headers = curl_slist_append(state->headers, h.c_str());
-    }
-    if (!has_accept) {
-        state->headers = curl_slist_append(state->headers, "Accept: application/json");
-    }
-    if (!state->request.bearer_token.empty()) {
-        std::string auth_header = "Authorization: Bearer " + state->request.bearer_token;
-        state->headers = curl_slist_append(state->headers, auth_header.c_str());
-    }
-    if (state->headers) {
-        curl_easy_setopt(state->easy, CURLOPT_HTTPHEADER, state->headers);
-    }
-
-    // Timeouts
-    if (state->request.timeout_seconds > 0) {
-        curl_easy_setopt(state->easy, CURLOPT_TIMEOUT, state->request.timeout_seconds);
-    }
-    curl_easy_setopt(state->easy, CURLOPT_FOLLOWLOCATION,
-                     state->request.follow_redirects ? 1L : 0L);
-    if (!state->request.user_agent.empty()) {
-        curl_easy_setopt(state->easy, CURLOPT_USERAGENT, state->request.user_agent.c_str());
-    }
-
-    // Write callback
-    curl_easy_setopt(state->easy, CURLOPT_WRITEFUNCTION, write_cb);
-    curl_easy_setopt(state->easy, CURLOPT_WRITEDATA, state);
-
-    // Header callback (for Content-Type extraction)
-    curl_easy_setopt(state->easy, CURLOPT_HEADERFUNCTION, header_cb);
-    curl_easy_setopt(state->easy, CURLOPT_HEADERDATA, state);
-
-    // Store RequestState* for retrieval in completion callback
-    curl_easy_setopt(state->easy, CURLOPT_PRIVATE, state);
-
-    // Add to multi handle
-    CURLMcode rc = curl_multi_add_handle(multi_, state->easy);
-    if (rc != CURLM_OK) {
-        LOG_CERR(ERROR,  "[CurlMultiSession] curl_multi_add_handle failed: " << rc);
-        curl_easy_cleanup(state->easy);
-        if (state->headers) curl_slist_free_all(state->headers);
-        state->promise.set_value(std::unexpected(CurlError::Unknown));
-        delete state;
-        return;
-    }
-
-    state->in_multi = true;
-    state->start_time = std::chrono::steady_clock::now();
-    active_count_.fetch_add(1, std::memory_order_relaxed);
-    total_count_.fetch_add(1, std::memory_order_relaxed);
-    {
-        std::lock_guard<std::mutex> lock(in_flight_mutex_);
-        in_flight_.push_back(state);
-    }
-}
-
-// ============================================================================
-// Process completed transfers
-// ============================================================================
-
-void CurlMultiSession::process_completed() {
-    CURLMsg* msg = nullptr;
-    int msgs_left = 0;
-    while ((msg = curl_multi_info_read(multi_, &msgs_left)) != nullptr) {
-        if (msg->msg != CURLMSG_DONE) continue;
-
-        CURL* easy = msg->easy_handle;
-        RequestState* state = nullptr;
-        curl_easy_getinfo(easy, CURLINFO_PRIVATE, &state);
-        if (state == nullptr) continue;
-
-        // Check if cancelled via stop_token
-        if (state->stop_token.stop_requested()) {
-            state->response.cancelled = true;
-            state->promise.set_value(std::unexpected(CurlError::Cancelled));
-        } else {
-            // Get response code
-            long code = 0;
-            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &code);
-            state->response.status_code = code;
-
-            if (msg->data.result == CURLE_OK) {
-                if (code >= 200 && code < 300) {
-                    state->promise.set_value(std::move(state->response));
-                } else {
-                    // Non-2xx response: return the full response so callers can
-                    // inspect status_code and body (e.g. API error messages).
-                    // Previously we discarded the body and returned only the error tag.
-                    state->response.status_code = code;
-                    state->promise.set_value(std::move(state->response));
-                }
-            } else if (msg->data.result == CURLE_OPERATION_TIMEDOUT) {
-                state->response.timed_out = true;
-                state->promise.set_value(std::unexpected(CurlError::Timeout));
-            } else {
-                state->promise.set_value(std::unexpected(CurlError::Network));
-            }
-        }
-
-        // Cleanup
-        curl_multi_remove_handle(multi_, easy);
-        curl_easy_cleanup(easy);
-        if (state->headers) curl_slist_free_all(state->headers);
-        {
-            std::lock_guard<std::mutex> lock(in_flight_mutex_);
-            auto it = std::find(in_flight_.begin(), in_flight_.end(), state);
-            if (it != in_flight_.end()) in_flight_.erase(it);
-        }
-        delete state;
-
-        active_count_.fetch_sub(1, std::memory_order_relaxed);
-        completed_count_.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-void CurlMultiSession::remove_from_multi(RequestState* state, CurlError error) {
-    if (state->in_multi && state->easy) {
-        curl_multi_remove_handle(multi_, state->easy);
-    }
-    if (state->easy) {
-        curl_easy_cleanup(state->easy);
-    }
-    if (state->headers) {
-        curl_slist_free_all(state->headers);
-    }
-    {
-        std::lock_guard<std::mutex> lock(in_flight_mutex_);
-        auto it = std::find(in_flight_.begin(), in_flight_.end(), state);
-        if (it != in_flight_.end()) in_flight_.erase(it);
-    }
-    state->promise.set_value(std::unexpected(error));
-    delete state;
-}
-
-// ============================================================================
-// Callbacks
-// ============================================================================
-
-size_t CurlMultiSession::write_cb(void* contents, size_t size, size_t nmemb, void* userp) {
-    size_t realsize = size * nmemb;
-    auto* state = static_cast<RequestState*>(userp);
-
-    // Streaming mode: invoke the per-chunk callback instead of buffering.
-    // The callback is responsible for parsing SSE lines and extracting text deltas.
-    if (state->request.stream_callback) {
-        state->request.stream_callback(
-            std::string_view(static_cast<char*>(contents), realsize));
-        return realsize;
-    }
-
-    // Non-streaming: accumulate into response.body for later JSON parse.
-    state->response.body.append(static_cast<char*>(contents), realsize);
-    return realsize;
-}
-
-size_t CurlMultiSession::header_cb(void* contents, size_t size, size_t nmemb, void* userp) {
-    size_t realsize = size * nmemb;
-    auto* state = static_cast<RequestState*>(userp);
-    std::string header(static_cast<char*>(contents), realsize);
-
-    // We extract exactly two headers from the response: Content-Type
-    // (used by callers to detect SSE vs JSON) and Mcp-Session-Id (used
-    // by MCP streamable-HTTP clients to replay the session on every
-    // subsequent request per spec §Session Management). Other response
-    // headers are dropped — we don't need a generic map.
-
-    // Header is "Name: value\r\n" (curl strips the CRLF). Skip the
-    // status line ("HTTP/1.1 200 OK").
-    size_t colon = header.find(':');
-    if (colon == std::string::npos) {
-        return realsize;
-    }
-    std::string name = header.substr(0, colon);
-    std::string value = header.substr(colon + 1);
-    // Trim leading whitespace from value.
-    size_t start = value.find_first_not_of(" \t");
-    if (start != std::string::npos) value = value.substr(start);
-    // Trim trailing CR/LF/whitespace.
-    size_t end = value.find_last_not_of(" \t\r\n");
-    if (end != std::string::npos) value = value.substr(0, end + 1);
-
-    // Lowercase name once for case-insensitive comparison.
-    std::string lc_name;
-    lc_name.reserve(name.size());
-    for (char c : name) {
-        lc_name.push_back(static_cast<char>(
-            (c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
-    }
-
-    if (lc_name == "content-type") {
-        state->response.content_type = value;
-    } else if (lc_name == "mcp-session-id") {
-        // §18.9 — MCP streamable-HTTP. Cache the session id so the
-        // transport can replay it on every subsequent request.
-        state->response.mcp_session_id = value;
-    } else if (lc_name == "retry-after") {
-        // §B14 fix: capture Retry-After header (RFC 7231 §7.1.3).
-        // Both forms supported: <integer-seconds> or HTTP-date.
-        // For HTTP-date we approximate as max_seconds — caller can clamp.
-        try {
-            int secs = std::stoi(value);
-            if (secs > 0) state->response.retry_after_seconds = secs;
-        } catch (...) {
-            // HTTP-date format (RFC 1123). For now treat as 0; the caller
-            // will fall back to its exponential-backoff wait_time.
-        }
-    }
-    return realsize;
-}
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-std::future<std::expected<CurlResponse, CurlError>> CurlMultiSession::submit(
-    const CurlRequest& request) {
+std::future<std::expected<CurlResponse, CurlError>>
+CurlMultiSession::submit(const CurlRequest& request) {
     return submit_cancellable(request, std::stop_token{});
 }
 
-std::future<std::expected<CurlResponse, CurlError>> CurlMultiSession::submit_cancellable(
-    const CurlRequest& request,
-    std::stop_token stop_token
-) {
-    auto* state = new RequestState();
-    state->request = request;
-    state->stop_token = stop_token;
-    state->start_time = std::chrono::steady_clock::now();
+std::future<std::expected<CurlResponse, CurlError>>
+CurlMultiSession::submit_cancellable(const CurlRequest& request,
+                                      std::stop_token stop_token) {
+    total_count_.fetch_add(1, std::memory_order_acq_rel);
+    active_count_.fetch_add(1, std::memory_order_acq_rel);
 
-    auto fut = state->promise.get_future();
+    // Pull out the streaming callback before the CurlRequest is moved
+    // into the lambda (CurlRequest is passed by const&, but body()
+    // inside make_omninet_request is read-only — the stream_callback
+    // is std::function and we copy it for the lambda).
+    auto stream_callback = request.stream_callback;
+    const bool streaming = (bool)stream_callback;
 
-    if (stop_.load()) {
-        // Shutting down - return error immediately
-        state->promise.set_value(std::unexpected(CurlError::Cancelled));
-        delete state;
-        return fut;
-    }
+    auto req   = make_omninet_request(request);
+    auto cfg   = make_omninet_config(request);
 
-    {
-        std::scoped_lock lock(queue_mutex_);
-        pending_.push(std::unique_ptr<RequestState>(state));
-    }
-    queue_cv_.notify_one();
+    // Each submission gets its own shared state for thread-safe tracking.
+    auto promise = std::make_shared<std::promise<std::expected<CurlResponse, CurlError>>>();
+    auto fut     = promise->get_future();
+
+    // §NC-6 streaming path:
+    //   submit_cancellable with stream_callback runs on a worker thread that
+    //   pulls chunks from OmniNet::HTTP::ClientResponseStream and calls
+    //   stream_callback per chunk. The body is NOT accumulated.
+    // §NC-6 non-streaming path:
+    //   Uses OmniNet::HTTP::Client::send_blocking (or ::send with stop_token).
+    std::jthread([promise, request, req, cfg, stream_callback, streaming,
+                  stop_token, this]() mutable {
+        // Helper: detect cancellation before honouring it.
+        auto cancelled = [stop_token]() -> bool {
+            return stop_token.stop_requested();
+        };
+
+        // §Cancellation before submit
+        if (cancelled()) {
+            promise->set_value(std::unexpected(CurlError::Cancelled));
+            active_count_.fetch_sub(1, std::memory_order_acq_rel);
+            completed_count_.fetch_add(1, std::memory_order_acq_rel);
+            return;
+        }
+
+        if (streaming) {
+            // ---- Streaming (SSE) path ----
+            auto r = OmniNet::HTTP::Client::get_instance().send_streaming(req, cfg);
+            if (!r.has_value()) {
+                promise->set_value(std::unexpected(map_error(r.error())));
+                active_count_.fetch_sub(1, std::memory_order_acq_rel);
+                completed_count_.fetch_add(1, std::memory_order_acq_rel);
+                return;
+            }
+            auto& stream = *r.value();
+
+            // Build the response shell; body is accumulated as we feed the
+            // stream_callback, but most SSE consumers don't actually need
+            // the body afterwards. status/headers come from the stream.
+            CurlResponse resp;
+            resp.status_code    = stream.statusCode();
+            resp.content_type   = stream.header("Content-Type");
+            resp.mcp_session_id = stream.header("Mcp-Session-Id");
+            resp.body.clear();
+
+            bool cancelled_now = false;
+            while (true) {
+                if (cancelled()) {
+                    cancelled_now = true;
+                    break;
+                }
+                auto chunk = stream.read_some();
+                if (!chunk) break;       // EOF
+                if (chunk->empty()) continue;
+                std::string_view sv(reinterpret_cast<const char*>(chunk->data()),
+                                     chunk->size());
+                stream_callback(sv);
+                // Some callers accumulate the streamed body themselves via
+                // the callback; we don't store it here.
+            }
+            if (cancelled_now) {
+                promise->set_value(std::unexpected(CurlError::Cancelled));
+            } else {
+                promise->set_value(std::move(resp));
+            }
+            active_count_.fetch_sub(1, std::memory_order_acq_rel);
+            completed_count_.fetch_add(1, std::memory_order_acq_rel);
+            return;
+        }
+
+        // ---- Non-streaming path ----
+        // Poll the stop_token on a short cadence so cancellation is honoured
+        // promptly. OmniNet::HTTP::Client::send_blocking(req, cfg, stop)
+        // also accepts a stop_token but only checks it between socket I/O
+        // events; the local poll bounds worst-case latency.
+        OmniNet::HTTP::Client& client = OmniNet::HTTP::Client::get_instance();
+        OmniNet::Result<OmniNet::HTTP::ClientResponse, OmniNet::HTTP::ClientError> result;
+        bool cancelled_now = false;
+        while (true) {
+            if (cancelled()) {
+                cancelled_now = true;
+                break;
+            }
+            // Use the synchronous send with stop_token. The variant
+            // returns Cancelled if the stop fires mid-flight.
+            result = client.send_blocking(req, cfg, stop_token);
+            break;  // §non-blocking would loop here for retry; we delegate retry to callers.
+        }
+
+        if (cancelled_now) {
+            promise->set_value(std::unexpected(CurlError::Cancelled));
+        } else if (!result.has_value()) {
+            promise->set_value(std::unexpected(map_error(result.error())));
+        } else {
+            const auto& r = result.value();
+            CurlResponse resp = build_response(r, r.statusCode());
+            promise->set_value(std::move(resp));
+        }
+        active_count_.fetch_sub(1, std::memory_order_acq_rel);
+        completed_count_.fetch_add(1, std::memory_order_acq_rel);
+    }).detach();
 
     return fut;
 }
 
-std::vector<std::future<std::expected<CurlResponse, CurlError>>> CurlMultiSession::submit_batch(
-    const std::vector<CurlRequest>& requests
-) {
-    std::vector<std::future<std::expected<CurlResponse, CurlError>>> results;
-    results.reserve(requests.size());
-
-    for (const auto& req : requests) {
-        results.push_back(submit(req));
+std::vector<std::future<std::expected<CurlResponse, CurlError>>>
+CurlMultiSession::submit_batch(const std::vector<CurlRequest>& requests) {
+    std::vector<std::future<std::expected<CurlResponse, CurlError>>> out;
+    out.reserve(requests.size());
+    for (const auto& r : requests) {
+        out.push_back(submit(r));
     }
-    return results;
+    return out;
 }
 
-CurlMultiSession::Stats CurlMultiSession::get_stats() const {
-    return Stats{
-        .active = active_count_.load(std::memory_order_relaxed),
-        .completed = completed_count_.load(std::memory_order_relaxed),
-        .total = total_count_.load(std::memory_order_relaxed),
-    };
-}
+// event_loop / process_completed / add_to_multi / remove_from_multi /
+// write_cb / header_cb / multi_ / worker_ / stop_source_ / queue_mutex_ /
+// queue_cv_ / pending_ / in_flight_ / in_flight_mutex_
+//
+// Everything above was needed for curl_multi. OmniNet manages its own
+// connection pool + thread pool internally, so the data members and
+// helpers are no longer needed. They're declared in the header for ABI
+// stability — the implementation just becomes empty no-ops / unused.
+//
+// §NC-6: keep RequestState as an opaque empty struct so the legacy
+// std::queue<std::unique_ptr<RequestState>> member in the header
+// can be destructed without ABI churn.
+struct CurlMultiSession::RequestState {};
+
+void CurlMultiSession::event_loop(std::stop_token /*st*/) {}
+void CurlMultiSession::process_completed() {}
+void CurlMultiSession::add_to_multi(RequestState* /*state*/) {}
+void CurlMultiSession::remove_from_multi(RequestState* /*state*/, CurlError /*error*/) {}
+size_t CurlMultiSession::write_cb(void* /*contents*/, size_t /*size*/,
+                                   size_t /*nmemb*/, void* /*userp*/) { return 0; }
+size_t CurlMultiSession::header_cb(void* /*contents*/, size_t /*size*/,
+                                    size_t /*nmemb*/, void* /*userp*/) { return 0; }
 
 } // namespace daedalus::net

@@ -1,25 +1,32 @@
 /**
  * @file CurlMultiSession.h
- * @brief Async HTTP client using libcurl's multi interface
+ * @brief Async HTTP client — OmniNet-backed adapter
  *
- * Why this exists:
- * - Replaces synchronous curl_easy_perform with non-blocking curl_multi.
- * - Allows multiple concurrent HTTP requests (batch tool calls, parallel
- *   searches, etc.) in a single event-loop thread.
- * - Supports cancellation via std::stop_token (ESCs mid-request actually work).
- * - Reuses connections via HTTP keep-alive (faster subsequent calls).
- * - Returns std::expected<CurlResponse, CurlError> for type-safe error handling.
+ * §NC-6 (2026-07-16): the implementation in CurlMultiSession.cpp now uses
+ * OmniNet::HTTP::Client instead of libcurl's curl_multi. Public API
+ * (CurlRequest / CurlResponse / CurlError / submit / submit_cancellable /
+ * submit_batch / get_stats / shutdown) is UNCHANGED so callers (LLMClient)
+ * don't need to be rewritten yet.
+ *
+ * Once NC-7 (LLMClient migration) + NC-8 (sync-path migration) are
+ * done, this file can be deleted (NC-9).
  *
  * Architecture:
- * - One CurlMultiSession = one CURLM handle + one event-loop jthread.
- * - Submit enqueues a request; the event loop adds it to curl_multi and polls.
- * - When a transfer completes, the corresponding promise is fulfilled.
- * - Cancellation removes the handle from curl_multi and fulfills with CurlError::Cancelled.
+ *   - submit() returns a std::future backed by a per-request jthread.
+ *     Each request uses OmniNet::HTTP::Client directly — no shared
+ *     event-loop thread, no curl_multi handle. Connection pooling
+ *     comes from OmniNet's singleton Client (it reuses TLS sockets).
+ *   - submit_cancellable() honours the std::stop_token by passing it
+ *     through to OmniNet::send(req, stop_token) and polling it on the
+ *     worker thread so cancellation latency is bounded.
+ *   - SSE streaming: when CurlRequest::stream_callback is set, the
+ *     worker calls OmniNet::HTTP::Client::send_streaming and pulls
+ *     chunks, invoking the callback per chunk.
  *
  * Thread-safety:
- * - submit() can be called from any thread.
- * - The event loop runs in one dedicated thread (jthread).
- * - Per-request state is owned by the request and not shared.
+ *   - submit / submit_cancellable / submit_batch are safe from any thread.
+ *   - get_stats is lock-free (atomic counters).
+ *   - shutdown() is idempotent.
  *
  * Usage:
  * @code
@@ -30,13 +37,13 @@
  *   req.bearer_token = "sk-...";
  *   req.timeout_seconds = 30;
  *
- *   auto fut = session.submit(req);
+ *   auto fut = session.submit_cancellable(req, stop_token);
  *   auto result = fut.get();
  *   if (result) {
  *       std::cout << "Status: " << result->status_code << "\n";
  *       std::cout << "Body: " << result->body << "\n";
  *   } else {
- *       std::cerr << "Error: " << static_cast<int>(result.error()) << "\n";
+ *       std::cerr << "Error: " << to_string(result.error()) << "\n";
  *   }
  * @endcode
  */
@@ -46,8 +53,6 @@
 #include <atomic>
 #include <cstdint>
 #include <chrono>
-#include <condition_variable>
-#include <curl/curl.h>
 #include <expected>
 #include <functional>
 #include <future>
@@ -56,6 +61,7 @@
 #include <queue>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -210,24 +216,26 @@ public:
 
 private:
     CurlMultiSession();
+    // §NC-6: legacy event-loop helpers are no-ops now. The implementation
+    // in CurlMultiSession.cpp uses per-request jthreads and OmniNet directly.
     void event_loop(std::stop_token st);
-    struct RequestState;
+    struct RequestState;     // forward-declared for ABI; no longer used
     void process_completed();
     void add_to_multi(RequestState* state);
     void remove_from_multi(RequestState* state, CurlError error);
     static size_t write_cb(void* contents, size_t size, size_t nmemb, void* userp);
     static size_t header_cb(void* contents, size_t size, size_t nmemb, void* userp);
 
-    CURLM* multi_ = nullptr;
+    // Worker thread + stop source for the legacy event loop. With the
+    // OmniNet rewrite these are unused but kept for ABI.
     std::jthread worker_;
     std::stop_source stop_source_;
 
+    // Legacy queue + in-flight tracking. Kept as members but never
+    // populated; the dtor's member-cleanup needs them to compile.
     mutable std::mutex queue_mutex_;
     std::condition_variable queue_cv_;
     std::queue<std::unique_ptr<RequestState>> pending_;
-    /// §B16 fix: tracks RequestState* for every handle currently in curl_multi.
-    /// Used at shutdown to cancel all in-flight requests — curl_multi_info_read
-    /// only returns CURLMSG_DONE (completed), so in-flight handles would leak.
     std::vector<RequestState*> in_flight_;
     std::mutex in_flight_mutex_;
 

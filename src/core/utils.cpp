@@ -10,8 +10,9 @@
 #include <limits>
 #include <algorithm>
 #include <cstring>
-#include <curl/curl.h>
-#include "api/CurlMultiSession.h"
+#include <OmniNet.h>
+#include <http/HttpClient.h>
+#include <http/HttpResponse.h>
 
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
@@ -282,41 +283,43 @@ std::string download_image_as_base64(const std::string& url) {
         return url;
     }
 
-    // Use CurlMultiSession for async, non-blocking download.
-    // (Replaces synchronous curl_easy_perform - benefits: HTTP keep-alive,
-    //  connection reuse, non-blocking I/O. CurlMultiSession manages the
-    //  curl handle internally.)
-    using daedalus::net::CurlRequest;
-    using daedalus::net::CurlMultiSession;
-    CurlRequest req;
-    req.url = url;
-    req.method = "GET";
-    req.timeout_seconds = 30;  // 30 second timeout
-    req.follow_redirects = true;
-    req.user_agent = "daedalus/1.0";
+    // §NC-5 (2026-07-16): migrated from CurlMultiSession to OmniNet.
+    // Sync GET via OmniNet::HTTP::Client::send_blocking. Content-Type
+    // is pulled from the response headers map.
+    LOG_DEBUG("[download_image] Fetching URL: " + url);
 
-        LOG_DEBUG("[download_image] Fetching URL: " + url);
-    auto fut = CurlMultiSession::get_instance().submit(req);
-    auto result = fut.get();
+    OmniNet::HTTP::ClientRequest req;
+    req.url(url);
+    req.method("GET");
+    req.header("User-Agent", "daedalus/1.0");
 
-    if (!result) {
+    OmniNet::HTTP::ClientConfig cfg;
+    cfg.connect_timeout = std::chrono::seconds(10);
+    cfg.request_timeout = std::chrono::seconds(30);
+    cfg.follow_redirects = true;
+
+    auto result = OmniNet::HTTP::Client::get_instance().send_blocking(req, cfg);
+
+    if (!result.has_value()) {
         LOG_WARNING("[download_image] Request failed for URL: " + url);
         return "";
     }
-    if (result->status_code < 200 || result->status_code >= 300) {
+    const auto& resp = result.value();
+    const int code = resp.statusCode();
+    if (code < 200 || code >= 300) {
         LOG_WARNING("[download_image] HTTP error: response code " +
-                    std::to_string(result->status_code) + " for URL: " + url);
+                    std::to_string(code) + " for URL: " + url);
         return "";
     }
-    if (result->body.empty()) {
+    const std::string body = resp.bodyAsString();
+    if (body.empty()) {
         LOG_WARNING("[download_image] No data received from URL: " + url);
         return "";
     }
 
-    LOG_DEBUG("[download_image] HTTP response code: " +
-              std::to_string(result->status_code));
+    LOG_DEBUG("[download_image] HTTP response code: " + std::to_string(code));
     LOG_DEBUG("[download_image] Data size received: " +
-              std::to_string(result->body.size()) + " bytes");
+              std::to_string(body.size()) + " bytes");
 
     // Detect MIME type from URL extension (or use Content-Type from response)
     std::string ext = get_image_extension(url);
@@ -325,17 +328,27 @@ std::string download_image_as_base64(const std::string& url) {
     else if (ext == "gif") mime_type = "image/gif";
     else if (ext == "webp") mime_type = "image/webp";
     else if (ext == "bmp") mime_type = "image/bmp";
-    else if (!result->content_type.empty()) {
-        // Use the server-provided Content-Type if available
-        mime_type = result->content_type;
-    } else {
-        mime_type = "image/jpeg"; // Default to JPEG
+    else {
+        // Use server-provided Content-Type when available; strip any
+        // parameters (e.g. "; charset=utf-8") so the data URL stays valid.
+        const auto ctype = resp.header("Content-Type");
+        if (!ctype.empty()) {
+            const auto semi = ctype.find(';');
+            mime_type = (semi == std::string::npos) ? ctype
+                                                   : ctype.substr(0, semi);
+            // Trim trailing whitespace.
+            while (!mime_type.empty() &&
+                   (mime_type.back() == ' ' || mime_type.back() == '\t'))
+                mime_type.pop_back();
+        } else {
+            mime_type = "image/jpeg"; // Default to JPEG
+        }
     }
 
     // Encode to base64
     std::string base64_data = base64_encode(
-        reinterpret_cast<const unsigned char*>(result->body.data()),
-        result->body.size()
+        reinterpret_cast<const unsigned char*>(body.data()),
+        body.size()
     );
 
     // Return as data URL

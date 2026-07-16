@@ -603,6 +603,13 @@ migrating this code to OmniNet, not adding new instances.
 | NC-2 | Implement **client-side SSE parser** using `OmniNet::HTTP::ClientResponseStream` (no libcurl). Lives in `src/library/net/SseParser.h` (no stdio — library-safe). | HIGH | ✅ Done (2026-07-16) — `<daedalus/net/SseParser.h>` lives in public include path. Header-only, WHATWG-compliant. 17 cases / 47 assertions in `daedalus_sse_parser_tests`. Covers: single/multi-line data, CRLF+LF endings, comments, chunk-boundary splits, finish() flush, retry field parsing, leading-space stripping, unknown-field ignoring, event-without-data skipping. |
 | NC-3 | Implement **ACP-7 SSE streaming** using the new SseParser + `send_streaming`. Dispatches to `IRunEventHandler::on_*`. | HIGH | ✅ Done (2026-07-16) — `OmninetTransport::stream_events` uses `send_streaming` + `SseParser`. Structured dispatch through `on_run_*/on_message_*/on_error` callbacks is currently a stub that routes everything to `on_generic`; proper dispatch requires adding the missing callbacks (`on_tool_call`, `on_tool_call_output`, `on_await`) to `IRunEventHandler` first. |
 | NC-4 | Replace libcurl in `SearchTool.cpp` with `OmniNet::HTTP::Client::send_blocking`. Use `OmniNet::urlEncode()` instead of `curl_easy_escape`. | HIGH | ✅ Done (2026-07-16) — both Serper and Wikipedia paths migrated. Removed dead `serper_write_callback`. |
+| NC-5 | Replace libcurl in `utils.cpp` (TBD: identify what it does). | MEDIUM | ✅ Done (2026-07-16) — `download_image_as_base64` migrated to `OmniNet::HTTP::Client::send_blocking`. Content-Type pulled from response headers (with parameter stripping for `data:` URLs). |
+| NC-6 | **Migrate `CurlMultiSession` → OmniNet-backed HTTP session.** Add an adapter that implements the existing `submit_cancellable(req, stop_token)` API on top of `OmniNet::HTTP::Client::send(req, stop)`. | HIGH (most-used path) | ✅ Done (2026-07-16) — `CurlMultiSession.cpp` rewritten on `OmniNet::HTTP::Client`. Public API (CurlRequest/CurlResponse/CurlError + submit/submit_cancellable/submit_batch/get_stats/shutdown) preserved. SSE streaming now goes through `send_streaming` + per-chunk callback. Live-LLM smoke test confirms real API calls + SSE streaming + tool calls work end-to-end through the new transport. |
+| NC-7 | Migrate `LLMClient::make_api_request_async` to the OmniNet-backed session. Preserve Retry-After, SSE, retry policy, cancellation, 401/429/5xx routing. | HIGH | ✅ Done (2026-07-16, by NC-6) — `LLMClient` keeps using `CurlMultiSession::submit_cancellable(req, stop_token)` exactly as before; the API surface is unchanged so the migration is transparent. Retry-After parsing, 401/429/5xx routing, stop_token cancellation, SSE streaming all preserved. Live-LLM test confirms `MiniMax-M2.7` model works through the new stack. |
+| NC-8 | Migrate `LLMClient::make_curl_request_with_retry` (sync path) + `run_agent_cycle(CURL*, ...)`. | HIGH | 🟡 Open — the sync path takes raw `CURL*` params and bypasses `CurlMultiSession`. Live-LLM smoke test exercises the async path only; the sync path may be dead code in practice. Needs a separate pass: either confirm dead code and remove, or rewrite on OmniNet sync. |
+| NC-9 | Delete `CurlHandle.h` + `CurlMultiSession.{h,cpp}`. | LOW | 🟡 Open — depends on NC-8 (sync-path usage) being confirmed/eliminated. |
+| NC-10 | Delete `tests/test_curl_handle.cpp` + rewrite `tests/test_curl_multi_session.cpp` against OmniNet-backed transport. | LOW | 🟡 Open — same as NC-9. The current tests still pass because they only use the public API, but `test_curl_handle.cpp` tests a deleted internal type (`CurlHandle`). |
+| NC-11 | Drop `find_package(CURL REQUIRED)` + `CURL::libcurl` links from `CMakeLists.txt` + `tests/CMakeLists.txt`. | LOW | 🟡 Open — only possible after NC-9 + NC-10 remove every last curl reference. |
 | NC-12 | Update `ThreadPool.h` comment that mentions `curl_multi`. | TRIVIAL | ✅ Done (2026-07-16) — "curl_multi" → "OmniNet HTTP/MCP". |
 
 **Scope of THIS session:** NC-1, NC-2, NC-3, NC-4, NC-12. LLMClient
@@ -617,6 +624,9 @@ in one shot without breaking the live LLM smoke tests.
 - [x] NC-2: client-side SSE parser in `<daedalus/net/SseParser.h>` + tests
 - [x] NC-3: ACP SSE streaming via send_streaming + SseParser (structured dispatch stubbed)
 - [x] NC-4: replace libcurl in SearchTool.cpp (Serper + Wikipedia)
+- [x] NC-5: replace libcurl in utils.cpp (download_image_as_base64)
+- [x] NC-6: CurlMultiSession rewritten on OmniNet (public API preserved)
+- [x] NC-7: LLMClient migration done implicitly via NC-6 (API unchanged)
 - [x] NC-12: ThreadPool.h comment update
 
 **Verification:**
@@ -624,6 +634,10 @@ in one shot without breaking the live LLM smoke tests.
 - `test_acp_basic` → 25 cases / 84 assertions, all pass.
 - `daedalus_sse_parser_tests` → 17 cases / 47 assertions, all pass.
 - `ctest -E phase15_typo_warning` → **63/63 pass**, 2 live-LLM skipped, 0 failures.
+- **Live-LLM smoke test (daedalus-cli --model minimax-m2.7)**:
+  Banner renders, model responds via SSE stream, tool calls (tell_user, stop)
+  fire correctly, token usage tracked. End-to-end LLM traffic now flows
+  through `OmniNet::HTTP::Client` with zero libcurl on the hot path.
 
 ---
 
