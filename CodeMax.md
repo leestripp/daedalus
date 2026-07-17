@@ -14,7 +14,7 @@
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
 - **Open items:** none.
 
-Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (16/16 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`. ACP-16: fixed empty `session_id` serialization in `RunCreateRequest::to_json`. **§CRASH-RESILIENCE plan added** (5 phases; phase 1 in progress).
+Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (16/16 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`. ACP-16: fixed empty `session_id` serialization in `RunCreateRequest::to_json`. **§CRASH-RESILIENCE plan complete** (5/5 phases done; 14 new tests).
 
 ---
 
@@ -439,21 +439,44 @@ parser crash on bad upstream data.
 ### Implementation order
 
 1. **Phase 1** — atomic save. Pure refactor, no API change. Land first
-   so subsequent phases build on a solid foundation.
-2. **Phase 2** — auto-save. Adds the dirty flag + background thread.
+   so subsequent phases build on a solid foundation. ✅
+2. **Phase 2** — auto-save. Adds the dirty flag + background thread. ✅
 3. **Phase 3** — graceful shutdown hooks. Wires into existing
-   `install_signal_handlers` in `demos/daedalus-cli/util.h`.
+   `install_signal_handlers` in `demos/daedalus-cli/util.h`. ✅ (covered
+   by Phase 2 — auto-flush + destructor's worker-stop-and-flush is
+   sufficient; no separate code path needed)
 4. **Phase 4** — crash handler. Most complex; depends on Phase 1
-   (atomic rename) and Phase 2 (always-fresh `.crash` file).
-5. **Phase 5** — drop-last heuristic. Final polish; depends on Phase 4.
+   (atomic rename) and Phase 2 (always-fresh `.crash` file). ✅
+5. **Phase 5** — drop-last heuristic. Final polish; depends on Phase 4. ✅
 
-### Estimated diff size
-- `Messages.{h,cpp}`: ~120 lines added, 20 modified.
-- `tests/test_messages.cpp`: ~180 lines (6 new test cases).
-- `demos/daedalus-cli/util.h`: ~20 lines (new SIGTSTP + crash hooks).
-- `demos/daedalus-cli/main.cpp`: ~5 lines (call `install_crash_handlers`).
-- `CMakeLists.txt`: unchanged (no new files).
-- `CodeMax.md`: this plan + per-phase entries.
+### Final diff (vs base)
+
+- `Messages.{h,cpp}`: ~250 lines added, ~30 modified.
+- `tests/test_messages.cpp`: ~280 lines (14 new test cases).
+- `Agent.{h,cpp}` + `AgentImpl.{h,cpp}` + `LLMClient.{h,cpp}`:
+  forward crash-handler install/uninstall through the stack.
+- `demos/daedalus-cli/main.cpp`: ~5 lines (call `install_crash_handlers`
+  after `initialize`).
+- `CodeMax.md`: this plan + per-phase status updates.
+
+### Test counts
+
+- Before: 64/64 ctest pass.
+- After: 64/64 ctest pass + 14 new messages_tests (73/73 + 1 skipped in
+  messages_tests; 203/203 assertions).
+
+### What was deferred
+
+- **In-process fork test of the SIGABRT signal handler** — libc's
+  `std::abort()` flushes stdio streams (not async-signal-safe), which
+  fights with doctest's own SIGABRT handler. The unit tests cover the
+  components; end-to-end verification needs a standalone test binary
+  outside the doctest framework. Placeholder test marked
+  `doctest::skip(true)`.
+- **Ctrl-Z (SIGTSTP) handler** — Phase 3 was simplified: instead of a
+  SIGTSTP handler that flushes + re-raises, we rely on the auto-flush
+  worker in Messages. A SIGTSTP stops the process; on resume, the
+  worker resumes too. No separate handler needed.
 
 ---
 
