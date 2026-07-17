@@ -42,6 +42,7 @@ embedding `libdaedalus.a` and for core contributors.
 |------|----------|-------------|
 | [`mcp_server.md`](mcp_server.md) | **Host developers** | MCP server integration via `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (legacy: `~/.daedalus/mcp/servers.json`, see [`storage.md`](storage.md) for migration). Stdio + HTTP transports, JSON-RPC, MiniMax MCP tools (`understand_image`, `web_search`). |
 | [`network-tools.md`](network-tools.md) | **Host developers** | OmniNet-backed HTTP/DNS/TCP/TLS/WebSocket tools available to the agent. |
+| [`sse_streaming.md`](sse_streaming.md) | **Core contributors** | OpenAI-compatible SSE consumption from `LLMClient` to LLM providers: chunked-encoding gotchas, `usage`-trailer recovery, `reasoning_split` quirk. Must-read before touching `HttpSession::submit_cancellable` or `MiniMaxSseParser`. |
 
 ## Demo / Testing
 

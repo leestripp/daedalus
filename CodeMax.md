@@ -9,13 +9,14 @@
 
 ---
 
-## Current state (2026-07-16)
+## Current state (2026-07-17)
 
 - **Build:** clean (only OmniNet-internal warnings).
-- **Tests:** `ctest` → **64/64 pass**, 2 live-LLM skipped, 0 failures.
+- **Tests:** `ctest` → **65/65 pass**, 2 live-LLM skipped, 0 failures.
   - `messages_tests` 73/73 + 1 skipped (203/203 assertions; 14 new CRASH-* cases).
   - `test_acp_basic` 40/40 (131/131 assertions).
   - `test_acp_end_to_end` 4/4 (42/42 assertions).
+  - `phase15_typo_warning_tests` re-enabled (no `-E` exclusion needed).
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
 - **Open items:** none. See `CHANGELOG.md` for the v0.5.0 release notes.
 
@@ -25,6 +26,7 @@
 
 | Date | Item | Where |
 |------|------|-------|
+| 2026-07-17 | **SSE streaming token-count fix** — `HttpSession::submit_cancellable` was treating socket-wait timeouts as EOF, dropping the usage-only trailer chunk on slow providers (MiniMax/M2.7). Distinguishing `nullopt`-timeout from real EOF fixes `'usage' is null in SSE stream` and the zero-token-count UI bar. | [CHANGELOG v0.5.0](./CHANGELOG.md), [docs/sse_streaming.md](./docs/sse_streaming.md) |
 | 2026-07-16 | **§CRASH-RESILIENCE** complete (5/5 phases). Atomic save, write-through auto-flush, async-signal-safe SIGSEGV/SIGABRT handler, drop-last-message recovery. | [CHANGELOG v0.5.0](./CHANGELOG.md), [docs/crash_resilience.md](docs/crash_resilience.md) |
 | 2026-07-16 | **ACP sub-library** complete (16/16 tasks). `OmniNet` transport, structured SSE dispatch, e2e test. | [CHANGELOG v0.5.0](./CHANGELOG.md) |
 | 2026-07-16 | **§NOMORE-CURL** complete (12/12 tasks). libcurl fully removed. | [CHANGELOG v0.5.0](./CHANGELOG.md) |
@@ -57,3 +59,4 @@ spec; the main one:
 - `docs/library_design.md` — invariants for `libdaedalus.a`.
 - `docs/crash_resilience.md` — message persistence lifecycle.
 - `docs/embedding.md` — how to host `libdaedalus.a`.
+- `docs/sse_streaming.md` — SSE consumption pipeline, EOF gotcha, `usage`-trailer recovery. Read before touching `HttpSession` or `MiniMaxSseParser`.

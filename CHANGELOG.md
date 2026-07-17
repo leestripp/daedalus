@@ -146,13 +146,29 @@ Communication Protocol (ACP) sub-library.
   most fields. Both now round-trip cleanly.
 - **`is_connected` check**: previously returned true for any status
   `<500`; now requires `2xx` (the original semantics were a typo).
+- **SSE streaming drops the usage-only trailer on slow providers**
+  (e.g. MiniMax/M2.7). The streaming loop in
+  `HttpSession::submit_cancellable` treated any `nullopt` from
+  `OmniNet::HTTP::ClientResponseStream::read_some()` as end-of-stream.
+  `read_some()` also returns `nullopt` when `socket->waitForRead(100ms)`
+  times out without data — providers whose chunks are spaced
+  >100 ms apart hit this and the loop exited after only the first
+  2 reads, dropping the `{"choices":[],"usage":{...}}` trailer that
+  carries real token counts. Fixed by checking `stream.eof()` before
+  breaking on `nullopt`; on transient timeout, sleep 5 ms and
+  continue. Symptom was `'usage' is null in SSE stream — token counts
+  unavailable` and a zero-token-count UI bar on every turn. Full
+  write-up of the SSE consumption pipeline and its gotchas:
+  **[`docs/sse_streaming.md`](docs/sse_streaming.md)**.
 
 ### Tests
 
 - `messages_tests` 73/73 + 1 skipped (203/203 assertions).
 - `test_acp_basic` 40/40 (131/131 assertions).
 - `test_acp_end_to_end` 4/4 (42/42 assertions).
-- Full `ctest` → 64/64 pass, 2 live-LLM skipped, 0 failures.
+- Full `ctest` → 65/65 pass, 2 live-LLM skipped, 0 failures
+  (was 64/64 with `phase15_typo_warning_tests` excluded; that
+  test is now passing again and excluded flag is no longer needed).
 
 ### Migration notes (v0.4.x → v0.5.0)
 
