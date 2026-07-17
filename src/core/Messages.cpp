@@ -21,6 +21,8 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+#include <cstdio>      // fileno(), ::fdopen()
+#include <unistd.h>    // fileno(), fsync(), ::dup()
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
 // statements into LOG_INFO/LOG_WARNING/LOG_ERROR via the existing
@@ -324,12 +326,20 @@ void Messages::save() const {
             std::filesystem::remove(messages_file_);
             LOG_DEBUG("Removed empty messages file");
         }
+        // §CRASH-1 (2026-07-16): also remove any stale .tmp or .crash
+        // file left from a previous incomplete save. Otherwise an
+        // empty session would leave a .crash file behind that the
+        // next load() could mistake for a recoverable session.
+        try {
+            std::filesystem::remove(messages_file_.string() + ".tmp");
+            std::filesystem::remove(messages_file_.string() + ".crash");
+        } catch (...) { /* best-effort */ }
         return;
     }
-    
+
     // Sanitize before saving - remove orphaned tool results
     json to_save = sanitize_message_chain(messages_);
-    
+
     try {
         // §Phase 8.8: parent_path() is the per-agent namespace dir
         // (e.g. `.daedalus/` or `.daedalus-bob/`), already created in
@@ -339,20 +349,73 @@ void Messages::save() const {
         if (!std::filesystem::exists(daedalus_dir)) {
             std::filesystem::create_directories(daedalus_dir);
         }
-        
-        std::ofstream f(messages_file_);
-        if (!f.is_open()) {
-            LOG_ERROR("Cannot open messages file for writing: " + messages_file_.string());
+
+        // §CRASH-1 (2026-07-16): atomic write via temp file + rename.
+        //
+        // Problem: the old code wrote directly to messages_file_ with
+        // std::ofstream. A kill -9 or power loss mid-write left a
+        // truncated file on disk; the next load() would parse-error
+        // and silently drop to an empty session, losing every message.
+        //
+        // Fix: write to a sibling .tmp file, fsync, close, then
+        // `rename(tmp, final)`. POSIX rename() on the same filesystem
+        // is atomic — readers always see either the old file or the
+        // new file, never a half-written one.
+        //
+        // We re-open the file via the C API in write_atomic() so we
+        // get a portable fd for fsync(2). std::ofstream has no
+        // portable native_handle() in C++23.
+        const std::string tmp_path   = messages_file_.string() + ".tmp";
+        const std::string crash_path = messages_file_.string() + ".crash";
+        const std::string contents   = to_save.dump(2);
+
+        auto write_atomic = [&](const std::string& path) -> bool {
+            // C API for portable fd access.
+            std::FILE* wf = std::fopen(path.c_str(), "wb");
+            if (!wf) {
+                LOG_ERROR("Cannot open for writing: " + path);
+                return false;
+            }
+            const std::size_t wrote = std::fwrite(contents.data(), 1,
+                                                  contents.size(), wf);
+            if (wrote != contents.size()) {
+                LOG_ERROR("Short write to " + path + " ("
+                          + std::to_string(wrote) + "/"
+                          + std::to_string(contents.size()) + " bytes)");
+                std::fclose(wf);
+                return false;
+            }
+            std::fflush(wf);
+#ifndef _WIN32
+            // fsync the file data. Without this, a power loss could
+            // leave the rename() ahead of the data write, producing
+            // an empty target file.
+            ::fsync(::fileno(wf));
+#endif
+            std::fclose(wf);
+            return true;
+        };
+
+        if (!write_atomic(tmp_path)) {
             return;
         }
-        
-        f << to_save.dump(2);
-        if (f.fail()) {
-            LOG_ERROR("Failed to write messages to file");
-        } else {
-            LOG_INFO("Saved " + std::to_string(to_save.size()) + " messages to " + messages_file_.string());
+        // Atomic rename. Throws on filesystem error (cross-device,
+        // permission denied, etc.).
+        std::filesystem::rename(tmp_path, messages_file_);
+
+        LOG_INFO("Saved " + std::to_string(to_save.size()) + " messages to " + messages_file_.string());
+
+        // §CRASH-1: also write the async-signal-safe crash mirror.
+        // The crash handler (Phase 4) will re-write this on signal,
+        // but keeping it in sync on every save means we always have
+        // a recoverable copy at most one save() behind.
+        try {
+            write_atomic(crash_path);
+        } catch (const std::exception& e) {
+            LOG_WARNING("Messages: .crash mirror write failed ("
+                        + std::string(e.what()) + ")");
         }
-        
+
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to save messages: " + std::string(e.what()));
     }

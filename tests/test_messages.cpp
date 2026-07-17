@@ -775,7 +775,7 @@ TEST_SUITE("Save and Load") {
     
     TEST_CASE("messages persist after destruction and recreation") {
         auto proj = create_test_project();
-        
+
         // Create, save messages, then destruct
         {
             auto msgs1 = create_test_messages(proj);
@@ -783,13 +783,123 @@ TEST_SUITE("Save and Load") {
             msgs1.add_user("Persistent user");
             msgs1.save();
         }
-        
+
         // Create new instance and load
         auto msgs2 = create_test_messages(proj);
         CHECK(msgs2.load());
         CHECK(msgs2.size() == 2);
         CHECK(msgs2.get_messages()[0]["content"] == "Persistent system");
-        
+
+        cleanup_test_project(proj);
+    }
+
+    // §CRASH-1 (2026-07-16): atomic save via temp+rename.
+
+    TEST_CASE("CRASH-1 save leaves no .tmp file behind on success") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        msgs.add_system("Atomic save test");
+        msgs.add_user("Hello");
+        msgs.save();
+
+        // Final file exists.
+        CHECK(msgs.has_saved_messages());
+        // No .tmp left behind.
+        CHECK_FALSE(std::filesystem::exists(
+                        proj / ".daedalus" / "messages.json.tmp"));
+        // .crash mirror was also written.
+        CHECK(std::filesystem::exists(
+                  proj / ".daedalus" / "messages.json.crash"));
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-1 save recovers from a stale .tmp file") {
+        auto proj = create_test_project();
+        auto msgs_dir = proj / ".daedalus";
+        auto msgs = create_test_messages(proj);
+
+        // Pre-create a stale .tmp file from a "previous incomplete save".
+        // It contains garbage; the new save() must overwrite it.
+        std::ofstream bad(msgs_dir / "messages.json.tmp", std::ios::binary);
+        bad << "{ this is not valid json";
+        bad.close();
+
+        msgs.add_system("Re-overwrites stale .tmp");
+        msgs.add_user("Hello");
+        // If save() doesn't overwrite .tmp, this would also fail because
+        // the rename() target is busy. The test passes only if save()
+        // trumps/overwrites stale .tmp.
+        CHECK_NOTHROW(msgs.save());
+        CHECK(msgs.has_saved_messages());
+
+        // Reload — must parse cleanly.
+        auto msgs2 = create_test_messages(proj);
+        CHECK(msgs2.load());
+        CHECK(msgs2.size() == 2);
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-1 save produces valid file even after a previous truncation") {
+        auto proj = create_test_project();
+        auto msgs_file = proj / ".daedalus" / "messages.json";
+
+        // First save: write valid content.
+        {
+            auto msgs = create_test_messages(proj);
+            msgs.add_system("First");
+            msgs.add_user("Hello");
+            msgs.save();
+            CHECK(msgs.has_saved_messages());
+        }
+        // Simulate a previously-crashed save that left a truncated
+        // file on disk.
+        {
+            std::ofstream f(msgs_file, std::ios::binary | std::ios::trunc);
+            f << "[{\"role\":\"user\",\"content\":\"HALF-WRITTEN";  // truncated JSON
+            // Do NOT close — simulate the file as it would look on
+            // disk after a kill mid-write. close() will flush; the
+            // partial content is what load() will see.
+            f.close();
+        }
+
+        // Save again. Should atomically replace the truncated file.
+        {
+            auto msgs = create_test_messages(proj);
+            msgs.add_system("Second");
+            msgs.add_user("World");
+            msgs.save();
+        }
+        // Load — must see the second save, not the truncated first.
+        {
+            auto msgs = create_test_messages(proj);
+            CHECK(msgs.load());
+            CHECK(msgs.size() == 2);
+            CHECK(msgs.get_messages()[0]["content"] == "Second");
+            CHECK(msgs.get_messages()[1]["content"] == "World");
+        }
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-1 empty-session save also cleans up .crash file") {
+        auto proj = create_test_project();
+        auto crash = proj / ".daedalus" / "messages.json.crash";
+
+        // Pre-plant a stale .crash from a previous session.
+        std::ofstream cf(crash, std::ios::binary);
+        cf << "[\"stale\"]";
+        cf.close();
+        CHECK(std::filesystem::exists(crash));
+
+        // New session with no messages; save() must remove the
+        // stale .crash so the next load() doesn't pick it up.
+        auto msgs = create_test_messages(proj);
+        msgs.save();
+        CHECK_FALSE(std::filesystem::exists(crash));
+
         cleanup_test_project(proj);
     }
 }
