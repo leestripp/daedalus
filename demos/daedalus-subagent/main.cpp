@@ -43,6 +43,12 @@ public:
         std::string child_model_name;
         std::string child_system_prompt;
         int         max_iterations = 30;
+        // §subagent-1 (2026-07-16): monotonic counter for unique
+        // child session_ids. Parent Agent invokes this tool on a
+        // single thread, so an atomic is unnecessary — a plain int is
+        // enough and avoids the move-only constraint atomic imposes
+        // on the containing Config struct.
+        int spawn_count = 0;
     };
 
     explicit SpawnSubAgentTool(Config cfg) : cfg_(std::move(cfg)) {}
@@ -87,7 +93,11 @@ public:
         child_cfg.model_name          = cfg_.child_model_name;
         child_cfg.system_prompt       = cfg_.child_system_prompt;
         child_cfg.max_agent_iterations = cfg_.max_iterations;
-        child_cfg.session_id          = "subagent:";
+        // §subagent-1 (2026-07-16): unique session_id per spawn so
+        // subagents don't share conversation history in the SQLite
+        // store. Use a monotonic counter (cfg_.spawn_count) so
+        // re-using the parent in one session produces stable IDs.
+        child_cfg.session_id          = "subagent:" + std::to_string(++cfg_.spawn_count);
         // §B2-fix (2026-07-16): use user_data_root() (XDG pure path),
         // not default_daedalus_home(). The latter wraps user_root() which
         // honors legacy `~/.daedalus/` as a fallback — but that dir can
@@ -98,7 +108,9 @@ public:
         child_cfg.daedalus_home       = daedalus::Paths::global().user_data_root();
         child_cfg.auto_approve       = true;   // child is read-only
         child_cfg.agent_name         = "child";
-        child_cfg.skills_dirs         = { "/home/ubuntu/.daedalus/skills/" };
+        // §subagent-2 (2026-07-16): was a hardcoded "/home/ubuntu/.daedalus/skills/"
+        // path. Use Paths::global() so the demo works on any system.
+        child_cfg.skills_dirs         = { daedalus::Paths::global().global_skills_dir() };
         child_cfg.stream              = true;
 
         daedalus::Agent child(std::move(child_cfg), cfg_.child_sink);
@@ -130,10 +142,23 @@ int main(int argc, char* argv[]) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") {
             std::cout << "Usage: daedalus-subagent <project_root> <model>\n"
-                      << "       daedalus-subagent <project_root> <model> [args...]\n"
                       << "\n"
+                      << "Demonstrates the sub-agent composition pattern:\n"
+                      << "  - parent Agent receives a user request,\n"
+                      << "  - delegates focused investigations to a child Agent\n"
+                      << "    via the host-registered `spawn_subagent` tool,\n"
+                      << "  - returns the child's answer as the tool result.\n"
+                      << "\n"
+                      << "Arguments:\n"
+                      << "  project_root   Directory to investigate\n"
+                      << "  model          Model name to use (must be configured)\n"
+                      << "\n"
+                      << "Options:\n"
                       << "  --help, -h     Show this message and exit\n"
-                      << "  --version, -v  Show version\n";
+                      << "  --version, -v  Show version\n"
+                      << "\n"
+                      << "In-session commands:\n"
+                      << "  /quit, /exit   Leave the demo\n";
             return 0;
         }
         if (a == "--version" || a == "-v") {
@@ -154,7 +179,14 @@ int main(int argc, char* argv[]) {
     parent_cfg.auto_approve  = true;
     parent_cfg.session_id    = "subagent-demo-parent";
     parent_cfg.agent_name    = "parent";
-    parent_cfg.skills_dirs   = { "/home/ubuntu/.daedalus/skills/" };
+    // §subagent-3 (2026-07-16): explicit daedalus_home using
+    // user_data_root() so the parent finds the same model store as the
+    // child. Without this the parent may pick up a different default
+    // (legacy `~/.daedalus/` or an empty XDG path).
+    parent_cfg.daedalus_home = daedalus::Paths::global().user_data_root();
+    // §subagent-2 (2026-07-16): was hardcoded "/home/ubuntu/.daedalus/skills/".
+    // Use Paths::global() so the demo works on any system.
+    parent_cfg.skills_dirs   = { daedalus::Paths::global().global_skills_dir() };
     parent_cfg.stream        = true;
     parent_cfg.system_prompt =
         "You are a parent agent that orchestrates work by delegating "
@@ -186,7 +218,9 @@ int main(int argc, char* argv[]) {
                   "work to a child agent. /quit to exit.\n\n";
 
     std::string line;
-    while (std::getline(std::cin, line)) {
+    while (true) {
+        std::cout << "> " << std::flush;
+        if (!std::getline(std::cin, line)) break;   // EOF
         if (line == "/quit" || line == "/exit") break;
         if (line.empty()) continue;
         parent.submit_user_message(std::move(line));
