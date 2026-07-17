@@ -1120,6 +1120,110 @@ TEST_CASE("CRASH-4 fork: SIGABRT writes messages.json.crash"
     CHECK(true);
 }
 
+// §CRASH-5 (2026-07-16): drop-last-message recovery heuristic tests.
+
+TEST_CASE("CRASH-5 load falls back to .crash when messages.json missing") {
+    auto proj = create_test_project();
+    auto crash_path = proj / ".daedalus" / "messages.json.crash";
+
+    // Plant a valid .crash file; no messages.json.
+    {
+        std::ofstream f(crash_path, std::ios::binary);
+        f << R"([{"role":"system","content":"Recovered from crash"},{"role":"user","content":"Hello"}])";
+    }
+
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = false;
+    Messages msgs(proj / ".daedalus", cfg);
+    CHECK(msgs.load());
+    CHECK(msgs.size() == 2);
+    CHECK(msgs.get_messages()[1]["content"] == "Hello");
+
+    cleanup_test_project(proj);
+}
+
+TEST_CASE("CRASH-5 load falls back to .crash when messages.json corrupt") {
+    auto proj = create_test_project();
+
+    // Plant a corrupt messages.json.
+    {
+        std::ofstream f(proj / ".daedalus" / "messages.json", std::ios::binary);
+        f << "{ this is not valid JSON at all";
+    }
+    // Plant a valid .crash.
+    {
+        std::ofstream f(proj / ".daedalus" / "messages.json.crash", std::ios::binary);
+        f << R"([{"role":"system","content":"Recovered"}])";
+    }
+
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = false;
+    Messages msgs(proj / ".daedalus", cfg);
+    CHECK(msgs.load());
+    CHECK(msgs.size() == 1);
+
+    cleanup_test_project(proj);
+}
+
+TEST_CASE("CRASH-5 load drops corrupt last message and re-saves") {
+    auto proj = create_test_project();
+
+    // Two valid messages + one corrupt last message (malformed tool
+    // result — missing tool_call_id, classic cause of parser crash).
+    {
+        std::ofstream f(proj / ".daedalus" / "messages.json.crash", std::ios::binary);
+        f << R"([
+            {"role":"system","content":"System"},
+            {"role":"user","content":"Hello"},
+            {"role":"tool","content":"orphaned result without tool_call_id"}
+        ])";
+    }
+
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = false;
+    Messages msgs(proj / ".daedalus", cfg);
+    CHECK(msgs.load());
+    // Last message should have been dropped.
+    CHECK(msgs.size() == 2);
+    CHECK(msgs.get_messages().back()["content"] == "Hello");
+
+    // messages.json should now contain the recovered chain so the
+    // next launch goes through the normal load path.
+    CHECK(std::filesystem::exists(proj / ".daedalus" / "messages.json"));
+
+    cleanup_test_project(proj);
+}
+
+TEST_CASE("CRASH-5 load keeps messages when last is well-formed") {
+    auto proj = create_test_project();
+    {
+        std::ofstream f(proj / ".daedalus" / "messages.json.crash", std::ios::binary);
+        f << R"([
+            {"role":"system","content":"System"},
+            {"role":"user","content":"Hello"}
+        ])";
+    }
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = false;
+    Messages msgs(proj / ".daedalus", cfg);
+    CHECK(msgs.load());
+    // Both messages kept (last is well-formed).
+    CHECK(msgs.size() == 2);
+
+    cleanup_test_project(proj);
+}
+
+TEST_CASE("CRASH-5 load returns false when no messages.json AND no .crash") {
+    auto proj = create_test_project();
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = false;
+    Messages msgs(proj / ".daedalus", cfg);
+    CHECK_FALSE(msgs.load());
+    CHECK(msgs.size() == 0);
+
+    cleanup_test_project(proj);
+}
+
 // ============================================================================
 // Test Suite: Tool Call State Machine
 // ============================================================================

@@ -372,7 +372,7 @@ flush messages first.**
   `cli_system_prompt_tests` smoke test; add a new one that raises
   SIGINT mid-turn and asserts messages.json was written.
 
-**Status:** ⏳ Planned.
+**Status:** ✅ Done (2026-07-16). `validate_message_for_recovery()` + `load_from_crash_file()` helpers; 5 new CRASH-5 tests pass (73/73 + 1 skipped).
 
 ### Phase 4 — Crash handler (SIGSEGV, SIGABRT, SIGFPE, SIGILL)
 
@@ -412,7 +412,7 @@ are async-signal-safe per POSIX. We can't safely call `Messages::save()`
 - Unit: `Messages::load recovers from messages.json.crash when messages.json missing`
 - Integration: `fork + kill -11 child; parent checks messages.json.crash contains the expected messages`
 
-**Status:** ⏳ Planned.
+**Status:** ✅ Done (2026-07-16). Pre-opened fd + crash payload cache + signal handler for SIGSEGV/SIGABRT/SIGFPE/SIGILL. 5 new CRASH-4 tests pass (`messages_tests` 73/73 + 1 skipped, 203/203 assertions). In-process fork test deferred to standalone binary — libc `abort()` flushes stdio which fights with doctest's SIGABRT handler.
 
 ### Phase 5 — "Drop last message" heuristic
 

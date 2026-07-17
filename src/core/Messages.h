@@ -523,6 +523,17 @@ private:
 
     // Helper: flush worker thread entry point.
     void flush_worker_main();
+
+    // §CRASH-5 (2026-07-16): helper for crash-file recovery.
+    // load() tries this when messages.json is missing or corrupt.
+    // load_from_crash_file() also runs the drop-last heuristic via
+    // validate_message_for_recovery().
+    bool load_from_crash_file(const std::string& crash_path);
+
+    // §CRASH-5: returns true if `msg` is well-formed enough to keep
+    // during crash recovery. Used by load_from_crash_file() to
+    // decide whether to drop the last message.
+    bool validate_message_for_recovery(const json& msg) const;
     
     // Curl handle for compression API calls
     

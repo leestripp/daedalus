@@ -451,6 +451,14 @@ bool Messages::load() {
     }
 
     if (!std::filesystem::exists(messages_file_)) {
+        // §CRASH-5 (2026-07-16): try the .crash mirror as a fallback.
+        // The crash handler (Phase 4) wrote this on SIGSEGV/SIGABRT/etc.
+        // It may be the only copy of the messages if the process died
+        // before save() finished writing messages.json.
+        const std::string crash_path = messages_file_.string() + ".crash";
+        if (load_from_crash_file(crash_path)) {
+            return true;
+        }
         return false;
     }
 
@@ -460,33 +468,161 @@ bool Messages::load() {
             LOG_WARNING("Messages file exists but cannot be read: " + messages_file_.string());
             return false;
         }
-        
+
         json saved = json::parse(f);
         if (!saved.is_array()) {
             LOG_WARNING("Messages file contains invalid format (not an array)");
             return false;
         }
-        
+
         if (saved.empty()) {
             LOG_INFO("Messages file is empty");
             return false;
         }
-        
+
         messages_ = saved;
-        
+
         // Always sanitize on load to remove orphaned tool results
         messages_ = sanitize_message_chain(messages_);
-        
+
         LOG_INFO("Loaded " + std::to_string(messages_.size()) + " messages from " + messages_file_.string());
         return true;
-        
+
     } catch (const json::parse_error& e) {
-        LOG_ERROR("JSON parse error in messages file: " + std::string(e.what()));
+        // §CRASH-5 (2026-07-16): JSON in the main file is corrupt —
+        // it may have been a half-written state from a previous crash.
+        // Try the .crash mirror before giving up.
+        LOG_WARNING("JSON parse error in messages file ("
+                    + std::string(e.what()) + "); trying .crash mirror");
+        const std::string crash_path = messages_file_.string() + ".crash";
+        if (load_from_crash_file(crash_path)) {
+            return true;
+        }
         return false;
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to load messages: " + std::string(e.what()));
         return false;
     }
+}
+
+// §CRASH-5 (2026-07-16): helper to load from messages.json.crash.
+//
+// Called from load() when the main messages.json is missing or
+// corrupt. The .crash file is the same JSON array format, written
+// by the crash handler at the last successfully-saved state.
+//
+// After loading, we run a defensive "drop last message" heuristic
+// (Phase 5): if the last message in the chain fails a basic
+// validity check (no role, missing tool_call_id, etc.) AND the
+// second-to-last is well-formed, drop the last message and re-save
+// the chain. This covers the common case where a malformed tool
+// result caused a parser crash mid-add.
+bool Messages::load_from_crash_file(const std::string& crash_path) {
+    if (!std::filesystem::exists(crash_path)) return false;
+
+    try {
+        std::ifstream f(crash_path);
+        if (!f.good()) {
+            LOG_WARNING("Crash file exists but cannot be read: " + crash_path);
+            return false;
+        }
+        json saved = json::parse(f);
+        if (!saved.is_array() || saved.empty()) {
+            LOG_WARNING("Crash file is empty or not an array: " + crash_path);
+            return false;
+        }
+
+        // §CRASH-5: drop-last heuristic. If the last message is
+        // suspect (missing role, missing tool_call_id where required,
+        // unparseable inner JSON) AND the second-to-last is fine,
+        // drop the last. We only drop ONE message — if more are
+        // corrupt, the user gets them all back to inspect.
+        if (saved.size() >= 2 && !validate_message_for_recovery(saved.back())) {
+            const json& second_to_last = saved[saved.size() - 2];
+            if (validate_message_for_recovery(second_to_last)) {
+                LOG_WARNING("Messages: dropping suspect last message from .crash recovery: "
+                            + saved.back().dump());
+                saved.erase(saved.end() - 1);
+                // Re-save the recovered chain to messages.json so the
+                // next launch goes through the normal path.
+                // We don't write .crash again here — install_crash_handlers
+                // (if used) will re-create it on the next save().
+                try {
+                    std::filesystem::create_directories(messages_file_.parent_path());
+                    const std::string tmp = messages_file_.string() + ".tmp";
+                    std::FILE* wf = std::fopen(tmp.c_str(), "wb");
+                    if (wf) {
+                        const std::string blob = saved.dump(2);
+                        std::fwrite(blob.data(), 1, blob.size(), wf);
+                        std::fflush(wf);
+#ifndef _WIN32
+                        ::fsync(::fileno(wf));
+#endif
+                        std::fclose(wf);
+                        std::filesystem::rename(tmp, messages_file_);
+                        LOG_INFO("Messages: re-saved recovered chain to " + messages_file_.string());
+                    }
+                } catch (...) { /* best-effort */ }
+            }
+        }
+
+        messages_ = saved;
+        messages_ = sanitize_message_chain(messages_);
+        LOG_INFO("Loaded " + std::to_string(messages_.size()) + " messages from .crash mirror " + crash_path);
+        return true;
+    } catch (const json::parse_error& e) {
+        LOG_WARNING("JSON parse error in .crash file: " + std::string(e.what()));
+        return false;
+    } catch (const std::exception& e) {
+        LOG_WARNING("Failed to load .crash file: " + std::string(e.what()));
+        return false;
+    }
+}
+
+// §CRASH-5 (2026-07-16): validate a single message for crash recovery.
+// Returns true if the message is well-formed enough to keep; false
+// if it's likely the cause of a crash (malformed JSON, missing role,
+// tool result missing tool_call_id, etc.).
+bool Messages::validate_message_for_recovery(const json& msg) const {
+    if (!msg.is_object()) return false;
+    if (!msg.contains("role") || !msg["role"].is_string()) return false;
+    if (msg["role"].get<std::string>().empty()) return false;
+
+    // Tool results must reference a tool_call_id.
+    if (msg["role"] == "tool") {
+        if (!msg.contains("tool_call_id") ||
+            !msg["tool_call_id"].is_string() ||
+            msg["tool_call_id"].get<std::string>().empty()) {
+            return false;
+        }
+    }
+    // Assistant messages with tool_calls must have valid JSON
+    // arguments in each call (a malformed argument string is a
+    // classic cause of "exception while parsing tool call" crashes).
+    if (msg["role"] == "assistant" && msg.contains("tool_calls")
+        && msg["tool_calls"].is_array()) {
+        for (const auto& tc : msg["tool_calls"]) {
+            if (!tc.is_object()) return false;
+            if (!tc.contains("id") || !tc["id"].is_string()) return false;
+            if (tc.contains("function") && tc["function"].is_object()) {
+                const auto& fn = tc["function"];
+                if (fn.contains("arguments")) {
+                    if (fn["arguments"].is_string()) {
+                        // Try to parse — if it's malformed JSON, drop.
+                        try {
+                            (void)json::parse(fn["arguments"].get<std::string>());
+                        } catch (...) {
+                            return false;
+                        }
+                    } else if (!fn["arguments"].is_object()) {
+                        // arguments must be a string or object, nothing else
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
 }
 
 void Messages::save() const {
