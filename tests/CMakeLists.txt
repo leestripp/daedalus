@@ -179,7 +179,7 @@ add_executable(daedalus_mcp_server_config_http_tests
     ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
@@ -213,7 +213,7 @@ add_executable(daedalus_mcp_proxied_tool_tests
     ${CMAKE_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Subprocess.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_proxied_tool_tests PRIVATE
@@ -247,7 +247,7 @@ add_executable(daedalus_mcp_hub_hardening_tests
     ${CMAKE_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Subprocess.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_hub_hardening_tests PRIVATE
@@ -292,26 +292,26 @@ target_link_libraries(daedalus_serper_startup_tests PRIVATE
 add_test(NAME serper_startup_tests COMMAND daedalus_serper_startup_tests)
 
 # ============================================================================
-# CurlMultiSession tests (uses libcurl, network may be unavailable)
+# HttpSession tests (uses OmniNet HTTP, network may be unavailable)
 # ============================================================================
 
-add_executable(daedalus_curl_multi_tests
-    test_curl_multi_session.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+add_executable(daedalus_http_session_tests
+    test_http_session.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
-target_include_directories(daedalus_curl_multi_tests PRIVATE
+target_include_directories(daedalus_http_session_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: CurlMultiSession.cpp #includes <OmniNet.h>
+    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: HttpSession.cpp #includes <OmniNet.h>
 )
-target_link_libraries(daedalus_curl_multi_tests PRIVATE
+target_link_libraries(daedalus_http_session_tests PRIVATE
     OmniNet
     nlohmann_json::nlohmann_json
     pthread
 )
-add_test(NAME curl_multi_tests COMMAND daedalus_curl_multi_tests)
+add_test(NAME http_session_tests COMMAND daedalus_http_session_tests)
 
 # ============================================================================
 # EditFilePatchTool tests (C++23)
@@ -319,7 +319,7 @@ add_test(NAME curl_multi_tests COMMAND daedalus_curl_multi_tests)
 
 add_executable(daedalus_edit_file_patch_tests
     test_edit_file_patch.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/ToolHandler.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/ToolFactory.cpp
@@ -373,7 +373,7 @@ add_test(NAME edit_file_patch_tests COMMAND daedalus_edit_file_patch_tests)
 # ============================================================================
 # CurlHandle tests were removed 2026-07-16 as part of §NOMORE-CURL.
 # CurlHandle.h is gone; the libcurl easy-handle RAII wrapper is no
-# longer used. The OmniNet-backed CurlMultiSession is the sole
+# longer used. The OmniNet-backed HttpSession is the sole
 # HTTP transport for the daemon.
 # ============================================================================
 
@@ -385,7 +385,7 @@ add_executable(daedalus_mcp_transport_tests
     test_mcp_transport.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/StdioMcpTransport.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_transport_tests PRIVATE
@@ -394,7 +394,7 @@ target_include_directories(daedalus_mcp_transport_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/api
     ${CMAKE_SOURCE_DIR}/src/mcp
     ${nlohmann_json_INCLUDE_DIR}
-    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: CurlMultiSession.cpp includes <OmniNet.h>
+    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: HttpSession.cpp includes <OmniNet.h>
 )
 target_link_libraries(daedalus_mcp_transport_tests PRIVATE
     nlohmann_json::nlohmann_json
@@ -877,7 +877,7 @@ add_executable(daedalus_mcp_load_from_store_tests
     ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
@@ -921,7 +921,7 @@ add_executable(daedalus_messages_tests
     ${CMAKE_SOURCE_DIR}/src/core/Messages.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
 )
 target_include_directories(daedalus_messages_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
@@ -982,7 +982,7 @@ add_test(NAME cli_system_prompt_tests COMMAND daedalus_cli_system_prompt_tests)
 # Note: Includes PDFTool but with POPPLER include dirs for linking
 add_executable(daedalus_tool_definitions_tests
     test_tool_definitions.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/CurlMultiSession.cpp
+    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/ToolHandler.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/ToolFactory.cpp

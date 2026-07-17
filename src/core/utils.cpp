@@ -283,7 +283,7 @@ std::string download_image_as_base64(const std::string& url) {
         return url;
     }
 
-    // §NC-5 (2026-07-16): migrated from CurlMultiSession to OmniNet.
+    // §NC-5 (2026-07-16): migrated from HttpSession to OmniNet.
     // Sync GET via OmniNet::HTTP::Client::send_blocking. Content-Type
     // is pulled from the response headers map.
     LOG_DEBUG("[download_image] Fetching URL: " + url);

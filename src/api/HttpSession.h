@@ -1,10 +1,10 @@
 /**
- * @file CurlMultiSession.h
+ * @file HttpSession.h
  * @brief Async HTTP client — OmniNet-backed adapter
  *
- * §NC-6 (2026-07-16): the implementation in CurlMultiSession.cpp now uses
+ * §NC-6 (2026-07-16): the implementation in HttpSession.cpp now uses
  * OmniNet::HTTP::Client instead of libcurl's curl_multi. Public API
- * (CurlRequest / CurlResponse / CurlError / submit / submit_cancellable /
+ * (HttpRequest / HttpResponse / HttpError / submit / submit_cancellable /
  * submit_batch / get_stats / shutdown) is UNCHANGED so callers (LLMClient)
  * don't need to be rewritten yet.
  *
@@ -19,7 +19,7 @@
  *   - submit_cancellable() honours the std::stop_token by passing it
  *     through to OmniNet::send(req, stop_token) and polling it on the
  *     worker thread so cancellation latency is bounded.
- *   - SSE streaming: when CurlRequest::stream_callback is set, the
+ *   - SSE streaming: when HttpRequest::stream_callback is set, the
  *     worker calls OmniNet::HTTP::Client::send_streaming and pulls
  *     chunks, invoking the callback per chunk.
  *
@@ -30,8 +30,8 @@
  *
  * Usage:
  * @code
- *   auto& session = CurlMultiSession::get_instance();
- *   CurlRequest req;
+ *   auto& session = HttpSession::get_instance();
+ *   HttpRequest req;
  *   req.url = "https://api.example.com/data";
  *   req.method = "GET";
  *   req.bearer_token = "sk-...";
@@ -74,7 +74,7 @@ namespace daedalus::net {
 /**
  * @brief HTTP request configuration
  */
-struct CurlRequest {
+struct HttpRequest {
     std::string url;                 ///< Target URL (required)
     std::string method = "GET";      ///< HTTP method (GET, POST, PUT, DELETE, etc.)
     std::string body;                ///< Request body (for POST/PUT)
@@ -94,7 +94,7 @@ struct CurlRequest {
 /**
  * @brief HTTP response
  */
-struct CurlResponse {
+struct HttpResponse {
     long status_code = 0;            ///< HTTP status (200, 404, etc.)
     std::string body;                ///< Response body
     std::string content_type;        ///< Content-Type header (if any)
@@ -117,7 +117,7 @@ struct CurlResponse {
 /**
  * @brief Error categories for HTTP operations
  */
-enum class CurlError : std::uint8_t {
+enum class HttpError : std::uint8_t {
     InitFailed,         ///< curl_easy_init returned null
     InvalidUrl,         ///< URL is empty or malformed
     Network,            ///< DNS, connection refused, etc.
@@ -129,24 +129,24 @@ enum class CurlError : std::uint8_t {
 };
 
 /**
- * @brief Convert CurlError to human-readable string
+ * @brief Convert HttpError to human-readable string
  */
-inline const char* to_string(CurlError e) {
+inline const char* to_string(HttpError e) {
     switch (e) {
-        case CurlError::InitFailed:   return "Failed to initialize curl";
-        case CurlError::InvalidUrl:   return "Invalid or empty URL";
-        case CurlError::Network:      return "Network error";
-        case CurlError::Timeout:      return "Request timed out";
-        case CurlError::Cancelled:    return "Request cancelled";
-        case CurlError::HttpStatus:   return "HTTP error status";
-        case CurlError::WriteError:   return "Write callback error";
-        case CurlError::Unknown:      return "Unknown error";
+        case HttpError::InitFailed:   return "Failed to initialize curl";
+        case HttpError::InvalidUrl:   return "Invalid or empty URL";
+        case HttpError::Network:      return "Network error";
+        case HttpError::Timeout:      return "Request timed out";
+        case HttpError::Cancelled:    return "Request cancelled";
+        case HttpError::HttpStatus:   return "HTTP error status";
+        case HttpError::WriteError:   return "Write callback error";
+        case HttpError::Unknown:      return "Unknown error";
     }
     return "Unknown error";
 }
 
 // ============================================================================
-// CurlMultiSession
+// HttpSession
 // ============================================================================
 
 /**
@@ -154,13 +154,13 @@ inline const char* to_string(CurlError e) {
  *
  * Singleton per process. Use get_instance() to access.
  */
-class CurlMultiSession {
+class HttpSession {
 public:
-    static CurlMultiSession& get_instance();
+    static HttpSession& get_instance();
 
     // Non-copyable
-    CurlMultiSession(const CurlMultiSession&) = delete;
-    CurlMultiSession& operator=(const CurlMultiSession&) = delete;
+    HttpSession(const HttpSession&) = delete;
+    HttpSession& operator=(const HttpSession&) = delete;
 
     /**
      * @brief Submit a request and get a future to the result
@@ -169,18 +169,18 @@ public:
      * the returned future to await the result.
      *
      * @param request Request configuration
-     * @return std::future<std::expected<CurlResponse, CurlError>>
+     * @return std::future<std::expected<HttpResponse, HttpError>>
      */
-    std::future<std::expected<CurlResponse, CurlError>> submit(const CurlRequest& request);
+    std::future<std::expected<HttpResponse, HttpError>> submit(const HttpRequest& request);
 
     /**
      * @brief Submit a request that can be cancelled via stop_token
      *
      * When the stop_token is requested, the event loop removes the curl
-     * handle from curl_multi and fulfills the future with CurlError::Cancelled.
+     * handle from curl_multi and fulfills the future with HttpError::Cancelled.
      */
-    std::future<std::expected<CurlResponse, CurlError>> submit_cancellable(
-        const CurlRequest& request,
+    std::future<std::expected<HttpResponse, HttpError>> submit_cancellable(
+        const HttpRequest& request,
         std::stop_token stop_token
     );
 
@@ -190,8 +190,8 @@ public:
      * All requests are in-flight at once. Use the returned futures to
      * await each result. Useful for parallel tool calls.
      */
-    std::vector<std::future<std::expected<CurlResponse, CurlError>>> submit_batch(
-        const std::vector<CurlRequest>& requests
+    std::vector<std::future<std::expected<HttpResponse, HttpError>>> submit_batch(
+        const std::vector<HttpRequest>& requests
     );
 
     /**
@@ -212,17 +212,17 @@ public:
      */
     void shutdown();
 
-    ~CurlMultiSession();
+    ~HttpSession();
 
 private:
-    CurlMultiSession();
+    HttpSession();
     // §NC-6: legacy event-loop helpers are no-ops now. The implementation
-    // in CurlMultiSession.cpp uses per-request jthreads and OmniNet directly.
+    // in HttpSession.cpp uses per-request jthreads and OmniNet directly.
     void event_loop(std::stop_token st);
     struct RequestState;     // forward-declared for ABI; no longer used
     void process_completed();
     void add_to_multi(RequestState* state);
-    void remove_from_multi(RequestState* state, CurlError error);
+    void remove_from_multi(RequestState* state, HttpError error);
     static size_t write_cb(void* contents, size_t size, size_t nmemb, void* userp);
     static size_t header_cb(void* contents, size_t size, size_t nmemb, void* userp);
 

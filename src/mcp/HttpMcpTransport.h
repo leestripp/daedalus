@@ -2,7 +2,7 @@
  * @file HttpMcpTransport.h
  * @brief HTTP-based MCP transport (streamable HTTP / SSE)
  *
- * Uses the CurlMultiSession for async HTTP I/O.
+ * Uses the HttpSession for async HTTP I/O.
  * Supports streamable HTTP and SSE (Server-Sent Events) transports.
  */
 
@@ -25,7 +25,7 @@ namespace mcp {
  * @brief HTTP transport for MCP (Streamable HTTP)
  *
  * Sends JSON-RPC requests as HTTP POST and reads responses.
- * Uses CurlMultiSession for async I/O.
+ * Uses HttpSession for async I/O.
  */
 class HttpMcpTransport : public McpTransport {
 public:

@@ -7,7 +7,7 @@
  * - Tool executions (count, by name, success/failure)
  * - MCP tool calls
  * - Compression calls
- * - Network requests via CurlMultiSession
+ * - Network requests via HttpSession
  *
  * Thread-safe: All methods can be called from any thread.
  *

@@ -194,7 +194,7 @@ set(CORE_SOURCES
 
 set(API_SOURCES
 	src/api/LLMClient.cpp
-	src/api/CurlMultiSession.cpp
+	src/api/HttpSession.cpp
 )
 
 set(MCP_SOURCES

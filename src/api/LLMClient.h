@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <stop_token>
 
-#include "api/CurlMultiSession.h"
+#include "api/HttpSession.h"
 #include "core/FileIO.h"
 #include "core/SessionMemory.h"
 #include "core/Messages.h"
@@ -192,7 +192,7 @@ public:
     // uses OmniNet::HTTP::Client::send_blocking.
     std::string make_curl_request_with_retry(const std::string& url, const std::string& payload, int max_retries = 3);
 
-    // Async API request using CurlMultiSession with optional cancellation.
+    // Async API request using HttpSession with optional cancellation.
     // Returns a future to the response body string. Throws std::runtime_error
     // on permanent failure (e.g., all retries exhausted).
     //

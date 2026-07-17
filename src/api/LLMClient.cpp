@@ -331,9 +331,9 @@ std::future<std::string> LLMClient::make_api_request_async(
     std::stop_token stop_token,
     std::function<void(std::string_view)> streaming_callback
 ) {
-    using daedalus::net::CurlRequest;
-    using daedalus::net::CurlMultiSession;
-    using daedalus::net::CurlError;
+    using daedalus::net::HttpRequest;
+    using daedalus::net::HttpSession;
+    using daedalus::net::HttpError;
     using daedalus::net::to_string;
 
     // Get server error settings
@@ -373,14 +373,14 @@ std::future<std::string> LLMClient::make_api_request_async(
                     throw std::runtime_error("API request cancelled");
                 }
 
-                CurlRequest req;
+                HttpRequest req;
                 req.url = url;
                 req.method = "POST";
                 req.body = payload;
                 req.headers.push_back("Content-Type: application/json");
                 if (streaming_callback) {
                     req.headers.push_back("Accept: text/event-stream");
-                    // Streaming: pass per-chunk callback to CurlMultiSession.
+                    // Streaming: pass per-chunk callback to HttpSession.
                     // Guard against stop_requested() so in-flight chunks from the
                     // kernel buffer don't fire one more on_chunk after cancellation.
                     auto safe_callback = [&streaming_callback,
@@ -398,8 +398,8 @@ std::future<std::string> LLMClient::make_api_request_async(
                 req.timeout_seconds = 900;  // 15 minutes
                 req.follow_redirects = true;
 
-                // Submit via CurlMultiSession (async, non-blocking)
-                auto fut = CurlMultiSession::get_instance().submit_cancellable(req, stop_token);
+                // Submit via HttpSession (async, non-blocking)
+                auto fut = HttpSession::get_instance().submit_cancellable(req, stop_token);
                 auto result = fut.get();
 
                 if (result) {
@@ -430,10 +430,10 @@ std::future<std::string> LLMClient::make_api_request_async(
                         log_err("[API] HTTP " + std::to_string(code) + " (server error)");
                     }
                 } else {
-                    CurlError err = result.error();
-                    if (err == CurlError::Cancelled) {
+                    HttpError err = result.error();
+                    if (err == HttpError::Cancelled) {
                         throw std::runtime_error("API request cancelled");
-                    } else if (err == CurlError::Timeout) {
+                    } else if (err == HttpError::Timeout) {
                         log_err("[API] request timed out (attempt " + std::to_string(attempt) + ")");
                     } else {
                         log_err("[API] request failed (attempt " + std::to_string(attempt) + "): " + to_string(err));
@@ -1101,7 +1101,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // Make the API call with retry logic - run in thread for ESC cancellation support
     std::string response_body;
 
-    // Make the API call asynchronously via CurlMultiSession
+    // Make the API call asynchronously via HttpSession
     // Benefits: HTTP keep-alive, connection reuse, true async I/O,
     // §Phase 5.1: the cancel source is a member of LLMClient
     // (cancel_source_) so Agent::cancel() can fire it from any
@@ -1146,7 +1146,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     sse_parser.finish();
 
     // Get the result from the API call.
-    // With config_.stream=true, response_body may be empty (CurlMultiSession
+    // With config_.stream=true, response_body may be empty (HttpSession
     // takes the streaming branch and doesn't accumulate when stream_callback
     // is set). In that case sse_parser.final_event() carries the data.
     // With config_.stream=false, response_body holds the full JSON and
@@ -2539,7 +2539,7 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
 
     // §NC-8 (2026-07-16): CURL handle removed. The sync fallback path
     // inside run_agent_cycle now uses OmniNet::HTTP::Client directly;
-    // the async path always used CurlMultiSession (now also OmniNet).
+    // the async path always used HttpSession (now also OmniNet).
 
     json& messages = messages_->get_messages();
 

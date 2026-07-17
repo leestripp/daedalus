@@ -1,6 +1,6 @@
 /**
  * @file test_curl_multi_session.cpp
- * @brief Unit tests for the CurlMultiSession async HTTP client
+ * @brief Unit tests for the HttpSession async HTTP client
  *
  * Tests cover:
  * - Basic GET request
@@ -19,7 +19,7 @@
 #include <vector>
 #include <stop_token>
 
-#include "api/CurlMultiSession.h"
+#include "api/HttpSession.h"
 
 using namespace daedalus::net;
 using namespace std::chrono_literals;
@@ -49,8 +49,8 @@ static int test_count = 0;
 
 // Helper: skip test if network unavailable
 static bool network_available() {
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "https://example.com";
     req.timeout_seconds = 5;
     auto fut = session.submit(req);
@@ -64,8 +64,8 @@ static bool network_available() {
 // Test: get_instance returns the same singleton
 // ============================================================================
 TEST(singleton) {
-    auto& a = CurlMultiSession::get_instance();
-    auto& b = CurlMultiSession::get_instance();
+    auto& a = HttpSession::get_instance();
+    auto& b = HttpSession::get_instance();
     CHECK_EQ(&a, &b);
     return 0;
 }
@@ -74,7 +74,7 @@ TEST(singleton) {
 // Test: stats start at zero
 // ============================================================================
 TEST(stats_initial) {
-    auto& session = CurlMultiSession::get_instance();
+    auto& session = HttpSession::get_instance();
     auto stats = session.get_stats();
     // Just verify the call succeeds and returns valid values
     (void)stats.total;
@@ -92,8 +92,8 @@ TEST(basic_get) {
         return 0;
     }
 
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "https://example.com";
     req.timeout_seconds = 10;
 
@@ -117,8 +117,8 @@ TEST(get_with_bearer_token) {
         return 0;
     }
 
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "https://example.com";
     req.bearer_token = "test-token-12345";
     req.timeout_seconds = 10;
@@ -143,8 +143,8 @@ TEST(post_with_body) {
     }
 
     // Use httpbin.org which echoes POST data
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "https://httpbin.org/post";
     req.method = "POST";
     req.body = R"({"key": "value", "test": true})";
@@ -173,8 +173,8 @@ TEST(http_404_error) {
         return 0;
     }
 
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "https://httpbin.org/status/404";
     req.timeout_seconds = 10;
 
@@ -183,7 +183,7 @@ TEST(http_404_error) {
 
     CHECK(!result.has_value());
     if (!result) {
-        CHECK(result.error() == CurlError::HttpStatus);
+        CHECK(result.error() == HttpError::HttpStatus);
     }
     return 0;
 }
@@ -192,8 +192,8 @@ TEST(http_404_error) {
 // Test: invalid URL returns InvalidUrl error
 // ============================================================================
 TEST(invalid_url) {
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "";  // Empty URL
     req.timeout_seconds = 5;
 
@@ -202,7 +202,7 @@ TEST(invalid_url) {
 
     CHECK(!result.has_value());
     if (!result) {
-        CHECK(result.error() == CurlError::InvalidUrl);
+        CHECK(result.error() == HttpError::InvalidUrl);
     }
     return 0;
 }
@@ -216,10 +216,10 @@ TEST(batch_parallel) {
         return 0;
     }
 
-    auto& session = CurlMultiSession::get_instance();
-    std::vector<CurlRequest> reqs;
+    auto& session = HttpSession::get_instance();
+    std::vector<HttpRequest> reqs;
     for (int i = 0; i < 5; ++i) {
-        CurlRequest r;
+        HttpRequest r;
         r.url = "https://example.com";
         r.timeout_seconds = 10;
         reqs.push_back(r);
@@ -248,10 +248,10 @@ TEST(batch_parallel) {
 // Test: cancellation via stop_token
 // ============================================================================
 TEST(cancellation_via_stop_token) {
-    auto& session = CurlMultiSession::get_instance();
+    auto& session = HttpSession::get_instance();
 
     std::stop_source ss;
-    CurlRequest req;
+    HttpRequest req;
     // Use a slow URL or a URL that won't resolve quickly
     req.url = "https://httpbin.org/delay/10";  // 10-second delay
     req.timeout_seconds = 30;
@@ -265,8 +265,8 @@ TEST(cancellation_via_stop_token) {
     auto result = fut.get();
     // Should be cancelled or timed out (depends on timing)
     if (!result) {
-        CHECK(result.error() == CurlError::Cancelled ||
-              result.error() == CurlError::Timeout);
+        CHECK(result.error() == HttpError::Cancelled ||
+              result.error() == HttpError::Timeout);
     }
     return 0;
 }
@@ -275,10 +275,10 @@ TEST(cancellation_via_stop_token) {
 // Test: stats increment after completion
 // ============================================================================
 TEST(stats_increment) {
-    auto& session = CurlMultiSession::get_instance();
+    auto& session = HttpSession::get_instance();
     auto before = session.get_stats();
 
-    CurlRequest req;
+    HttpRequest req;
     req.url = "https://example.com";
     req.timeout_seconds = 5;
 
@@ -302,8 +302,8 @@ TEST(content_type_captured) {
         return 0;
     }
 
-    auto& session = CurlMultiSession::get_instance();
-    CurlRequest req;
+    auto& session = HttpSession::get_instance();
+    HttpRequest req;
     req.url = "https://httpbin.org/json";
     req.timeout_seconds = 10;
 
@@ -327,10 +327,10 @@ TEST(many_requests_stress) {
         return 0;
     }
 
-    auto& session = CurlMultiSession::get_instance();
-    std::vector<std::future<std::expected<CurlResponse, CurlError>>> futures;
+    auto& session = HttpSession::get_instance();
+    std::vector<std::future<std::expected<HttpResponse, HttpError>>> futures;
     for (int i = 0; i < 20; ++i) {
-        CurlRequest r;
+        HttpRequest r;
         r.url = "https://example.com";
         r.timeout_seconds = 10;
         futures.push_back(session.submit(r));
@@ -349,7 +349,7 @@ TEST(many_requests_stress) {
 // ============================================================================
 
 int main() {
-    std::cout << "Running CurlMultiSession tests..." << std::endl;
+    std::cout << "Running HttpSession tests..." << std::endl;
     std::cout << "(Tests requiring network will SKIP if unavailable)\n" << std::endl;
 
     int local_failures = 0;

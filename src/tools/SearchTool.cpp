@@ -1,7 +1,7 @@
 #include "tools/SearchTool.h"
 #include "core/SerperConfig.h"
 #include "core/FileIO.h"
-#include "api/CurlMultiSession.h"
+#include "api/HttpSession.h"
 
 #include <OmniNet.h>
 #include <http/HttpClient.h>
@@ -664,7 +664,7 @@ json WikiSearchTool::execute(const json& args, FileIO& file_io) {
         std::string url = "https://api.wikimedia.org/core/v1/wikipedia/en/search/page?q="
                         + url_encode(query) + "&limit=" + std::to_string(limit);
 
-        // §NC-4: Wikipedia search via OmniNet::HTTP::Client (was CurlMultiSession).
+        // §NC-4: Wikipedia search via OmniNet::HTTP::Client (was HttpSession).
         OmniNet::HTTP::ClientRequest req;
         req.url(url);
         req.method("GET");

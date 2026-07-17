@@ -14,7 +14,7 @@
 #include "Messages.h"
 #include "daedalus/settings.h"
 #include <algorithm>
-#include "api/CurlMultiSession.h"
+#include "api/HttpSession.h"
 #include "Utf8Utils.h"
 #include "Logger.h"
 
@@ -549,12 +549,12 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
     const int timeouts[] = {30, 60, 120};
     const int num_attempts = sizeof(timeouts) / sizeof(timeouts[0]);
 
-    using daedalus::net::CurlRequest;
-    using daedalus::net::CurlMultiSession;
-    using daedalus::net::CurlError;
+    using daedalus::net::HttpRequest;
+    using daedalus::net::HttpSession;
+    using daedalus::net::HttpError;
 
     for (int attempt = 0; attempt < num_attempts; ++attempt) {
-        CurlRequest req;
+        HttpRequest req;
         req.url = config_.api_url;
         req.method = "POST";
         req.body = request_body;
@@ -570,7 +570,7 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
                   << num_attempts << " (timeout=" << timeouts[attempt]
                   << "s, prompt_size=" << prompt.size() << " bytes)" << '\n');
 
-        auto fut = CurlMultiSession::get_instance().submit(req);
+        auto fut = HttpSession::get_instance().submit(req);
         auto result = fut.get();
 
         if (result && result->status_code >= 200 && result->status_code < 300) {
@@ -602,7 +602,7 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
         }
 
         if (!result) {
-            CurlError err = result.error();
+            HttpError err = result.error();
             LOG_CERR(ERROR,  "[Messages] Compression attempt " << (attempt + 1)
                       << " failed: " << daedalus::net::to_string(err)
                       << " (url=" << req.url

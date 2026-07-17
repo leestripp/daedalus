@@ -1,6 +1,6 @@
 /**
  * @file HttpMcpTransport.cpp
- * @brief HTTP MCP transport implementation (uses CurlMultiSession)
+ * @brief HTTP MCP transport implementation (uses HttpSession)
  *
  * §18.9 — Streamable-HTTP session continuity:
  *   The MCP streamable-HTTP spec requires the server to assign a session
@@ -23,7 +23,7 @@
  */
 
 #include "HttpMcpTransport.h"
-#include "api/CurlMultiSession.h"
+#include "api/HttpSession.h"
 
 #include <iostream>
 #include <utility>
@@ -113,17 +113,17 @@ HttpMcpTransport::send_request(
         sid_snapshot = session_id_;
     }
 
-    // Submit to CurlMultiSession
-    using daedalus::net::CurlRequest;
-    using daedalus::net::CurlMultiSession;
-    CurlRequest req;
+    // Submit to HttpSession
+    using daedalus::net::HttpRequest;
+    using daedalus::net::HttpSession;
+    HttpRequest req;
     req.url = base_url_;
     req.method = "POST";
     req.body = request.dump();
     add_standard_headers(req.headers, bearer_token_, sid_snapshot);
     req.timeout_seconds = timeout_ms / 1000;
 
-    auto curl_fut = CurlMultiSession::get_instance().submit(req);
+    auto curl_fut = HttpSession::get_instance().submit(req);
 
     // When curl completes, parse and fulfill the promise. We capture
     // method by value so we know whether this response might carry a
@@ -132,13 +132,13 @@ HttpMcpTransport::send_request(
         auto result = curl_fut.get();
         if (!result) {
             switch (result.error()) {
-                case daedalus::net::CurlError::Network:
+                case daedalus::net::HttpError::Network:
                     promise->set_value(std::unexpected(TransportError::ConnectionFailed));
                     break;
-                case daedalus::net::CurlError::Timeout:
+                case daedalus::net::HttpError::Timeout:
                     promise->set_value(std::unexpected(TransportError::Timeout));
                     break;
-                case daedalus::net::CurlError::Cancelled:
+                case daedalus::net::HttpError::Cancelled:
                     promise->set_value(std::unexpected(TransportError::Cancelled));
                     break;
                 default:
@@ -200,16 +200,16 @@ std::expected<void, TransportError> HttpMcpTransport::send_notification(
         sid_snapshot = session_id_;
     }
 
-    using daedalus::net::CurlRequest;
-    using daedalus::net::CurlMultiSession;
-    CurlRequest req;
+    using daedalus::net::HttpRequest;
+    using daedalus::net::HttpSession;
+    HttpRequest req;
     req.url = base_url_;
     req.method = "POST";
     req.body = notification.dump();
     add_standard_headers(req.headers, bearer_token_, sid_snapshot);
     req.timeout_seconds = 30;
 
-    auto fut = CurlMultiSession::get_instance().submit(req);
+    auto fut = HttpSession::get_instance().submit(req);
     auto result = fut.get();
     if (!result) {
         return std::unexpected(TransportError::WriteFailed);
