@@ -48,6 +48,10 @@ public:
     // Lifecycle
     void initialize();
     void shutdown();
+    // §CRASH-4 (2026-07-16): forward to LLMClient::install_crash_handlers.
+    // Idempotent. Call after initialize() and before run_one_turn().
+    void install_crash_handlers();
+    void uninstall_crash_handlers();
     [[nodiscard]] bool is_initialized() const noexcept { return initialized_; }
 
     // Conversation control

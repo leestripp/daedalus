@@ -230,6 +230,11 @@ public:
     void initialize();  // one-time setup: banner, persisted messages
     void cleanup();     // graceful teardown: save messages + session memory
 
+    // §CRASH-4 (2026-07-16): forward crash-handler install/uninstall
+    // to the underlying Messages instance. Idempotent.
+    void install_crash_handlers();
+    void uninstall_crash_handlers();
+
     // §Phase 5.1: cancel an in-flight turn. Fires cancel_source_, which
     // the API wait loop and the per-iteration check both consult. Safe
     // to call from any thread. Idempotent. Hosts that want ESC-to-cancel

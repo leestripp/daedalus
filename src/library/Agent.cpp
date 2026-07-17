@@ -27,6 +27,10 @@ Agent& Agent::operator=(Agent&&) noexcept = default;
 
 void Agent::initialize()       { impl_->initialize(); }
 void Agent::shutdown()         { impl_->shutdown(); }
+// §CRASH-4 (2026-07-16): forward the crash-handler install/uninstall
+// to AgentImpl, which forwards to LLMClient's Messages instance.
+void Agent::install_crash_handlers()   { impl_->install_crash_handlers(); }
+void Agent::uninstall_crash_handlers() { impl_->uninstall_crash_handlers(); }
 
 // ---- Conversation control --------------------------------------------------
 

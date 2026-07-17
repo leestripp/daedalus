@@ -2395,6 +2395,21 @@ void LLMClient::cancel() noexcept {
     }
 }
 
+// §CRASH-4 (2026-07-16): forward to Messages::install_crash_handlers.
+// No-op if messages_ hasn't been initialized yet (which would only
+// happen if a host calls install_crash_handlers before initialize()).
+void LLMClient::install_crash_handlers() {
+    if (messages_) {
+        messages_->install_crash_handlers();
+    }
+}
+
+void LLMClient::uninstall_crash_handlers() {
+    if (messages_) {
+        messages_->uninstall_crash_handlers();
+    }
+}
+
     // ===================================================================
     // §Phase 3 - SSE streaming via sink
     //

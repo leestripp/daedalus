@@ -477,6 +477,12 @@ void AgentImpl::initialize()
 void AgentImpl::shutdown()
 {
     if (!initialized_) return;
+    // §CRASH-4 (2026-07-16): uninstall crash handlers BEFORE
+    // tearing down LLMClient; otherwise the signal handler would
+    // iterate a stale `messages_` pointer as Messages destructs.
+    if (body_->client) {
+        body_->client->uninstall_crash_handlers();
+    }
     // §Phase 11: disconnect MCP servers before destroying the client.
     // Safe to call on nullptr (no-op).
     if (body_->mcp) {
@@ -492,6 +498,28 @@ void AgentImpl::shutdown()
     if (sink_) {
         sink_->on_log(daedalus::LogLevel::Info,
                       "Agent::shutdown() — done");
+    }
+}
+
+// §CRASH-4 (2026-07-16): forward install/uninstall to the LLMClient
+// (and from there to the underlying Messages instance).
+void AgentImpl::install_crash_handlers() {
+    if (!initialized_) {
+        if (sink_) {
+            sink_->on_log(daedalus::LogLevel::Warn,
+                          "Agent::install_crash_handlers called before "
+                          "initialize(); ignored. Call after agent.initialize().");
+        }
+        return;
+    }
+    if (body_->client) {
+        body_->client->install_crash_handlers();
+    }
+}
+
+void AgentImpl::uninstall_crash_handlers() {
+    if (body_->client) {
+        body_->client->uninstall_crash_handlers();
     }
 }
 

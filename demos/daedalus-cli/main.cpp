@@ -121,6 +121,11 @@ int main(int argc, char* argv[]) {
 
     try {
         agent.initialize();
+        // §CRASH-4 (2026-07-16): install async-signal-safe crash
+        // handlers now that Messages has been initialised. From here
+        // on, SIGSEGV/SIGABRT/SIGFPE/SIGILL will write the current
+        // messages to messages.json.crash before re-raising.
+        agent.install_crash_handlers();
 
         if (args.model_list_only) {
             auto models = agent.list_models();

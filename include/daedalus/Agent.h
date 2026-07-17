@@ -65,6 +65,14 @@ public:
     /// @brief Graceful shutdown. Idempotent. Automatically called by dtor.
     void shutdown();
 
+    /// @brief §CRASH-4 (2026-07-16): install async-signal-safe crash
+    ///        handlers for SIGSEGV/SIGABRT/SIGFPE/SIGILL that write
+    ///        the current messages to messages.json.crash before the
+    ///        signal is re-raised. Idempotent. Pairs with
+    ///        uninstall_crash_handlers() in the graceful shutdown path.
+    void install_crash_handlers();
+    void uninstall_crash_handlers();
+
     // ------------------------------------------------------------------
     // Conversation control
     // ------------------------------------------------------------------
