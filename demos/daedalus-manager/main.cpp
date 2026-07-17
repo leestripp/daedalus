@@ -26,6 +26,7 @@
 
 #include <daedalus.h>
 #include <daedalus/default_paths.h>
+#include <daedalus/paths.h>
 
 #include "ThinkingSpinner.h"
 #include "tagged_sink.h"
@@ -66,8 +67,25 @@ int main(int argc, char* argv[]) {
         if (a == "--help" || a == "-h") {
             std::cout << "Usage: daedalus-manager <project_root> <goal> <max_iters> <model>\n"
                       << "\n"
+                      << "Demonstrates the 3-agent manager pattern:\n"
+                      << "  - planner   : produces a numbered plan from the goal,\n"
+                      << "  - actor     : executes the plan with tools,\n"
+                      << "  - validator : inspects the project and emits VERDICT.\n"
+                      << "Loop: planner -> actor -> validator -> (re-plan on REJECTED).\n"
+                      << "\n"
+                      << "Arguments:\n"
+                      << "  project_root   Directory to operate on\n"
+                      << "  goal           Free-form goal string\n"
+                      << "  max_iters      Max planner/actor/validator iterations\n"
+                      << "  model          Model name to use (must be configured)\n"
+                      << "\n"
+                      << "Options:\n"
                       << "  --help, -h     Show this message and exit\n"
-                      << "  --version, -v  Show version\n";
+                      << "  --version, -v  Show version\n"
+                      << "\n"
+                      << "Exit codes:\n"
+                      << "  0   Validator approved within max_iters\n"
+                      << "  2   Pipeline did not converge\n";
             return 0;
         }
         if (a == "--version" || a == "-v") {
@@ -96,8 +114,15 @@ int main(int argc, char* argv[]) {
     base.project_root  = project_root;
     base.model_name    = model_name;
     base.auto_approve = true;          // demo: no bash-approval prompts
-    base.skills_dirs   = { "/home/ubuntu/.daedalus/skills/" };
+    // §manager-1 (2026-07-16): was hardcoded "/home/ubuntu/.daedalus/skills/".
+    // Use Paths::global() so the demo works on any system.
+    base.skills_dirs   = { daedalus::Paths::global().global_skills_dir() };
     base.stream        = true;
+    // §manager-2 (2026-07-16): explicit daedalus_home using
+    // user_data_root() so all 3 agents (planner/actor/validator) find
+    // the same model store. Without this they may pick up a
+    // different default than the child in daedalus-subagent.
+    base.daedalus_home = daedalus::Paths::global().user_data_root();
 
     // ----- 3 agents -----
     AgentSpec planner_spec{
