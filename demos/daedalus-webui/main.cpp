@@ -27,30 +27,90 @@
 #include "OmniNet.h"
 #include "http/HttpServer.h"
 
+#include <daedalus.h>
+#include <daedalus/paths.h>
+
 #include "session_manager.h"
 #include "routes.h"
+
+static void print_help(const char* argv0) {
+    std::cout << "Usage: " << argv0 << " [options] [port] [project_dir]\n"
+              << "\n"
+              << "Phase 7 webui demo: HTTP + SSE host for libdaedalus.a.\n"
+              << "One Agent per browser session. Streams tool calls, assistant\n"
+              << "deltas, state changes, and log messages over Server-Sent Events.\n"
+              << "\n"
+              << "Positional arguments:\n"
+              << "  port          HTTP port (default: 8080)\n"
+              << "  project_dir   Project root directory (default: current dir)\n"
+              << "\n"
+              << "Options:\n"
+              << "  -h, --help      Show this message and exit\n"
+              << "  -v, --version   Show version\n"
+              << "      --model NAME Use model NAME from settings\n"
+              << "      --home PATH  Use PATH as the daedalus home (model store).\n"
+              << "                   Overrides the XDG default. Useful when\n"
+              << "                   testing with an isolated config.\n"
+              << "\n"
+              << "Environment:\n"
+              << "  DAEDALUS_WEBUI_PORT  Override default port\n"
+              << "  DAEDALUS_HOME       Override model store location\n"
+              << "\n"
+              << "Endpoints (once running):\n"
+              << "  GET  /                       Single-page browser UI\n"
+              << "  POST /sessions               Create a new session\n"
+              << "  POST /sessions/<id>/messages Submit a user message\n"
+              << "  POST /sessions/<id>/cancel   Cancel current turn\n"
+              << "  GET  /sessions/<id>/state    Get current AgentState\n"
+              << "  GET  /sessions/<id>/events   SSE event stream (text/event-stream)\n"
+              << "  GET  /healthz                Liveness probe\n"
+              << "  GET  /info                   Server-side metadata (cwd, etc.)\n";
+}
 
 int main(int argc, char* argv[]) {
     uint16_t port = 8080;
     std::string model_name;
     std::filesystem::path project_root = std::filesystem::current_path();
+    std::filesystem::path daedalus_home;   // empty = use default
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
-            std::cout << "Usage: " << argv[0] << " [port] [--model NAME] [project_dir]\n";
-            std::cout << "  port         HTTP port (default: 8080)\n";
-            std::cout << "  --model NAME Use model NAME from settings\n";
-            std::cout << "  project_dir  Project root (default: .)\n";
+            print_help(argv[0]);
+            return 0;
+        }
+        if (arg == "-v" || arg == "--version") {
+            std::cout << "daedalus-webui (libdaedalus)\n";
             return 0;
         }
         else if (arg == "--model") {
-            if (i + 1 < argc) model_name = argv[++i];
+            if (i + 1 >= argc) {
+                std::cerr << "--model requires a NAME argument\n";
+                return 2;
+            }
+            model_name = argv[++i];
         }
-        else if (arg == "--home") {
-            if (i + 1 < argc) ++i; // skip, not used in webui
+    else if (arg == "--home") {
+        // §webui-3 (2026-07-16): --home was previously parsed and
+        // discarded. Now honoured by setting $DAEDALUS_HOME in the
+        // process environment BEFORE Paths::global() is initialized.
+        // Paths::user_root() honours $DAEDALUS_HOME, so this routes
+        // every per-session AgentConfig (which sets daedalus_home
+        // from Paths::global().user_root()) to the user's chosen
+        // model store.
+        if (i + 1 >= argc) {
+            std::cerr << "--home requires a PATH argument\n";
+            return 2;
+        }
+        daedalus_home = argv[++i];
+    }
+        else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "Unknown option: " << arg << "\n"
+                      << "Run `" << argv[0] << " --help` for usage.\n";
+            return 2;
         }
         else {
+            // Positional: try port first, then project_dir.
             try {
                 port = static_cast<uint16_t>(std::stoi(arg));
             } catch (...) {
@@ -60,6 +120,22 @@ int main(int argc, char* argv[]) {
     }
     if (const char* env = std::getenv("DAEDALUS_WEBUI_PORT"); env && *env) {
         try { port = static_cast<uint16_t>(std::stoi(env)); } catch (...) {}
+    }
+    // §webui-3 (cont.): honour DAEDALUS_HOME in addition to --home.
+    // --home on the CLI wins over the env var.
+    if (daedalus_home.empty()) {
+        if (const char* env = std::getenv("DAEDALUS_HOME"); env && *env) {
+            daedalus_home = env;
+        }
+    }
+    if (!daedalus_home.empty()) {
+        // Set $DAEDALUS_HOME in the process environment so
+        // Paths::user_root() picks it up. (user_data_root() honours
+        // XDG only — user_root() honours both $DAEDALUS_HOME and
+        // XDG. The session_manager sets daedalus_home = user_root(),
+        // so this routes every session to the override.)
+        setenv("DAEDALUS_HOME", daedalus_home.string().c_str(), 1);
+        std::cerr << "[daedalus-webui] using daedalus_home=" << daedalus_home << "\n";
     }
 
     OmniNet::init();
@@ -77,7 +153,8 @@ int main(int argc, char* argv[]) {
 
     std::cerr << "[daedalus-webui] listening on http://"
               << cfg.address << ":" << cfg.port << "/\n"
-              << "[daedalus-webui] open in a browser; one Agent per session\n";
+              << "[daedalus-webui] open in a browser; one Agent per session\n"
+              << "[daedalus-webui] project_root=" << project_root << "\n";
 
     server.start();      // blocks
 

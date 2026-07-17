@@ -24,6 +24,7 @@
 #include "sse/SSEHandler.h"
 
 #include <daedalus.h>
+#include <daedalus/paths.h>
 
 #include "web_sse_sink.h"
 
@@ -88,7 +89,18 @@ public:
         // is never populated at startup. The webui is a host that
         // wants the user's skills loaded — other hosts (embedded
         // sandboxed agents, tests) leave this empty by design.
-        cfg.skills_dirs = { "/home/ubuntu/.daedalus/skills/" };
+        // §webui-1 (2026-07-16): was hardcoded
+        // "/home/ubuntu/.daedalus/skills/". Use Paths::global() so
+        // the demo works on any system.
+        cfg.skills_dirs = { daedalus::Paths::global().global_skills_dir() };
+        // §webui-2 (2026-07-16): explicit daedalus_home using
+        // user_root() (NOT user_data_root) so that $DAEDALUS_HOME
+        // and --home (which sets the env var) both route the agent
+        // to the user's chosen model store. user_data_root() honours
+        // only XDG_DATA_HOME; user_root() honours DAEDALUS_HOME
+        // first, then XDG. The webui explicitly wants the override
+        // to work, so use user_root().
+        cfg.daedalus_home = daedalus::Paths::global().user_root();
 
         sess->sink  = std::make_shared<WebSseSink>();
         sess->agent = std::make_unique<daedalus::Agent>(std::move(cfg), sess->sink);
