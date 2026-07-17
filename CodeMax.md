@@ -12,7 +12,7 @@
 - **Build:** clean (only OmniNet-internal warnings).
 - **Tests:** `ctest` → **64/64 pass**, 2 live-LLM skipped, 0 failures.
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
-- **Open items:** F3 (LOW — Readme missing webui body shape)
+- **Open items:** none.
 
 Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (16/16 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`. ACP-16: fixed empty `session_id` serialization in `RunCreateRequest::to_json`.
 
@@ -119,7 +119,7 @@ Live demos against `minimax-m2.7`:
 
 - ✅ F0 `print_banner` throws `length_error` on long paths (2026-07-16, `pad_to` helper)
 - ✅ F2 daedalus-subagent/manager crash on `--help` (2026-07-16, argv short-circuit — both demos now check for `--help`/`-h` before positional parsing)
-- ✅ F3 Readme webui section doesn't document `message` field (2026-07-16)
+- ✅ F3 Readme webui section already documents `{"message":"..."}` body shape (Readme.md:525 — confirmed present)
 
 ---
 
@@ -180,8 +180,7 @@ for diagnostics, which would corrupt a TUI host). Enabled via
 - **daedalus-manager:** same hardcoded path fix; explicit `base.daedalus_home`; expanded `--help`.
 - **daedalus-webui:** same path fix; `daedalus_home = user_root()` (NOT `user_data_root`) so `$DAEDALUS_HOME`/`--home` both route to user's chosen model store; `--home` flag actually honoured via `setenv(DAEDALUS_HOME)`; unknown options exit 2; full `--help` rewrite with endpoint table; CORS tightened to loopback-only with `--cors-origins` override.
 
-**Open (not yet fixed):**
-- **F3 (LOW):** Readme.md doesn't document that the webui POST body must use `{"message":"..."}` — not `{"content":"..."}`. `session_manager.cpp` explicitly validates `message` field.
+**Open (not yet fixed):** none.
 
 ## ACP end-to-end test (2026-07-16)
 
