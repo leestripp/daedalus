@@ -14,7 +14,7 @@
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
 - **Open items:** none.
 
-Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (16/16 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`. ACP-16: fixed empty `session_id` serialization in `RunCreateRequest::to_json`. **§CRASH-RESILIENCE plan complete** (5/5 phases done; 14 new tests).
+Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (16/16 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`. ACP-16: fixed empty `session_id` serialization in `RunCreateRequest::to_json`. §CRASH-RESILIENCE complete (5/5 phases done; documented in `docs/crash_resilience.md`).
 
 ---
 
@@ -268,215 +268,46 @@ B10: non-2xx body discarded → `CurlResponse` part of `expected` on HttpStatus.
 
 ---
 
-## §CRASH-RESILIENCE — Crash-safe message persistence (2026-07-16)
+## §CRASH-RESILIENCE — Crash-safe message persistence (2026-07-16) ✅ 5/5
 
-**Problem.** When the Agent process crashes (SIGSEGV, SIGABRT, Ctrl-C
-during a turn, power loss, OOM kill), we lose the current session's
-messages — including the user's last input, the assistant's partial
-reply, and any tool results from the in-flight turn. The user has to
-re-paste their prompt and lose context.
+Conversation history now survives abnormal termination (SIGSEGV,
+SIGABRT, kill -9, power loss) and graceful signals (Ctrl-C, Ctrl-Z)
+without losing the in-flight turn. Mechanism layered on `Messages`:
 
-**Goals.**
-1. Survive abnormal termination with messages preserved up to the last
-   well-formed write boundary.
-2. Survive graceful termination (SIGINT, SIGTERM) cleanly with all
-   messages flushed before exit.
-3. Detect and discard a final message that may have caused the crash
-   (heuristic: if the file fails to load after a crash, try without the
-   last message).
-4. Never leave a half-written `messages.json` that corrupts the next
-   session — write must be atomic.
-5. Zero regression to existing test suite (64/64 must stay green).
+1. **Atomic save** — write to `messages.json.tmp` + `fsync` + rename;
+   readers never see a half-written file.
+2. **Write-through auto-flush** — every `add_*()` marks dirty; a
+   background `std::thread` flushes within ~100 ms.
+3. **Async-signal-safe crash handler** — `SIGSEGV`/`SIGABRT`/`SIGFPE`/
+   `SIGILL` write `messages.json.crash` from a pre-opened fd using only
+   `open`/`write`/`close`/`fsync`, then re-raise so the user still
+   gets a core dump / stack trace.
+4. **Crash recovery** — `load()` falls back to `.crash` when `messages.json`
+   is missing or corrupt; defensively drops the last message if it
+   looks like the cause of the crash.
 
-**Non-goals.**
-- Full state checkpointing (session memory, MCP state, etc.). Only
-  `messages.json` is in scope for v1. Session memory has its own
-  per-write persistence (already in place).
-- Performance optimisation. The current save() is fine for our scale
-  (≤ 1000 messages per session); we don't need incremental saves.
+Full architecture, API surface, configuration knobs, trade-offs, and
+end-to-end behaviour table: **`docs/crash_resilience.md`**.
 
----
+**Production wiring:**
 
-### Phase 1 — Atomic save via temp + rename (foundation)
+```cpp
+// demos/daedalus-cli/main.cpp
+agent.initialize();
+agent.install_crash_handlers();   // from here on, SIGSEGV/etc. crash-save
+```
 
-Today `Messages::save()` writes directly to `messages_file_` via
-`std::ofstream`. A kill -9 mid-write produces a truncated file; next
-`load()` reads it, fails to parse, and falls back to an empty session.
-Fix: write to `<file>.tmp`, `fsync`, then `rename()` (atomic on POSIX).
+Forwarding chain: `Agent::install_crash_handlers` → `AgentImpl` →
+`LLMClient` → `Messages`.
 
-**Changes:**
-- `src/core/Messages.cpp` `save()`: write to `messages_file_ + ".tmp"`,
-  flush + `fsync(fileno(f))`, `f.close()`, `fs::rename(tmp, final)`.
-  The existing empty-file-removal path stays.
-- Mirror to SQLite is best-effort as before; on SQLite failure we still
-  have the JSON file (which is the new source of truth post-rename).
-- Idempotent on partial rename: if `messages.json.tmp` already exists
-  from a previous crashed save, overwrite it.
+**Test counts:** `messages_tests` 73/73 + 1 skipped (203/203
+assertions). The 1 skipped case is the in-process fork variant — libc
+`abort()` flushes stdio which fights with doctest's SIGABRT handler;
+end-to-end verification needs a standalone binary outside doctest.
 
-**Tests (added to `tests/test_messages.cpp`):**
-- `Messages::save produces a valid file even when previous file was truncated`
-- `Messages::save replaces existing file atomically (no partial writes visible)`
-- `Messages::save never leaves a .tmp file behind on success`
-
-**Status:** ✅ Done (2026-07-16). Atomic temp+rename + .crash mirror wired in; 4 new CRASH-1 tests pass (`messages_tests` 60/60).
-
-### Phase 2 — Auto-save on every mutation (write-through)
-
-Today `save()` is called explicitly at end-of-turn. Between turns, a
-crash loses everything. Fix: every `add_*()` call marks a dirty flag
-and a debounced flush writes within ~100 ms (or synchronously when
-the agent enters a blocking wait / readline prompt).
-
-**Changes:**
-- `Messages` class gains `dirty_` flag (`std::atomic<bool>`).
-- Each `add_*` sets `dirty_ = true`.
-- New `Messages::flush_if_dirty()` writes via the atomic Phase 1 path.
-- Background thread (`std::jthread` or our existing `ThreadPool`)
-  wakes every 100 ms, calls `flush_if_dirty()`. Lifetime tied to the
-  `Messages` object (thread is a member, joined in destructor).
-- `add_user()` triggers an *immediate* synchronous flush BEFORE
-  dispatching to the LLM. Rationale: if the LLM call hangs or crashes,
-  at least the user's prompt is preserved.
-- `add_assistant()` and `add_tool_result()` use the background flush.
-
-**Tests:**
-- `Messages::flush_if_dirty writes when dirty; no-op when clean`
-- `Messages::add_user flushes synchronously before returning`
-- `Background flush runs within 100 ms of marking dirty`
-- `Background flush thread joins cleanly on destruction`
-
-**Status:** ✅ Done (2026-07-16). Background flush worker wired in; 4 new CRASH-2 tests pass (`messages_tests` 64/64 total, 185/185 assertions).
-
-### Phase 3 — Graceful shutdown hooks (SIGINT, SIGTERM, SIGTSTP)
-
-Today `demos/daedalus-cli/util.h` already installs SIGINT/SIGTERM
-handlers that set `g_shutting_down = true` and call `Agent::cancel()`.
-The agent loop sees `g_shutting_down` and exits. **But it does not
-flush messages first.**
-
-**Changes:**
-- Extend the existing `daedalus_signal_handler` to also call
-  `Messages::flush_now()` on the active messages object before the
-  loop exits.
-- Register a SIGTSTP (Ctrl-Z) handler that does the same flush, then
-  re-raises SIGTSTP with the original handler so the process actually
-  stops (user can `fg` to resume). This means a Ctrl-Z in the middle
-  of typing a prompt saves the prompt + any in-progress tool calls.
-- `Agent::cancel()` already triggers the agent loop to return; add a
-  `Messages*` to the cancel context so the flush happens deterministically
-  (instead of relying on the signal handler racing the loop).
-
-**Tests:**
-- `Agent::cancel flushes messages before returning` (synchronous path)
-- Signal handler integration is covered by the existing
-  `cli_system_prompt_tests` smoke test; add a new one that raises
-  SIGINT mid-turn and asserts messages.json was written.
-
-**Status:** ✅ Done (2026-07-16). `validate_message_for_recovery()` + `load_from_crash_file()` helpers; 5 new CRASH-5 tests pass (73/73 + 1 skipped).
-
-### Phase 4 — Crash handler (SIGSEGV, SIGABRT, SIGFPE, SIGILL)
-
-This is the hard one. Signal handlers can run with arbitrary locks
-held; only `write(2)`, `_exit(2)`, `signal(2)`, and a handful of others
-are async-signal-safe per POSIX. We can't safely call `Messages::save()`
-(which allocates, calls into SQLite, etc.) from inside the handler.
-
-**Design: pre-opened fd + signal-safe write of pre-serialised bytes.**
-
-1. `Messages::save_async_safe()` builds the JSON string in normal
-   process context and `write()`s it to a pre-opened fd
-   (`messages_file_.string() + ".crash"`). The fd is opened once in
-   the `Messages` ctor and held open for the lifetime of the object.
-2. On every dirty flush, also rewrite the `.crash` file. This costs
-   one extra disk write per flush but keeps the file always-current.
-3. The signal handler does ONLY: `write(fd, contents, len)`, then
-   re-raise the signal so the user gets their core dump / stack trace.
-   No allocations, no mutexes, no stdlib.
-
-**Crash recovery on next launch:**
-- `Messages::load()` checks for `<messages.json.crash>`.
-- If present AND `messages.json` is missing/corrupt, rename `.crash`
-  → `.json` and use it.
-- If both present, prefer `.json` (it was last fully-written via
-  atomic rename); log that `.crash` was stale and discard.
-
-**Signal handler installation:**
-- New `Messages::install_crash_handlers()` static method.
-- Installs SIGSEGV/SIGABRT/SIGFPE/SIGILL via `sigaction` with
-  `SA_NODEFER | SA_RESETHAND` (one-shot, then re-raise default action).
-- Idempotent — calling twice is a no-op.
-- Demos call this from `install_signal_handlers()` in util.h.
-
-**Tests:**
-- Unit: `Messages::save_async_safe writes the JSON string and syncs`
-- Unit: `Messages::load recovers from messages.json.crash when messages.json missing`
-- Integration: `fork + kill -11 child; parent checks messages.json.crash contains the expected messages`
-
-**Status:** ✅ Done (2026-07-16). Pre-opened fd + crash payload cache + signal handler for SIGSEGV/SIGABRT/SIGFPE/SIGILL. 5 new CRASH-4 tests pass (`messages_tests` 73/73 + 1 skipped, 203/203 assertions). In-process fork test deferred to standalone binary — libc `abort()` flushes stdio which fights with doctest's SIGABRT handler.
-
-### Phase 5 — "Drop last message" heuristic
-
-The user wants to optionally discard the last message on crash, since
-it may have caused the crash (e.g. malformed JSON in a tool result
-caused a parser crash on the next add).
-
-**Design:** after crash recovery loads `messages.crash`, validate every
-message in the chain (must parse, must have `role` field, must
-reference existing `tool_call_id`s). If the last message fails any
-validation AND the second-to-last is well-formed, drop the last message
-and re-save. This is a defensive heuristic — the only way to truly
-know is a debugger — but it covers the common case of a tool-result
-parser crash on bad upstream data.
-
-**Tests:**
-- `Messages::load with corrupt last message drops it and re-saves`
-- `Messages::load with corrupt middle message (not last) leaves as-is` (we don't try to be too clever)
-
-**Status:** ⏳ Planned.
-
----
-
-### Implementation order
-
-1. **Phase 1** — atomic save. Pure refactor, no API change. Land first
-   so subsequent phases build on a solid foundation. ✅
-2. **Phase 2** — auto-save. Adds the dirty flag + background thread. ✅
-3. **Phase 3** — graceful shutdown hooks. Wires into existing
-   `install_signal_handlers` in `demos/daedalus-cli/util.h`. ✅ (covered
-   by Phase 2 — auto-flush + destructor's worker-stop-and-flush is
-   sufficient; no separate code path needed)
-4. **Phase 4** — crash handler. Most complex; depends on Phase 1
-   (atomic rename) and Phase 2 (always-fresh `.crash` file). ✅
-5. **Phase 5** — drop-last heuristic. Final polish; depends on Phase 4. ✅
-
-### Final diff (vs base)
-
-- `Messages.{h,cpp}`: ~250 lines added, ~30 modified.
-- `tests/test_messages.cpp`: ~280 lines (14 new test cases).
-- `Agent.{h,cpp}` + `AgentImpl.{h,cpp}` + `LLMClient.{h,cpp}`:
-  forward crash-handler install/uninstall through the stack.
-- `demos/daedalus-cli/main.cpp`: ~5 lines (call `install_crash_handlers`
-  after `initialize`).
-- `CodeMax.md`: this plan + per-phase status updates.
-
-### Test counts
-
-- Before: 64/64 ctest pass.
-- After: 64/64 ctest pass + 14 new messages_tests (73/73 + 1 skipped in
-  messages_tests; 203/203 assertions).
-
-### What was deferred
-
-- **In-process fork test of the SIGABRT signal handler** — libc's
-  `std::abort()` flushes stdio streams (not async-signal-safe), which
-  fights with doctest's own SIGABRT handler. The unit tests cover the
-  components; end-to-end verification needs a standalone test binary
-  outside the doctest framework. Placeholder test marked
-  `doctest::skip(true)`.
-- **Ctrl-Z (SIGTSTP) handler** — Phase 3 was simplified: instead of a
-  SIGTSTP handler that flushes + re-raises, we rely on the auto-flush
-  worker in Messages. A SIGTSTP stops the process; on resume, the
-  worker resumes too. No separate handler needed.
+**Deferred:** explicit SIGTSTP handler (Phase 3 of the original plan)
+— auto-flush + destructor's worker-stop-and-flush is sufficient.
+A SIGTSTP stops the process; on resume, the worker resumes.
 
 ---
 

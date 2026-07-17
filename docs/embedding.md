@@ -5,7 +5,10 @@ public API. This document is the complete embedding guide: minimum viable
 host, sink contract, config, lifecycle, cancellation, composition
 patterns, and network/MCP integration.
 
-**See also:** `docs/index.md` for a map of all documentation.
+**See also:** `docs/index.md` for a map of all documentation. For
+the conversation-history lifecycle (atomic save, write-through
+auto-flush, SIGSEGV/SIGABRT handler, drop-last-message recovery),
+see `docs/crash_resilience.md`.
 
 daedalus ships as a static library (`libdaedalus.a`) that exposes a narrow
 public API. This document is the embedding guide for host applications.

@@ -149,7 +149,8 @@ get different `agent_dir()` paths, so:
 
 | Path | Purpose | Safe to delete between sessions? |
 |---|---|---|
-| `agent_dir/messages.json` | Conversation transcript | Yes (rebuilds from the agent loop on next turn) |
+| `agent_dir/messages.json` | Conversation transcript. Atomic write via temp + rename + `fsync`; survives `kill -9` mid-save. Write-through auto-flush keeps it within ~100 ms of every `add_*()` call. | Yes (rebuilds from the agent loop on next turn) |
+| `agent_dir/messages.json.crash` | Crash mirror — written by the SIGSEGV/SIGABRT/SIGFPE/SIGILL signal handlers and re-written on every save. Read on next launch if `messages.json` is missing/corrupt. Defensive "drop last message" recovery. | Yes |
 | `agent_dir/messages.sqlite` | Conversation mirror (v0.3.5+) — SQLite, in `daedalus.db` | Yes |
 | `agent_dir/memory/memory.sqlite` | Long-term facts (THE cardinal file) | No — losing this loses project memory |
 | `agent_dir/memory/memory.json` | Legacy memory format (v0.3.5+: backed up to `daedalus.db`) | No |

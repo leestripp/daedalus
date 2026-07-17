@@ -18,8 +18,14 @@ in each release. See `docs/storage.md` for the storage architecture,
 | `~/.local/share/daedalus/daedalus.db` | Settings store (models, key/value, MCP servers) — v0.4.0+ |
 | `~/.local/share/daedalus/skills/installed/` | Agent skills |
 | `~/.local/share/daedalus/memory/` | Session memory |
-| `<project>/.daedalus[-<agent_name>]/` | Per-project state for each `Agent` |
+| `<project>/.daedalus[-<agent_name>]/messages.json` | Conversation transcript (atomic-rename save; auto-flush every ~100 ms) |
+| `<project>/.daedalus[-<agent_name>]/messages.json.crash` | Crash mirror (written by SIGSEGV/SIGABRT/SIGFPE/SIGILL handler; recovered on next launch) |
+| `<project>/.daedalus[-<agent_name>]/` | Other per-project state for each `Agent` |
 | `/etc/xdg/daedalus/` (system) | System-wide defaults |
+
+See [docs/crash_resilience.md](docs/crash_resilience.md) for the full
+crash-recovery story (atomic save, write-through auto-flush, async-signal-safe
+crash handler, drop-last-message recovery).
 
 ## Quick Start (Ubuntu)
 
@@ -755,6 +761,7 @@ See `demos/daedalus-manager/main.cpp` for the implementation.
 
 - [docs/index.md](docs/index.md) — start here: map of all docs
 - [docs/embedding.md](docs/embedding.md) — embedding guide + AgentSink contract
+- [docs/crash_resilience.md](docs/crash_resilience.md) — atomic save, auto-flush, SIGSEGV/SIGABRT handler, recovery
 - [docs/storage.md](docs/storage.md) — XDG-compliant storage layout
 - [docs/tools.md](docs/tools.md) — tool specifications
 - [docs/skills.md](docs/skills.md) — Agent Skills
