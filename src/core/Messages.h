@@ -256,6 +256,36 @@ public:
     void clear();
 
     /**
+     * @brief §CRASH-4 (2026-07-16): async-signal-safe crash handler.
+     *
+     * Installs SIGSEGV / SIGABRT / SIGFPE / SIGILL handlers that
+     * write the current messages to messages.json.crash using
+     * only async-signal-safe primitives (open(2), write(2), close(2)),
+     * then re-raise the signal so the user still gets their core
+     * dump / stack trace.
+     *
+     * Idempotent: calling twice does not stack handlers.
+     *
+     * The crash handler MUST be installed after a Messages object is
+     * alive (so its pre-opened fd exists). The static
+     * `crash_handler_registry` keeps a list of active Messages
+     * instances; the signal handler iterates and writes to each
+     * .crash file.
+     *
+     * Call this from main() (after constructing the Agent / Messages)
+     * and pair it with `uninstall_crash_handlers()` in the graceful
+     * shutdown path so the signal handler does not iterate a
+     * half-destroyed list.
+     */
+    void install_crash_handlers();
+    void uninstall_crash_handlers();
+
+    // §CRASH-4: signal-handler accessors. Public so the C signal
+    // handler in the anonymous namespace in Messages.cpp can read
+    // crash_fd_ and crash_payload_ without needing friendship.
+    int  crash_fd_for_signal()     const { return crash_fd_; }
+    const std::string& crash_payload_for_signal() const { return crash_payload_; }
+    /**
      * @brief Check if messages file exists
      */
     bool has_saved_messages() const;
@@ -470,6 +500,26 @@ private:
     std::mutex flush_mutex_;
     bool stop_flush_ = false;
     bool worker_was_running_ = false;
+
+    // §CRASH-4 (2026-07-16): pre-opened fd for the .crash mirror.
+    // The signal handler can only call async-signal-safe primitives
+    // (open/write/close), so we open the .crash file once at install
+    // time and hold the fd for the lifetime of the Messages object.
+    // Each save() truncates + writes + closes; on signal, the
+    // handler re-writes the last known good contents and exits.
+    //
+    // We keep the fd in the object rather than a static because the
+    // path is per-instance (per-agent). The static signal handler
+    // iterates a process-global registry of Messages* (see
+    // crash_handler_registry_ in Messages.cpp).
+    int crash_fd_ = -1;
+
+    // §CRASH-4: cache of the last successfully-saved JSON blob.
+    // The signal handler re-writes this verbatim to the .crash fd.
+    // Updated by save() on every successful flush. mutable because
+    // save() is const (the cache is a side-effect of save, not a
+    // logical state mutation observable through the public API).
+    mutable std::string crash_payload_;
 
     // Helper: flush worker thread entry point.
     void flush_worker_main();

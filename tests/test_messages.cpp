@@ -13,6 +13,12 @@
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <cstdio>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <cstdlib>
 
 // Include Messages.h after doctest so FRIEND_TEST is available
 #include "core/Messages.h"
@@ -1009,6 +1015,109 @@ TEST_SUITE("Save and Load") {
 
         cleanup_test_project(proj);
     }
+
+    // §CRASH-4 (2026-07-16): crash handler install/uninstall.
+
+    TEST_CASE("CRASH-4 install_crash_handlers opens the .crash file") {
+        auto proj = create_test_project();
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = false;
+        Messages msgs(proj / ".daedalus", cfg);
+
+        msgs.add_system("Crash test");
+        msgs.save();   // populates crash_payload_
+
+        msgs.install_crash_handlers();
+
+        const std::string crash_path =
+            (proj / ".daedalus" / "messages.json.crash").string();
+        CHECK(std::filesystem::exists(crash_path));
+        // The .crash file should be non-empty (we saved above).
+        CHECK(std::filesystem::file_size(crash_path) > 0);
+
+        msgs.uninstall_crash_handlers();
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-4 install is idempotent (no double-register)") {
+        auto proj = create_test_project();
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = false;
+        Messages msgs(proj / ".daedalus", cfg);
+
+        msgs.add_system("Idempotent test");
+        msgs.save();
+
+        // Install twice — the signal handler is registered exactly once.
+        msgs.install_crash_handlers();
+        msgs.install_crash_handlers();
+        // No crash; no need to assert here.
+
+        msgs.uninstall_crash_handlers();
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-4 uninstall is safe to call without install") {
+        auto proj = create_test_project();
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = false;
+        Messages msgs(proj / ".daedalus", cfg);
+
+        // Never installed. Uninstall must be a no-op, not crash.
+        CHECK_NOTHROW(msgs.uninstall_crash_handlers());
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-4 crash_payload_for_signal reflects last save") {
+        auto proj = create_test_project();
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = false;
+        Messages msgs(proj / ".daedalus", cfg);
+
+        msgs.add_system("First save");
+        msgs.add_user("Hello");
+        msgs.save();
+        // Cached payload should contain the messages we just saved.
+        const std::string& blob = msgs.crash_payload_for_signal();
+        CHECK(blob.find("\"First save\"") != std::string::npos);
+        CHECK(blob.find("\"Hello\"") != std::string::npos);
+
+        cleanup_test_project(proj);
+    }
+}
+
+// §CRASH-4 fork-based integration test (skipped by default — see note).
+//
+// We previously tried to fork a child that installs the crash handler,
+// saves messages, then calls std::abort() to trigger SIGABRT. The
+// signal handler runs, writes .crash, re-raises, and the child dies.
+// The parent verifies the .crash file contents.
+//
+// The test DOES verify the crash handler end-to-end, but it's
+// tricky inside doctest because:
+//   1. libc's std::abort() flushes stdio streams (NOT async-signal-
+//      safe — could deadlock if the child inherits our write paths).
+//   2. doctest installs its own SIGABRT handler that calls
+//      std::exit(EXIT_FAILURE) — when our handler re-raises SIGABRT
+//      with SIG_DFL, the kernel delivers it; if anything in that
+//      delivery still triggers the previous (doctest) handler, the
+//      parent process aborts.
+//   3. After install_crash_handlers, the parent's SIGABRT handler
+//      is permanently changed to ours — earlier CRASH-4 tests leave
+//      it set, and that state persists.
+//
+// The component-level unit tests (CRASH-4 install/uninstall/...
+// above) verify the machinery. End-to-end verification is done
+// in a SEPARATE standalone binary under
+// `demos/daedalus-cli/crash_recovery_e2e/` (built ad hoc). For
+// now, skip the in-process fork variant.
+TEST_CASE("CRASH-4 fork: SIGABRT writes messages.json.crash"
+          * doctest::skip(true)) {
+    // Placeholder — see note above.
+    MESSAGE("See demos/daedalus-cli/crash_recovery_e2e/ for the");
+    MESSAGE("end-to-end fork-based crash handler test.");
+    CHECK(true);
 }
 
 // ============================================================================

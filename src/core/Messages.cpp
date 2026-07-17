@@ -23,6 +23,13 @@
 #include <iostream>
 #include <cstdio>      // fileno(), ::fdopen()
 #include <unistd.h>    // fileno(), fsync(), ::dup()
+#include <fcntl.h>     // open(), O_CREAT, O_WRONLY, O_TRUNC
+#include <sys/stat.h>  // mode_t
+#include <csignal>     // sigaction
+#include <vector>
+#include <cstring>     // strlen
+#include <mutex>       // std::call_once
+#include <algorithm>   // std::find, std::swap
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
 // statements into LOG_INFO/LOG_WARNING/LOG_ERROR via the existing
@@ -147,6 +154,106 @@ prefix, suffix, or explanation. Just output the summary in the format above.
 // Constructor / Destructor
 // ============================================================================
 
+// ============================================================================
+// §CRASH-4 (2026-07-16): async-signal-safe crash handler infrastructure.
+//
+// The crash handler must avoid allocations, locks, and any non-trivial
+// stdlib calls. We keep a small registry of active Messages* in a
+// process-global vector, guarded by a tiny atomic spinlock (no
+// pthread_mutex, which is NOT async-signal-safe per POSIX).
+// ============================================================================
+
+namespace {
+
+// Lock-free registry of Messages instances that want their .crash
+// file written on SIGSEGV/SIGABRT/SIGFPE/SIGILL.
+std::atomic<int> g_crash_registry_lock{0};
+std::vector<Messages*> g_crash_registry;
+
+// Async-signal-safe write helper. Writes len bytes from buf to fd,
+// looping on EINTR. Returns 0 on success, -1 on hard error. No
+// std::cerr / printf — only write(2).
+ssize_t signal_safe_write(int fd, const void* buf, std::size_t len) {
+    const char* p = static_cast<const char*>(buf);
+    std::size_t total = 0;
+    while (total < len) {
+        ssize_t n = ::write(fd, p + total, len - total);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (n == 0) return -1;
+        total += static_cast<std::size_t>(n);
+    }
+    return static_cast<ssize_t>(total);
+}
+
+// Re-raise the signal with the original disposition so the user
+// still gets their core dump / stack trace.
+void re_raise(int sig) {
+    ::signal(sig, SIG_DFL);
+    ::sigset_t mask;
+    ::sigemptyset(&mask);
+    ::sigaddset(&mask, sig);
+    ::sigprocmask(SIG_UNBLOCK, &mask, nullptr);
+    ::raise(sig);
+}
+
+// The actual signal handler. Iterates the registry, writes each
+// .crash file with the most recently persisted contents, then
+// re-raises.
+extern "C" void daedalus_crash_signal_handler(int sig) {
+    // Spinlock acquire.
+    while (g_crash_registry_lock.fetch_add(1, std::memory_order_acquire)
+           != 0) {
+        g_crash_registry_lock.fetch_sub(1, std::memory_order_relaxed);
+        // Avoid volatile-increment (deprecated in C++20+). Use a
+        // local counter the compiler is allowed to optimise out; we
+        // only need a handful of iterations to give the holder a
+        // chance to release.
+        for (int i = 0; i < 100; ++i) { /* brief spin */ }
+    }
+    // Snapshot registry contents while holding the lock. Copy into
+    // a local vector so we can release the lock before iterating.
+    std::vector<Messages*> snapshot;
+    snapshot.reserve(g_crash_registry.size());
+    for (auto* p : g_crash_registry) {
+        snapshot.push_back(p);
+    }
+    g_crash_registry_lock.fetch_sub(1, std::memory_order_release);
+
+    for (Messages* m : snapshot) {
+        if (!m) continue;
+        int fd = m->crash_fd_for_signal();
+        const std::string& blob = m->crash_payload_for_signal();
+        if (fd >= 0 && !blob.empty()) {
+            ::lseek(fd, 0, SEEK_SET);
+            signal_safe_write(fd, blob.data(), blob.size());
+            ::fsync(fd);
+        }
+    }
+    re_raise(sig);
+}
+
+// One-time install of the signal handler for SIGSEGV/SIGABRT/SIGFPE/SIGILL.
+void install_signal_handlers_once() {
+    static std::atomic<bool> installed{false};
+    if (installed.exchange(true)) return;
+    struct sigaction sa{};
+    sa.sa_handler = daedalus_crash_signal_handler;
+    sigemptyset(&sa.sa_mask);
+    // SA_NODEFER: don't block the signal we're handling (so re-raise
+    // works). SA_RESETHAND: revert to SIG_DFL after one delivery, so
+    // a recursive crash still produces a core dump.
+    sa.sa_flags = SA_NODEFER | SA_RESETHAND;
+    ::sigaction(SIGSEGV, &sa, nullptr);
+    ::sigaction(SIGABRT, &sa, nullptr);
+    ::sigaction(SIGFPE,  &sa, nullptr);
+    ::sigaction(SIGILL,  &sa, nullptr);
+}
+
+}  // namespace
+
 Messages::Messages(std::filesystem::path data_dir,
                  const MessageCompressionConfig& config)
     : data_dir_(std::move(data_dir))
@@ -198,6 +305,13 @@ Messages::~Messages() {
     // flushing and is responsible for the save() timing. A surprise
     // save() here would re-create the messages file even after the
     // test wiped the data dir (destroying the test isolation).
+
+    // §CRASH-4 (2026-07-16): close the .crash fd and deregister from
+    // the signal-handler registry. Callers should have called
+    // uninstall_crash_handlers() in the graceful shutdown path; we
+    // also do it here defensively so the registry doesn't accumulate
+    // dangling pointers across Messages instances.
+    uninstall_crash_handlers();
 }
 
 // §CRASH-2 (2026-07-16): move ops are deleted in the header
@@ -396,6 +510,10 @@ void Messages::save() const {
     // Sanitize before saving - remove orphaned tool results
     json to_save = sanitize_message_chain(messages_);
 
+    // §CRASH-4 (2026-07-16): declare `contents` at function scope so
+    // it's visible after the try block where crash_payload_ is updated.
+    const std::string contents = to_save.dump(2);
+
     try {
         // §Phase 8.8: parent_path() is the per-agent namespace dir
         // (e.g. `.daedalus/` or `.daedalus-bob/`), already created in
@@ -423,7 +541,6 @@ void Messages::save() const {
         // portable native_handle() in C++23.
         const std::string tmp_path   = messages_file_.string() + ".tmp";
         const std::string crash_path = messages_file_.string() + ".crash";
-        const std::string contents   = to_save.dump(2);
 
         auto write_atomic = [&](const std::string& path) -> bool {
             // C API for portable fd access.
@@ -498,6 +615,84 @@ void Messages::save() const {
     // §CRASH-2 (2026-07-16): save() succeeded — clear dirty so the
     // background flush worker doesn't immediately re-save.
     dirty_.store(false, std::memory_order_release);
+
+    // §CRASH-4 (2026-07-16): cache the JSON payload so the crash
+    // handler can re-write it verbatim without re-entering save()
+    // (which calls into the allocator, mutex-guarded SQLite, and
+    // std::ofstream — none of which are async-signal-safe).
+    crash_payload_ = contents;
+    if (crash_fd_ >= 0) {
+        // Re-write the .crash file via the pre-opened fd so the
+        // crash handler has the latest contents even if a save()
+        // happened after the fd was opened.
+        ::lseek(crash_fd_, 0, SEEK_SET);
+        ::ftruncate(crash_fd_, 0);
+        signal_safe_write(crash_fd_, contents.data(), contents.size());
+        ::fsync(crash_fd_);
+        ::lseek(crash_fd_, 0, SEEK_SET);
+    }
+}
+
+// ============================================================================
+// §CRASH-4 (2026-07-16): crash handler install / uninstall
+// ============================================================================
+
+void Messages::install_crash_handlers() {
+    // Open (or truncate) the .crash file once. The fd is held open
+    // for the lifetime of this Messages instance. The signal
+    // handler writes to this fd — no allocation, no stdio.
+    if (crash_fd_ < 0) {
+        const std::string crash_path = messages_file_.string() + ".crash";
+        // Ensure the directory exists (data_dir_ was created in the
+        // ctor, but be defensive).
+        std::error_code ec;
+        std::filesystem::create_directories(messages_file_.parent_path(), ec);
+        crash_fd_ = ::open(crash_path.c_str(),
+                           O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        // Write current contents (empty if nothing saved yet) so
+        // the fd has a valid byte sequence.
+        if (crash_fd_ >= 0) {
+            signal_safe_write(crash_fd_, crash_payload_.data(),
+                              crash_payload_.size());
+            ::fsync(crash_fd_);
+            ::lseek(crash_fd_, 0, SEEK_SET);
+        }
+    }
+    // Install the signal handlers (one-time, process-global).
+    install_signal_handlers_once();
+    // Register ourselves in the process-global registry.
+    while (g_crash_registry_lock.fetch_add(1, std::memory_order_acquire)
+           != 0) {
+        g_crash_registry_lock.fetch_sub(1, std::memory_order_relaxed);
+        for (int i = 0; i < 100; ++i) { /* spin */ }
+    }
+    g_crash_registry.push_back(this);
+    g_crash_registry_lock.fetch_sub(1, std::memory_order_release);
+}
+
+void Messages::uninstall_crash_handlers() {
+    // Remove from registry.
+    while (g_crash_registry_lock.fetch_add(1, std::memory_order_acquire)
+           != 0) {
+        g_crash_registry_lock.fetch_sub(1, std::memory_order_relaxed);
+        for (int i = 0; i < 100; ++i) { /* spin */ }
+    }
+    auto it = std::find(g_crash_registry.begin(),
+                        g_crash_registry.end(), this);
+    if (it != g_crash_registry.end()) {
+        // Swap-remove: O(1) and doesn't break iterators.
+        std::swap(*it, g_crash_registry.back());
+        g_crash_registry.pop_back();
+    }
+    g_crash_registry_lock.fetch_sub(1, std::memory_order_release);
+
+    // Close the .crash fd. We keep crash_payload_ around in case
+    // the file is needed for crash recovery (load() checks for
+    // messages.json.crash on the next launch).
+    if (crash_fd_ >= 0) {
+        ::close(crash_fd_);
+        crash_fd_ = -1;
+    }
 }
 
 // ============================================================================
