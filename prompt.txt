@@ -1,9 +1,220 @@
-# Messages
+# Daedalus Bugs
 
-Currently when the Agent crashes, we loose the current session messsages, we either need to save messages as we go, OR on a crash or Ctrl-C/Z catch the crash ans save the messages in memory.
-We might need to throw away the last message, as it may have caused the crash.
-If you can think of any improvements on this please add them.
+Bugs found in the [daedalus](https://gitlab.com/leestripp/daedalus) C++
+agent library. Issues that affect icarus are flagged here before being
+filed upstream.
 
-Create a Plan to implement this and put the Plan in CodeMax.md
-Start the Plan.
+---
 
+## BUG-001 (daedalus v0.5.0) — Null `usage` on SSE final chunk discards streamed response
+
+**Severity:** High — silently breaks task execution on streaming paths.
+
+**Status:** Unfixed in `main` at the time of icarus integration.
+
+**Affects:** `daedalus::LLMClient` SSE streaming path. Triggered
+specifically by LLM providers that emit `"usage": null` on the final
+SSE chunk (confirmed with MiniMax).
+
+**Discovered in icarus:** 2026-07-17 (Phase 6 of CodeMax.md).
+
+### Symptom (in icarus)
+
+User gives the agent a task that requires a tool call (e.g. "list the
+files in the current directory using the bash tool"). The agent:
+
+1. Streams a tool-call delta through `on_assistant_delta`.
+2. Receives the final SSE chunk from the server with `choices: []`
+   and `usage: null` (this is the MiniMax "usage-only" trailer).
+3. Emits the warning:
+   ```
+   [Warn] [LLM] 'usage' is null in SSE stream — token counts unavailable
+   ```
+4. Returns to the prompt without ever calling the tool.
+
+From the user's perspective, the agent "stopped dead in its tracks"
+after the warning, the task is not done, and no error is reported.
+If the user retries, the same sequence repeats.
+
+### Root cause
+
+**File:** `daedalus-src/src/api/LLMClient.cpp`
+**Lines:** ~1411-1417
+
+```cpp
+if (!response_json.contains("choices") || response_json["choices"].empty()) {
+    bool is_usage_only_chunk =
+        config_.stream &&
+        response_json.contains("usage") &&
+        !response_json["usage"].is_null();      // ← BUG
+    if (is_usage_only_chunk) {
+        // Recover the assistant message that the SSE parser
+        // already accumulated from earlier delta chunks.
+        json synth_message = sse_parser.synthesized_message();
+        response_json["choices"] = json::array({
+            {{"index", 0},
+             {"message", synth_message},
+             {"finish_reason", "stop"}}
+        });
+        // ... fall through to normal processing ...
+    }
+    else
+    {
+        // WRONG PATH TAKEN when usage is null:
+        LOG_ERROR("No choices in response - will retry API call...");
+        // ... 3-retry exponential backoff, 1s+2s+4s = 7s of spinning ...
+    }
+}
+```
+
+The condition `!response_json["usage"].is_null()` evaluates to
+**`false` when `usage` is `null`** (the value the MiniMax API sends).
+So the library treats the case "usage is present and null" the same
+as "usage is absent entirely" — and routes it to the
+"no choices, retry the API" branch.
+
+But the assistant message has already been fully accumulated by
+`MiniMaxSseParser` from the prior delta chunks. The recovery code
+(`synthesized_message()`) is sitting right there, ready to use.
+The library is throwing away a valid completed response and
+re-querying the API instead.
+
+### Why the agent looks dead
+
+Three compounding effects:
+
+1. **Streamed content is discarded.**
+   `sse_parser.synthesized_message()` is never built. The line
+   `messages.push_back(message)` (line ~1531) is never reached for
+   the streamed response. The assistant's message — text or
+   tool_calls — never lands in the message history.
+
+2. **7-second silent spinner.**
+   The retry loop calls `make_http_request_with_retry` with the
+   same payload. Each retry waits `1s + 2s + 4s = 7s`. Each retry
+   returns essentially the same response (MiniMax is deterministic
+   for the same input). To the user: spinner spins, no output,
+   no error message about the underlying cause.
+
+3. **Tool-call amnesia.**
+   When the streamed response contained a `tool_calls` array, that
+   tool call is now lost. After the retries, the agent either
+   returns `AgentState::DONE` (clean exit, task never done) or
+   returns `AgentState::ACT` with a synthetic error message that
+   doesn't reflect what the assistant actually wanted to do. The
+   agent has effectively forgotten it was about to call a tool.
+
+### How to reproduce (in icarus)
+
+```bash
+$ printf 'list the files in the current directory using the bash tool\n/quit\n' \
+    | /workspace/icarus/build/icarus /tmp 2>&1 | tail -20
+```
+
+**Expected output:**
+```
+[/TOOL] bash          ← agent invoked the bash tool
+```
+
+**Actual output:**
+```
+[Warn] [LLM] 'usage' is null in SSE stream — token counts unavailable
+>                      ← prompt returns; task never executed
+```
+
+(The exact text the agent streams before dying varies — the warning
+fires AFTER the streamed text, on the same line.)
+
+### Suggested fix
+
+The gatekeeper for the synthetic-message recovery should be
+"the SSE parser accumulated a complete assistant message",
+not "the server sent non-null usage". Concretely:
+
+```cpp
+bool is_usage_only_chunk =
+    config_.stream &&
+    (sse_parser.had_text_deltas() ||
+     !sse_parser.accumulated_tool_calls().empty()) &&
+    (!response_json.contains("choices") ||
+     response_json["choices"].empty());
+```
+
+That is: if the SSE parser already accumulated a complete response
+(text OR tool_calls), AND the final SSE chunk has no `choices`,
+treat it as a usage-only trailer — **regardless of what the
+`usage` field contains**.
+
+The downstream pipeline (`messages.push_back(message)`,
+tool-call processing) already handles a fully-synthesized
+message correctly — it just needs the gate to actually open.
+
+### Workaround in icarus
+
+If upstream is slow to fix, icarus can work around this by:
+
+1. **Disabling SSE streaming.** Set `cfg.stream = false`. The
+   non-streaming path uses `make_http_request_with_retry` directly,
+   parses the full JSON response (which has the real usage), and
+   never hits the §Phase 9.10 logic. Trade-off: no live deltas,
+   longer first-token latency.
+
+2. **Patching the condition at runtime.** Catch the warning in
+   the host sink and re-issue the user prompt until the agent
+   produces a non-streaming fallback. Brittle; not recommended.
+
+3. **Adding a post-warning retry in icarus.** Intercept the
+   `usage` warning in `ConsoleAgentSink::on_log`, re-submit the
+   user message via `agent.submit_user_message()` + `run_one_turn()`
+   synchronously (no streaming). Cleaner than #2, still hacky.
+
+### Related upstream references
+
+- §Phase 9.10 comment block (lines 1389-1394) describes the
+  intended behaviour — the intent is right, the gatekeeper is wrong.
+- §Phase 9.11 added `MiniMaxSseParser::had_text_deltas()` — which
+  is exactly the field the fixed gatekeeper needs.
+- The MiniMax API quirk (`"usage": null` in the final chunk) is
+  documented in `/tmp/test_sse_raw.py` referenced in §Phase 9.10.
+
+---
+
+## Bug filing template (for upstream)
+
+When filing this against the daedalus repository, the minimum
+information to include:
+
+```markdown
+## Bug: null `usage` on SSE final chunk discards streamed response
+
+**Library version:** v0.5.0 (commit on main as of 2026-07-17)
+**Trigger:** LLM provider that emits `"usage": null` on the final
+SSE chunk (MiniMax confirmed; OpenAI usage-only chunks send
+non-null usage so they don't hit this).
+
+**Location:** `src/api/LLMClient.cpp` line ~1414
+
+```cpp
+bool is_usage_only_chunk =
+    config_.stream &&
+    response_json.contains("usage") &&
+    !response_json["usage"].is_null();   // ← wrong gate
+```
+
+**Expected:** When the SSE parser has already accumulated a
+complete assistant response (text OR tool_calls) and the final
+SSE chunk has no `choices`, recover the response via
+`sse_parser.synthesized_message()`.
+
+**Actual:** The `!is_null()` check makes the gate fail when
+`usage` is `null` (the MiniMax case). The library falls into the
+"no choices, retry API" path with 3-retry exponential backoff,
+the streamed message is discarded, and tool_calls are lost.
+
+**Fix:** Change the gate to check `sse_parser.had_text_deltas() ||
+!accumulated_tool_calls_.empty()` instead of the usage field.
+
+**Repro:** Use MiniMax API endpoint, set `cfg.stream = true`, send
+any prompt that triggers a tool call. Observe that the tool call
+is never executed; only the warning is emitted.
+```
