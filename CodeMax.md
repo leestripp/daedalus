@@ -12,9 +12,9 @@
 - **Build:** clean (only OmniNet-internal warnings).
 - **Tests:** `ctest` → **64/64 pass**, 2 live-LLM skipped, 0 failures.
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
-- **Open items:** none.
+- **Open items:** F3 (LOW — Readme missing webui body shape)
 
-Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (15/15 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`.
+Recent work: §NOMORE-CURL complete (12/12 NC tasks), ACP code review complete (16/16 ACP tasks), demos cleanup (subagent/manager/webui fixed hardcoded paths), NC-9 cosmetic rename `CurlMultiSession` → `HttpSession`. ACP-16: fixed empty `session_id` serialization in `RunCreateRequest::to_json`.
 
 ---
 
@@ -118,7 +118,7 @@ Bugs are tagged by severity. ✅ = done (one-liner; details in
 Live demos against `minimax-m2.7`:
 
 - ✅ F0 `print_banner` throws `length_error` on long paths (2026-07-16, `pad_to` helper)
-- ✅ F2 daedalus-subagent/manager crash on `--help` (2026-07-16, argv short-circuit)
+- ✅ F2 daedalus-subagent/manager crash on `--help` (2026-07-16, argv short-circuit — both demos now check for `--help`/`-h` before positional parsing)
 - ✅ F3 Readme webui section doesn't document `message` field (2026-07-16)
 
 ---
@@ -147,7 +147,7 @@ triggered by ACP transport being written with `curl/curl.h` directly.
 
 ---
 
-## ACP (Agent Communication Protocol) — 15/15 ✅
+## ACP (Agent Communication Protocol) — 16/16 ✅
 
 Sub-library at `demos/daedalus-cli/acp/` (demos-only — uses `std::cerr`
 for diagnostics, which would corrupt a TUI host). Enabled via
@@ -170,6 +170,7 @@ for diagnostics, which would corrupt a TUI host). Enabled via
 | ACP-13 | `is_connected` checks 2xx (not `<500`) | ✅ |
 | ACP-14 | `get_agent` 404 returns `AcpError` (not silent default manifest) | ✅ |
 | ACP-15 | Long error messages in SSE: truncate to 1024 chars + `…[truncated]` | ✅ |
+| ACP-16 | `session_id` in `RunCreateRequest::to_json` was no-op (was empty `if` body) | ✅ |
 
 ---
 
@@ -180,12 +181,11 @@ for diagnostics, which would corrupt a TUI host). Enabled via
 - **daedalus-webui:** same path fix; `daedalus_home = user_root()` (NOT `user_data_root`) so `$DAEDALUS_HOME`/`--home` both route to user's chosen model store; `--home` flag actually honoured via `setenv(DAEDALUS_HOME)`; unknown options exit 2; full `--help` rewrite with endpoint table; CORS tightened to loopback-only with `--cors-origins` override.
 
 **Open (not yet fixed):**
-- **F2 (HIGH):** `daedalus-subagent` and `daedalus-manager` crash on `--help`. Root cause: `argv[1]` is consumed as `project_root` before the help-check, so `--help` hits the Agent constructor instead of exiting. Fix: move help check before positional-argument parsing.
 - **F3 (LOW):** Readme.md doesn't document that the webui POST body must use `{"message":"..."}` — not `{"content":"..."}`. `session_manager.cpp` explicitly validates `message` field.
 
 ## ACP end-to-end test (2026-07-16)
 
-`test_acp_end_to_end` (3 cases / 35 assertions, all pass in 1.7s):
+`test_acp_end_to_end` (4 cases / 42 assertions, all pass in ~2s):
 spins up an in-process OmniNet HTTP server, registers a chunked-SSE
 endpoint at `/v1/runs/<id>/events`, emits the 11 spec ACP event types
 in order, then connects with `AcpClient` and verifies the right

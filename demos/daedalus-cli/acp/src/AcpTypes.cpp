@@ -104,7 +104,7 @@ void to_json(nlohmann::json& j, const RunCreateRequest& req) {
     j["mode"] = mode_str;
     
     if (req.session_id) {
-        // TODO: add session_id
+        j["session_id"] = *req.session_id;
     }
 }
 
