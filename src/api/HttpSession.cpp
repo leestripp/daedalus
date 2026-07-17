@@ -222,6 +222,21 @@ HttpSession::submit_cancellable(const HttpRequest& request,
             resp.mcp_session_id = stream.header("Mcp-Session-Id");
             resp.body.clear();
 
+            // §Fix: SSE BUG — nullopt from read_some() is NOT always EOF.
+            // The OmniNet read_some() implementation calls
+            // socket->waitForRead(100ms) and returns nullopt on timeout
+            // (no data yet). Returning nullopt does NOT set m_state->eof,
+            // so stream.eof() still returns false after a timeout. The
+            // caller MUST distinguish "timed out, keep waiting" from
+            // "real EOF, close stream" — the original code conflated
+            // both, causing MiniMax/M2.7 to drop the trailer chunk
+            // (which carries the non-null `usage` field) because the
+            // server pauses >100ms between chunks. Symptoms:
+            //   - 'usage' is null in SSE stream — token counts unavailable
+            //   - "No choices in response - will retry API call..." if
+            //     the parser happens to land on an empty trailer
+            //   - SSE parser finishes before seeing chunk N+1 (the
+            //     usage-only trailer)
             bool cancelled_now = false;
             while (true) {
                 if (cancelled()) {
@@ -229,7 +244,17 @@ HttpSession::submit_cancellable(const HttpRequest& request,
                     break;
                 }
                 auto chunk = stream.read_some();
-                if (!chunk) break;       // EOF
+                if (!chunk) {
+                    // §Fix: check eof() before treating as end-of-stream.
+                    if (stream.eof()) break;
+                    // Transient nullopt (socket wait timeout, no data
+                    // yet). Brief sleep to avoid a tight busy-loop, then
+                    // keep waiting. 5ms is long enough to keep CPU near
+                    // 0 and short enough that total wall-clock for a
+                    // normal stream stays well under a second.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    continue;
+                }
                 if (chunk->empty()) continue;
                 std::string_view sv(reinterpret_cast<const char*>(chunk->data()),
                                      chunk->size());
