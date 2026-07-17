@@ -10,7 +10,7 @@
 ## Current state (2026-07-16)
 
 - **Build:** clean (only OmniNet-internal warnings).
-- **Tests:** `ctest` → **62/62 pass**, 2 live-LLM skipped, 0 failures.
+- **Tests:** `ctest` → **64/64 pass**, 2 live-LLM skipped, 0 failures.
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
 - **Open items:** none.
 
@@ -177,7 +177,24 @@ for diagnostics, which would corrupt a TUI host). Enabled via
 
 - **daedalus-subagent:** hardcoded `/home/ubuntu/.daedalus/skills/` → `Paths::global()`; explicit `daedalus_home`; child `session_id` collision fix (monotonic counter); `> ` prompt; expanded `--help`.
 - **daedalus-manager:** same hardcoded path fix; explicit `base.daedalus_home`; expanded `--help`.
-- **daedalus-webui:** same path fix; `daedalus_home = user_root()` (NOT `user_data_root`) so `$DAEDALUS_HOME`/`--home` both route to user's chosen model store; `--home` flag actually honoured via `setenv(DAEDALUS_HOME)`; unknown options exit 2; full `--help` rewrite with endpoint table.
+- **daedalus-webui:** same path fix; `daedalus_home = user_root()` (NOT `user_data_root`) so `$DAEDALUS_HOME`/`--home` both route to user's chosen model store; `--home` flag actually honoured via `setenv(DAEDALUS_HOME)`; unknown options exit 2; full `--help` rewrite with endpoint table; CORS tightened to loopback-only with `--cors-origins` override.
+
+## ACP end-to-end test (2026-07-16)
+
+`test_acp_end_to_end` (3 cases / 35 assertions, all pass in 1.7s):
+spins up an in-process OmniNet HTTP server, registers a chunked-SSE
+endpoint at `/v1/runs/<id>/events`, emits the 11 spec ACP event types
+in order, then connects with `AcpClient` and verifies the right
+`IRunEventHandler` callbacks fire. Covers the full lifecycle
+(run.created → message.created → message.part ×2 → message.completed
+→ generic → run.completed), error events (run.created → error),
+and run.failed / run.cancelled routing.
+
+Key gotcha: the mock server must emit `Transfer-Encoding:
+chunked`-framed data (`<hex size>\r\n<data>\r\n`), not raw SSE
+frames. Without the chunked wrapper the client decoder reports
+EOF immediately and the test sees `calls.size() == 0`. The fix
+matches `SSEHandler::writeChunked()`'s on-the-wire format.
 
 ---
 

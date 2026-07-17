@@ -1,22 +1,9 @@
-**Source**: `LLMClient::initialize()` in `build/_deps/daedalus-src/src/api/LLMClient.cpp:2373-2391`
+# Messages
 
-```cpp
-void LLMClient::initialize() {
-    // Display startup banner — §Phase 3: routed through sink.
-    if (sink_) {
-        std::ostringstream banner;
-        banner << "╔═══════════════════════════════════════════════════════════════════\n"
-               << "║  daedalus v" << VERSION_STRING << " - Autonomous Coding Agent\n"
-               << "║  Base URL: " << config_.base_url << "\n"
-               << "║  Chat path: " << config_.chat_endpoint << "\n"
-               << "║  Model:    " << config_.model << "\n"
-               << "╚═══════════════════════════════════════════════════════════════════";
-        sink_->on_log(daedalus::LogLevel::Info, banner.str());
-    } else {
-        // ... fallback to LOG_INFO() ...
-    }
-    // ... [PERSIST] / [SKILLS] lines are also from the lib ...
-}
-```
+Currently when the Agent crashes, we loose the current session messsages, we either need to save messages as we go, OR on a crash or Ctrl-C/Z catch the crash ans save the messages in memory.
+We might need to throw away the last message, as it may have caused the crash.
+If you can think of any improvements on this please add them.
 
+Create a Plan to implement this and put the Plan in CodeMax.md
+Start the Plan.
 
