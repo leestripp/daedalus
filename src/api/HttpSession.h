@@ -2,20 +2,18 @@
  * @file HttpSession.h
  * @brief Async HTTP client — OmniNet-backed adapter
  *
- * §NC-6 (2026-07-16): the implementation in HttpSession.cpp now uses
- * OmniNet::HTTP::Client instead of libcurl's curl_multi. Public API
- * (HttpRequest / HttpResponse / HttpError / submit / submit_cancellable /
- * submit_batch / get_stats / shutdown) is UNCHANGED so callers (LLMClient)
- * don't need to be rewritten yet.
+ * Implementation in HttpSession.cpp uses OmniNet::HTTP::Client directly.
+ * Public API: HttpRequest / HttpResponse / HttpError / submit /
+ * submit_cancellable / submit_batch / get_stats / shutdown.
  *
- * Once NC-7 (LLMClient migration) + NC-8 (sync-path migration) are
- * done, this file can be deleted (NC-9).
+ * The "Http" prefix replaces the legacy "Curl" name; this is now an
+ * OmniNet wrapper, not a libcurl one.
  *
  * Architecture:
  *   - submit() returns a std::future backed by a per-request jthread.
  *     Each request uses OmniNet::HTTP::Client directly — no shared
- *     event-loop thread, no curl_multi handle. Connection pooling
- *     comes from OmniNet's singleton Client (it reuses TLS sockets).
+ *     event-loop thread. Connection pooling comes from OmniNet's
+ *     singleton Client (it reuses TLS sockets).
  *   - submit_cancellable() honours the std::stop_token by passing it
  *     through to OmniNet::send(req, stop_token) and polling it on the
  *     worker thread so cancellation latency is bounded.
@@ -118,14 +116,14 @@ struct HttpResponse {
  * @brief Error categories for HTTP operations
  */
 enum class HttpError : std::uint8_t {
-    InitFailed,         ///< curl_easy_init returned null
+    InitFailed,         ///< OmniNet HTTP client init failed
     InvalidUrl,         ///< URL is empty or malformed
     Network,            ///< DNS, connection refused, etc.
     Timeout,            ///< Operation exceeded timeout_seconds
     Cancelled,          ///< Cancelled via stop_token
     HttpStatus,         ///< Non-2xx response (use response.status_code for details)
     WriteError,         ///< Write callback failed
-    Unknown,            ///< Other libcurl error
+    Unknown,            ///< Other HTTP transport error
 };
 
 /**
@@ -133,7 +131,7 @@ enum class HttpError : std::uint8_t {
  */
 inline const char* to_string(HttpError e) {
     switch (e) {
-        case HttpError::InitFailed:   return "Failed to initialize curl";
+        case HttpError::InitFailed:   return "Failed to initialize HTTP client";
         case HttpError::InvalidUrl:   return "Invalid or empty URL";
         case HttpError::Network:      return "Network error";
         case HttpError::Timeout:      return "Request timed out";
@@ -150,7 +148,7 @@ inline const char* to_string(HttpError e) {
 // ============================================================================
 
 /**
- * @brief Async HTTP session using libcurl's multi interface
+ * @brief Async HTTP session backed by OmniNet
  *
  * Singleton per process. Use get_instance() to access.
  */
@@ -176,8 +174,8 @@ public:
     /**
      * @brief Submit a request that can be cancelled via stop_token
      *
-     * When the stop_token is requested, the event loop removes the curl
-     * handle from curl_multi and fulfills the future with HttpError::Cancelled.
+     * When the stop_token is requested, the worker thread cancels
+     * the OmniNet request and fulfills the future with HttpError::Cancelled.
      */
     std::future<std::expected<HttpResponse, HttpError>> submit_cancellable(
         const HttpRequest& request,

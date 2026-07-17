@@ -217,8 +217,11 @@ int main() {
     test_skills_disabled_valid_silent();
     test_skills_disabled_empty_no_warn();
     test_mcp_servers_disabled_typo_warns();
-    // test_mcp_disabled_skips_typo_check();  // §B31: hangs — temporarily disabled
+    // §B31: was previously disabled because of a hang in
+    // SkillManager::cached_skills_. The added SkillManager::delete_default()
+    // calls between tests should fix this. Re-enabled 2026-07-16.
+    test_mcp_disabled_skips_typo_check();
 
-    std::cout << "test_phase15_typo_warning: 4 tests passed (1 disabled, see B31)\n";
+    std::cout << "test_phase15_typo_warning: 5 tests passed\n";
     return 0;
 }

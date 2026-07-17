@@ -190,7 +190,7 @@ public:
     // API interaction functions
     // §NC-8 (2026-07-16): CURL* parameter dropped. Implementation
     // uses OmniNet::HTTP::Client::send_blocking.
-    std::string make_curl_request_with_retry(const std::string& url, const std::string& payload, int max_retries = 3);
+    std::string make_http_request_with_retry(const std::string& url, const std::string& payload, int max_retries = 3);
 
     // Async API request using HttpSession with optional cancellation.
     // Returns a future to the response body string. Throws std::runtime_error

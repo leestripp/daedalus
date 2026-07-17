@@ -51,6 +51,10 @@ static void print_help(const char* argv0) {
               << "      --home PATH  Use PATH as the daedalus home (model store).\n"
               << "                   Overrides the XDG default. Useful when\n"
               << "                   testing with an isolated config.\n"
+              << "      --cors-origins CSV  Override CORS allowed origins (default:\n"
+              << "                   http://localhost,http://127.0.0.1).\n"
+              << "                   Pass '*' for wildcard (NOT recommended;\n"
+              << "                   only for trusted environments).\n"
               << "\n"
               << "Environment:\n"
               << "  DAEDALUS_WEBUI_PORT  Override default port\n"
@@ -72,6 +76,12 @@ int main(int argc, char* argv[]) {
     std::string model_name;
     std::filesystem::path project_root = std::filesystem::current_path();
     std::filesystem::path daedalus_home;   // empty = use default
+    // §webui-6: default to loopback + localhost origins. Hosts that
+    // genuinely need wildcard (or a LAN origin) can override via
+    // --cors-origins on the CLI.
+    std::string cors_origins =
+        "http://localhost,http://localhost:8080,"
+        "http://127.0.0.1,http://127.0.0.1:8080";
 
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -90,20 +100,29 @@ int main(int argc, char* argv[]) {
             }
             model_name = argv[++i];
         }
-    else if (arg == "--home") {
-        // §webui-3 (2026-07-16): --home was previously parsed and
-        // discarded. Now honoured by setting $DAEDALUS_HOME in the
-        // process environment BEFORE Paths::global() is initialized.
-        // Paths::user_root() honours $DAEDALUS_HOME, so this routes
-        // every per-session AgentConfig (which sets daedalus_home
-        // from Paths::global().user_root()) to the user's chosen
-        // model store.
-        if (i + 1 >= argc) {
-            std::cerr << "--home requires a PATH argument\n";
-            return 2;
+        else if (arg == "--cors-origins") {
+            // §webui-6: explicit override. Use "*" for wildcard
+            // (NOT recommended; only for trusted environments).
+            if (i + 1 >= argc) {
+                std::cerr << "--cors-origins requires a CSV argument\n";
+                return 2;
+            }
+            cors_origins = argv[++i];
         }
-        daedalus_home = argv[++i];
-    }
+        else if (arg == "--home") {
+            // §webui-3 (2026-07-16): --home was previously parsed and
+            // discarded. Now honoured by setting $DAEDALUS_HOME in the
+            // process environment BEFORE Paths::global() is initialized.
+            // Paths::user_root() honours $DAEDALUS_HOME, so this routes
+            // every per-session AgentConfig (which sets daedalus_home
+            // from Paths::global().user_root()) to the user's chosen
+            // model store.
+            if (i + 1 >= argc) {
+                std::cerr << "--home requires a PATH argument\n";
+                return 2;
+            }
+            daedalus_home = argv[++i];
+        }
         else if (!arg.empty() && arg[0] == '-') {
             std::cerr << "Unknown option: " << arg << "\n"
                       << "Run `" << argv[0] << " --help` for usage.\n";
@@ -145,7 +164,13 @@ int main(int argc, char* argv[]) {
     cfg.port              = port;
     cfg.workerCount       = 4;
     cfg.corsEnabled       = true;
-    cfg.corsAllowedOrigins = "*";
+    // §webui-6 (2026-07-16): default to loopback-only origins.
+    // The default address is 127.0.0.1, but a host could pass `--bind`
+    // (future) to expose this on a LAN address; in that case the
+    // browser will reject responses whose Access-Control-Allow-Origin
+    // doesn't match. Hosts that genuinely need wildcard CORS can
+    // override via --cors-origins "*" on the CLI.
+    cfg.corsAllowedOrigins = cors_origins;
 
     OmniNet::HTTP::Server server(cfg);
     websse::SessionManager mgr(server, model_name, project_root);

@@ -10,7 +10,7 @@
 ## Current state (2026-07-16)
 
 - **Build:** clean (only OmniNet-internal warnings).
-- **Tests:** `ctest -E phase15_typo_warning` → **62/62 pass**, 2 live-LLM skipped, 0 failures.
+- **Tests:** `ctest` → **62/62 pass**, 2 live-LLM skipped, 0 failures.
 - **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
 - **Open items:** none.
 
@@ -91,7 +91,7 @@ Bugs are tagged by severity. ✅ = done (one-liner; details in
 - ✅ B24 std::stod throws on non-numeric backoff_multiplier
 - ✅ B25 McpServerManager::load_env_file idempotency (verified non-bug)
 - ✅ B29 BashCommandExecutor::execute has no timeout (already in place)
-- ✅ B31 phase15_typo_warning_tests hangs in case 3 (SkillManager singleton)
+- ✅ B31 phase15_typo_warning_tests hangs in case 3 (SkillManager singleton, 2026-07-16; re-enabled case 5 in 2026-07-16 sweep — all 5 tests pass in 0.03s)
 
 ### LOW
 

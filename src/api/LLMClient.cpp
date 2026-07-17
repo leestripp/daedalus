@@ -480,7 +480,7 @@ std::future<std::string> LLMClient::make_api_request_async(
         });
 }
 
-// §NC-8 (2026-07-16): make_curl_request_with_retry rewritten on
+// §NC-8 (2026-07-16): make_http_request_with_retry rewritten on
 // OmniNet::HTTP::Client. The CURL* parameter is dropped — callers
 // no longer need to manage a curl handle.
 //
@@ -490,7 +490,7 @@ std::future<std::string> LLMClient::make_api_request_async(
 //   - 4xx (other) → log + return body (no retry, client error)
 //   - 5xx → log + exponential backoff via server_error_settings
 //   - Transport error → log + exponential backoff (if enabled)
-std::string LLMClient::make_curl_request_with_retry(
+std::string LLMClient::make_http_request_with_retry(
     const std::string& url, const std::string& payload, int max_retries)
 {
     std::string response_buffer;
@@ -1181,7 +1181,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // retry instead of trying to json::parse an empty response_body.
         if (retry >= 2 && config_.stream && sse_parser.final_event().is_null()) {
             try {
-                response_body = make_curl_request_with_retry( api_url,
+                response_body = make_http_request_with_retry( api_url,
                     request_payload.dump());
             } catch (const std::exception& api_e) {
                 std::ostringstream api_retry;
@@ -1209,7 +1209,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
                 // Try to get a fresh response from the API (non-streaming fallback)
                 try {
-                    response_body = make_curl_request_with_retry( api_url,
+                    response_body = make_http_request_with_retry( api_url,
                         request_payload.dump());
                 } catch (const std::exception& api_e) {
                     std::ostringstream api_retry;
@@ -1317,7 +1317,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_curl_request_with_retry( api_url, request_payload.dump());
+                response_body = make_http_request_with_retry( api_url, request_payload.dump());
                 response_json = json::parse(response_body);
                 
                 // Check if this response is valid
@@ -1433,7 +1433,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_curl_request_with_retry( api_url, request_payload.dump());
+                response_body = make_http_request_with_retry( api_url, request_payload.dump());
                 response_json = json::parse(response_body);
                 
                 if (response_json.contains("choices") && !response_json["choices"].empty()) {

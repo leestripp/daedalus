@@ -2,11 +2,9 @@
  * @file HttpSession.cpp
  * @brief Async HTTP client — OmniNet-backed implementation
  *
- * §NC-6 (2026-07-16): internal rewrite. Public API (HttpRequest /
- * HttpResponse / HttpError / submit / submit_cancellable / submit_batch /
- * get_stats / shutdown) UNCHANGED. The implementation now uses
- * OmniNet::HTTP::Client instead of libcurl's curl_multi. libcurl
- * is fully gone from daedalus (see CodeMax.md "§NOMORE-CURL").
+ * Public API: HttpRequest / HttpResponse / HttpError / submit /
+ * submit_cancellable / submit_batch / get_stats / shutdown.
+ * The implementation uses OmniNet::HTTP::Client directly (no libcurl).
  *
  * Why OmniNet works without manual event-loop gymnastics:
  *   - OmniNet::HTTP::Client is a singleton that pools TLS sockets
@@ -298,14 +296,11 @@ HttpSession::submit_batch(const std::vector<HttpRequest>& requests) {
 // write_cb / header_cb / multi_ / worker_ / stop_source_ / queue_mutex_ /
 // queue_cv_ / pending_ / in_flight_ / in_flight_mutex_
 //
-// Everything above was needed for curl_multi. OmniNet manages its own
-// connection pool + thread pool internally, so the data members and
-// helpers are no longer needed. They're declared in the header for ABI
-// stability — the implementation just becomes empty no-ops / unused.
-//
-// §NC-6: keep RequestState as an opaque empty struct so the legacy
-// std::queue<std::unique_ptr<RequestState>> member in the header
-// can be destructed without ABI churn.
+// Legacy stubs: the original libcurl-multi event loop is gone.
+// OmniNet manages its own connection pool + thread pool internally.
+// These empty implementations are kept as private members so the
+// ABI surface (private methods + data members) is unchanged for
+// any embedder that #includes this header.
 struct HttpSession::RequestState {};
 
 void HttpSession::event_loop(std::stop_token /*st*/) {}
