@@ -19,6 +19,7 @@ embedding `libdaedalus.a` and for core contributors.
 | [`agent_system_prompts.md`](agent_system_prompts.md) | **Core contributors** | System prompt components: identity, tools section, phase descriptions, skill blocks. |
 | [`how_compress_works.md`](how_compress_works.md) | **Core contributors** | The 70/30 context compression algorithm, safe split-point rules, tool-call-pair integrity. |
 | [`crash_resilience.md`](crash_resilience.md) | **Host developers / users** | Atomic save, write-through auto-flush, async-signal-safe crash handler, drop-last-message recovery. Explains `messages.json`, `messages.json.crash`, and the SIGSEGV/SIGABRT/SIGFPE/SIGILL handler. |
+| [`library_design.md`](library_design.md) | **Core contributors** | Permanent invariants for `libdaedalus.a`: the no-stdio rule, async-signal-safety, output channels the library may use. Promoted from `CodeMax.md`. |
 | [`agent_state_machine.md`](agent_state_machine.md) | **Core contributors** | Redirect stub — state enum + table now in `Agent.md §3.4`. |
 
 ## Tool Reference

@@ -762,6 +762,7 @@ See `demos/daedalus-manager/main.cpp` for the implementation.
 - [docs/index.md](docs/index.md) — start here: map of all docs
 - [docs/embedding.md](docs/embedding.md) — embedding guide + AgentSink contract
 - [docs/crash_resilience.md](docs/crash_resilience.md) — atomic save, auto-flush, SIGSEGV/SIGABRT handler, recovery
+- [docs/library_design.md](docs/library_design.md) — permanent invariants for `libdaedalus.a` (no-stdio, output channels)
 - [docs/storage.md](docs/storage.md) — XDG-compliant storage layout
 - [docs/tools.md](docs/tools.md) — tool specifications
 - [docs/skills.md](docs/skills.md) — Agent Skills

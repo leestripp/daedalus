@@ -4,6 +4,176 @@ All notable changes to CodeMax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.5.0] — Unreleased
+
+Crash-resilient message persistence + libcurl removal + Agent
+Communication Protocol (ACP) sub-library.
+
+### Added
+
+- **Crash-resilient message persistence** (`Messages`):
+  - **Atomic save** (CRASH-1): every `save()` writes to `messages.json.tmp`,
+    `fsync()`s, then `rename()`s over `messages.json`. POSIX `rename()`
+    on the same filesystem is atomic — readers never see a half-written
+    file. `kill -9` mid-write now leaves the previous fully-written
+    `messages.json` intact.
+  - **Write-through auto-flush** (CRASH-2): every `add_*()` marks the
+    message chain as dirty; a background `std::thread` flushes within
+    ~100 ms (configurable via `auto_flush_interval_ms`). Destructor
+    stops the worker cleanly and does one final flush.
+  - **Async-signal-safe crash handler** (CRASH-4): `Messages::install_crash_handlers()`
+    installs `SIGSEGV`/`SIGABRT`/`SIGFPE`/`SIGILL` handlers that write
+    `messages.json.crash` from a pre-opened fd using only
+    `open`/`write`/`close`/`fsync`, then re-raise so the user still
+    gets a core dump / stack trace. Handler iterates a process-global
+    registry of `Messages*` instances under a tiny `std::atomic<int>`
+    spinlock (no `pthread_mutex` — not async-signal-safe).
+  - **Crash recovery** (CRASH-5): `load()` falls back to
+    `messages.json.crash` when the main file is missing or corrupt;
+    defensively drops the last message if it looks like the cause of
+    the crash (via `validate_message_for_recovery()` — checks role,
+    tool_call_id, assistant tool_calls arguments JSON), then re-saves
+    the recovered chain to `messages.json` atomically.
+  - **Production wiring**: `Agent::install_crash_handlers()` /
+    `uninstall_crash_handlers()` forward through `AgentImpl` and
+    `LLMClient` to `Messages`. `daedalus-cli/main.cpp` calls
+    `agent.install_crash_handlers()` after `agent.initialize()`.
+  - Full architecture + trade-offs + end-to-end behaviour per crash
+    scenario: **`docs/crash_resilience.md`**.
+
+- **Agent Communication Protocol (ACP) sub-library** at
+  `demos/daedalus-cli/acp/`. Sub-library, demos-only (uses `std::cerr`
+  for diagnostics which would corrupt a TUI host). Enabled via
+  `-DDAEDALUS_CLI_ACP=ON` (default OFF).
+  - `AcpClient` with structured `AcpResult<T>` error propagation
+    (replaces silent default-constructed return values).
+  - SSE structured dispatch via `IRunEventHandler` callbacks
+    (`on_run_created`, `on_message_part`, `on_run_completed`,
+    `on_run_failed`, `on_run_cancelled`, `on_error`, …).
+  - `OmniNet`-backed transport: `create_omni_transport()` (was
+    `create_curl_transport` — the old name was a lie).
+  - `stream_run_events()` was a leftover stub returning
+    `AcpError{501,"not implemented"}`. Now correctly delegates to
+    `transport_->stream_events()` (send_streaming + SseParser +
+    dispatch_sse_event).
+  - End-to-end test (`test_acp_end_to_end`, 4 cases / 42 assertions,
+    ~2 s) spins up an in-process OmniNet HTTP server with a
+    chunked-SSE endpoint, verifies all 11 spec event types route to
+    the correct callbacks.
+
+- **Documentation:**
+  - `docs/crash_resilience.md` (new) — the conversation-history
+    lifecycle story.
+  - `docs/library_design.md` (new) — the no-stdio invariant for
+    `libdaedalus.a` (formerly in `CodeMax.md`; promoted to a
+    permanent spec).
+  - `daedalus_cli` body shape for webui POST
+    (`{"message":"..."}`, not `{"content":"..."}`) explicitly
+    documented in `Readme.md`.
+
+### Changed
+
+- **`CurlMultiSession` → `HttpSession`** rename (12 files, ~172
+  references). The class still wraps an HTTP client; the new name
+  reflects the actual implementation (OmniNet HTTP, not curl). The
+  public API is unchanged.
+- **`make_curl_request_with_retry` → `make_http_request_with_retry`**
+  in `LLMClient` (sync path). Same behaviour; libcurl no longer in
+  the build.
+- **`AcpClient::create_curl_transport` → `create_omni_transport`**.
+- **`daedalus-webui` CORS**: default `cfg.corsAllowedOrigins`
+  tightened from `"*"` to loopback-only
+  (`http://localhost`, `http://localhost:8080`, `http://127.0.0.1`,
+  `http://127.0.0.1:8080`); new `--cors-origins` CLI flag for
+  override.
+- **Phase 15 typo-warning tests**: case 5 re-enabled (was disabled
+  pending `SkillManager::delete_default()` lifecycle fix B31).
+  All 5 cases now pass in 0.03 s.
+- **ACP error message handling**: `err.message` and `err.cause` in
+  SSE error events truncated to 1024 chars + `…[truncated]` to
+  prevent unbounded payloads from a malicious or buggy server
+  consuming receiver memory.
+
+### Removed
+
+- **libcurl dependency completely removed** from the build system.
+  `find_package(CURL)` and `CURL::libcurl` links gone from
+  `CMakeLists.txt`. Zero `curl_easy_*`, `curl_multi_*` calls
+  anywhere in `src/`, `demos/`, `tests/`.
+- **Deleted** `include/daedalus/net/CurlHandle.h`. File no longer
+  referenced after the libcurl removal.
+- **Deleted** `tests/test_curl_handle.cpp`. The curl handle unit
+  tests are no longer applicable.
+- **Deleted** `tests/test_curl_multi_session.cpp`; replaced by
+  `tests/test_http_session.cpp` (covers the renamed HttpSession).
+- **Legacy `.codemax[-<name>]/` runtime-state paths** completely
+  removed. `.codemax` was a leftover from a previous tool with the
+  same name as a user; never a previous name for `daedalus`. User
+  explicitly banned `.codemax` references in the library. Fallback
+  branch and constants removed from `src/library/project_paths.cpp`;
+  test cases removed from `tests/test_project_paths.cpp`; doc
+  sections removed from `docs/storage.md` and `docs/migration.md`.
+  `grep -rn codemax src/ include/ tests/` → 0 hits
+  (`demos/daedalus-cli/system_prompt.txt` retains one teaching
+  example for the LLM about `pkill -f codemax`).
+
+### Fixed
+
+- **Crash-safe message persistence**: every crash scenario
+  (SIGSEGV, SIGABRT, SIGFPE, SIGILL, `kill -9`, power loss, OOM kill)
+  now recovers up to the last successfully-`fsync()`'d save().
+  Worst-case data-loss window is bounded by the 100 ms auto-flush
+  interval.
+- **ACP-16**: `RunCreateRequest::to_json()` had an empty `if (req.session_id)`
+  block — the `session_id` field was silently dropped from every
+  `POST /v1/runs` request body. Now correctly writes
+  `j["session_id"] = *req.session_id;`.
+- **daedalus-subagent / daedalus-manager `--help` crash** (F2,
+  was open in v0.4.6-prep notes). Both demos now short-circuit
+  `--help`/`-h` BEFORE positional argument parsing, so `--help`
+  prints help text and exits 0 instead of passing `"--help"` as a
+  non-existent `project_root` to `Agent::initialize()`.
+- **Webui body shape documented** (F3, was open in v0.4.6-prep
+  notes). `Readme.md` line 525 now explicitly states
+  `/sessions/<id>/messages` expects `{"message": "..."}`.
+- **Messages destructor no longer auto-saves** when background flush
+  is disabled (per-phase test race fix: tests that wiped the data
+  directory between Messages construction and destruction no longer
+  get phantom `messages.json` files re-created by the destructor).
+- **ACO transport / Message / Run `from_json` / `to_json`
+  completeness**: previously `Run.created_at` / `Message.created_at`
+  were parsed but not written out, and `from_json(Run&)` discarded
+  most fields. Both now round-trip cleanly.
+- **`is_connected` check**: previously returned true for any status
+  `<500`; now requires `2xx` (the original semantics were a typo).
+
+### Tests
+
+- `messages_tests` 73/73 + 1 skipped (203/203 assertions).
+- `test_acp_basic` 40/40 (131/131 assertions).
+- `test_acp_end_to_end` 4/4 (42/42 assertions).
+- Full `ctest` → 64/64 pass, 2 live-LLM skipped, 0 failures.
+
+### Migration notes (v0.4.x → v0.5.0)
+
+- **libcurl users**: no API change. `LLMClient`'s sync HTTP path now
+  uses OmniNet under the hood. Behaviour is identical.
+- **`CurlMultiSession` users**: rename to `HttpSession`. Source
+  drops & include paths are unchanged; only the class name moved.
+- **`cfg.corsAllowedOrigins = "*"` (webui)**: now defaults to
+  loopback-only. Hosts running on a non-loopback origin must pass
+  `--cors-origins https://myhost.example` (comma-separated).
+- **`.codemax[-<name>]/` users**: those paths no longer work.
+  Migrate to `.daedalus[-<name>]/` (the existing canonical namespacing)
+  via `daedalus-cli --migrate-data`. If data still exists in the
+  legacy path the migrator handles it.
+- **Crash recovery**: hosts that previously saw empty sessions after
+  a crash now get the recovered conversation back automatically on
+  next launch. No host code change required; `Messages::load()` is
+  backward-compatible.
+
+---
+
 ## [Unreleased]
 
 ### Fixed (2026-07-16, v0.4.2 prep — physical test pass)
@@ -21,12 +191,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   end-to-end with the live `minimax-m2.7` model.
 
 - **`daedalus-subagent --help` / `daedalus-manager --help` crash**
-  (HIGH — F2, open). Both demos treat `argv[1]` as `project_root`
-  and pass it to `Agent::initialize()` without a `--help` short-circuit;
+  (HIGH — F2). Both demos treat `argv[1]` as `project_root` and
+  pass it to `Agent::initialize()` without a `--help` short-circuit;
   the demo throws `std::invalid_argument("Project path does not
   exist: --help")` and aborts. Same root cause in both; same
-  fix pattern as `daedalus-cli/main.cpp:52-60`. Tracked in
-  CodeMax.md F2 for follow-up.
+  fix pattern as `daedalus-cli/main.cpp:52-60`. **Fixed in v0.5.0**
+  (see above). Tracked in CodeMax.md F2.
 
 ### Fixed (2026-07-15, v0.4.2 prep)
 
