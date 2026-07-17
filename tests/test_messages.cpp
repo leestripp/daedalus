@@ -50,6 +50,15 @@ Messages create_test_messages(const fs::path& proj_root, int keep_head = 2, int 
     config.max_context_size = 200000;
     config.compress_threshold = 0.9f;
     config.debug_output = false;  // Disable debug output in tests
+    // §CRASH-2 (2026-07-16): tests disable the background flush thread
+    // by default. Most tests want full control over when save() is
+    // called (to assert file contents immediately after add_*).
+    // Tests that exercise the flush worker re-enable it explicitly
+    // by mutating `config` after construction is no longer possible
+    // (auto-flush is decided at construction time), so they pass
+    // a config with auto_flush_enabled = true via the second
+    // overload create_test_messages_cfg() below.
+    config.auto_flush_enabled = false;
     // §Phase 8.8: Messages takes the per-agent data dir, not the
     // project root. Tests that want the legacy default namespace
     // pass `<proj_root>/.daedalus`. Use create_test_messages_with_name()
@@ -564,11 +573,14 @@ TEST_SUITE("Compression Threshold") {
         MessageCompressionConfig config;
         config.compress_threshold = 0.5f;  // 50%
         config.max_context_size = 100000;
+        // §CRASH-2 (2026-07-16): disable auto-flush so the background
+        // worker doesn't race with cleanup_test_project below.
+        config.auto_flush_enabled = false;
         Messages msgs(proj, config);
-        
+
         msgs.add_system("System");
         msgs.add_user("Task");
-        
+
         CHECK_FALSE(msgs.should_compress(49000));  // 49%
         CHECK(msgs.should_compress(50000));        // 50%
         CHECK(msgs.should_compress(100000));       // 100%
@@ -899,6 +911,101 @@ TEST_SUITE("Save and Load") {
         auto msgs = create_test_messages(proj);
         msgs.save();
         CHECK_FALSE(std::filesystem::exists(crash));
+
+        cleanup_test_project(proj);
+    }
+
+    // §CRASH-2 (2026-07-16): write-through auto-flush tests.
+
+    TEST_CASE("CRASH-2 background flush worker writes within 100ms") {
+        auto proj = create_test_project();
+
+        // Build a Messages with auto_flush_enabled = true and a
+        // tight 50ms interval so the test runs fast.
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = true;
+        cfg.auto_flush_interval_ms = 50;
+        Messages msgs(proj / ".daedalus", cfg);
+
+        msgs.add_system("Background flush test");
+        msgs.add_user("Hello");
+
+        // Poll for up to 1 second for the file to appear.
+        const auto deadline = std::chrono::steady_clock::now()
+                              + std::chrono::seconds(1);
+        bool appeared = false;
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (msgs.has_saved_messages()) {
+                appeared = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        CHECK(appeared);
+
+        // Verify contents survived the round-trip via the background
+        // thread (not via explicit save()).
+        Messages reload(proj / ".daedalus", cfg);
+        CHECK(reload.load());
+        CHECK(reload.size() == 2);
+        CHECK(reload.get_messages()[1]["content"] == "Hello");
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-2 flush_now() blocks until save completes") {
+        auto proj = create_test_project();
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = true;
+        cfg.auto_flush_interval_ms = 10000;  // effectively never auto-flush
+        Messages msgs(proj / ".daedalus", cfg);
+
+        msgs.add_user("Synchronous flush please");
+        // The background worker won't fire for 10s; only an
+        // explicit flush_now() should put it on disk.
+        CHECK_FALSE(msgs.has_saved_messages());
+        msgs.flush_now();
+        CHECK(msgs.has_saved_messages());
+
+        // Reload to confirm contents.
+        MessageCompressionConfig cfg2 = cfg;
+        Messages reload(proj / ".daedalus", cfg2);
+        CHECK(reload.load());
+        CHECK(reload.get_messages()[0]["content"] == "Synchronous flush please");
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-2 destructor stops worker cleanly") {
+        auto proj = create_test_project();
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = true;
+        cfg.auto_flush_interval_ms = 50;
+        // Add a message, then destroy immediately.
+        {
+            Messages msgs(proj / ".daedalus", cfg);
+            msgs.add_system("Destroy me");
+            msgs.add_user("Last gasp");
+            // No explicit flush_now() — relies on destructor's
+            // worker-stop-and-final-flush path.
+        }
+        // File MUST exist on disk after Messages goes out of scope.
+        CHECK(std::filesystem::exists(proj / ".daedalus" / "messages.json"));
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-2 auto_flush disabled leaves save to caller") {
+        auto proj = create_test_project();
+        // create_test_messages() already disables auto-flush.
+        auto msgs = create_test_messages(proj);
+        msgs.add_user("Should not auto-flush");
+        // Background worker not running, so no save happens.
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        CHECK_FALSE(msgs.has_saved_messages());
+        // Explicit save() still works.
+        msgs.save();
+        CHECK(msgs.has_saved_messages());
 
         cleanup_test_project(proj);
     }

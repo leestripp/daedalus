@@ -345,7 +345,7 @@ the agent enters a blocking wait / readline prompt).
 - `Background flush runs within 100 ms of marking dirty`
 - `Background flush thread joins cleanly on destruction`
 
-**Status:** ⏳ Planned.
+**Status:** ✅ Done (2026-07-16). Background flush worker wired in; 4 new CRASH-2 tests pass (`messages_tests` 64/64 total, 185/185 assertions).
 
 ### Phase 3 — Graceful shutdown hooks (SIGINT, SIGTERM, SIGTSTP)
 

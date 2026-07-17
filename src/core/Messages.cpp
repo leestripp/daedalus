@@ -164,13 +164,44 @@ Messages::Messages(std::filesystem::path data_dir,
     if (!std::filesystem::exists(data_dir_)) {
         std::filesystem::create_directories(data_dir_);
     }
+
+    // §CRASH-2 (2026-07-16): start the write-through flush worker.
+    // The worker waits on flush_cv_; when an add_* sets dirty_ and
+    // notifies, it wakes up and calls save(). On destruction,
+    // stop_flush_ is set, the worker wakes, does one final flush,
+    // and exits.
+    //
+    // Tests can opt out via config.auto_flush_enabled = false if
+    // they want full control over save() timing. We remember this
+    // choice in worker_was_running_ so the destructor knows whether
+    // to flush final dirty state.
+    worker_was_running_ = config_.auto_flush_enabled;
+    if (config_.auto_flush_enabled) {
+        flush_worker_ = std::thread([this]{ flush_worker_main(); });
+    }
 }
 
-Messages::~Messages() = default;
+Messages::~Messages() {
+    // §CRASH-2 (2026-07-16): ask the flush worker to stop and join.
+    // Any final dirty state is flushed by the worker before exit, so
+    // messages added in the destructor or just before it are not lost.
+    if (flush_worker_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lk(flush_mutex_);
+            stop_flush_ = true;
+        }
+        flush_cv_.notify_all();
+        flush_worker_.join();
+    }
+    // Note: we deliberately do NOT auto-save in the destructor if
+    // the worker was disabled. The caller opted out of background
+    // flushing and is responsible for the save() timing. A surprise
+    // save() here would re-create the messages file even after the
+    // test wiped the data dir (destroying the test isolation).
+}
 
-// Default move semantics
-Messages::Messages(Messages&&) noexcept = default;
-Messages& Messages::operator=(Messages&&) noexcept = default;
+// §CRASH-2 (2026-07-16): move ops are deleted in the header
+// (atomic + thread are not movable). RVO handles return-by-value.
 
 // ============================================================================
 // Message Access
@@ -203,12 +234,17 @@ void Messages::add_system(const std::string& content) {
         return;
     }
     messages_.push_back({{"role", "system"}, {"content", content}});
+    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 void Messages::add_user(const std::string& content, const std::string& image_url) {
     json msg;
     msg["role"] = "user";
-    
+
     if (!image_url.empty()) {
         // Multi-modal: array content with text and image
         json content_array = json::array();
@@ -218,12 +254,22 @@ void Messages::add_user(const std::string& content, const std::string& image_url
     } else {
         msg["content"] = content;
     }
-    
+
     messages_.push_back(msg);
+    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 void Messages::add_assistant(const std::string& content) {
     messages_.push_back({{"role", "assistant"}, {"content", content}});
+    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 void Messages::add_tool_result(const std::string& tool_call_id, const std::string& content, bool is_error) {
@@ -237,10 +283,20 @@ void Messages::add_tool_result(const std::string& tool_call_id, const std::strin
         {"content", content},
         {"status", is_error ? "error" : "success"}
     });
+    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 void Messages::add_message(const json& msg) {
     messages_.push_back(msg);
+    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 void Messages::set_messages(const json& msgs) {
@@ -418,6 +474,8 @@ void Messages::save() const {
 
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to save messages: " + std::string(e.what()));
+        // Don't clear dirty_; let the worker try again on the next tick.
+        return;
     }
 
     // §Plan.md v0.3.5: write-through mirror to SQLite (best-effort).
@@ -435,6 +493,65 @@ void Messages::save() const {
     } catch (const std::exception& e) {
         LOG_WARNING("Messages: SQLite mirror save failed ("
                     + std::string(e.what()) + ")");
+    }
+
+    // §CRASH-2 (2026-07-16): save() succeeded — clear dirty so the
+    // background flush worker doesn't immediately re-save.
+    dirty_.store(false, std::memory_order_release);
+}
+
+// ============================================================================
+// §CRASH-2 (2026-07-16): write-through auto-flush
+// ============================================================================
+
+void Messages::flush_now() const {
+    // Caller wants the data on disk *now* (e.g. before dispatching an
+    // LLM call). Blocks until save() completes.
+    if (dirty_.load(std::memory_order_acquire)) {
+        save();
+    }
+}
+
+bool Messages::flush_if_dirty() const {
+    // Non-blocking. Used by the background flush worker.
+    if (!dirty_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    save();
+    return true;
+}
+
+void Messages::flush_worker_main() {
+    // Worker thread entry point. Loops on flush_cv_ with a timeout,
+    // exits cleanly when stop_flush_ is set.
+    //
+    // Order of operations on stop:
+    //   1. lock flush_mutex_
+    //   2. set stop_flush_ = true
+    //   3. notify_all (worker wakes from cv.wait_for)
+    //   4. join
+    // Worker sees stop_flush_, does a final flush_if_dirty(), and
+    // returns. The mutex is released during the wait, so the worker
+    // can re-acquire it to read stop_flush_.
+    while (true) {
+        std::unique_lock<std::mutex> lk(flush_mutex_);
+        // Wait until either:
+        //   - dirty_ is set (an add_* notified us), OR
+        //   - the timeout elapses (safety net), OR
+        //   - stop_flush_ is set (shutdown).
+        flush_cv_.wait_for(
+            lk,
+            std::chrono::milliseconds(config_.auto_flush_interval_ms),
+            [this] { return dirty_.load(std::memory_order_acquire)
+                       || stop_flush_; });
+        if (stop_flush_) {
+            // Final flush so nothing in-flight is lost.
+            lk.unlock();
+            flush_if_dirty();
+            return;
+        }
+        lk.unlock();
+        flush_if_dirty();
     }
 }
 

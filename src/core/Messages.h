@@ -30,6 +30,9 @@
 #include <future>
 #include <thread>
 #include <chrono>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 using json = nlohmann::json;
 
@@ -69,6 +72,20 @@ struct MessageCompressionConfig {
     
     // Debug
     bool debug_output = false;
+
+    // §CRASH-2 (2026-07-16): write-through auto-flush. When enabled
+    // (default), every add_*() marks the messages as dirty and a
+    // background thread flushes to disk within ~100 ms. Guarantees
+    // that an abrupt exit never loses more than one turn's worth of
+    // state. Disable in tests that want full control over save()
+    // timing or want to assert that save() is not called by add_*.
+    bool auto_flush_enabled = true;
+
+    // §CRASH-2: flush interval in milliseconds. Default 100 ms gives
+    // a reasonable balance between I/O overhead and data-loss
+    // window. Tests with strict timing can dial this down to 0
+    // (flush on every dirty mark).
+    int auto_flush_interval_ms = 100;
 
     // §Phase 9.10: optional callback invoked by call_llm_for_summary after a
     // successful compression API call. Reports (prompt_tokens, completion_tokens,
@@ -119,14 +136,17 @@ public:
              const MessageCompressionConfig& config = MessageCompressionConfig());
     
     ~Messages();
-    
-    // Disable copy (each session has its own Messages instance)
+
+    // §CRASH-2 (2026-07-16): Messages holds std::atomic<bool> and
+    // std::thread, both of which are NOT movable. The default move
+    // ops would be deleted by the compiler with a confusing error
+    // message, so we delete them explicitly with a clear comment.
+    // Tests rely on RVO when returning Messages by value from
+    // factory helpers — RVO does NOT require a move constructor.
     Messages(const Messages&) = delete;
     Messages& operator=(const Messages&) = delete;
-    
-    // Allow move
-    Messages(Messages&&) noexcept;
-    Messages& operator=(Messages&&) noexcept;
+    Messages(Messages&&) noexcept = delete;
+    Messages& operator=(Messages&&) noexcept = delete;
 
     // =========================================================================
     // Message Access
@@ -211,12 +231,30 @@ public:
      * @brief Save messages to .daedalus/messages.json
      */
     void save() const;
-    
+
+    /**
+     * @brief §CRASH-2 (2026-07-16): synchronously flush any pending
+     * dirty messages to disk. Returns immediately if not dirty.
+     *
+     * Use this BEFORE dispatching an LLM call if you want the user's
+     * prompt to be persisted before the LLM touches anything: if the
+     * LLM call hangs or crashes, the user's input is already on
+     * disk.
+     */
+    void flush_now() const;
+
+    /**
+     * @brief §CRASH-2: non-blocking flush. Returns true if the
+     * worker thread will flush soon (within auto_flush_interval_ms).
+     * Returns false if auto-flush is disabled.
+     */
+    bool flush_if_dirty() const;
+
     /**
      * @brief Clear all messages (keep system if exists)
      */
     void clear();
-    
+
     /**
      * @brief Check if messages file exists
      */
@@ -402,10 +440,39 @@ private:
     std::string session_id_ = "default"; // §Plan.md v0.3.5: SQLite mirror key
     json messages_;
     MessageCompressionConfig config_;
-    
+
     // Ephemeral runtime state only (NOT persisted)
     // Tracks which tools are currently executing
     std::unordered_set<std::string> executing_tools_;
+
+    // §CRASH-2 (2026-07-16): write-through auto-flush machinery.
+    //
+    // dirty_ is set by every add_*() and cleared by save(). The
+    // background thread waits on flush_cv_ with a timeout of
+    // auto_flush_interval_ms; when notified (or timed out) it checks
+    // dirty_ and calls save() if set.
+    //
+    // stop_flush_ is set in the destructor to ask the worker to
+    // exit. The worker flushes any final dirty state, joins
+    // cleanly, and the destructor then proceeds to free resources.
+    // This means the last add_*() before destruction is guaranteed
+    // to hit disk before the Messages object is gone.
+    //
+    // worker_was_running_ records whether the background flush
+    // thread was started in the constructor. If it wasn't (caller
+    // disabled auto-flush), the destructor does NOT auto-save — the
+    // caller is in full control of save() timing, and a destructive
+    // "save on dtor" would surprise test code that wipes the data
+    // dir in between Messages construction and destruction.
+    mutable std::atomic<bool> dirty_{false};
+    std::thread flush_worker_;
+    std::condition_variable flush_cv_;
+    std::mutex flush_mutex_;
+    bool stop_flush_ = false;
+    bool worker_was_running_ = false;
+
+    // Helper: flush worker thread entry point.
+    void flush_worker_main();
     
     // Curl handle for compression API calls
     
