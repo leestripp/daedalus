@@ -500,6 +500,30 @@ target_link_libraries(daedalus_sse_parser_tests PRIVATE
 )
 add_test(NAME sse_parser_tests COMMAND daedalus_sse_parser_tests)
 
+# §BUG-001 (2026-07-17): MiniMaxSseParser unit tests. Verifies the
+# is_usage_only_chunk() gate logic that fixes the streaming-trailer
+# bug (MiniMax sends `"usage": null` on the final chunk; old gate
+# keyed on the usage field and threw away the recovered response).
+#
+# Links against the pre-built daedalus library (which provides the
+# MiniMaxSseParser method bodies via LLMClient.cpp) rather than
+# compiling LLMClient.cpp directly — that avoids pulling the full
+# transitive include chain (SettingsStore → db/Database.h) into the
+# test compilation unit.
+add_executable(daedalus_minimax_sse_parser_tests
+    test_minimax_sse_parser.cpp
+)
+target_include_directories(daedalus_minimax_sse_parser_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_minimax_sse_parser_tests PRIVATE
+    doctest::doctest
+    nlohmann_json::nlohmann_json
+    daedalus
+)
+add_test(NAME minimax_sse_parser_tests COMMAND daedalus_minimax_sse_parser_tests)
+
 # Create Session Memory test
 add_executable(daedalus_session_memory_tests
     test_session_memory.cpp

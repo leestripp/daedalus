@@ -1,4 +1,5 @@
 #include "api/LLMClient.h"
+#include "api/MiniMaxSseParser.h"   // §BUG-001: exposed for tests
 #include "core/version.h"
 #include "core/FileIO.h"
 #include "core/utils.h"
@@ -703,224 +704,179 @@ void LLMClient::update_token_usage(const json& response_json) {
 }
 
 // ===================================================================
-// §Phase 3 - MiniMax SSE streaming parser (file scope).
-// Defined here so run_one_turn can instantiate it and pass a callback
-// to make_api_request_async.
+// §Phase 3 - MiniMax SSE streaming parser.
+//
+// `MiniMaxSseParser` is declared in `src/api/MiniMaxSseParser.h`
+// (private header, exposed for unit tests). This translation unit
+// provides its method bodies.
 //
 // MiniMax SSE line format:
 //   data: [{"id":"...","choices":[{"delta":{"content":"..."},"index":0}]}]
 //   data: [DONE]
 // ===================================================================
-class MiniMaxSseParser {
-public:
-    explicit MiniMaxSseParser(std::weak_ptr<daedalus::AgentSink> sink)
-        : weak_sink_(std::move(sink)) {}
-
-    /// Called for each raw HTTP chunk; SSE-lines are buffered and parsed.
-    void on_chunk(std::string_view data) {
-        buffer_.append(data.data(), data.size());
-        size_t pos = 0;
-        while ((pos = buffer_.find('\n', pos)) != std::string::npos) {
-            std::string line = buffer_.substr(0, pos);
-            buffer_.erase(0, pos + 1);
-            pos = 0;
-            parse_line(line);
-        }
+void MiniMaxSseParser::on_chunk(std::string_view data) {
+    buffer_.append(data.data(), data.size());
+    size_t pos = 0;
+    while ((pos = buffer_.find('\n', pos)) != std::string::npos) {
+        std::string line = buffer_.substr(0, pos);
+        buffer_.erase(0, pos + 1);
+        pos = 0;
+        parse_line(line);
     }
+}
 
-    /// Flush any incomplete line after the stream ends.
-    void finish() {
-        if (!buffer_.empty()) {
-            parse_line(buffer_);
-            buffer_.clear();
-        }
+void MiniMaxSseParser::finish() {
+    if (!buffer_.empty()) {
+        parse_line(buffer_);
+        buffer_.clear();
     }
+}
 
-    /// Returns all text accumulated from delta events. Used for display.
-    const std::string& text() const noexcept { return accumulated_text_; }
-
-    /// Returns the final SSE event as a JSON object. Contains the complete
-    /// response metadata (id, model, usage, finish_reason) needed for
-    /// token tracking and downstream JSON parsing.
-    /// Returns a null json::object() if no valid event was received.
-    const json& final_event() const noexcept { return final_event_; }
-
-    /// Reconstruct the assistant's message in the standard non-streaming
-    /// format.  When the server streams `delta`-shaped chunks, the
-    /// downstream code that consumes `choices[0].message` breaks unless we
-    /// synthesise the equivalent object from accumulated fragments:
-    ///   {
-    ///     "role": "assistant",
-    ///     "content": "<accumulated text>",
-    ///     "tool_calls": [<accumulated tool calls>],     // if any
-    ///     "audio_content": ""                            // MiniMax quirk
-    ///   }
-    /// `final_event_` is *not* used here — it is the LAST SSE chunk, which
-    /// carries the final `finish_reason` and `usage` but only the trailing
-    /// `delta` text fragment.  All reassembly has to come from the deltas
-    /// we buffered as they arrived.
-    json synthesized_message() const {
-        json m;
-        m["role"] = accumulated_role_.empty() ? "assistant" : accumulated_role_;
-        m["content"] = accumulated_text_;
-        m["audio_content"] = "";
-        if (!accumulated_tool_calls_.empty()) {
-            m["tool_calls"] = accumulated_tool_calls_;
-        }
-        if (!accumulated_finish_reason_.empty()) {
-            m["finish_reason"] = accumulated_finish_reason_;
-        }
-        return m;
+nlohmann::json MiniMaxSseParser::synthesized_message() const {
+    nlohmann::json m;
+    m["role"] = accumulated_role_.empty() ? "assistant" : accumulated_role_;
+    m["content"] = accumulated_text_;
+    m["audio_content"] = "";
+    if (!accumulated_tool_calls_.empty()) {
+        m["tool_calls"] = accumulated_tool_calls_;
     }
+    if (!accumulated_finish_reason_.empty()) {
+        m["finish_reason"] = accumulated_finish_reason_;
+    }
+    return m;
+}
 
-    /// §Phase 9.11: Did the SSE stream emit any text via `on_assistant_delta`
-    /// during this turn?  Used by the downstream pipeline to decide whether
-    /// to re-emit the synthesized message's content (which would duplicate
-    /// every fragment the user already saw streaming live).
-    ///   - Returns `true` if at least one text delta was fired.
-    ///   - Returns `false` if the stream had no text content (tool-only
-    ///     response, or empty response, or non-streaming path).
-    bool had_text_deltas() const noexcept { return !accumulated_text_.empty(); }
+void MiniMaxSseParser::parse_line(const std::string& line) {
+    constexpr std::string_view PREFIX = "data: ";
+    if (line.rfind(PREFIX, 0) != 0) return;
+    std::string json_str = line.substr(PREFIX.size());
+    if (json_str == "[DONE]" || json_str == "DONE") return;
+    try {
+        nlohmann::json parsed = nlohmann::json::parse(json_str);
 
-private:
-    void parse_line(const std::string& line) {
-        constexpr std::string_view PREFIX = "data: ";
-        if (line.rfind(PREFIX, 0) != 0) return;
-        std::string json_str = line.substr(PREFIX.size());
-        if (json_str == "[DONE]" || json_str == "DONE") return;
-        try {
-            json parsed = json::parse(json_str);
-
-            // Normalise into a list of top-level objects.
-            // MiniMax streams: `data: {"id":"...","choices":[{...delta...}]}` (one object).
-            // Some OpenAI-compatible endpoints stream: `data: [{...}]` (array of one).
-            // We must support both.  If `parsed` is already an array, iterate it.
-            // If it's an object, treat it as a one-element list.
-            // If neither (string, number, etc.), skip silently.
-            std::vector<json> items;
-            if (parsed.is_array()) {
-                for (const auto& el : parsed) {
-                    if (el.is_object()) items.push_back(el);
-                }
-            } else if (parsed.is_object()) {
-                items.push_back(parsed);
+        // Normalise into a list of top-level objects.
+        // MiniMax streams: `data: {"id":"...","choices":[{...delta...}]}` (one object).
+        // Some OpenAI-compatible endpoints stream: `data: [{...}]` (array of one).
+        // We must support both.  If `parsed` is already an array, iterate it.
+        // If it's an object, treat it as a one-element list.
+        // If neither (string, number, etc.), skip silently.
+        std::vector<nlohmann::json> items;
+        if (parsed.is_array()) {
+            for (const auto& el : parsed) {
+                if (el.is_object()) items.push_back(el);
             }
-            // Anything else (string, primitive) -- skip.
+        } else if (parsed.is_object()) {
+            items.push_back(parsed);
+        }
+        // Anything else (string, primitive) -- skip.
 
-            for (const auto& item : items) {
-                // Guard: item must be a JSON object (not an array or primitive).
-                if (!item.is_object()) continue;
+        for (const auto& item : items) {
+            // Guard: item must be a JSON object (not an array or primitive).
+            if (!item.is_object()) continue;
 
-                // Capture the complete item for final_event_ -- it carries the
-                // final `usage` (token counts) and `id`/`model` metadata that
-                // aren't present on every chunk.
-                final_event_ = item;
+            // Capture the complete item for final_event_ -- it carries the
+            // final `usage` (token counts) and `id`/`model` metadata that
+            // aren't present on every chunk.
+            final_event_ = item;
 
-                for (const auto& choice : item.value("choices", json::array())) {
-                    const auto& delta = choice.value("delta", json::object());
+            for (const auto& choice : item.value("choices", nlohmann::json::array())) {
+                const auto& delta = choice.value("delta", nlohmann::json::object());
 
-                    // Role (typically "assistant"; MiniMax also puts name here).
-                    if (delta.contains("role") && delta["role"].is_string()) {
-                        accumulated_role_ = delta["role"].get<std::string>();
-                    }
+                // Role (typically "assistant"; MiniMax also puts name here).
+                if (delta.contains("role") && delta["role"].is_string()) {
+                    accumulated_role_ = delta["role"].get<std::string>();
+                }
 
-                    // Text content streaming — the basic case.
-                    const json& content = delta.value("content", json());
-                    if (content.is_string() && !content.get<std::string>().empty()) {
-                        const std::string& s = content.get_ref<const std::string&>();
-                        accumulated_text_ += s;
-                        if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
-                    } else if (content.is_array()) {
-                        // MiniMax sometimes sends content as an array of parts.
-                        for (const auto& part : content) {
-                            if (part.is_string()) {
-                                const std::string& s = part.get_ref<const std::string&>();
-                                accumulated_text_ += s;
-                                if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
-                            } else if (part.is_object() && part.value("type", "") == "text") {
-                                const std::string& txt = part.value("text", std::string{});
-                                if (!txt.empty()) {
-                                    accumulated_text_ += txt;
-                                    if (auto w = weak_sink_.lock()) w->on_assistant_delta(txt);
-                                }
+                // Text content streaming — the basic case.
+                const nlohmann::json& content = delta.value("content", nlohmann::json());
+                if (content.is_string() && !content.get<std::string>().empty()) {
+                    const std::string& s = content.get_ref<const std::string&>();
+                    accumulated_text_ += s;
+                    if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
+                } else if (content.is_array()) {
+                    // MiniMax sometimes sends content as an array of parts.
+                    for (const auto& part : content) {
+                        if (part.is_string()) {
+                            const std::string& s = part.get_ref<const std::string&>();
+                            accumulated_text_ += s;
+                            if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
+                        } else if (part.is_object() && part.value("type", "") == "text") {
+                            const std::string& txt = part.value("text", std::string{});
+                            if (!txt.empty()) {
+                                accumulated_text_ += txt;
+                                if (auto w = weak_sink_.lock()) w->on_assistant_delta(txt);
                             }
-                        }
-                    }
-
-                    // Tool calls — the part Phase 9.8 missed.
-                    // MiniMax streams the whole tool_call object in one chunk
-                    // (id, name, complete arguments JSON string).
-                    // OpenAI spec streams arguments char-by-char; we handle
-                    // both by keying on `index` for accumulation.
-                    if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
-                        for (const auto& tc : delta["tool_calls"]) {
-                            if (!tc.is_object()) continue;
-                            int tc_index = tc.value("index", static_cast<int>(accumulated_tool_calls_.size()));
-                            // Grow the list to fit this index.
-                            while (static_cast<int>(accumulated_tool_calls_.size()) <= tc_index) {
-                                accumulated_tool_calls_.push_back(json::object());
-                            }
-                            auto& slot = accumulated_tool_calls_[tc_index];
-                            // Copy known fields onto the slot.  Streaming
-                            // arguments arrive as fragments -- always concatenate
-                            // strings rather than overwriting.
-                            if (tc.contains("id") && tc["id"].is_string()) {
-                                slot["id"] = tc["id"];
-                            } else if (!slot.contains("id")) {
-                                slot["id"] = "";
-                            }
-                            if (tc.contains("type") && tc["type"].is_string()) {
-                                slot["type"] = tc["type"];
-                            } else if (!slot.contains("type")) {
-                                slot["type"] = "function";
-                            }
-                            if (tc.contains("function") && tc["function"].is_object()) {
-                                if (!slot.contains("function")) slot["function"] = json::object();
-                                if (tc["function"].contains("name") && tc["function"]["name"].is_string()) {
-                                    slot["function"]["name"] = tc["function"]["name"];
-                                } else if (!slot["function"].contains("name")) {
-                                    slot["function"]["name"] = "";
-                                }
-                                if (tc["function"].contains("arguments")) {
-                                    if (tc["function"]["arguments"].is_string()) {
-                                        // Streaming fragment -- append.
-                                        std::string prev = slot["function"].value("arguments", std::string{});
-                                        slot["function"]["arguments"] = prev + tc["function"]["arguments"].get<std::string>();
-                                    } else if (tc["function"]["arguments"].is_object()) {
-                                        // Already-parsed object (rare).  Keep as JSON string.
-                                        slot["function"]["arguments"] = tc["function"]["arguments"].dump();
-                                    }
-                                } else if (!slot["function"].contains("arguments")) {
-                                    slot["function"]["arguments"] = "";
-                                }
-                            } else if (!slot.contains("function")) {
-                                slot["function"] = json::object();
-                            }
-                        }
-                    }
-
-                    // finish_reason comes on the LAST chunk for tool_calls /
-                    // stop decisions. Capture it once.
-                    if (choice.contains("finish_reason") && !choice["finish_reason"].is_null()) {
-                        if (choice["finish_reason"].is_string()) {
-                            accumulated_finish_reason_ = choice["finish_reason"].get<std::string>();
                         }
                     }
                 }
-            }
-        } catch (const json::parse_error&) {
-            // Malformed SSE line -- skip silently
-        }
-    }
 
-    std::weak_ptr<daedalus::AgentSink> weak_sink_;
-    std::string buffer_;
-    std::string accumulated_text_;           /// Complete assistant text from deltas.
-    std::string accumulated_role_;           /// "assistant" usually; set from delta.role.
-    std::string accumulated_finish_reason_;  /// "stop", "tool_calls", "length" — set once.
-    json accumulated_tool_calls_ = json::array();  /// Rebuilt by tool_calls streaming.
-    json final_event_;                       /// Last SSE event with usage/finish_reason.
-};
+                // Tool calls — the part Phase 9.8 missed.
+                // MiniMax streams the whole tool_call object in one chunk
+                // (id, name, complete arguments JSON string).
+                // OpenAI spec streams arguments char-by-char; we handle
+                // both by keying on `index` for accumulation.
+                if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
+                    for (const auto& tc : delta["tool_calls"]) {
+                        if (!tc.is_object()) continue;
+                        int tc_index = tc.value("index",
+                                                static_cast<int>(accumulated_tool_calls_.size()));
+                        // Grow the list to fit this index.
+                        while (static_cast<int>(accumulated_tool_calls_.size()) <= tc_index) {
+                            accumulated_tool_calls_.push_back(nlohmann::json::object());
+                        }
+                        auto& slot = accumulated_tool_calls_[tc_index];
+                        // Copy known fields onto the slot.  Streaming
+                        // arguments arrive as fragments -- always concatenate
+                        // strings rather than overwriting.
+                        if (tc.contains("id") && tc["id"].is_string()) {
+                            slot["id"] = tc["id"];
+                        } else if (!slot.contains("id")) {
+                            slot["id"] = "";
+                        }
+                        if (tc.contains("type") && tc["type"].is_string()) {
+                            slot["type"] = tc["type"];
+                        } else if (!slot.contains("type")) {
+                            slot["type"] = "function";
+                        }
+                        if (tc.contains("function") && tc["function"].is_object()) {
+                            if (!slot.contains("function")) slot["function"] = nlohmann::json::object();
+                            if (tc["function"].contains("name") && tc["function"]["name"].is_string()) {
+                                slot["function"]["name"] = tc["function"]["name"];
+                            } else if (!slot["function"].contains("name")) {
+                                slot["function"]["name"] = "";
+                            }
+                            if (tc["function"].contains("arguments")) {
+                                if (tc["function"]["arguments"].is_string()) {
+                                    // Streaming fragment -- append.
+                                    std::string prev = slot["function"].value("arguments", std::string{});
+                                    slot["function"]["arguments"] =
+                                        prev + tc["function"]["arguments"].get<std::string>();
+                                } else if (tc["function"]["arguments"].is_object()) {
+                                    // Already-parsed object (rare).  Keep as JSON string.
+                                    slot["function"]["arguments"] = tc["function"]["arguments"].dump();
+                                }
+                            } else if (!slot["function"].contains("arguments")) {
+                                slot["function"]["arguments"] = "";
+                            }
+                        } else if (!slot.contains("function")) {
+                            slot["function"] = nlohmann::json::object();
+                        }
+                    }
+                }
+
+                // finish_reason comes on the LAST chunk for tool_calls /
+                // stop decisions. Capture it once.
+                if (choice.contains("finish_reason") && !choice["finish_reason"].is_null()) {
+                    if (choice["finish_reason"].is_string()) {
+                        accumulated_finish_reason_ = choice["finish_reason"].get<std::string>();
+                    }
+                }
+            }
+        }
+    } catch (const nlohmann::json::parse_error&) {
+        // Malformed SSE line -- skip silently
+    }
+}
 
 // // Helper method to get state name as string
 std::string LLMClient::get_state_name(AgentState state) const {
@@ -975,15 +931,20 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     };
 
     // §Phase 9.10: When streaming, always request usage stats via
-    // `stream_options: {include_usage: true}`.  MiniMax (confirmed by live
-    // test on 2026-07-11) sends a separate final chunk with
-    // `{"choices":[],"usage":{"total_tokens":N,"prompt_tokens":M,
-    // "completion_tokens":K}}` only when this flag is set.  Without it,
-    // every chunk has `"usage": null` and token counts are 0 for the whole
-    // session — making context-compression triggering impossible.
-    // OpenAI added this in May 2024; MiniMax supports it identically.
+    // `stream_options: {include_usage: true, continuous_usage_stats: true}`.
+    // MiniMax (confirmed by live test on 2026-07-11) sends a separate
+    // final chunk with `{"choices":[],"usage":{...}}` only when this flag
+    // is set. Without it, every chunk has `"usage": null` and token
+    // counts are 0 for the whole session — making context-compression
+    // triggering impossible.  `continuous_usage_stats` additionally tells
+    // the server to emit usage on every chunk (not just the final one),
+    // which gives live per-chunk token counts for the session.  OpenAI
+    // added these in May 2024; MiniMax supports both identically.
     if (config_.stream) {
-        request_payload["stream_options"] = {{"include_usage", true}};
+        request_payload["stream_options"] = {
+            {"include_usage", true},
+            {"continuous_usage_stats", true}
+        };
     }
     
     // Validate JSON serialization before sending
@@ -1396,25 +1357,37 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // That IS a valid response: the assistant message has already been
     // accumulated by `MiniMaxSseParser` from the earlier delta chunks.  Skip
     // the "no choices" retry path in that case.
+    //
+    // §BUG-001 (2026-07-17): the original gate keyed on
+    // `!response_json["usage"].is_null()`. That fails for MiniMax,
+    // which sends `"usage": null` on the final chunk. The result: a
+    // successfully-streamed response (text or tool_calls) is
+    // discarded, and the library falls into the 3-retry exponential
+    // backoff (1s+2s+4s=7s of silent spinner) before giving up.
+    // The fix is to gate on what the SSE parser has actually
+    // accumulated — text OR tool_calls — regardless of what `usage`
+    // contains. See `is_usage_only_chunk()` in MiniMaxSseParser.h
+    // for the truth table.
     if (!response_json.contains("choices") || response_json["choices"].empty()) {
-        bool is_usage_only_chunk =
-            config_.stream &&
-            response_json.contains("usage") &&
-            !response_json["usage"].is_null();
-        if (is_usage_only_chunk) {
-            // §Phase 9.10: usage-only final SSE chunk.  Build a synthetic
-            // single-choice response so the rest of the pipeline (which
-            // reads `response_json["choices"][0]`) continues to work.
-            // `usage` data is preserved as-is for `update_token_usage`.
-            json synth_message = sse_parser.synthesized_message();
-            response_json["choices"] = json::array({
+        if (is_usage_only_chunk(config_.stream, response_json, sse_parser)) {
+            // §Phase 9.10 / §BUG-001: usage-only final SSE chunk.
+            // Build a synthetic single-choice response so the rest of
+            // the pipeline (which reads `response_json["choices"][0]`)
+            // continues to work. `usage` data is preserved as-is for
+            // `update_token_usage`.
+            nlohmann::json synth_message = sse_parser.synthesized_message();
+            response_json["choices"] = nlohmann::json::array({
                 {{"index", 0},
                  {"message", synth_message},
                  {"finish_reason", "stop"}}
             });
             if (sink_) sink_->on_log(daedalus::LogLevel::Info,
                 "[LLM] Stream finished with usage-only final chunk "
-                "(real token counts available)");
+                "(recovered via synthesized_message; usage was "
+                + std::string(response_json.contains("usage") &&
+                              response_json["usage"].is_null() ? "null"
+                                                                : "non-null")
+                + ")");
             // Fall through to message/tool-call processing below.
         }
         else
