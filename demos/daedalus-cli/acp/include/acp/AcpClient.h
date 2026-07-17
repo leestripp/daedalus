@@ -175,7 +175,7 @@ private:
 // ============================================================================
 
 // Internal factory for curl transport
-std::unique_ptr<IAcpTransport> create_curl_transport(const std::string& base_url);
+std::unique_ptr<IAcpTransport> create_omni_transport(const std::string& base_url);
 
 std::unique_ptr<AcpClient> create_client(const std::string& base_url);
 

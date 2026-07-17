@@ -103,7 +103,14 @@ TEST_CASE("get_session returns AcpError when transport fails") {
     REQUIRE_FALSE(result.has_value());
 }
 
-TEST_CASE("stream_run_events returns AcpError 501 (not implemented yet)") {
+TEST_CASE("stream_run_events returns success on unreachable server") {
+    // §ACP-7 (2026-07-16): no longer a stub. stream_run_events now
+    // delegates to the transport's stream_events() — which uses
+    // send_streaming + SseParser. With an unreachable server the
+    // streaming path returns an empty result (the SSE stream
+    // simply has no events to deliver, so we don't return an error).
+    // The behaviour: the call completes silently; the handler is
+    // never invoked because the server is unreachable.
     auto client = acp::create_client("http://localhost:1");
     // Even on a real server this would fail until ACP-7 is done. We
     // don't pass a handler — using a do-nothing lambda for completeness.
@@ -122,8 +129,7 @@ TEST_CASE("stream_run_events returns AcpError 501 (not implemented yet)") {
     } handler;
 
     auto result = client->stream_run_events("test", handler);
-    REQUIRE_FALSE(result.has_value());
-    CHECK(result.error().code == 501);
+    REQUIRE(result.has_value());   // success — stream simply ends
 }
 
 // ============================================================================

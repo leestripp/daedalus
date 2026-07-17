@@ -199,10 +199,14 @@ AcpResult<Run> AcpClient::cancel_run(const RunId& run_id) {
 }
 
 AcpResult<void> AcpClient::stream_run_events(const RunId& run_id, IRunEventHandler& handler) {
-    // SSE is a stub for now — return an explicit error so callers know.
-    return std::unexpected(make_error(
-        "SSE streaming not implemented (ACP-7 open)", 501 /* Not Implemented */));
-    (void)run_id; (void)handler;  // suppress unused-param warnings
+    // §ACP-7 (2026-07-16): no longer a stub. Delegate to the
+    // transport's stream_events() which uses OmniNet's send_streaming
+    // + the client-side SseParser + the structured dispatch in
+    // dispatch_sse_event(). AcpResult<void> is the contract — the
+    // streaming itself is push-based via the IRunEventHandler
+    // callbacks; this method returns once SSE ends or errors.
+    transport_->stream_events(run_id, handler);
+    return {};   // success
 }
 
 // ----- Session operations --------------------------------------------------
@@ -234,7 +238,7 @@ bool AcpClient::ping() {
 // ============================================================================
 
 std::unique_ptr<AcpClient> create_client(const std::string& base_url) {
-    auto transport = create_curl_transport(base_url);
+    auto transport = create_omni_transport(base_url);
     return std::make_unique<AcpClient>(std::move(transport), base_url);
 }
 

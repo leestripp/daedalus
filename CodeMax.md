@@ -509,10 +509,10 @@ so none of it is compiled. Standalone build fails immediately.
 | ACP-9 | Decide on stdio policy — `AcpClient.cpp` and `AcpTransport.cpp` use `std::cerr` (8 + 4 sites). Fine for CLI demo (host owns terminal), but a future TUI host wrapping ACP will be corrupted. Either keep `std::cerr` (demos-only) or migrate to a `LogFn` callback (matching `AgentSink` pattern). | LOW | ✅ Resolved by user (2026-07-16): "This App is NOT codemax, and should never use any data from codemax. It should NOT be in daedalus lib" + "this cant go in the library sadly as it uses stdio, but we can use it in the demos". User has explicitly accepted `std::cerr` for ACP as part of the demo-only design. No code change needed. |
 | ACP-10 | Switch test to doctest — converted from raw `assert()` to doctest; added 13 test cases / 50 assertions covering the regressions fixed above. | LOW | ✅ Done (2026-07-16) |
 | ACP-11 | `AcpClient::create_run` hardcodes `run.status = RunStatus::Queued` ignoring the server's actual response status. | MEDIUM | ✅ Done (2026-07-16) — now goes through `parse_run_response` |
-| ACP-12 | `AcpClient::get_session` doesn't parse `messages` — half the value of fetching a session is the history. | MEDIUM | 🟡 Todo |
-| ACP-13 | `CurlTransport::is_connected` treats 404 as connected (`code < 500`). Should check 2xx. | LOW | 🟡 Todo |
+| ACP-12 | `AcpClient::get_session` doesn't parse `messages` — half the value of fetching a session is the history. | MEDIUM | ✅ Done (2026-07-15) — `from_json(Session&)` parses `messages` field via `j.at("messages").get<std::vector<Message>>()`. Tested in `test_acp_basic.cpp`: "from_json(Session) parses message history" + 3 edge cases (tolerates missing / non-array messages). |
+| ACP-13 | `CurlTransport::is_connected` treats 404 as connected (`code < 500`). Should check 2xx. | LOW | ✅ Done (2026-07-15) — replaced `CurlTransport` with `OmninetTransport`; `is_connected()` now checks `r.value().statusCode() >= 200 && r.value().statusCode() < 300`. |
 | ACP-14 | `AcpClient::get_agent` of a nonexistent agent returns an `AgentManifest` with the requested name echoed back, no exception — hidden failure mode. | MEDIUM | ✅ Done (2026-07-16, by ACP-6) — `get_agent` now returns `AcpResult<AgentManifest>`. A 404 from the server now produces `AcpError{404, "HTTP 404"}` instead of a default-constructed manifest. |
-| ACP-15 | `CurlTransport::get`/`post` use `curl_easy_duphandle` for one-shot calls; `is_connected` uses `curl_easy_init`. Pick one. | LOW | 🟡 Todo |
+| ACP-15 | `CurlTransport::get`/`post` use `curl_easy_duphandle` for one-shot calls; `is_connected` uses `curl_easy_init`. Pick one. | LOW | ✅ Done (2026-07-15) — replaced `CurlTransport` with `OmninetTransport`; no libcurl code paths remain. `OmninetTransport` uses `make_request()` consistently. |
 
 **Progress:**
 - [x] Read `docs/acp-protocol.md` + `docs/acp-openapi.yaml`
@@ -605,7 +605,7 @@ migrating this code to OmniNet, not adding new instances.
 | NC-6 | **Migrate `CurlMultiSession` → OmniNet-backed HTTP session.** Add an adapter that implements the existing `submit_cancellable(req, stop_token)` API on top of `OmniNet::HTTP::Client::send(req, stop)`. | HIGH (most-used path) | ✅ Done (2026-07-16) — `CurlMultiSession.cpp` rewritten on `OmniNet::HTTP::Client`. Public API (CurlRequest/CurlResponse/CurlError + submit/submit_cancellable/submit_batch/get_stats/shutdown) preserved. SSE streaming now goes through `send_streaming` + per-chunk callback. Live-LLM smoke test confirms real API calls + SSE streaming + tool calls work end-to-end through the new transport. |
 | NC-7 | Migrate `LLMClient::make_api_request_async` to the OmniNet-backed session. Preserve Retry-After, SSE, retry policy, cancellation, 401/429/5xx routing. | HIGH | ✅ Done (2026-07-16, by NC-6) — `LLMClient` keeps using `CurlMultiSession::submit_cancellable(req, stop_token)` exactly as before; the API surface is unchanged so the migration is transparent. Retry-After parsing, 401/429/5xx routing, stop_token cancellation, SSE streaming all preserved. Live-LLM test confirms `MiniMax-M2.7` model works through the new stack. |
 | NC-8 | Migrate `LLMClient::make_curl_request_with_retry` (sync path) + `run_agent_cycle(CURL*, ...)`. | HIGH | ✅ Done (2026-07-16) — `make_curl_request_with_retry(CURL*, ...)` rewritten on `OmniNet::HTTP::Client::send_blocking`. `CURL* curl` parameter dropped (4 internal call sites updated). `run_agent_cycle(CURL*, ...)` also drops the `CURL*` parameter. `run_one_turn` no longer calls `curl_easy_init/cleanup`; the local `CURL* curl` is gone. `<curl/curl.h>` removed from LLMClient.h. Dead `WriteBuffer` struct + `write_callback` removed (no longer needed). Retry policy preserved: 2xx returns body, 401 + 4xx no retry, 5xx + transport errors use exponential backoff via `server_error_settings`. Live-LLM smoke test (`MiniMax-M2.7`) confirms the sync fallback path works through OmniNet. |
-| NC-9 | Delete `CurlHandle.h` + `CurlMultiSession.{h,cpp}`. | LOW | 🟡 Partial — `CurlHandle.h` deleted (only `CurlMultiSession.cpp` itself and its test referenced it). `CurlMultiSession.{h,cpp}` kept as the OmniNet-backed adapter (LLMClient + Messages.cpp + tests still use the CurlRequest/CurlResponse/CurlError API surface). Full deletion would require renaming the adapter's public API away from "Curl" — significant LLMClient rewrite. |
+| NC-9 | Delete `CurlHandle.h` + `CurlMultiSession.{h,cpp}`. | LOW | ✅ Done (2026-07-16) — `CurlHandle.h` deleted in earlier session; this commit finishes the rename: `CurlMultiSession.{h,cpp}` → `HttpSession.{h,cpp}` (file + type), `CurlRequest`/`CurlResponse`/`CurlError` → `HttpRequest`/`HttpResponse`/`HttpError` across 12 source files (~172 references), test file + target renamed. Zero `Curl*` references remain in src/, demos/, tests/, CMakeLists.txt. `grep -rn "CurlMultiSession\|CurlRequest\|CurlResponse\|CurlError"` returns no matches. |
 | NC-10 | Delete `tests/test_curl_handle.cpp` + rewrite `tests/test_curl_multi_session.cpp` against OmniNet-backed transport. | LOW | ✅ Done (2026-07-16, partial) — `test_curl_handle.cpp` deleted (CurlHandle.h is gone). `test_curl_multi_session.cpp` kept; it tests the OmniNet-backed `CurlMultiSession` API surface unchanged, so all 8 assertions pass without modification. Test count went from 63 → 62 (curl_handle_tests removed). |
 | NC-11 | Drop `find_package(CURL REQUIRED)` + `CURL::libcurl` links from `CMakeLists.txt` + `tests/CMakeLists.txt`. | LOW | ✅ Done (2026-07-16) — `find_package(CURL REQUIRED)` removed from top-level CMakeLists.txt. `CURL::libcurl` link removed from daedalus target. All `CURL::libcurl` / `${CURL_LIBRARIES}` / `${CURL_INCLUDE_DIRS}` references removed from tests/CMakeLists.txt. The two tests that include `CurlMultiSession.cpp` directly (which now `#include <OmniNet.h>`) get the OmniNet include dir + OmniNet link. |
 | NC-12 | Update `ThreadPool.h` comment that mentions `curl_multi`. | TRIVIAL | ✅ Done (2026-07-16) — "curl_multi" → "OmniNet HTTP/MCP". |
@@ -640,6 +640,68 @@ in one shot without breaking the live LLM smoke tests.
   Banner renders, model responds via SSE stream, tool calls (tell_user, stop)
   fire correctly, token usage tracked. End-to-end LLM traffic now flows
   through `OmniNet::HTTP::Client` with **zero libcurl anywhere in the build**.
+
+---
+
+## Demos cleanup + NC-9 cosmetic rename (2026-07-16)
+
+### Demos fixed
+- **daedalus-subagent**: hardcoded `/home/ubuntu/.daedalus/skills/`
+  (×2) replaced with `Paths::global().global_skills_dir()`. Explicit
+  `parent_cfg.daedalus_home = user_data_root()` so parent + child
+  share the model store. **§subagent-1**: child `session_id` collision
+  fixed (was just `"subagent:"`, now `"subagent:N"` with monotonic
+  counter) — without this, every spawned child shared conversation
+  history in the SQLite store. Added `> ` prompt + expanded `--help`.
+- **daedalus-manager**: same hardcoded skills path replaced with
+  `Paths::global().global_skills_dir()`. Explicit `base.daedalus_home`
+  on the shared base config so all 3 agents (planner/actor/validator)
+  find the same model store. Expanded `--help` (3-agent pattern,
+  argument list, exit code list). Live smoke run: planner/actor/
+  validator all initialize, all call LLM, validator emits
+  `VERDICT: APPROVED`, host loop exits cleanly.
+- **daedalus-webui**: hardcoded `/home/ubuntu/.daedalus/skills/`
+  replaced with `Paths::global().global_skills_dir()`. Explicit
+  `daedalus_home = user_root()` (NOT `user_data_root`) so that
+  `$DAEDALUS_HOME` and `--home` both route the agent to the user's
+  chosen model store. `--home` was previously parsed and discarded
+  with a "skip, not used in webui" comment; now sets `$DAEDALUS_HOME`
+  via setenv() before Paths::global() initializes. `--help` rewritten
+  with full endpoint table. Unknown options now exit 2 instead of
+  silently being ignored. Live HTTP smoke: /healthz, /info,
+  POST /sessions, POST /messages, GET /state all work.
+
+### NC-9 cosmetic rename (CurlMultiSession → HttpSession)
+The "Curl" prefix was historical (predated OmniNet). The adapter
+is now a thin `OmniNet::HTTP::Client` wrapper; the name was both
+a lie (no libcurl) and a misnomer (OmniNet is the backing
+transport).
+- File rename: `src/api/CurlMultiSession.{h,cpp}` → `HttpSession.{h,cpp}`
+- Type renames (12 files, ~172 references):
+  - `CurlMultiSession` → `HttpSession`
+  - `CurlRequest` → `HttpRequest`
+  - `CurlResponse` → `HttpResponse`
+  - `CurlError` → `HttpError`
+- Test rename: `test_curl_multi_session.cpp` → `test_http_session.cpp`,
+  `daedalus_curl_multi_tests` → `daedalus_http_session_tests`,
+  `curl_multi_tests` → `http_session_tests`.
+- `grep -rn "CurlMultiSession\|CurlRequest\|CurlResponse\|CurlError"`
+  returns zero matches.
+
+### ACP transport rename
+- `create_curl_transport` → `create_omni_transport` (kept alias
+  `create_transport`). The old name was a lie — it returned
+  `OmninetTransport`.
+- `AcpClient::stream_run_events` was a stub that returned
+  "not implemented". Now correctly delegates to
+  `transport_->stream_events()`, which uses `send_streaming` +
+  `SseParser` + `dispatch_sse_event()` (the ACP-7 structured
+  dispatch from earlier in this session).
+
+### Verification
+- `ctest -E phase15_typo_warning` → **62/62 pass**, 2 live-LLM
+  skipped, 0 failures.
+- Build clean (only OmniNet-internal warnings).
 
 ---
 

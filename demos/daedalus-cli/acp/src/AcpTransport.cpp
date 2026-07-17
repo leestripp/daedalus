@@ -194,10 +194,7 @@ void OmninetTransport::stream_events(const RunId& run_id,
 // Transport factory — OmniNet only. No libcurl in this translation unit.
 // ============================================================================
 
-std::unique_ptr<IAcpTransport> create_curl_transport(const std::string& base_url) {
-    (void)base_url;
-    // Kept for ABI compatibility — names say "curl" but the implementation
-    // is OmniNet. New code should call create_transport() below.
+std::unique_ptr<IAcpTransport> create_omni_transport(const std::string& base_url) {
     return std::make_unique<OmninetTransport>(base_url);
 }
 
