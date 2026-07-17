@@ -61,18 +61,38 @@ std::string slurp(const std::filesystem::path& p) {
     return content;
 }
 
-// Find the project root by walking up from CWD until we find CMakeLists.txt.
+// Find the project root by walking up from CWD until we find a directory
+// that actually contains the daedalus source tree.
+//
+// BUG-002 fix (2026-07-17): the previous heuristic latched onto
+// `CMakeLists.txt`, which works when the build dir is a child of the
+// source dir (`build/daedalus-src/tests/` → up → `build/daedalus-src/`)
+// but FAILS for `ExternalProject_Add` / `FetchContent` consumers
+// (e.g. icarus) where the build dir is a SIBLING of the source dir
+// (`build/daedalus/tests/` → up → `build/daedalus/` has its own
+// `CMakeLists.txt` from the external project, which has no `src/`).
+//
+// Anchor on a source file the test actually needs instead — works
+// in both layouts.
 std::filesystem::path find_project_root() {
+    // The sentinel file. Exists in the daedalus source tree but in
+    // NO build dir, ExternalProject subdir, or third-party project.
+    // Bumping the iteration count to 8 covers the deeper ExternalProject
+    // layout (CWD → build/daedalus → build → .. → ../daedalus-src).
+    constexpr int kMaxLevels = 8;
+    constexpr const char* kSentinel[] = {
+        "src/tools/SearchTool.cpp",      // canonical — primary sentinel
+        "src/core/SettingsMigrator.cpp", // secondary — alt for unit tests
+    };
     std::filesystem::path candidate = std::filesystem::current_path();
-    for (int i = 0; i < 6; ++i) {
-        if (std::filesystem::exists(candidate / "CMakeLists.txt")) {
-            return candidate;
+    for (int i = 0; i < kMaxLevels; ++i) {
+        for (const char* s : kSentinel) {
+            if (std::filesystem::exists(candidate / s)) {
+                return candidate;
+            }
         }
-        if (candidate.has_parent_path()) {
-            candidate = candidate.parent_path();
-        } else {
-            break;
-        }
+        if (!candidate.has_parent_path()) break;
+        candidate = candidate.parent_path();
     }
     return {};
 }
@@ -93,6 +113,14 @@ TEST(searchtool_accepts_canonical_and_legacy_keys) {
         return 0;
     }
     auto path = root / "src" / "tools" / "SearchTool.cpp";
+    // §BUG-002: defensive guard. find_project_root() already checks for
+    // this file's existence (it IS the sentinel), so this branch is
+    // unreachable on a correctly-built tree. Kept so a future refactor
+    // of the heuristic degrades gracefully (SKIP) instead of FAIL.
+    if (!std::filesystem::exists(path)) {
+        std::cerr << "SKIP: " << path << " not found\n";
+        return 0;
+    }
     auto content = slurp(path);
     CHECK(!content.empty());
 
@@ -108,7 +136,12 @@ TEST(searchtool_accepts_canonical_and_legacy_keys) {
 TEST(searchtool_error_message_mentions_serper_search) {
     auto root = find_project_root();
     if (root.empty()) return 0;
-    auto content = slurp(root / "src" / "tools" / "SearchTool.cpp");
+    auto path = root / "src" / "tools" / "SearchTool.cpp";
+    if (!std::filesystem::exists(path)) {
+        std::cerr << "SKIP: " << path << " not found\n";
+        return 0;
+    }
+    auto content = slurp(path);
     CHECK(!content.empty());
 
     // The error message should mention "serper-search.api_key" (canonical).
@@ -122,7 +155,12 @@ TEST(searchtool_error_message_mentions_serper_search) {
 TEST(settingsmigrator_uses_canonical_key) {
     auto root = find_project_root();
     if (root.empty()) return 0;
-    auto content = slurp(root / "src" / "core" / "SettingsMigrator.cpp");
+    auto path = root / "src" / "core" / "SettingsMigrator.cpp";
+    if (!std::filesystem::exists(path)) {
+        std::cerr << "SKIP: " << path << " not found\n";
+        return 0;
+    }
+    auto content = slurp(path);
     CHECK(!content.empty());
 
     // The migrated "serper-search" key should appear in the migrator

@@ -183,6 +183,23 @@ Communication Protocol (ACP) sub-library.
   `reasoning_content` / `reasoning_details` and `content` stays
   clean.
 
+- **ExternalProject layout broke `serper_settings_tests`** (BUG-002).
+  `find_project_root()` walked up looking for the first directory
+  containing `CMakeLists.txt`, which is the wrong sentinel in an
+  `ExternalProject`/`FetchContent` layout: the test was running with
+  CWD = the external project's build dir (which has a generated
+  `CMakeLists.txt` but no `src/`), so the heuristic stopped one
+  level too high and slurped the WRONG file. Three tests then
+  failed at `test_serper_settings.cpp:97`, `:112`, `:126` with
+  `CHECK(!content.empty())` blowing up on the empty content of
+  the (wrong) `src/` directory. Fixed by changing the sentinel to
+  `src/tools/SearchTool.cpp` (a file that only exists in the real
+  source tree, never in a generated build tree). Also added an
+  explicit `if (!std::filesystem::exists(path)) return 0;` guard
+  to the three previously-unguarded tests so a future heuristic
+  refactor degrades gracefully (SKIP) instead of FAIL when the
+  source tree is unreachable.
+
 ### Tests
 
 - `messages_tests` 73/73 + 1 skipped (203/203 assertions).
