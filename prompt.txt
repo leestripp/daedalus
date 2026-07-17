@@ -341,7 +341,7 @@ stall.
 
 ---
 
-## BUG-002 (daedalus v0.5.1-3-g3e2b888) — `serper_settings_tests` fails when daedalus is built as a CMake `ExternalProject`
+## BUG-002 (daedalus v0.5.1) — `serper_settings_tests` fails when daedalus is built as a CMake `ExternalProject`
 
 **Severity:** Low — test-only failure, no runtime impact on consumers.
 Three of the seven `serper_settings` regression tests fail with
@@ -349,8 +349,12 @@ Three of the seven `serper_settings` regression tests fail with
 the build directory and the source directory are siblings (i.e. the
 `ExternalProject_Add` / `FetchContent` pattern that icarus uses).
 
-**Status:** 🔴 **OPEN.** Reported 2026-07-17 by icarus after the
-clean rebuild pulled daedalus `main` (v0.5.1-3-g3e2b888).
+**Status:** ✅ **FIXED in daedalus main** (2026-07-17, commit 8e1585e).
+`tests/test_serper_settings.cpp` updated: `find_project_root()` now
+anchors on `src/tools/SearchTool.cpp` instead of `CMakeLists.txt`,
+and all three previously-unguarded tests now have `if(!exists) SKIP`
+defensive guards. 65/65 ctest pass; simulated ExternalProject layout
+verified (in-source: PASS 7 checks; build/daedalus/ CWD: SKIP cleanly).
 
 **Affects:** `tests/test_serper_settings.cpp`. Specifically the
 three tests that source-grep `src/tools/SearchTool.cpp` and
@@ -575,4 +579,4 @@ project (icarus does this) and run `ctest` in the resulting
 | ID | Title | Status | Filed |
 |----|-------|--------|-------|
 | BUG-001 | Null `usage` on SSE final chunk discards streamed response | ✅ Fixed in v0.5.1 (2026-07-17) | yes |
-| BUG-002 | `serper_settings_tests` fails when daedalus is built as `ExternalProject` | 🔴 Open | draft above |
+| BUG-002 | `serper_settings_tests` fails when daedalus is built as `ExternalProject` | ✅ Fixed in daedalus main (2026-07-17, commit 8e1585e) | yes |
