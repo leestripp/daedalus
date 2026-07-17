@@ -48,8 +48,9 @@ embedding `libdaedalus.a` and for core contributors.
 
 | File | Audience | Description |
 |------|----------|-------------|
-| [`../containers/README.md`](../containers/README.md) | **DevOps / packagers** | Reference Dockerfile + docker-compose.yml implementing the XDG-clean deployment from `docs/storage.md` §4.4. |
+| [`storage.md` §4.4](storage.md#44-rootful-docker) | **DevOps / packagers** | Rootful Docker reference `docker-compose.yml` implementing the XDG-clean deployment (was `../containers/README.md`, moved into `docs/` 2026-07-17). |
 | [`webui_testing.md`](webui_testing.md) | **Core contributors** | Firefox BiDi end-to-end testing recipe for browser-based hosts. |
+| [`testing.md`](testing.md) | **Core contributors** | Two-layer test strategy: unit tests (`tests/test_*.cpp`, ctest) and integration tests (`/workspace/Testing/test_*/`, real LLM). How to run, how to add, what each layer verifies. Includes `test_token_counts/` — the SSE graceful-degradation canary. |
 
 ## Legacy (deleted in Phase 10)
 
