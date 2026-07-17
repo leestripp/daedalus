@@ -160,6 +160,28 @@ Communication Protocol (ACP) sub-library.
   unavailable` and a zero-token-count UI bar on every turn. Full
   write-up of the SSE consumption pipeline and its gotchas:
   **[`docs/sse_streaming.md`](docs/sse_streaming.md)**.
+- **`Authorization` header was malformed** in both
+  `LLMClient::make_api_request_async` (streaming path) and
+  `make_http_request_with_retry` (sync fallback). Earlier code did
+  `req.header("Authorization", std::string("Authorization: Bearer ") + key)`,
+  producing the malformed wire header `Authorization: Authorization: Bearer XXX`
+  that OmniNet then sent to the API. MiniMax rejected every
+  request with `authorized_error` (401). Fixed by passing only the
+  value (`req.header("Authorization", "Bearer " + key)`). Visible
+  symptom: every fresh agent session failed with a 401 on the
+  first API call.
+- **MiniMax-M2 streamed chain-of-thought leaked into `content`**
+  (BUG-MINIMAX-105). MiniMax's HTTP stream inserts thinking into
+  the `content` field as a `(think)\n...` prefix, which the agent
+  UI double-shows as if it were the final answer. The official
+  MiniMax-blessed fix is to send `reasoning_split: true` in the
+  request body — documented at
+  [MiniMax-M2 issue #105](https://github.com/MiniMax-AI/MiniMax-M2/issues/105)
+  and in
+  [MiniMax API docs](https://platform.minimax.io/docs/api-reference/text-openai-api).
+  Now wired in `LLMClient::run_agent_cycle` so thinking goes to
+  `reasoning_content` / `reasoning_details` and `content` stays
+  clean.
 
 ### Tests
 

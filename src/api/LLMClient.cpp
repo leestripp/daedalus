@@ -528,8 +528,13 @@ std::string LLMClient::make_http_request_with_retry(
         req.header("Content-Type", "application/json");
         req.header("Accept",       "application/json");
         if (!config_.api_key.empty()) {
-            req.header("Authorization",
-                       std::string("Authorization: Bearer ") + config_.api_key);
+            // OmniNet::HTTP::ClientRequest::header() expects JUST the
+            // header value (the library prepends "name: " itself).
+            // Previously this passed "Authorization: Bearer XXX" as
+            // the value, producing an invalid HTTP header
+            // ("Authorization: Authorization: Bearer XXX") and
+            // triggering MiniMax's `authorized_error` (401).
+            req.header("Authorization", "Bearer " + config_.api_key);
         }
 
         OmniNet::HTTP::ClientConfig cfg;
@@ -929,6 +934,18 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         {"stream",    config_.stream},  // §Phase 9.8: true = SSE tokens, false = buffered JSON
         {"temperature", config_.temperature}
     };
+
+    // §BUG-MINIMAX-105 (2026-07-17): MiniMax's streaming mode mixes
+    // thinking content into the `content` field as a literal prefix
+    // like "(think)\nThe user wants me to...". This breaks clients that
+    // display the streamed content directly. The official fix
+    // (per MiniMax's own response on issue #105 in MiniMax-M2) is to
+    // send `reasoning_split: true` in the request body, which causes
+    // the API to put thinking into a separate `reasoning_details`
+    // field and keep `content` clean. Reference:
+    //   https://github.com/MiniMax-AI/MiniMax-M2/issues/105
+    //   https://platform.minimax.io/docs/api-reference/text-openai-api
+    request_payload["reasoning_split"] = true;
 
     // §Phase 9.10: When streaming, always request usage stats via
     // `stream_options: {include_usage: true, continuous_usage_stats: true}`.

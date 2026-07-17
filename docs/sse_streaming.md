@@ -162,6 +162,31 @@ kernel buffer doesn't fire `on_chunk` after `Agent::cancel()` has
 been called. `HttpSession::submit_cancellable` already does this
 via a `safe_callback` wrapper.
 
+### 7. Authorization header — pass the value, not the full header
+
+`OmniNet::HTTP::ClientRequest::header(name, value)` prepends the
+header **name** itself — pass only the value, never
+`"Authorization: Bearer XXX"`. The earlier code did:
+
+```cpp
+req.header("Authorization",
+           std::string("Authorization: Bearer ") + config_.api_key);
+```
+
+producing the malformed header line `Authorization: Authorization: Bearer XXX`,
+which MiniMax rejects with `authorized_error` (401). The fix is:
+
+```cpp
+req.header("Authorization", "Bearer " + config_.api_key);
+```
+
+This applies to **both** the streaming path (when building
+`HttpRequest` inside `make_api_request_async`) **and** the sync
+fallback path (`make_http_request_with_retry` building
+`OmniNet::HTTP::ClientRequest`). Both sites have been fixed.
+Affects every request — visible symptom is a 401 + `authorized_error`
+on the first API call from a fresh agent session.
+
 ---
 
 ## Debugging recipe
