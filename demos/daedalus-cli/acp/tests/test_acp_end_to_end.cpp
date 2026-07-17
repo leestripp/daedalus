@@ -431,4 +431,90 @@ TEST_CASE("ACP end-to-end: run.failed and run.cancelled route correctly") {
     OmniNet::cleanup();
 }
 
+// §ACP-15 (2026-07-16): long error message truncation test.
+// A malicious or buggy server could send an unbounded error message
+// (e.g. full HTML error page, stack trace). The dispatcher must
+// truncate err.message to MAX_ERROR_MSG (1024) chars to prevent memory
+// exhaustion.
+TEST_CASE("ACP end-to-end: error messages > 1024 chars are truncated") {
+    OmniNet::init();
+
+    const uint16_t port = static_cast<uint16_t>(19000 + (getpid() % 100));
+    const std::string run_id = "e2e-long-err";
+    // Build a JSON error message > 1024 chars.
+    std::string long_msg(2048, 'X');  // 2048 X's
+
+    OmniNet::HTTP::Server::Config scfg;
+    scfg.address = "127.0.0.1";
+    scfg.port    = port;
+    scfg.workerCount = 2;
+    OmniNet::HTTP::Server server(scfg);
+
+    server.registerProtocolSwitch(
+        "/v1/runs/e2e-long-err/events",
+        {
+            .on_upgrade = [](const OmniNet::HTTP::Request&,
+                             OmniNet::HTTP::Response& resp) {
+                resp.setStatus(OmniNet::HTTP::StatusCode::OK);
+                resp.setContentType("text/event-stream");
+                resp.setTransferEncoding("chunked");
+                resp.markStreaming();
+            },
+            .on_post_upgrade = [=](std::unique_ptr<OmniNet::Socket> sock,
+                                         const OmniNet::HTTP::Request&) {
+                std::thread([sock = std::move(sock), run_id, long_msg]() mutable {
+                    if (!sock || !sock->isOpen()) return;
+                    auto send = [&](const std::string& payload) {
+                        std::string sse = "data: " + payload + "\n\n";
+                        std::ostringstream oss;
+                        oss << std::hex << sse.size() << "\r\n";
+                        std::string hdr = oss.str();
+                        sock->sendAll(std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(hdr.data()),
+                            hdr.size()));
+                        sock->sendAll(std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>(sse.data()),
+                            sse.size()));
+                        sock->sendAll(std::span<const uint8_t>(
+                            reinterpret_cast<const uint8_t*>("\r\n"), 2));
+                    };
+                    nlohmann::json err_json = {
+                        {"type", "error"},
+                        {"error", {
+                            {"code", 500},
+                            {"message", long_msg},
+                            {"cause", "stack trace line 1\nline 2\n" + std::string(2048, 'Y')}
+                        }}
+                    };
+                    send(err_json.dump());
+                    sock->sendAll(std::span<const uint8_t>(
+                        reinterpret_cast<const uint8_t*>("0\r\n\r\n"), 5));
+                }).detach();
+            }
+        });
+
+    server.startAsync();
+    std::this_thread::sleep_for(500ms);
+
+    auto client = acp::create_client("http://127.0.0.1:" + std::to_string(port));
+    RecordingHandler h;
+
+    client->stream_run_events(run_id, h);
+
+    REQUIRE(h.calls.size() == 1);
+    CHECK(h.calls[0] == "error");
+    CHECK(h.last_error_code == 500);
+    // Message must be truncated.
+    // The '…' (U+2026 HORIZONTAL ELLIPSIS) is 3 UTF-8 bytes.
+    // MAX_ERROR_MSG (1024) + 3-byte ellipsis + 12-char "[truncated]" = 1039.
+    CHECK(h.last_error_message.size() <= 1024 + 3 + 12);
+    CHECK(h.last_error_message.find("XXXXX") != std::string::npos);  // original data preserved at start
+    CHECK(h.last_error_message.find("…[truncated]") != std::string::npos);
+    // cause must also be truncated.
+    CHECK(h.error == 1);
+
+    server.stop();
+    OmniNet::cleanup();
+}
+
 }  // namespace test_acp_e2e

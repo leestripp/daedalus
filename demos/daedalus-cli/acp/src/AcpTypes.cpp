@@ -178,8 +178,23 @@ void dispatch_sse_event(const RunId& run_id,
             if (j.contains("error") && j["error"].is_object()) {
                 const auto& e = j["error"];
                 err.code    = e.value("code", 0);
+                // §ACP-15 (2026-07-16): truncate to prevent a malicious or
+                // buggy server from sending an unbounded error (e.g. full HTML
+                // error page / stack trace) into a std::string that could
+                // grow to consume all memory on the receiving end.
+                constexpr std::size_t MAX_ERROR_MSG = 1024;
                 err.message = e.value("message", std::string{});
-                if (e.contains("cause")) err.cause = e["cause"].get<std::string>();
+                if (err.message.size() > MAX_ERROR_MSG) {
+                    err.message.resize(MAX_ERROR_MSG);
+                    err.message += "…[truncated]";
+                }
+                if (e.contains("cause")) {
+                    err.cause = e["cause"].get<std::string>();
+                    if (err.cause->size() > MAX_ERROR_MSG) {
+                        err.cause->resize(MAX_ERROR_MSG);
+                        *err.cause += "…[truncated]";
+                    }
+                }
             }
             handler.on_error(run_id, std::move(err));
         } else {

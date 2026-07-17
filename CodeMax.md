@@ -169,7 +169,7 @@ for diagnostics, which would corrupt a TUI host). Enabled via
 | ACP-12 | `get_session` parses `messages` field | ✅ |
 | ACP-13 | `is_connected` checks 2xx (not `<500`) | ✅ |
 | ACP-14 | `get_agent` 404 returns `AcpError` (not silent default manifest) | ✅ |
-| ACP-15 | `CurlTransport` get/post + is_connected split (now single `make_request` path) | ✅ |
+| ACP-15 | Long error messages in SSE: truncate to 1024 chars + `…[truncated]` | ✅ |
 
 ---
 
@@ -178,6 +178,10 @@ for diagnostics, which would corrupt a TUI host). Enabled via
 - **daedalus-subagent:** hardcoded `/home/ubuntu/.daedalus/skills/` → `Paths::global()`; explicit `daedalus_home`; child `session_id` collision fix (monotonic counter); `> ` prompt; expanded `--help`.
 - **daedalus-manager:** same hardcoded path fix; explicit `base.daedalus_home`; expanded `--help`.
 - **daedalus-webui:** same path fix; `daedalus_home = user_root()` (NOT `user_data_root`) so `$DAEDALUS_HOME`/`--home` both route to user's chosen model store; `--home` flag actually honoured via `setenv(DAEDALUS_HOME)`; unknown options exit 2; full `--help` rewrite with endpoint table; CORS tightened to loopback-only with `--cors-origins` override.
+
+**Open (not yet fixed):**
+- **F2 (HIGH):** `daedalus-subagent` and `daedalus-manager` crash on `--help`. Root cause: `argv[1]` is consumed as `project_root` before the help-check, so `--help` hits the Agent constructor instead of exiting. Fix: move help check before positional-argument parsing.
+- **F3 (LOW):** Readme.md doesn't document that the webui POST body must use `{"message":"..."}` — not `{"content":"..."}`. `session_manager.cpp` explicitly validates `message` field.
 
 ## ACP end-to-end test (2026-07-16)
 
