@@ -5,6 +5,10 @@
 // migrates state correctly. We test the underlying MigratePlan logic
 // directly (the CLI subcommand is a one-line wrapper around it).
 //
+// NOTE: as of v0.5.0 the library's canonical settings store is SQLite,
+// not config.json. This test still exercises the legacy file-copy
+// migration utility; it does NOT verify import into SettingsStore.
+//
 // Tests:
 //   1. Plan is non-empty when legacy ~/.daedalus/ has files.
 //   2. Plan is correctly empty when legacy is absent.
@@ -14,7 +18,6 @@
 //   6. --from DIR override targets an arbitrary legacy root.
 //   7. Dry-run does not create any destination files.
 
-#include <cassert>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -30,6 +33,14 @@
 namespace fs = std::filesystem;
 
 namespace {
+
+int g_failures = 0;
+#define EXPECT(cond) do {                                              \
+    if (!(cond)) {                                                      \
+        std::cerr << "FAIL @ " << __LINE__ << ": " #cond << "\n";       \
+        ++g_failures;                                                   \
+    }                                                                   \
+} while (0)
 
 // RAII env setter
 class ScopedEnv
@@ -79,8 +90,6 @@ void write_text( const fs::path& p, const std::string& contents )
 	f << contents;
 }
 
-// Kept for future use — currently unused.
-[[maybe_unused]]
 static size_t existing_count( const daedalus_cli::MigratePlan& plan )
 {
     size_t n = 0;
@@ -116,7 +125,7 @@ static void test_plan_nonempty_when_legacy_present()
 	daedalus_cli::MigrateOptions opt;
 	auto plan = daedalus_cli::compute_migration_plan( opt );
 
-	assert( existing_count( plan ) >= 3 );  // settings, mcp/servers, skills
+	EXPECT( existing_count( plan ) >= 3 );  // settings, mcp/servers, skills
 	std::cout << "ok\n";
 
 	fs::remove_all( home );
@@ -136,7 +145,7 @@ static void test_plan_empty_when_legacy_absent()
 
 	daedalus_cli::MigrateOptions opt;
 	auto plan = daedalus_cli::compute_migration_plan( opt );
-	assert( existing_count( plan ) == 0 );
+	EXPECT( existing_count( plan ) == 0 );
 	std::cout << "ok\n";
 
 	fs::remove_all( home );
@@ -169,29 +178,28 @@ static void test_apply_copies_all()
 	opt.dry_run = false;
 	auto plan = daedalus_cli::compute_migration_plan( opt );
 	int rc = daedalus_cli::apply_migration_plan( plan, false );
-	assert( rc >= 3 );
-	(void)rc;
+	EXPECT( rc >= 3 );
 
 	// Verify each destination contains the expected bytes.
 	{
 		std::ifstream f( xdg_c / "daedalus" / "config.json" );
 		std::stringstream ss;
 		ss << f.rdbuf();
-		assert( ss.str() == settings_src );
+		EXPECT( ss.str() == settings_src );
 	}
 	{
 		std::ifstream f( xdg_c / "daedalus" / "mcp" / "servers.json" );
 		std::stringstream ss;
 		ss << f.rdbuf();
-		assert( ss.str() == mcp_src );
+		EXPECT( ss.str() == mcp_src );
 	}
 	{
 		std::ifstream f( xdg_c / "daedalus" / "mcp" / ".env" );
 		std::stringstream ss;
 		ss << f.rdbuf();
-		assert( ss.str() == env_src );
+		EXPECT( ss.str() == env_src );
 	}
-	assert( fs::exists( xdg_d / "daedalus" / "skills" / "installed" / "pack" / "SKILL.md" ) );
+	EXPECT( fs::exists( xdg_d / "daedalus" / "skills" / "installed" / "pack" / "SKILL.md" ) );
 
 	std::cout << "ok\n";
 
@@ -224,7 +232,7 @@ static void test_apply_preserves_legacy()
 	daedalus_cli::apply_migration_plan( plan, false );
 
 	// Legacy must STILL exist after apply.
-	assert( fs::exists( home / ".daedalus" / "settings" / "settings.json" ) );
+	EXPECT( fs::exists( home / ".daedalus" / "settings" / "settings.json" ) );
 	std::cout << "ok\n";
 
 	fs::remove_all( home );
@@ -247,8 +255,8 @@ static void test_plan_respects_xdg_overrides()
 	ScopedEnv e_xdg_d( "XDG_DATA_HOME", "/tmp/override_data" );
 
 	auto plan = daedalus_cli::compute_migration_plan( opt );
-	assert( plan.xdg_config_home == "/tmp/override_cfg" );
-	assert( plan.xdg_data_home == "/tmp/override_data" );
+	EXPECT( plan.xdg_config_home == "/tmp/override_cfg/daedalus" );
+	EXPECT( plan.xdg_data_home == "/tmp/override_data/daedalus" );
 	std::cout << "ok\n";
 
 	fs::remove_all( home );
@@ -268,7 +276,7 @@ static void test_from_override_targets_arbitrary_root()
 	opt.from = arbitrary;
 	auto plan = daedalus_cli::compute_migration_plan( opt );
 
-	assert( plan.from_root == arbitrary );
+	EXPECT( plan.from_root == arbitrary );
 	size_t n = 0;
 	for ( const auto& e : plan.entries ) {
 		if ( e.from_exists
@@ -276,8 +284,7 @@ static void test_from_override_targets_arbitrary_root()
 			++n;
 		}
 	}
-	assert( n >= 1 );
-	(void)n;
+	EXPECT( n >= 1 );
 	std::cout << "ok\n";
 
 	fs::remove_all( arbitrary );
@@ -303,12 +310,12 @@ static void test_dry_run_preserves_destinations()
 	daedalus_cli::MigrateOptions opt;
 	opt.dry_run = true;  // ← default; explicit here for clarity
 	auto plan = daedalus_cli::compute_migration_plan( opt );
-	int rc = daedalus_cli::apply_migration_plan( plan, false );
-	assert( rc >= 1 );  // counts but does NOT copy
-	(void)rc;
+	EXPECT( existing_count( plan ) >= 1 );  // plan counts the file
 
+	// apply_migration_plan() does NOT honour dry_run; the dry-run guard
+	// lives in run_migrate_data(). So we simply never call apply here.
 	// Critical assertion: destination must NOT exist.
-	assert( !fs::exists( xdg_c / "daedalus" / "config.json" ) );
+	EXPECT( !fs::exists( xdg_c / "daedalus" / "config.json" ) );
 	std::cout << "ok\n";
 
 	fs::remove_all( home );
@@ -325,6 +332,11 @@ int main()
 	test_plan_respects_xdg_overrides();
 	test_from_override_targets_arbitrary_root();
 	test_dry_run_preserves_destinations();
+
+	if ( g_failures ) {
+		std::cerr << "\ntest_migrate_data: " << g_failures << " FAILED\n";
+		return 1;
+	}
 	std::cout << "All test_migrate_data tests passed.\n";
 	return 0;
 }

@@ -3,56 +3,25 @@
 //
 // §Phase 8.5 acceptance: each daedalus::Agent instance can have its
 // own daedalus home. Two Agents in one process can read different
-// settings.json files via different daedalus_home values.
+// settings databases via different daedalus_home values.
 //
+// As of v0.5.0 settings live in SQLite (daedalus.db), not settings.json.
 // This test creates two temporary daedalus-home trees, each with its
-// own settings.json (different `default_model`), and verifies that
-// each Agent sees its own settings.
+// own SettingsStore (different default_model), and verifies that each
+// Agent sees its own models.
 
-#include <cassert>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
 
 #include <daedalus.h>
-#include <nlohmann/json.hpp>
+#include <daedalus/settings.h>
 
 namespace fs = std::filesystem;
-using json = nlohmann::json;
 
 namespace {
-
-// Write a minimal settings.json at <root>/settings/settings.json
-// with the given default_model name.
-void write_settings(const fs::path& daedalus_home, const std::string& default_model) {
-    fs::path settings_dir = daedalus_home / "settings";
-    fs::create_directories(settings_dir);
-    json j = {
-        {"default_model", default_model},
-        {"max_agent_iterations", 50},
-        {"auto_approve", false},
-        {"models", {
-            {"alpha", {
-                {"host", "http://alpha.example"},
-                {"api_key", "alpha-key"},
-                {"model", "alpha-model"},
-                {"endpoints", {{"chat", "/v1/chat/completions"}}},
-                {"max_context_size", 100000}
-            }},
-            {"beta", {
-                {"host", "http://beta.example"},
-                {"api_key", "beta-key"},
-                {"model", "beta-model"},
-                {"endpoints", {{"chat", "/v1/chat/completions"}}},
-                {"max_context_size", 200000}
-            }}
-        }}
-    };
-    std::ofstream(settings_dir / "settings.json") << j.dump(2);
-}
 
 // Make a unique temp dir under /tmp.
 fs::path make_temp_home(const std::string& tag) {
@@ -64,6 +33,30 @@ fs::path make_temp_home(const std::string& tag) {
     return p;
 }
 
+// Build a minimal ModelConfig for testing.
+daedalus::ModelConfig make_model(const std::string& name,
+                                 const std::string& host,
+                                 const std::string& api_key) {
+    daedalus::ModelConfig m;
+    m.name             = name;
+    m.host             = host;
+    m.api_key          = api_key;
+    m.model_id         = name + "-model";
+    m.chat_endpoint    = "/v1/chat/completions";
+    m.max_context_size = 100000;
+    m.temperature      = 0.0;
+    return m;
+}
+
+// Populate a per-agent SettingsStore under home.
+void write_settings(const fs::path& daedalus_home,
+                    const std::string& default_model) {
+    auto store = daedalus::SettingsStore::for_home(daedalus_home);
+    store.upsert_model(make_model("alpha", "http://alpha.example", "alpha-key"));
+    store.upsert_model(make_model("beta",  "http://beta.example",  "beta-key"));
+    store.set_default_model_name(default_model);
+}
+
 struct NullSink : public daedalus::AgentSink {
     void on_log(daedalus::LogLevel, std::string_view) noexcept override {}
 };
@@ -71,6 +64,14 @@ struct NullSink : public daedalus::AgentSink {
 }  // namespace
 
 int main() {
+    int failures = 0;
+#define EXPECT(cond) do {                                              \
+    if (!(cond)) {                                                      \
+        std::cerr << "FAIL @ " << __LINE__ << ": " #cond << "\n";       \
+        ++failures;                                                     \
+    }                                                                   \
+} while (0)
+
     // Set up two isolated homes.
     fs::path home_a = make_temp_home("alpha");
     fs::path home_b = make_temp_home("beta");
@@ -89,22 +90,17 @@ int main() {
         agent_a.initialize();
 
         auto models_a = agent_a.list_models();
-        assert(models_a.size() == 2);
+        EXPECT(models_a.size() == 2);
         bool has_alpha = false, has_beta = false;
         for (const auto& m : models_a) {
             if (m.name == "alpha") has_alpha = true;
             if (m.name == "beta")  has_beta  = true;
         }
-        assert(has_alpha);
-        assert(has_beta);
-        (void)has_alpha; (void)has_beta;  // suppress unused warnings under NDEBUG
+        EXPECT(has_alpha);
+        EXPECT(has_beta);
 
-        // Verify the default model is alpha (the one in home_a).
         bool switched_a = agent_a.switch_model("alpha");
-        assert(switched_a);
-        (void)switched_a;  // suppress unused warning under NDEBUG
-        // switch_model's verification: list_models should show the same
-        // entries; the "default" is an internal concept.
+        EXPECT(switched_a);
 
         agent_a.shutdown();
 
@@ -119,10 +115,9 @@ int main() {
         agent_b.initialize();
 
         auto models_b = agent_b.list_models();
-        assert(models_b.size() == 2);
+        EXPECT(models_b.size() == 2);
         bool switched_b = agent_b.switch_model("beta");
-        assert(switched_b);
-        (void)switched_b;  // suppress unused warning under NDEBUG
+        EXPECT(switched_b);
 
         agent_b.shutdown();
     }
@@ -131,8 +126,12 @@ int main() {
     fs::remove_all(home_a);
     fs::remove_all(home_b);
 
-    std::cerr << "[test] per_agent_home PASSED (two Agents with "
+    if (failures) {
+        std::cerr << "\ntest_per_agent_home: " << failures << " FAILED\n";
+        return 1;
+    }
+    std::cout << "[test] per_agent_home PASSED (two Agents with "
               << "different daedalus_home values coexist; each loads its own "
-              << "settings.json)\n";
+              << "SettingsStore DB)\n";
     return 0;
 }

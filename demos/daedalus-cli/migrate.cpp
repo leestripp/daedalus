@@ -58,8 +58,11 @@ struct XdgTargets
 };
 XdgTargets resolve_xdg_targets()
 {
-	const auto& p = daedalus::Paths::global();
-	return { p.user_config_root(), p.user_data_root() };
+	// Use a fresh Paths instance so env-var overrides (e.g.
+	// $XDG_CONFIG_HOME set just before --migrate-data) are honoured.
+	// Paths::global() is a singleton and caches the first-resolved values.
+	auto p = daedalus::Paths::make_default();
+	return { p->user_config_root(), p->user_data_root() };
 }
 
 }  // namespace

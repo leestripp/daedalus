@@ -15,7 +15,6 @@
 // credentials and a live endpoint. The Phase 1+ test suite covers
 // subsystem wiring in dedicated tests (test_session_memory, etc.).
 
-#include <cassert>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -47,12 +46,20 @@ struct RecordingSink : public daedalus::AgentSink {
 
 int main()
 {
+    int failures = 0;
+#define EXPECT(cond) do {                                              \
+    if (!(cond)) {                                                      \
+        std::cerr << "FAIL @ " << __LINE__ << ": " #cond << "\n";       \
+        ++failures;                                                     \
+    }                                                                   \
+} while (0)
+
     g_state_changes = 0;
     g_log_count = 0;
     g_states.clear();
     g_state_seen.clear();
 
-    // Construct Agent with no settings_path and no model — initialize()
+    // Construct Agent with no daedalus_home and no model — initialize()
     // should still succeed (it just doesn't have a real LLMClient to wire).
     daedalus::AgentConfig cfg;
     cfg.project_root = "/tmp";
@@ -61,27 +68,27 @@ int main()
     auto sink = std::make_shared<RecordingSink>();
     daedalus::Agent agent(std::move(cfg), sink);
 
-    assert(agent.state() == daedalus::AgentState::Idle);
+    EXPECT(agent.state() == daedalus::AgentState::Idle);
 
     // initialize() — should not crash, no model_name so no LLMClient created
-    // (the real LLMClient requires API creds; with no settings_path the Impl
+    // (the real LLMClient requires API creds; with no daedalus_home the Impl
     //  leaves body_->client null until a real turn is requested).
     //
     // To keep this test pure (no network), we only test the path that
-    // does NOT trigger a settings.json load.
+    // does NOT trigger a SettingsStore lookup.
     agent.initialize();
-    assert(agent.state() == daedalus::AgentState::Idle);
+    EXPECT(agent.state() == daedalus::AgentState::Idle);
 
     // run_one_turn() with empty queue is a no-op.
     agent.run_one_turn();
-    assert(agent.state() == daedalus::AgentState::Idle);
+    EXPECT(agent.state() == daedalus::AgentState::Idle);
 
     // submit_user_message + cancel before run_one_turn — turn should not crash.
     agent.submit_user_message("ignored — test cancels");
     agent.cancel();
     agent.run_one_turn();
     // After cancel, state should be Cancelled.
-    assert(agent.state() == daedalus::AgentState::Cancelled);
+    EXPECT(agent.state() == daedalus::AgentState::Cancelled);
 
     // stats() should return sensible defaults.
     daedalus::AgentStats s = agent.stats();
@@ -90,6 +97,10 @@ int main()
     // shutdown() round-trip.
     agent.shutdown();
 
+    if (failures) {
+        std::cerr << "\ntest_daedalus_api: " << failures << " FAILED\n";
+        return 1;
+    }
     std::cerr << "[test] Phase 1+ smoke test passed "
               << "(state_changes=" << g_state_changes
               << ", logs=" << g_log_count << ")\n";

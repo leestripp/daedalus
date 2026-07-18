@@ -14,8 +14,9 @@
 // Run:
 //   ./build/tests/test_token_counts_sse
 //
-// No API credentials needed — uses /home/ubuntu/.daedalus/settings/settings.json
-// which is already configured in this environment.
+// Requires a configured model in the SQLite SettingsStore
+// (default ~/.local/share/daedalus/daedalus.db). The environment is already
+// configured, so no explicit credentials are needed.
 
 #include <cassert>
 #include <cerrno>
