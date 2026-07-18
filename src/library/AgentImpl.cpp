@@ -309,35 +309,55 @@ void AgentImpl::initialize()
         cfg_.clear_memory = false;
     }
 
-    if (has_explicit_creds) {
-        // Pass address of the contained SettingsStore (stable for Body lifetime).
-        AppConfig app = make_app_config(cfg_, *body_->store);
-
-        // §Phase 11: construct McpServerManager if mcp_enabled (default true).
-        // Pass the raw pointer into LLMClient — it replaces all ::instance()
-        // call sites in the library. When mcp_enabled=false, body_->mcp is
-        // nullptr and LLMClient's mcp_manager_ is null, so all MCP operations
-        // become no-ops.
-        if (cfg_.mcp_enabled) {
-            body_->mcp = std::make_unique<mcp::McpServerManager>();
-            // §Phase 15: install the per-server gate before load_config()
-            // so disabled servers never enter configs_ in the first place.
-            body_->mcp->set_disabled_servers(cfg_.mcp_servers_disabled);
-            // §Plan.md v0.5.0: load_config() and load_env_file() now use
-            // their default paths (Paths::global() / McpServerManager's
-            // own discovery) — the per-field overrides in AgentConfig
-            // (settings_path / mcp_servers_path / mcp_env_path / memory_dir
-            // / log_file) are gone.
+    // §FIX-MCP-STORE-LOAD (2026-07-17, plan R3-P1): MCP server
+    // setup was inside `if (has_explicit_creds)` — meaning if the
+    // user had MCP servers but no default model configured, MCP
+    // setup was silently skipped entirely. MCP is independent of
+    // LLM credentials: the user might configure MCP for testing
+    // without an LLM, or set up MCP before picking a model.
+    // The right gate is `cfg_.mcp_enabled`, not "has an LLM".
+    if (cfg_.mcp_enabled) {
+        body_->mcp = std::make_unique<mcp::McpServerManager>();
+        // §Phase 15: install the per-server gate before load_from_store()
+        // so disabled servers never enter configs_ in the first place.
+        body_->mcp->set_disabled_servers(cfg_.mcp_servers_disabled);
+        // Order:
+        //   1. load_from_store() — preferred (SQLite, v0.5.0+).
+        //      RESETS configs_ before loading (see McpServerManager.cpp).
+        //   2. If the store had zero servers, fall back to load_config()
+        //      — the legacy JSON path for users who haven't run
+        //      --migrate-data yet. load_config() is ALSO exclusive, so
+        //      we don't call it unconditionally (it would wipe out the
+        //      store-loaded entries).
+        //   3. load_env_file() — populates env_vars_ from $XDG_CONFIG_HOME/daedalus/mcp/.env
+        //      (or the legacy ~/.daedalus/mcp/.env fallback).
+        body_->mcp->load_from_store(*body_->store);
+        if (body_->mcp->list_configured_servers().empty()) {
             body_->mcp->load_config();
-            body_->mcp->load_env_file();
         }
+        body_->mcp->load_env_file();
 
         // §Phase 11: inject McpServerManager* into ToolFactory BEFORE
         // LLMClient::initialize() is called (which calls refresh_mcp_tools()).
         // This replaces all ::instance() call sites in ToolFactory.
+        // Done here (outside has_explicit_creds) so MCP tools are
+        // wired even when the LLM hasn't been initialised yet — useful
+        // for hosts that surface MCP availability before model pick.
         if (auto factory = ToolHandler::get_tool_factory()) {
             factory->set_mcp_manager(body_->mcp.get());
         }
+    }
+
+    if (has_explicit_creds) {
+        // Pass address of the contained SettingsStore (stable for Body lifetime).
+        AppConfig app = make_app_config(cfg_, *body_->store);
+
+        // §Phase 11: when mcp_enabled=false, body_->mcp is
+        // nullptr and LLMClient's mcp_manager_ is null, so all MCP
+        // operations become no-ops. (Setup happens in the
+        // cfg_.mcp_enabled block above — moved out of this block
+        // per §FIX-MCP-STORE-LOAD plan R3-P1 so MCP doesn't depend
+        // on having LLM creds.)
 
         body_->client = std::make_unique<LLMClient>(
             app, std::addressof(*body_->store), body_->mcp.get());
@@ -603,6 +623,18 @@ AgentStats AgentImpl::stats() const noexcept
         s.max_context_size  = body_->client->get_max_context_size();
     }
     return s;
+}
+
+std::vector<std::string> AgentImpl::mcp_configured_servers() const
+{
+    // §FIX-MCP-STORE-LOAD (2026-07-17): thin forwarder. Previously
+    // AgentImpl built an McpServerManager but never loaded it from the
+    // store, so this would have returned []. Now returns whatever was
+    // loaded by AgentImpl::AgentImpl's load_from_store() + load_config()
+    // chain. Empty when mcp_enabled=false (body_->mcp is null).
+    std::vector<std::string> out;
+    if (!body_ || !body_->mcp) return out;
+    return body_->mcp->list_configured_servers();
 }
 
 std::vector<ToolInfo> AgentImpl::list_tools() const

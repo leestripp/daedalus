@@ -1,94 +1,198 @@
-# CodeMax — working memory
+# Daedalus CodeMax Agent Context
 
-> **Transient.** This is the active session's working memory — what's
-> in flight, what's about to be touched, what's recently shipped.
->
-> For permanent history, see:
-> - **`CHANGELOG.md`** — Keep-a-Changelog record of every shipped change.
-> - **`docs/`** — per-feature specification, invariants, integration guides.
+> Status: **✅ COMPLETE — all 4 demos + hello-world C++ test green; 100% pass
+> rate serially (97% under `-j12` due to two pre-existing DB-lock flake
+> unrelated to this work; see §6).**
+> Last updated: 2026-07-18 (build with `-j12`)
 
 ---
 
-## Current state (2026-07-17)
+## 1. Project Snapshot
 
-- **Build:** clean (only OmniNet-internal warnings).
-- **Tests:** `ctest` → **66/66 pass**, 2 live-LLM skipped, 0 failures.
-  - `messages_tests` 73/73 + 1 skipped (203/203 assertions; 14 new CRASH-* cases).
-  - `token_usage_graceful_tests` 15/15 (38/38 assertions) — **NEW** graceful-degradation contract.
-  - `test_acp_basic` 40/40 (131/131 assertions).
-  - `test_acp_end_to_end` 4/4 (42/42 assertions).
-  - `phase15_typo_warning_tests` re-enabled (no `-E` exclusion needed).
-- **libcurl:** fully gone from the build system. HTTP/SSE stack is `OmniNet::HTTP::Client`.
-- **Open items:** 
-  1. ~~**Verify token-count resilience**~~ ✅ **COMPLETE** — Added `token_usage_graceful_tests` (15/15 pass) AND live integration test `/workspace/Testing/test_token_counts/run.sh` (12/12 pass with real minimax-m2.7 API calls). Verified end-to-end:
-     - Non-stream mode: token counts deterministic (21 → 18,540 over multiple turns)
-     - Stream mode (SSE): trailer-chunk recovery works, no crashes, counts observed (18,540/200000 = 9.3%)
-     - `pass 2 (stream)` log shows: `[LLM] Stream finished with usage-only final chunk (recovered via synthesized_message; usage was non-null)` — the EOF timeout fix in `HttpSession::submit_cancellable` is confirmed working.
+- **Name**: Daedalus - Autonomous Agent Library for C++
+- **Version**: 0.5.3-dirty
+- **Language**: C++23
+- **Build**: CMake 3.28+, Clang 17+ / GCC 14+
+- **Type**: Static library `libdaedalus.a` + 4 demo hosts
+- **Core value**: XDG-compliant storage, per-agent isolation, native MCP support
 
-## Token Count Research (2026-07-17)
+### 4 demo apps (per prompt.txt)
 
-SSE streaming token counts are **not universally available** across providers:
+| Demo | Role | CMake Option | Default |
+|---|---|---|---|
+| `daedalus-cli` | REPL with `/models /skills /tools /stats /quit` | always on | ON |
+| `daedalus-subagent` | Spawns sub-agents from a parent | `DAEDALUS_DEMO_SUBAGENT` | ON |
+| `daedalus-manager` | Orchestrates planner/actor/verifier/coder | `DAEDALUS_DEMO_MANAGER` | ON |
+| `daedalus-webui` | HTTP + SSE browser host | `DAEDALUS_DEMO_WEBUI` | OFF (enabled in this build) |
 
-| Provider | Available | Requirement |
-|----------|-----------|-------------|
-| OpenAI | ✅ Yes | Must send `stream_options: { include_usage: true }` (added May 2024) |
-| Azure OpenAI | ✅ Yes | Same as OpenAI |
-| Anthropic Claude | ⚠️ Partial | `message_delta` has cumulative counts, but inconsistent |
-| MiniMax | ✅ Yes | Same as OpenAI + EOF handling fix needed |
-
-**Conclusion**: This is NOT a MiniMax-only issue. It's an industry-wide challenge addressed with the EOF fix in `HttpSession::submit_cancellable` and proper `stream_options` configuration.
+All 4 are built with `cmake -S . -B build -DDAEDALUS_DEMO_WEBUI=ON`.
 
 ---
 
-## Recent activity
+## 2. System
 
-| Date | Item | Where |
-|------|------|-------|
-| 2026-07-17 | **SSE streaming token-count fix** — `HttpSession::submit_cancellable` was treating socket-wait timeouts as EOF, dropping the usage-only trailer chunk on slow providers (MiniMax/M2.7). Distinguishing `nullopt`-timeout from real EOF fixes `'usage' is null in SSE stream` and the zero-token-count UI bar. | [CHANGELOG v0.5.0](./CHANGELOG.md), [docs/sse_streaming.md](./docs/sse_streaming.md) |
-| 2026-07-16 | **§CRASH-RESILIENCE** complete (5/5 phases). Atomic save, write-through auto-flush, async-signal-safe SIGSEGV/SIGABRT handler, drop-last-message recovery. | [CHANGELOG v0.5.0](./CHANGELOG.md), [docs/crash_resilience.md](docs/crash_resilience.md) |
-| 2026-07-16 | **ACP sub-library** complete (16/16 tasks). `OmniNet` transport, structured SSE dispatch, e2e test. | [CHANGELOG v0.5.0](./CHANGELOG.md) |
-| 2026-07-16 | **§NOMORE-CURL** complete (12/12 tasks). libcurl fully removed. | [CHANGELOG v0.5.0](./CHANGELOG.md) |
-| 2026-07-16 | `Readme.md` + `docs/storage.md` updated with `messages.json.crash` row; new `docs/crash_resilience.md` + `docs/library_design.md` cross-refs. | [CHANGELOG v0.5.0](./CHANGELOG.md) |
-| 2026-07-15 | Bug-sweep round 2 (B1–B32, F0–F8) closed. | [CHANGELOG v0.4.2 prep](./CHANGELOG.md) |
+- **Kernel**: Linux 7.0.3-6.stable x86_64
+- **OS**: Ubuntu 26.04 LTS (Podman container)
+- **Cores**: 12 (use `cmake --build build -j12`)
+- **Display**: Wayland (no GPU; SSH-friendly)
+- **User**: ubuntu at `/workspace/daedalus`
 
 ---
 
-## Invariants
+## 3. Plan & Results
 
-Permanent rules for `libdaedalus.a` code. See
-**[docs/library_design.md](docs/library_design.md)** for the full
-spec; the main one:
+### Step A — Bug fix surfaced by `test_mcp_load_from_agent`
 
-> **The library MUST NOT write to stdout, stderr, or stdin.** Use
-> `AgentSink` for user-visible output and `core/Logger.h` for
-> internal diagnostics. Demos (`demos/daedalus-cli/`) are exempt.
+`mcp::McpServerConfig::is_valid()` required `args` to be non-empty for
+stdio servers. Reasonable CLI servers (e.g., `/bin/true`, `node`,
+`cat`) accept zero args, so this was too strict — both the JSON and
+SQLite load paths silently dropped legitimate entries.
+
+**Fix applied:** `src/mcp/McpServerConfig.h` — stdio now requires only
+non-empty `name` and `command`; `args` is optional.
+
+Regression test: `tests/test_mcp_load_from_agent.cpp::alpha` (no args)
+now loads; previously was dropped.
+
+### Step B — All 4 demos built with `-j12`
+
+```bash
+cmake -S . -B build -DDAEDALUS_DEMO_WEBUI=ON
+cmake --build build -j12
+```
+
+```
+[ 91%] Built target daedalus-subagent
+[ 91%] Built target daedalus-manager
+[ 92%] Built target daedalus-cli
+[ 93%] Built target daedalus-webui
+[100%] Built target daedalus_tool_definitions_tests
+```
+
+### Step C — Hello-world C++ test, one per demo
+
+New smoke test: `tests/test_demos_hello_world.cpp` (registered as
+`demos_hello_world_tests`). It does five things:
+
+1. Launches `daedalus-cli --version` → exit 0, banner in stdout.
+2. Launches `daedalus-subagent --version` → exit 0, banner.
+3. Launches `daedalus-manager --version` → exit 0, banner.
+4. Launches `daedalus-webui --version` → exit 0, banner.
+5. Spawns `daedalus-webui` on `:18888`, polls `/healthz` until
+   `{"ok":true}` returns.
+6. Compiles a one-liner C++ `Hello, World!` program and runs the
+   binary.
+
+Per-demo gating honours `DAEDALUS_DEMO_<NAME>_OPT` env vars set by
+ctest from the CMake option cache — a default `webui=OFF` build skips
+the webui step cleanly.
+
+```
+[ok]   daedalus-cli (--version, exit 0)
+[ok]   daedalus-subagent (--version, exit 0)
+[ok]   daedalus-manager (--version, exit 0)
+[ok]   daedalus-webui (--version, exit 0)
+[ok]   daedalus-webui (/healthz returns {"ok":true})
+[ok]   hello-world C++ program compiled and ran
+
+All 4 demo apps + hello-world C++ test: PASS
+```
+
+### Step D — Full regression suite
+
+```
+ctest --test-dir build --output-on-failure -j1   # serial
+→ 100% tests passed, 0 tests failed out of 66
+   (2 live-LLM tests skipped: daedalus_token_counts_sse_tests,
+                               daedalus_no_content_duplicate_tests)
+```
+
+```
+ctest --test-dir build --output-on-failure -j12  # parallel
+→ 97% tests passed, 2 tests failed out of 66
+   FAILED: settings_active_model_tests, settings_for_home_vs_instance_tests
+```
+
+The two parallel failures are pre-existing DB-lock races on the
+process-global `SettingsStore::instance()`. **Verified pre-existing
+on `main` without this work** — same 2 tests fail under `-j12` from a
+clean rebuild with all changes stashed. Out of scope for this change;
+fixing it would mean giving each test its own store (touching ~6
+tests that share the singleton).
+
+### Step E — Commit
+
+Single changelist (`§FIX-MCP-STORE-LOAD: end-to-end MCP load + 4 demos +
+hello-world smoke test`) — see git log.
 
 ---
 
-## Project layout
+## 4. XDG Storage Layout (verified)
 
-- `/workspace/daedalus` — C++ agent library + demos (CMake build).
-- `/workspace/Testing` — manual + automated test suites for the demos.
+```
+$XDG_DATA_HOME/daedalus/                        # ~/.local/share/daedalus/
+├── daedalus.db                                 # Settings (models, MCP, kv)
+└── skills/installed/                           # §FIX-XDG-STORAGE: was ~/.daedalus/skills/
 
-## Related files
+$XDG_CONFIG_HOME/daedalus/                      # ~/.config/daedalus/
+├── mcp/servers.json                            # XDG-compliant path (NEW)
+├── mcp/.env                                    # XDG-compliant path (NEW)
+└── config.json
 
-- `CHANGELOG.md` — what shipped, by version.
-- `docs/index.md` — map of all `docs/*.md`.
-- `docs/library_design.md` — invariants for `libdaedalus.a`.
-- `docs/crash_resilience.md` — message persistence lifecycle.
-- `docs/embedding.md` — how to host `libdaedalus.a`.
-- `docs/sse_streaming.md` — SSE consumption pipeline, EOF gotcha, `usage`-trailer recovery. Read before touching `HttpSession` or `MiniMaxSseParser`.
-- `docs/token_counts.md` — Token count research: OpenAI/Anthropic/MiniMax comparison, SSE streaming availability, root causes.
-- `docs/testing.md` — Two-layer test strategy (unit + integration). Includes `test_token_counts/` SSE graceful-degradation canary.
+$XDG_STATE_HOME/daedalus/                       # ~/.local/state/daedalus/
+└── logs/daedalus.log
 
-## Live Integration Test (2026-07-17)
+$XDG_CACHE_HOME/daedalus/                       # ~/.cache/daedalus/
+└── (future: response cache)
 
-End-to-end test at `/workspace/Testing/test_token_counts/`. Drives
-the actual daedalus-cli with `--model minimax-m2.7` against the real
-MiniMax API. Two passes:
+<project>/.daedalus/                            # project-tier (per-agent default)
+├── messages.json + .crash
+├── memory/
+└── sessions/<id>/scratch.json
 
-- **Pass 1 (--no-stream):** 3/3 file assertions pass; hello binary builds with clang++; `./build/hello_world` prints "Hello, World!".
-- **Pass 2 (--stream):** SSE streaming; trailer-chunk recovery verified via `[LLM] Stream finished with usage-only final chunk (recovered via synthesized_message; usage was non-null)`. Token counts climb: 18,049 → 18,540.
+<project>/.daedalus-<name>/                     # project-tier (named agent)
+└── (same)
+```
 
-**Result: 12/12 checks pass.** Both modes complete the agent loop and
-build a working hello-world C++17 project.
+See `docs/xdg_compliance.md` for the full spec mapping, resolution
+priority, and Podman/systemd examples.
+
+---
+
+## 5. Documentation Map
+
+| Document | Purpose |
+|---|---|
+| `docs/index.md` | Start here |
+| `docs/storage.md` | Two-tier layout, env-var resolution |
+| `docs/xdg_compliance.md` | XDG Base Directory mapping (NEW this session) |
+| `docs/settings.md` | SettingsStore API |
+| `docs/mcp_server.md` | MCP integration |
+| `docs/tools.md` | Tool specs (40+) |
+| `docs/skills.md` | Agent Skills |
+| `docs/crash_resilience.md` | Atomic save + crash recovery |
+| `docs/how_compress_works.md` | 70/30 split |
+| `docs/session_memory.md` | Memory system |
+| `docs/agent_state_machine.md` | State transitions |
+| `docs/agent_system_prompts.md` | Prompt composition |
+| `docs/testing.md` | Test conventions |
+
+---
+
+## 6. Pre-existing issues (not introduced by this session)
+
+- Two tests fail under `-j12` due to SQLite DB-lock races on the
+  process-global `SettingsStore::instance()`:
+  - `settings_active_model_tests`
+  - `settings_for_home_vs_instance_tests`
+
+  Same failures on a clean rebuild of `main` (verified). Both pass
+  when run serially (`-j1`). Out of scope for the data-storage fix;
+  touching them would expand the surface area without addressing the
+  user's request.
+
+- `tests/test_phase15_disabled_switches.cpp` has 3 pre-existing
+  `-Wunused-variable` warnings (not errors). Tracked elsewhere.
+
+- `doctest 2.4.12` triggers a `-W#warnings` from `<ciso646>` under
+  GCC 15. Tracked in test header comment block.

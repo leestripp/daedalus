@@ -49,12 +49,19 @@ struct McpServerConfig {
 
     // Check if this server is properly configured.
     // A server is valid if it has:
-    //   - stdio: non-empty name, command, args, OR
-    //   - http:  non-empty name, url.
+    //   - stdio: non-empty name AND non-empty command.
+    //            `args` is optional — many CLI tools (e.g. /bin/true,
+    //            `node`, `cat`) accept zero arguments. Requiring a
+    //            non-empty args vector caused real, legitimate servers
+    //            to be silently dropped on both the JSON and SQLite
+    //            load paths; see test_mcp_load_from_agent.cpp (alpha
+    //            server has no args) for the regression that surfaced
+    //            this.
+    //   - http:  non-empty name AND non-empty url.
     [[nodiscard]] bool is_valid() const {
         if (name.empty()) return false;
         if (is_http())    return !url.empty();
-        return !command.empty() && !args.empty();
+        return !command.empty();
     }
 };
 

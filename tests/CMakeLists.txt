@@ -938,6 +938,25 @@ target_link_libraries(daedalus_mcp_load_from_store_tests PRIVATE
 )
 add_test(NAME mcp_load_from_store_tests COMMAND daedalus_mcp_load_from_store_tests)
 
+# §FIX-MCP-STORE-LOAD (plan R3-P1, 2026-07-17): end-to-end regression
+# — verify AgentImpl::AgentImpl actually loads MCP servers from the
+# SettingsStore via load_from_store(). Previously this path was
+# broken in TWO ways: (a) AgentImpl never called load_from_store(),
+# only load_config(); (b) the whole MCP setup was inside
+# `if (has_explicit_creds)`, so any user without a default model
+# silently lost their MCP servers.
+add_executable(daedalus_mcp_load_from_agent_tests
+    test_mcp_load_from_agent.cpp
+)
+target_include_directories(daedalus_mcp_load_from_agent_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_mcp_load_from_agent_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME mcp_load_from_agent_tests COMMAND daedalus_mcp_load_from_agent_tests)
+
 # Instance() auto-migration test. Runs in its own process so the
 # SettingsStore singleton is fresh. Verifies the constructor's
 # auto_migrate=true path actually fires against the user's real DB.
@@ -1353,6 +1372,29 @@ target_link_libraries(daedalus_ensure_directories_tests PRIVATE
 )
 add_test(NAME ensure_directories_tests
     COMMAND daedalus_ensure_directories_tests)
+
+# ============================================================================
+# §FIX-PLAN-R3-DEMOS (2026-07-18): Hello-world smoke test for the 4 demo
+# apps. Each demo binary is launched with --version; we verify exit 0
+# and the canonical banner. We also compile + run a trivial C++
+# "Hello, World!" to prove the toolchain still produces a working
+# binary. The test is hermetic — no network, no SettingsStore writes.
+# Per-demo gating (so a default-config build with webui=OFF still
+# passes): the test consults $DAEDALUS_DEMO_<NAME>_OPT env vars that
+# ctest sets from CMake's option cache at run time.
+# ============================================================================
+add_executable(daedalus_demos_hello_world_tests
+    test_demos_hello_world.cpp
+)
+add_test(NAME demos_hello_world_tests COMMAND daedalus_demos_hello_world_tests)
+set(_dhw_cli  "$<IF:$<BOOL:${DAEDALUS_BUILD_DEMOS}>,1,0>")
+set(_dhw_sub  "$<IF:$<BOOL:${DAEDALUS_DEMO_SUBAGENT}>,1,0>")
+set(_dhw_mgr  "$<IF:$<BOOL:${DAEDALUS_DEMO_MANAGER}>,1,0>")
+set(_dhw_web  "$<IF:$<BOOL:${DAEDALUS_DEMO_WEBUI}>,1,0>")
+set_tests_properties(demos_hello_world_tests PROPERTIES
+    ENVIRONMENT "DAEDALUS_DEMO_CLI_OPT=${_dhw_cli};DAEDALUS_DEMO_SUBAGENT_OPT=${_dhw_sub};DAEDALUS_DEMO_MANAGER_OPT=${_dhw_mgr};DAEDALUS_DEMO_WEBUI_OPT=${_dhw_web}"
+    LABELS "smoke"
+)
 
 # ============================================================================
 # §Phase E1: JS-side wiring check for the webui tool-panel.

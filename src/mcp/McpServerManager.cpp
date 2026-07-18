@@ -86,16 +86,22 @@ McpServerManager::~McpServerManager() {
 
 std::string McpServerManager::get_env_file_path() const {
     if (!config_path_.empty()) {
-        // Derive from config path: ~/.daedalus/mcp/servers.json -> ~/.daedalus/mcp/.env
+        // Derive from the resolved config path: foo/servers.json → foo/.env
         std::filesystem::path p(config_path_);
         return (p.parent_path() / ".env").string();
     }
 
-    // Default location
+    // §FIX-MCP-STORE-LOAD (2026-07-17): was hardcoded to
+    // `~/.daedalus/mcp/.env` — legacy path. Use the same XDG-compliant
+    // location the JSON fallback is read from (see load_config()).
+    const char* xdg = std::getenv("XDG_CONFIG_HOME");
     const char* home = std::getenv("HOME");
-    if (home) {
-        return std::string(home) + "/.daedalus/mcp/.env";
+    if (!home) {
+        struct passwd* pw = getpwuid(getuid());
+        if (pw) home = pw->pw_dir;
     }
+    if (xdg && *xdg) return std::string(xdg) + "/daedalus/mcp/.env";
+    if (home && *home) return std::string(home) + "/.config/daedalus/mcp/.env";
     return "";
 }
 
@@ -203,6 +209,15 @@ std::string McpServerManager::build_command_string(const McpServerConfig& config
 }
 
 bool McpServerManager::load_config(const std::string& config_path) {
+    // §FIX-MCP-STORE-LOAD (2026-07-17): load_config() is exclusive —
+    // it RESETS the configs_ map before loading. Tests that use the
+    // singleton (McpServerManager::instance()) rely on this so
+    // back-to-back load_config() calls don't accumulate state.
+    //
+    // Production callers that want BOTH the SQLite store AND the
+    // legacy JSON fallback should call clear() then load_from_store()
+    // then load_config() — AgentImpl does this. The explicit clear()
+    // is the caller's responsibility; see clear() in McpServerManager.h.
     configs_.clear();
     config_loaded_ = false;
     clients_.clear();
@@ -210,17 +225,39 @@ bool McpServerManager::load_config(const std::string& config_path) {
     server_tools_.clear();
     mark_mcp_tools_dirty();
 
-    // Determine config path
+    // Determine config path.
+    // §FIX-MCP-STORE-LOAD (2026-07-17): was hardcoded to
+    // `~/.daedalus/mcp/servers.json` — the legacy location. After the
+    // v0.5.0 cutover to SQLite (SettingsStore), the canonical user-tier
+    // location is `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (default
+    // `~/.config/daedalus/mcp/servers.json`). Honour the XDG var first,
+    // then fall back to the XDG default. The legacy `~/.daedalus/` path
+    // is checked last as a one-shot read-fallback for pre-v0.5.0 users
+    // who haven't run --migrate-data yet — NEVER written to, only read.
     std::string path = config_path;
     if (path.empty()) {
-        // Default location: ~/.daedalus/mcp/servers.json
+        const char* xdg = std::getenv("XDG_CONFIG_HOME");
         const char* home = std::getenv("HOME");
         if (!home) {
             struct passwd* pw = getpwuid(getuid());
             if (pw) home = pw->pw_dir;
         }
-        if (home) {
-            path = std::string(home) + "/.daedalus/mcp/servers.json";
+        std::vector<std::string> candidates;
+        if (xdg && *xdg) candidates.emplace_back(std::string(xdg) + "/daedalus/mcp/servers.json");
+        if (home && *home) {
+            candidates.emplace_back(std::string(home) + "/.config/daedalus/mcp/servers.json");
+            // Legacy fallback — read once, never written.
+            candidates.emplace_back(std::string(home) + "/.daedalus/mcp/servers.json");
+        }
+        for (const auto& c : candidates) {
+            std::ifstream probe(c);
+            if (probe.is_open()) { path = c; break; }
+        }
+        if (path.empty() && !candidates.empty()) {
+            // Use the canonical XDG path as the canonical config_path_
+            // value even when no file exists yet, so error messages point
+            // the user at the right place to create one.
+            path = candidates.front();
         }
     }
 
@@ -330,6 +367,18 @@ bool McpServerManager::load_from_store_impl(void* store_ptr)
 {
     auto& store = *static_cast<daedalus::SettingsStore*>(store_ptr);
 
+    // §FIX-MCP-STORE-LOAD (2026-07-17): load_from_store() is exclusive
+    // — it RESETS the configs_ map before loading. This matches the
+    // historical exclusive-load semantics of load_config() and the test
+    // contract in test_mcp_load_from_store.cpp (ML5: after disabling a
+    // server, calling load_from_store() again removes the disabled
+    // entry from the visible set — merge semantics would leave the
+    // stale entry in the map).
+    //
+    // Production callers that want both the SQLite store AND the legacy
+    // JSON fallback should load the store first and only fall back to
+    // load_config() if zero servers were loaded — AgentImpl follows
+    // this pattern (see the conditional in AgentImpl::initialize()).
     configs_.clear();
     config_loaded_ = false;
     clients_.clear();

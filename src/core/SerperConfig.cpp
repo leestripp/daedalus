@@ -47,16 +47,15 @@ constexpr const char* kPlaceholderValues[] = {
 // The candidate settings.json paths, in priority order. The first existing
 // file wins.
 //
-// §Plan.md Phase 2 (2026-07-13): this used to hard-code
-//   $HOME/.daedalus/settings
-//   $HOME/.config/daedalus/settings
-// It now derives candidates from Paths::global() so XDG env vars are
-// honoured (e.g. $XDG_CONFIG_HOME). The legacy $HOME/.daedalus/settings
-// is still probed because Paths::global().user_root() honours it as a
-// read-fallback (Plan.md §3.4).
+// §FIX-XDG-STORAGE (2026-07-17): also probe for `config.json` in the
+// XDG config root. Pre-v0.4.0 XDG users had `settings.json`; v0.4.0+
+// renamed it to `config.json` (see CHANGELOG.md v0.4.0 entry). Both
+// names should be probed during the migration window so a v0.4.0 user
+// who hasn't yet run --migrate-data still gets their serper key
+// loaded.
 //
-// Returned entries are DIRECTORIES (the caller probes for `settings.json`
-// inside each one), so we drop the trailing file component of config_file().
+// Returned entries are DIRECTORIES (the caller probes for files inside
+// each one), so we drop the trailing file component of config_file().
 std::vector<std::filesystem::path> candidate_settings_paths() {
     std::vector<std::filesystem::path> paths;
 
@@ -330,21 +329,33 @@ SerperApiKeyResult load_serper_api_key_from_dirs(
     // First, report where we looked. If nothing exists, return MISSING_FILE
     // with settings_path set to the first candidate (the user's primary
     // config location) so the error message tells them where to create it.
+    //
+    // §FIX-XDG-STORAGE (2026-07-17): probe BOTH `settings.json` (legacy,
+    // pre-v0.4.0 filename) AND `config.json` (v0.4.0+ canonical name) in
+    // each candidate directory. The legacy name lived in `~/.daedalus/settings/`;
+    // post-v0.4.0 the canonical XDG file is `<user_config_root>/config.json`
+    // (see SettingsMigrator and docs/storage.md §1.2).
     std::filesystem::path first_path;
     bool any_existing = false;
     for (const auto& dir : dirs) {
-        auto p = dir / "settings.json";
-        if (first_path.empty()) first_path = p;
-        std::error_code ec;
-        if (std::filesystem::exists(p, ec)) {
-            any_existing = true;
-            auto r = load_from_path(p);
-            // If the file is present but missing the serper block, treat
-            // that as the authoritative answer for that file (don't fall
-            // through to a lower-priority file with a valid key). The
-            // user's primary config is the source of truth - silently
-            // falling through to a secondary file would be confusing.
-            return r;
+        // Probe both names. `settings.json` is checked first because it's
+        // the more specific filename in legacy paths and matches what
+        // SerperConfig always used historically. `config.json` is checked
+        // second so v0.4.0+ users with the canonical layout get a match.
+        for (const char* name : {"settings.json", "config.json"}) {
+            auto p = dir / name;
+            if (first_path.empty()) first_path = p;
+            std::error_code ec;
+            if (std::filesystem::exists(p, ec)) {
+                any_existing = true;
+                auto r = load_from_path(p);
+                // If the file is present but missing the serper block, treat
+                // that as the authoritative answer for that file (don't fall
+                // through to a lower-priority file with a valid key). The
+                // user's primary config is the source of truth - silently
+                // falling through to a secondary file would be confusing.
+                return r;
+            }
         }
     }
 
@@ -354,9 +365,11 @@ SerperApiKeyResult load_serper_api_key_from_dirs(
                    : SerperApiKeyResult::Status::MISSING_FILE;
     r.settings_path = first_path;
     if (r.status == SerperApiKeyResult::Status::MISSING_FILE) {
-        r.error_detail = "No settings.json found. Checked:";
+        r.error_detail = "No settings.json or config.json found. Checked:";
         for (const auto& dir : dirs) {
-            r.error_detail += "\n    - " + (dir / "settings.json").string();
+            for (const char* name : {"settings.json", "config.json"}) {
+                r.error_detail += "\n    - " + (dir / name).string();
+            }
         }
     }
     return r;

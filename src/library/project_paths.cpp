@@ -96,11 +96,6 @@ fs::path ProjectPaths::scratch_file( std::string_view session_id ) const
 	return session_dir( session_id ) / "scratch.json";
 }
 
-fs::path ProjectPaths::project_config_file() const
-{
-	return agent_dir() / "config.json";
-}
-
 fs::path ProjectPaths::skills_active_dir() const
 {
 	return agent_dir() / "skills" / "active";

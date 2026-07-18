@@ -55,13 +55,19 @@ inline std::ostream& operator<<(std::ostream& os,
 }
 
 /**
- * @brief Load and validate the Serper API key from settings.json.
+ * @brief Load and validate the Serper API key from settings.json /
+ *        config.json.
  *
  * Searches the same paths SearchTool has always used (in priority order):
- *   1. $HOME/.daedalus/settings/settings.json
- *   2. $HOME/.config/daedalus/settings/settings.json
- *   3. ./settings/settings.json (relative to cwd)
- *   4. <absolute>/settings/settings.json
+ *   1. $HOME/.daedalus/settings/settings.json   (legacy)
+ *   2. $XDG_CONFIG_HOME/daedalus/settings.json (legacy name)
+ *   3. $XDG_CONFIG_HOME/daedalus/config.json    (v0.4.0+ canonical name)
+ *   4. ./settings/settings.json                (relative to cwd)
+ *
+ * §FIX-XDG-STORAGE (2026-07-17): also probes `config.json` (v0.4.0+
+ * canonical) in addition to `settings.json` (legacy name). Both names
+ * are accepted during the migration window. The store-based lookup
+ * via load_from_settings_store() (above) is the production path.
  *
  * Accepts BOTH "serper-search" (canonical, current) and "serper" (legacy)
  * for backward compatibility with older configs. The first match wins.

@@ -112,6 +112,16 @@ public:
     [[nodiscard]] std::vector<SkillInfo> list_skills() const;
     [[nodiscard]] std::vector<ModelInfo> list_models() const;
 
+    /// @brief Names of MCP servers currently configured (loaded from the
+    ///        SQLite SettingsStore during initialize(), with the legacy
+    ///        `mcp/servers.json` merged in as a fallback). Empty when
+    ///        `cfg.mcp_enabled == false` or no servers are configured.
+    /// @note   Useful for hosts wanting to surface "what MCP servers are
+    ///         available to the agent?" in their UI. Each name matches
+    ///         a row in the store's `mcp_servers` table (or a key in
+    ///         the legacy JSON).
+    [[nodiscard]] std::vector<std::string> mcp_configured_servers() const;
+
     /// @brief Return the model that's actually loaded for this session.
     ///        This is the model that subsequent turns will hit.
     ///        - If `cfg.model_name` was non-empty, the matching entry.

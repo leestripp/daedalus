@@ -130,6 +130,20 @@ public:
     // Get path to the loaded configuration file
     std::string get_config_path() const { return config_path_; }
 
+    // §FIX-MCP-STORE-LOAD (2026-07-17): explicit reset. Both
+    // load_config() (JSON) and load_from_store() (SQLite) MERGE into
+    // configs_; call clear() before a sequence of loads if you want
+    // exclusive semantics. AgentImpl does this on Agent init.
+    void clear()
+    {
+        configs_.clear();
+        config_loaded_ = false;
+        clients_.clear();
+        http_transports_.clear();
+        server_tools_.clear();
+        mark_mcp_tools_dirty();
+    }
+
     // -------------------------------------------------------------------
     // Hub public API (mcp-standard §9.6/§9.7).
     //

@@ -1,5 +1,6 @@
 #include "SkillManager.h"
 #include "core/ThreadPool.h"
+#include "daedalus/paths.h"      // §FIX-XDG-STORAGE: use Paths::global() for skill dirs
 #include "daedalus/settings.h"   // v0.5.0: SettingsStore for skill settings
 #include <nlohmann/json.hpp>
 #include <fstream>
@@ -74,12 +75,18 @@ void SkillManager::init_after_settings() {
 
     // Add default skill directories.
     // Discovery order:
-    //   1. ~/.daedalus/skills/   - daedalus-specific user-global skills
-    //   2. ~/.agents/skills/     - Anthropic Agent Skills standard (user-global)
-    //   3. .agents/skills/       - Anthropic Agent Skills standard (project-local)
+    //   1. <data_root>/skills/installed/    - daedalus-specific user-global skills
+    //      (XDG_DATA_HOME/daedalus/skills/installed, default
+    //      ~/.local/share/daedalus/skills/installed)
+    //   2. ~/.agents/skills/                - Anthropic Agent Skills standard (user-global)
+    //   3. .agents/skills/                  - Anthropic Agent Skills standard (project-local)
+    // §FIX-XDG-STORAGE (2026-07-17): the daedalus-specific user-global
+    // path was hardcoded to `~/.daedalus/skills/` — moved to the
+    // XDG-compliant data root via Paths::global().global_skills_dir().
     const char* home = std::getenv("HOME");
+    settings_.directories.push_back(
+        daedalus::Paths::global().global_skills_dir().string());
     if (home) {
-        settings_.directories.push_back(std::string(home) + "/.daedalus/skills/");
         settings_.directories.push_back(std::string(home) + "/.agents/skills/");
     }
     settings_.directories.push_back(".agents/skills/");
@@ -382,11 +389,14 @@ void SkillManager::deactivate_all_skills() {
 // =========================================================================
 
 static std::filesystem::path get_default_active_skills_path() {
-    const char* home = std::getenv("HOME");
-    if (home) {
-        return std::filesystem::path(home) / ".daedalus" / "skills" / "active.json";
-    }
-    return std::filesystem::path("active_skills.json");
+    // §FIX-XDG-STORAGE (2026-07-17): was hardcoded to
+    // `~/.daedalus/skills/active.json`. Moved to the XDG data root:
+    //   <data_root>/skills/active.json
+    //   (XDG_DATA_HOME/daedalus/skills/active.json, default
+    //    ~/.local/share/daedalus/skills/active.json)
+    // That sits alongside the global_skills_dir() siblings and stays
+    // out of the legacy ~/.daedalus/ tree entirely.
+    return daedalus::Paths::global().user_data_root() / "skills" / "active.json";
 }
 
 bool SkillManager::save_active_skills(const std::filesystem::path& path) const {

@@ -73,6 +73,12 @@ public:
     [[nodiscard]] std::vector<ToolInfo>  list_tools()  const;
     [[nodiscard]] std::vector<SkillInfo> list_skills() const;
     [[nodiscard]] std::vector<ModelInfo> list_models() const;
+
+    /// @brief Names of MCP servers currently configured (loaded from the
+    ///        SQLite SettingsStore during initialize(), with the legacy
+    ///        `mcp/servers.json` merged in as a fallback). Empty when
+    ///        `cfg.mcp_enabled == false` or no servers are configured.
+    [[nodiscard]] std::vector<std::string> mcp_configured_servers() const;
     [[nodiscard]] ModelInfo              active_model() const noexcept;
     [[nodiscard]] bool                   auto_approve() const noexcept;
     static std::string     library_version() noexcept;

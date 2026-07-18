@@ -72,7 +72,6 @@ public:
 	std::filesystem::path sessions_dir() const;      ///< `agent_dir() / "sessions"`
 	std::filesystem::path session_dir( std::string_view session_id ) const;
 	std::filesystem::path scratch_file( std::string_view session_id ) const;
-	std::filesystem::path project_config_file() const;
 	std::filesystem::path skills_active_dir() const;
 	std::filesystem::path agents_subdir() const;
 	std::filesystem::path lock_file() const;

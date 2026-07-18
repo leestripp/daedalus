@@ -55,6 +55,16 @@ std::vector<ToolInfo>  Agent::list_tools()  const { return impl_->list_tools(); 
 std::vector<SkillInfo> Agent::list_skills() const { return impl_->list_skills(); }
 std::vector<ModelInfo> Agent::list_models() const { return impl_->list_models(); }
 
+std::vector<std::string> Agent::mcp_configured_servers() const
+{
+    // §FIX-MCP-STORE-LOAD (2026-07-17): thin forwarder. Previously
+    // unreachable from outside the library — AgentImpl built an
+    // McpServerManager but never loaded it from the store, so this
+    // would have returned []. Now returns whatever was loaded by
+    // AgentImpl::AgentImpl's load_from_store() + load_config() chain.
+    return impl_->mcp_configured_servers();
+}
+
 ModelInfo Agent::active_model() const noexcept { return impl_->active_model(); }
 bool        Agent::auto_approve() const noexcept { return impl_->auto_approve(); }
 std::string Agent::library_version() noexcept   { return detail::AgentImpl::library_version(); }

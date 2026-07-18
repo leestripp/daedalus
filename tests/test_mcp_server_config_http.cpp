@@ -94,7 +94,12 @@ TEST(parse_transport_kind_http_aliases) {
 // ============================================================================
 // Test: McpServerConfig::is_valid - stdio regression
 // ============================================================================
-TEST(is_valid_stdio_requires_command_and_args) {
+// §FIX-MCP-STORE-LOAD (2026-07-17, plan R3-P1): stdio accepts an empty
+// args vector — many CLI tools (`/bin/true`, `node`, `cat`) accept zero
+// arguments. The previous contract required `!args.empty()`, which
+// caused real, legitimate servers to be silently dropped by both the
+// JSON and SQLite load paths (see test_mcp_load_from_agent.cpp).
+TEST(is_valid_stdio_requires_command_only) {
     McpServerConfig c;
     c.name = "foo";
 
@@ -104,11 +109,11 @@ TEST(is_valid_stdio_requires_command_and_args) {
     c.transport = "stdio";
     CHECK(!c.is_valid());
 
-    // Missing args
+    // Missing args is OK — args is OPTIONAL for stdio servers.
     c.command = "uvx";
     c.args = {};
     c.transport = "stdio";
-    CHECK(!c.is_valid());
+    CHECK(c.is_valid());
 
     // Both present
     c.command = "uvx";
@@ -350,7 +355,7 @@ int main() {
     int local_failures = 0;
     local_failures += test_parse_transport_kind_empty_defaults_to_stdio();
     local_failures += test_parse_transport_kind_http_aliases();
-    local_failures += test_is_valid_stdio_requires_command_and_args();
+    local_failures += test_is_valid_stdio_requires_command_only();
     local_failures += test_is_valid_http_requires_url();
     local_failures += test_is_valid_http_with_http_alias_accepted();
     local_failures += test_transport_defaults_to_stdio_when_omitted();
