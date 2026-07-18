@@ -156,6 +156,27 @@ else()
     FetchContent_MakeAvailable(OmniNet)
 endif()
 
+# Patch OmniNet bugs (infinite recursion in Formatter::kv/bool and
+# KeyValueList::add/bool) that the current main branch has.
+# These patches apply to the fetched source in build/_deps/omninet-src/.
+# Only apply when using the fetched OmniNet (not OMNINET_LOCAL).
+if(NOT DEFINED OMNINET_LOCAL OR NOT EXISTS "${OMNINET_LOCAL}/CMakeLists.txt")
+    # TODO: remove these patches once upstream OmniNet is fixed.
+    file(READ "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/colors.cpp" _colors_src)
+    string(REPLACE
+        "return kv(key, value ? \"true\" : \"false\");"
+        "return kv(key, std::string(value ? \"true\" : \"false\"));"
+        _colors_src "${_colors_src}")
+    file(WRITE "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/colors.cpp" "${_colors_src}")
+
+    file(READ "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/table.cpp" _table_src)
+    string(REPLACE
+        "return add(key, value ? \"true\" : \"false\");"
+        "return add(key, std::string(value ? \"true\" : \"false\"));"
+        _table_src "${_table_src}")
+    file(WRITE "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/table.cpp" "${_table_src}")
+endif()
+
 # Sanity check: OmniNet header must exist, otherwise the FetchContent_MakeAvailable
 # above did not actually provide the target/headers (e.g. repo renamed target).
 get_target_property(_omninet_inc OmniNet INCLUDE_DIRECTORIES)

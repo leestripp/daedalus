@@ -62,15 +62,15 @@ void test_project_override_appended() {
 
     // Look for the [INFO] merge log line.
     bool found_merge_log = false;
-    for (const auto& [lvl, msg] : sink->events) {
-        if (lvl == daedalus::LogLevel::Info &&
-            msg.find("[SYSTEM_PROMPT]") != std::string::npos &&
-            msg.find("system_prompt.txt") != std::string::npos) {
+    for (const auto& evt : sink->events) {
+        if (evt.first == daedalus::LogLevel::Info &&
+            evt.second.find("[SYSTEM_PROMPT]") != std::string::npos &&
+            evt.second.find("system_prompt.txt") != std::string::npos) {
             found_merge_log = true;
             break;
         }
     }
-    assert(found_merge_log);
+    assert(found_merge_log); (void)found_merge_log;
     std::cout << "[ok] test_project_override_appended" << std::endl;
 
     fs::remove_all(tmp);
@@ -98,13 +98,13 @@ void test_project_override_replaces_empty() {
 
     // No exception, no error log.
     bool found_error = false;
-    for (const auto& [lvl, msg] : sink->events) {
-        if (lvl == daedalus::LogLevel::Error) {
+    for (const auto& evt : sink->events) {
+        if (evt.first == daedalus::LogLevel::Error) {
             found_error = true;
-            std::cerr << "[unexpected error] " << msg << "\n";
+            std::cerr << "[unexpected error] " << evt.second << "\n";
         }
     }
-    assert(!found_error);
+    assert(!found_error); (void)found_error;
     std::cout << "[ok] test_project_override_replaces_empty" << std::endl;
 
     fs::remove_all(tmp);
@@ -126,8 +126,9 @@ void test_no_override_silent() {
     agent.initialize();
 
     // No merge log.
-    for (const auto& [lvl, msg] : sink->events) {
-        assert(msg.find("[SYSTEM_PROMPT]") == std::string::npos);
+    for (const auto& evt : sink->events) {
+        assert(evt.second.find("[SYSTEM_PROMPT]") == std::string::npos);
+        (void)evt;
     }
     std::cout << "[ok] test_no_override_silent" << std::endl;
 
@@ -154,8 +155,9 @@ void test_empty_override_silent() {
     agent.initialize();
 
     // Empty file → no merge log, no exception.
-    for (const auto& [lvl, msg] : sink->events) {
-        assert(msg.find("[SYSTEM_PROMPT]") == std::string::npos);
+    for (const auto& evt : sink->events) {
+        assert(evt.second.find("[SYSTEM_PROMPT]") == std::string::npos);
+        (void)evt;
     }
     std::cout << "[ok] test_empty_override_silent" << std::endl;
 
@@ -178,10 +180,10 @@ void test_no_daedalus_dir_silent() {
     agent.initialize();
 
     // No merge log, no error.
-    for (const auto& [lvl, msg] : sink->events) {
-        assert(msg.find("[SYSTEM_PROMPT]") == std::string::npos);
-        if (lvl == daedalus::LogLevel::Error) {
-            std::cerr << "[unexpected error] " << msg << "\n";
+    for (const auto& evt : sink->events) {
+        assert(evt.second.find("[SYSTEM_PROMPT]") == std::string::npos);
+        if (evt.first == daedalus::LogLevel::Error) {
+            std::cerr << "[unexpected error] " << evt.second << "\n";
             assert(false);
         }
     }

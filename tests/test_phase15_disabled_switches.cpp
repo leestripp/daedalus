@@ -78,7 +78,7 @@ void test_mcp_disabled_skips_config_entry() {
     // Load from SettingsStore (v0.5.0 approach)
     auto store = daedalus::SettingsStore::for_home(tmp);
     bool ok = mgr.load_from_store(store);
-    assert(ok);
+    assert(ok); (void)ok;
 
     auto configured = mgr.list_configured_servers();
     std::set<std::string> configured_set(configured.begin(), configured.end());
@@ -124,7 +124,7 @@ void test_mcp_disabled_filters_after_load() {
     auto store = daedalus::SettingsStore::for_home(tmp);
     mcp::McpServerManager mgr;
     bool ok = mgr.load_from_store(store);
-    assert(ok);
+    assert(ok); (void)ok;
 
     // No servers are actually *connected* here (we don't spawn
     // subprocesses in tests), but the filter for disabled entries
@@ -180,7 +180,7 @@ void test_mcp_empty_disabled_means_all_enabled() {
     mcp::McpServerManager mgr;
     mgr.set_disabled_servers({});  // explicitly empty
     bool ok = mgr.load_from_store(store);
-    assert(ok);
+    assert(ok); (void)ok;
 
     auto configured = mgr.list_configured_servers();
     assert(configured.size() == 2);
@@ -196,7 +196,10 @@ void test_mcp_empty_disabled_means_all_enabled() {
 // Helper: build a SkillManager with a few fake skills cached directly.
 // Bypasses the discovery filesystem scan — these tests only care about
 // the filter layer.
-void populate_skills(SkillManager& sm,
+// NOTE: this helper is a work-in-progress stub; the actual tests use
+// real SKILL.md files instead (see test_skill_disabled_filters_cached).
+[[maybe_unused]]
+static void populate_skills(SkillManager& sm,
                     std::vector<std::pair<std::string, std::string>> names_and_descs,
                     std::set<std::string> disabled = {}) {
     sm.set_disabled_skills(disabled);
@@ -375,8 +378,8 @@ void test_skill_disabled_filters_active_at_runtime() {
     assert(sm->is_skill_active("drop") == false);
     {
         auto active = sm->get_visible_active_skills();
-        for (const auto& s : active) {
-            assert(s.metadata.name != "drop");  // disabled skill should not appear
+        for (auto it = active.begin(); it != active.end(); ++it) {
+            assert(it->metadata.name != "drop");  // disabled skill should not appear
         }
     }
     assert(sm->is_skill_active("keep") == true);  // still visible

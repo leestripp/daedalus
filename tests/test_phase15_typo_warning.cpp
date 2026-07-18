@@ -40,7 +40,9 @@ struct RecordingSink : daedalus::AgentSink {
     void on_state_change(int, int) noexcept override {}
 };
 
-bool contains(const std::vector<std::pair<daedalus::LogLevel, std::string>>& v,
+// NOTE: kept for future use — currently unused.
+[[maybe_unused]]
+static bool contains(const std::vector<std::pair<daedalus::LogLevel, std::string>>& v,
               daedalus::LogLevel lvl, const std::string& needle) {
     for (const auto& [l, m] : v) {
         if (l == lvl && m.find(needle) != std::string::npos) return true;

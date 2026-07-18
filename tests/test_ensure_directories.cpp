@@ -70,11 +70,13 @@ fs::path fresh_dir( const char* tag )
 	return dir;
 }
 
-mode_t perms_of( const fs::path& p )
+// Kept for future use — currently unused.
+[[maybe_unused]]
+static mode_t perms_of( const fs::path& p )
 {
-	struct stat st{};
-	if ( ::stat( p.c_str(), &st ) != 0 ) return 0;
-	return st.st_mode & 0777;
+    struct stat st{};
+    if ( ::stat( p.c_str(), &st ) != 0 ) return 0;
+    return st.st_mode & 0777;
 }
 
 void clear_xdg_envs()

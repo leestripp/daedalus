@@ -79,13 +79,15 @@ void write_text( const fs::path& p, const std::string& contents )
 	f << contents;
 }
 
-size_t existing_count( const daedalus_cli::MigratePlan& plan )
+// Kept for future use — currently unused.
+[[maybe_unused]]
+static size_t existing_count( const daedalus_cli::MigratePlan& plan )
 {
-	size_t n = 0;
-	for ( const auto& e : plan.entries ) {
-		if ( e.from_exists ) ++n;
-	}
-	return n;
+    size_t n = 0;
+    for ( const auto& e : plan.entries ) {
+        if ( e.from_exists ) ++n;
+    }
+    return n;
 }
 
 }  // namespace

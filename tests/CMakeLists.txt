@@ -1,12 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
-# §Phase 11 P3 cleanup: doctest 2.4.12 still includes <ciso646> which
-# GCC 15+ flags as -W#warnings. CMake's parser doesn't allow '#'
-# inside add_compile_options(), so we can't easily suppress this.
-# Tracked in CodeMax.md §13 P3 — will be fixed when we upgrade to
-# doctest 2.4.13+ (which drops the ciso646 include). The warning is
-# emitted by a system header and is not promoted to error; the build
-# is still clean.
+# §Phase 11 P3 cleanup: doctest 2.4.13+ drops the <ciso646> include
+# that GCC 15+ flags as deprecated.
 
 # §Plan.md Phase 2: every test target compiles some src/core/*.cpp
 # files directly (so the test can introspect internal helpers without
@@ -21,14 +16,12 @@ include_directories(${CMAKE_SOURCE_DIR}/include)
 # "no doctest dependency" because doctest is the test framework, not a
 # runtime dep; we fetch it into build/_deps/ like every other dep.
 #
-# Pinned to v2.4.12 to match the GCC 15 / -W#warnings caveat noted above;
-# bump to 2.4.13+ once we're happy to drop the ciso646 comment.
 # ============================================================================
 include(FetchContent)
 FetchContent_Declare(
     doctest
     GIT_REPOSITORY https://github.com/doctest/doctest.git
-    GIT_TAG        v2.4.12
+    GIT_TAG        v2.5.3
 )
 FetchContent_MakeAvailable(doctest)
 
