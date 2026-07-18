@@ -617,8 +617,8 @@ std::vector<std::string> AgentImpl::mcp_configured_servers() const
     // §FIX-MCP-STORE-LOAD (2026-07-17): thin forwarder. Previously
     // AgentImpl built an McpServerManager but never loaded it from the
     // store, so this would have returned []. Now returns whatever was
-    // loaded by AgentImpl::AgentImpl's load_from_store() + load_config()
-    // chain. Empty when mcp_enabled=false (body_->mcp is null).
+    // Returns the MCP servers loaded from SettingsStore by AgentImpl::AgentImpl.
+    // Empty when mcp_enabled=false (body_->mcp is null).
     std::vector<std::string> out;
     if (!body_ || !body_->mcp) return out;
     return body_->mcp->list_configured_servers();
