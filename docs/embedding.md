@@ -144,30 +144,81 @@ struct daedalus::AgentSink {
 
 **IMPORTANT: Know which callback receives what data.**
 
-The callbacks are NOT interchangeable — each has a specific purpose:
+This section documents exactly what data each `AgentSink` callback receives,
+in what format, and what it means for your host application.
+
+### Callback Summary
 
 | Callback | Data Format | Purpose |
 |----------|-------------|---------|
-| `on_tool_call` | `name` (string) + `args` (JSON object) | **Structured tool input** — the parsed tool name and arguments from LLM |
-| `on_tool_result` | `name` (string) + `result` (JSON object) | **Structured tool output** — tool execution result |
-| `on_assistant_delta` | `text` (string_view) | **Streaming text tokens** — raw text chunks from LLM |
-| `on_tool_progress` | `name` + `progress` (JSON object) | **Tool progress updates** — `{stage, percent, message}` |
-| `on_state_change` | `from` + `to` (int enum values) | **State transitions** |
-| `on_log` | `level` (enum) + `message` (string) | **Library diagnostics only** — NOT LLM data |
+| `on_assistant_delta` | `text` (string_view) | **Streaming text tokens** — raw text chunks from LLM as they arrive |
+| `on_tool_call` | `name` + `call_id` + `args` (JSON) | **Structured tool input** — the tool the LLM wants to execute |
+| `on_tool_progress` | `name` + `call_id` + `progress` (JSON) | **Tool progress updates** — `{stage, percent, message}` |
+| `on_tool_result` | `name` + `call_id` + `result` (JSON) | **Structured tool output** — tool execution result |
+| `on_state_change` | `from` + `to` (int enum values) | **State transitions** — agent lifecycle |
+| `on_log` | `level` (enum) + `message` (string) | **Library diagnostics** — NOT LLM output |
 | `on_compaction` | `before` + `after` (size_t) | **Context compression stats** |
-| `on_bell` | none | **Notification signal** |
-| `request_command_approval` | `command` (string) | **Bash approval request** |
+| `on_bell` | none | **Notification signal** — ring the bell |
+| `request_command_approval` | `command` (string) | **Bash approval** — return true/false |
 
-#### `on_tool_call(name, args)` — Tool INPUT
+---
 
-Receives the **parsed tool arguments** from the LLM's function_call:
+### `on_assistant_delta(text)` — Streaming LLM Text
+
+```cpp
+void on_assistant_delta(std::string_view text) noexcept override;
+```
+
+**Called when:** LLM sends a text token via SSE streaming.
+
+**Data:**
+- `text`: Raw text chunk, typically 1-20 characters
+- Called repeatedly as tokens arrive (100s of times per response)
+- Empty chunks are possible
+
+**What to do:**
+- Accumulate in a buffer and display to user
+- Stop any "thinking" spinner/animation when first text arrives
+- **DO NOT** parse tool calls from this — use `on_tool_call` instead
+
+**Example SSE events from webui:**
+```json
+{"event":"assistant_delta","data":"Hello"}
+{"event":"assistant_delta","data":"!"}
+{"event":"assistant_delta","data":" Let me find that"}
+```
+
+---
+
+### `on_tool_call(name, call_id, args)` — Tool Execution Request
 
 ```cpp
 void on_tool_call(std::string_view name,
-                  const nlohmann::json& args) noexcept override
+                  std::string_view call_id,
+                  const nlohmann::json& args) noexcept override;
 ```
 
-**Example:** LLM wants to grep_search for "malloc"
+**Called when:** LLM wants to execute a tool (before execution).
+
+**Data:**
+- `name`: Tool name (e.g., `"grep_search"`, `"execute_bash"`, `"edit_file_patch"`)
+- `call_id`: OpenAI-style correlation ID (empty string if not provided)
+- `args`: Tool arguments as parsed JSON object
+
+**Common tool argument formats:**
+
+#### execute_bash
+```json
+{
+  "name": "execute_bash",
+  "call_id": "call_abc123",
+  "args": {
+    "command": "cmake --build build -j8"
+  }
+}
+```
+
+#### grep_search
 ```json
 {
   "name": "grep_search",
@@ -178,152 +229,431 @@ void on_tool_call(std::string_view name,
 }
 ```
 
-#### `on_tool_result(name, result)` — Tool OUTPUT
-
-Receives the **tool execution result**:
-
-```cpp
-void on_tool_result(std::string_view name,
-                    const nlohmann::json& result) noexcept override
-```
-
-**Example:** grep_search returned results
+#### edit_file_patch
 ```json
 {
-  "name": "grep_search",
-  "result": {
-    "matches": [
-      {"file": "src/core/utils.cpp", "line": 42, "text": "void* malloc(size_t);"},
-      {"file": "src/core/logger.cpp", "line": 15, "text": "void* malloc(size_t size) {"}
-    ],
-    "total": 2
+  "name": "edit_file_patch",
+  "args": {
+    "path": "src/core/utils.cpp",
+    "old_str": "void foo() {",
+    "new_str": "void foo() noexcept {"
   }
 }
 ```
 
-**Example:** Tool error (check for `"error"` key)
+#### create_file / modify_file
 ```json
 {
-  "name": "grep_search",
-  "result": {
-    "error": "Pattern not found: nonexistent_pattern_xyz"
+  "name": "create_file",
+  "args": {
+    "path": "src/new_file.cpp",
+    "content": "#include <daedalus.h>\n..."
   }
 }
 ```
 
-#### `on_assistant_delta(text)` — Streaming Text
+---
 
-Receives **raw text chunks** as they arrive from the LLM (SSE streaming):
-
-```cpp
-void on_assistant_delta(std::string_view text) noexcept override
-```
-
-- Chunks are typically 1-20 characters
-- Accumulate them to build the full response
-- **DO NOT parse tool calls from this** — use `on_tool_call` instead
-
-#### `on_tool_progress(name, progress)` — Progress Updates
-
-Only tools that emit progress (long-running operations):
+### `on_tool_progress(name, call_id, progress)` — Long-Running Tool Progress
 
 ```cpp
 void on_tool_progress(std::string_view name,
-                     const nlohmann::json& progress) noexcept override
+                     std::string_view call_id,
+                     const nlohmann::json& progress) noexcept override;
 ```
 
-**progress JSON shape:**
+**Called when:** A long-running tool emits progress updates (between call and result).
+
+**Data:**
 ```json
 {
   "stage": "starting" | "executing" | "finalizing" | "done",
-  "percent": 0-100,
-  "message": "human-readable status"
+  "percent": 0-100,           // optional, for progress bars
+  "message": "human-readable"  // optional, e.g., "Compiling..."
 }
 ```
 
-#### `on_log(level, message)` — Library Diagnostics
+**Example (execute_bash during build):**
+```json
+{
+  "name": "execute_bash",
+  "call_id": "call_xyz",
+  "progress": {
+    "stage": "executing",
+    "percent": 45,
+    "message": "Building target: daedalus-cli"
+  }
+}
+```
 
-**This is NOT for LLM data.** It's for library internal diagnostics:
+---
+
+### `on_tool_result(name, call_id, result)` — Tool Execution Result
+
+```cpp
+void on_tool_result(std::string_view name,
+                   std::string_view call_id,
+                   const nlohmann::json& result) noexcept override;
+```
+
+**Called when:** Tool execution completes (success or failure).
+
+**Common result formats by tool type:**
+
+#### execute_bash — Success
+```json
+{
+  "name": "execute_bash",
+  "call_id": "call_abc",
+  "result": {
+    "status": "success",
+    "command": "ls -la",
+    "output": "total 12\ndrwxr-xr-x  4 user user 4096 Jul 18 08:00 .\ndrwxr-xr-x  2 user user 4096 Jul 18 08:00 src",
+    "exit_code": 0
+  }
+}
+```
+
+#### execute_bash — Error (non-zero exit)
+```json
+{
+  "name": "execute_bash",
+  "call_id": "call_abc",
+  "result": {
+    "status": "error",
+    "message": "Command failed with exit code 1",
+    "command": "cmake --build build",
+    "output": "CMake Error: ...\nmake: *** [Makefile:123: all] Error 1",
+    "exit_code": 1
+  }
+}
+```
+
+#### grep_search — Results
+```json
+{
+  "name": "grep_search",
+  "call_id": "call_def",
+  "result": {
+    "status": "success",
+    "tool_name": "grep_search",
+    "query": "malloc",
+    "count": 42,
+    "truncated": false,
+    "results": [
+      {"file": "src/core/utils.cpp", "line": 42, "text": "void* malloc(size_t);"},
+      {"file": "src/core/logger.cpp", "line": 15, "text": "malloc(size);"}
+    ]
+  }
+}
+```
+
+#### grep_search — No matches
+```json
+{
+  "name": "grep_search",
+  "result": {
+    "status": "success",
+    "tool_name": "grep_search",
+    "query": "nonexistent",
+    "count": 0,
+    "results": [],
+    "message": "No matches found"
+  }
+}
+```
+
+#### create_file / modify_file
+```json
+{
+  "name": "create_file",
+  "result": {
+    "status": "success",
+    "tool_name": "create_file",
+    "path": "src/new_file.cpp",
+    "content": "... (truncated in display)",
+    "message": "File created: src/new_file.cpp"
+  }
+}
+```
+
+#### read_file / read_file_lines
+```json
+{
+  "name": "read_file",
+  "result": {
+    "status": "success",
+    "tool_name": "read_file",
+    "path": "src/core/utils.cpp",
+    "start_line": 1,
+    "end_line": 50,
+    "content": "... file content ...",
+    "size": 1234,
+    "lines": 50
+  }
+}
+```
+
+#### list_directory
+```json
+{
+  "name": "list_directory",
+  "result": {
+    "status": "success",
+    "tool_name": "list_directory",
+    "path": "src",
+    "entries": [
+      {"name": "api", "type": "directory"},
+      {"name": "core", "type": "directory"},
+      {"name": "CMakeLists.txt", "type": "file", "size": 1234}
+    ],
+    "count": 3
+  }
+}
+```
+
+#### MCP tools
+```json
+{
+  "name": "mcp__filesystem__read_file",
+  "result": {
+    "status": "success",
+    "server": "filesystem",
+    "tool": "read_file",
+    "result": "... parsed JSON or string result ..."
+  }
+}
+```
+
+#### stop (agent finished)
+```json
+{
+  "name": "stop",
+  "result": {
+    "status": "success",
+    "message": "stop",
+    "summary": "Fixed the memory leak in src/core/logger.cpp by adding proper cleanup."
+  }
+}
+```
+
+#### Error result (any tool)
+```json
+{
+  "name": "some_tool",
+  "result": {
+    "status": "error",
+    "message": "Error description here"
+  }
+}
+```
+
+---
+
+### `on_state_change(from, to)` — Agent State Transition
+
+```cpp
+void on_state_change(int from, int to) noexcept override;
+```
+
+**Called when:** Agent transitions between states.
+
+**Data:**
+- `from`: Previous state (integer enum value)
+- `to`: New state (integer enum value)
+
+**State values:**
+```cpp
+enum class AgentState : std::uint8_t {
+    Idle = 0,             // Constructed, no work in flight
+    Understanding = 1,    // ANALYSE phase
+    Planning = 2,         // PLANNING phase
+    Acting = 3,           // ACT phase (tools, edits)
+    Verifying = 4,        // BUILD_TEST phase
+    AwaitingApproval = 5, // Bash approval in flight
+    Compressing = 6,      // Context compression in progress
+    Done = 7,             // Agent emitted stop() cleanly
+    Cancelled = 8,        // Cancelled by host
+    Error = 9             // Unrecoverable error
+};
+```
+
+**Helper to get state name:**
+```cpp
+daedalus::to_string(static_cast<daedalus::AgentState>(to))
+// Returns: "Idle", "Understanding", "Planning", "Acting", etc.
+```
+
+**Typical sequence:**
+```
+on_state_change(0, 1)   // Idle -> Understanding
+on_state_change(1, 2)   // Understanding -> Planning
+on_state_change(2, 3)   // Planning -> Acting
+on_state_change(3, 7)   // Acting -> Done
+```
+
+**CLI behavior:** Shows a "Thinking..." spinner during Thinking states
+(Understanding, Planning, Acting, Verifying, Compressing).
+
+---
+
+### `on_log(level, message)` — Library Diagnostics
 
 ```cpp
 void on_log(daedalus::LogLevel level,
-            std::string_view message) noexcept override
+            std::string_view message) noexcept override;
 ```
 
-**Message examples:**
-- `"[PERSIST] Restored 42 messages"`
-- `"[SYSTEM_PROMPT] Merged project override: /path/to/override"`
-- `"[MCP] WARNING: tool schemas consume ~5000 tokens..."`
-- `"Waiting 2 seconds before retry..."`
-- `"[MEMORY] Conversation history wiped"`
+**IMPORTANT: This is NOT for LLM data.** It's for library internal
+diagnostics only.
 
-If you need the **LLM response data**, use `on_tool_call` / `on_tool_result` / `on_assistant_delta` — NOT `on_log`.
+**Data:**
+- `level`: Severity level (see below)
+- `message`: Human-readable diagnostic string
 
-**`on_assistant_delta`**: Called once per SSE chunk (typically 1–20 chars
-for OpenAI/Claude/MiniMax). Don't re-parse streamed text to detect tool
-calls — use the structured `on_tool_call` / `on_tool_result` events.
+**LogLevel values:**
+```cpp
+enum class LogLevel : std::uint8_t {
+    Trace,  // Very verbose — internal state machine transitions
+    Debug,  // Diagnostic for library developers
+    Info,   // High-level events (session restore, system prompt, etc.)
+    Warn,   // Recoverable issues (MCP server down, retry, etc.)
+    Error,  // Network failures, parse errors, tool errors
+    Fatal   // Never seen — agent transitions to Error state instead
+};
+```
 
-**`on_tool_call` / `on_tool_result`**: The structured tool events.
-`on_tool_result`'s `result` JSON contains the tool's output (success or
-error — check for `result.contains("error")`). For blocking tools
-like `execute_bash`, `request_command_approval` fires **between**
-the call and result.
+**Common log messages:**
 
-**`on_state_change`**: `from` and `to` are integer values of the public
-`daedalus::AgentState` enum. Use
-`daedalus::to_string(static_cast<daedalus::AgentState>(to))` for labels.
+| LogMessage | Level | Meaning |
+|------------|-------|---------|
+| `"[PERSIST] Restored N messages"` | Info | Session loaded from disk |
+| `"[PERSIST] Saved N messages"` | Info | Session saved to disk |
+| `"[SYSTEM_PROMPT] Merged project override: ..."` | Info | Project system prompt loaded |
+| `"[MCP] WARNING: tool schemas consume ~N tokens..."` | Warn | Large MCP schemas detected |
+| `"Waiting 2 seconds before retry..."` | Info | Retry backoff |
+| `"[MEMORY] Conversation history wiped"` | Info | Memory cleared |
+| `"Tool execute_bash failed: exit code 1"` | Error | Tool execution error |
+| `"[COMPACT] 5000 -> 3000 tokens"` | Info | Context compression completed |
 
-**`on_log`**: Free-form library diagnostics (HTTP errors, retry backoff,
-warnings). Route to a log window or file.
+**What to do:**
+- Route to your log window, file, or console
+- `Error` level from tool results is pre-formatted with the tool's
+  output (exit codes, command output, etc.)
+- This is NOT the place to display LLM responses — use `on_assistant_delta`
 
-| LogLevel | When used |
-|-----------|-----------|
-| `Trace` | Verbose internal state |
-| `Debug` | Diagnostic for library developers |
-| `Info` | High-level events ("[PERSIST] Restored N messages") |
-| `Warn` | Recoverable issues (MCP server down) |
-| `Error` | Network failures, parse errors |
-| `Fatal` | Never seen — agent transitions to Error state |
+---
 
-**`request_command_approval`**: Called for `execute_bash`. Return `true`
-to allow, `false` to deny. If `AgentConfig::auto_approve` is `true`
-(effective value is OR with `SettingsStore::get_auto_approve()`),
-this callback is **not** called.
+### `on_compaction(before, after)` — Context Compression Event
 
-> **Removed in v0.4.0:** `AgentSink::request_user_input(std::string_view)`
-> and the `ask_user` tool. The agent has no user-prompting path
-> mid-turn — use `tell_user` (informational only) or wait for the
-> turn to finish and prompt the host's loop.
+```cpp
+void on_compaction(std::size_t before, std::size_t after) noexcept;
+```
 
-**`on_bell`**: Analog of a terminal bell. Fire a notification if your
-host supports it.
+**Called when:** Context was compressed to fit within token budget.
 
-**`on_compaction(before, after)`**: Called when context is compressed.
-`before` = token count before, `after` = count after.
+**Data:**
+- `before`: Token count before compression
+- `after`: Token count after compression
 
-**Threading**: sink methods are called on the agent's own thread. Marshal
-to your UI thread as needed (e.g. `g_idle_add()` for GTK4, enqueue to
-your SSE strand for web). Sink methods are `noexcept` except the two
-`request_*` methods — throwing from those aborts the turn.
+**Example:**
+```
+on_compaction(8000, 4200)
+// Context was compressed from 8000 tokens down to 4200 tokens
+```
+
+---
+
+### `on_bell()` — Notification Signal
+
+```cpp
+void on_bell() noexcept;
+```
+
+**Called when:** Agent wants to notify the user (terminal bell, sound, etc.).
+
+**What to do:**
+- CLI: Print `\a` or ring terminal bell
+- Web: Play a notification sound
+- GUI: Flash window or show notification
+
+---
+
+### `request_command_approval(command)` — Bash Approval
+
+```cpp
+bool request_command_approval(std::string_view command);
+```
+
+**Called when:** `execute_bash` tool is invoked and `auto_approve` is false.
+
+**Data:**
+- `command`: The bash command string
+
+**Returns:**
+- `true`: Allow the command to execute
+- `false`: Deny the command (tool returns error to LLM)
+
+**Throws:** Can throw to abort the current turn.
+
+**Auto-approve:** If `AgentConfig::auto_approve` is `true` (OR'd with
+`SettingsStore::get_auto_approve()`), this callback is **never called**.
+
+---
+
+### Event Sequence (Typical Interactive Turn)
+
+```
+1. submit_user_message("fix the bug")           [host]
+2. run_one_turn()                               [host]
+3. on_state_change(Idle, Understanding)         [sink]
+4. on_log(Info, "[PERSIST] Restored 42 messages")
+5. (SSE tokens) on_assistant_delta("I'm analyzing...")  [sink, many times]
+6. on_state_change(Understanding, Planning)     [sink]
+7. on_tool_call("grep_search", "call_1", {...})  [sink]
+8. on_tool_result("grep_search", "call_1", {...}) [sink]
+9. on_state_change(Planning, Acting)            [sink]
+10. on_tool_call("edit_file_patch", "call_2", {...}) [sink]
+11. on_tool_result("edit_file_patch", "call_2", {...}) [sink]
+12. on_tool_call("execute_bash", "call_3", {...}) [sink]
+13. request_command_approval("cmake --build .")  [sink — blocking]
+14. on_tool_result("execute_bash", "call_3", {...}) [sink]
+15. on_state_change(Acting, Done)                [sink]
+16. run_one_turn() returns                       [host]
+```
+
+---
+
+### Threading Notes
+
+All sink methods are called on the **agent's worker thread**. Marshal to
+your UI thread as needed:
+
+**GTK4:**
+```cpp
+void on_assistant_delta(std::string_view t) noexcept override {
+    g_idle_add(+[](gpointer data) -> gboolean {
+        auto* s = static_cast<std::string*>(data);
+        gtk_label_set_text(label_, gtk_label_get_text(label_) + *s);
+        delete s;
+        return G_SOURCE_REMOVE;
+    }, new std::string(t));
+}
+```
+
+**Web SSE:**
+```cpp
+void on_assistant_delta(std::string_view t) noexcept override {
+    json j = {{"text", std::string(t)}};
+    sse_->broadcast("assistant_delta", j.dump());
+}
+```
+
+All sink methods are `noexcept` **except** the two `request_*` methods —
+throwing from those aborts the current turn.
 
 **Order guarantee**: within a single turn, sink calls are **strictly
 ordered** on the same thread. Multiple Agents are independently in-order.
-
-**Example GTK4 sink** (simplified):
-
-```cpp
-struct Gtksink : daedalus::AgentSink {
-    GtkLabel* lbl;
-    void on_assistant_delta(std::string_view t) noexcept override {
-        g_idle_add(+[](gpointer p) -> gboolean {
-            auto* s = static_cast<std::string*>(p);
-            gtk_label_set_text(lbl_, gtk_label_get_text(lbl_) + *s);
-            delete s; return G_SOURCE_REMOVE;
-        }, new std::string(t));
-    }
-    // ... marshal other methods similarly ...
-};
-```
 
 ### Settings, memory, MCP paths
 
