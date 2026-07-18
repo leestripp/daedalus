@@ -256,6 +256,13 @@ public:
     void clear();
 
     /**
+     * @brief Remove an incomplete trailing tool cycle (assistant message with
+     *        tool_calls followed by tool results) so a new user message can be
+     *        appended. Returns true if any messages were removed.
+     */
+    bool cleanup_dangling_tool_results();
+
+    /**
      * @brief §CRASH-4 (2026-07-16): async-signal-safe crash handler.
      *
      * Installs SIGSEGV / SIGABRT / SIGFPE / SIGILL handlers that

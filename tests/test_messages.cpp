@@ -131,6 +131,65 @@ TEST_SUITE("Message Addition") {
 }
 
 // ============================================================================
+// Test Suite: Cleanup Dangling Tool Results
+// ============================================================================
+
+TEST_SUITE("Cleanup Dangling Tool Results") {
+    TEST_CASE("Removes trailing tool result and its assistant") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json chain = json::array();
+        chain.push_back(make_msg("system", "You are helpful."));
+        chain.push_back(make_msg("user", "Hello"));
+
+        json assistant_msg;
+        assistant_msg["role"] = "assistant";
+        assistant_msg["content"] = "I'll help.";
+        assistant_msg["tool_calls"] = json::array({
+            {{"id", "call_1"},
+             {"type", "function"},
+             {"function", {{"name", "read_file"}, {"arguments", "{}"}}}}
+        });
+        chain.push_back(assistant_msg);
+
+        json tool_result;
+        tool_result["role"] = "tool";
+        tool_result["tool_call_id"] = "call_1";
+        tool_result["content"] = "File content";
+        chain.push_back(tool_result);
+
+        msgs.set_messages(chain);
+        CHECK(msgs.size() == 4);
+
+        CHECK(msgs.cleanup_dangling_tool_results() == true);
+        CHECK(msgs.size() == 2);
+        CHECK(msgs.get_messages()[0]["role"] == "system");
+        CHECK(msgs.get_messages()[1]["role"] == "user");
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Does nothing when last message is not a tool result") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json chain = json::array();
+        chain.push_back(make_msg("system", "You are helpful."));
+        chain.push_back(make_msg("user", "Hello"));
+        chain.push_back(make_msg("assistant", "Hi there!"));
+
+        msgs.set_messages(chain);
+        CHECK(msgs.size() == 3);
+
+        CHECK(msgs.cleanup_dangling_tool_results() == false);
+        CHECK(msgs.size() == 3);
+
+        cleanup_test_project(proj);
+    }
+}
+
+// ============================================================================
 // Test Suite: Set Messages
 // ============================================================================
 

@@ -947,6 +947,52 @@ void Messages::clear() {
     executing_tools_.clear();
 }
 
+bool Messages::cleanup_dangling_tool_results() {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
+    if (messages_.empty()) return false;
+
+    std::unordered_set<std::string> removed_tool_ids;
+    bool removed_any = false;
+
+    // Remove trailing tool results. These occur when the previous turn was
+    // interrupted after a tool executed but before the assistant could respond.
+    while (!messages_.empty() && messages_.back().value("role", "") == "tool") {
+        std::string tc_id = messages_.back().value("tool_call_id", "");
+        if (!tc_id.empty()) {
+            removed_tool_ids.insert(tc_id);
+        }
+        messages_.erase(messages_.end() - 1);
+        removed_any = true;
+    }
+
+    // If the message that initiated those tool calls is now at the end,
+    // remove it as well — an assistant message with tool_calls must be
+    // followed by tool results, not a user message.
+    if (!messages_.empty() && messages_.back().value("role", "") == "assistant"
+        && messages_.back().contains("tool_calls")) {
+        const auto& tool_calls = messages_.back()["tool_calls"];
+        bool all_have_removed_results = true;
+        if (tool_calls.is_array()) {
+            for (const auto& tc : tool_calls) {
+                std::string tc_id = tc.value("id", "");
+                if (!tc_id.empty() && removed_tool_ids.count(tc_id) == 0) {
+                    all_have_removed_results = false;
+                    break;
+                }
+            }
+        }
+        if (all_have_removed_results) {
+            messages_.erase(messages_.end() - 1);
+            removed_any = true;
+        }
+    }
+
+    if (removed_any) {
+        dirty_.store(true, std::memory_order_release);
+    }
+    return removed_any;
+}
+
 bool Messages::has_saved_messages() const {
     return std::filesystem::exists(messages_file_);
 }
