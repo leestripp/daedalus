@@ -12,6 +12,12 @@ embedding `libdaedalus.a` and for core contributors.
 | [`embedding.md`](embedding.md) | **Host developers** | Complete embedding guide: minimum viable host, AgentSink contract (all methods + threading), config, lifecycle, cancellation, composition patterns. |
 | [`sink.md`](sink.md) | *(deleted — merged into `embedding.md`)* | |
 
+### Quick Reference (in embedding.md)
+
+| Section | What it covers |
+|---------|---------------|
+| [Callback Data Reference](embedding.md#callback-data-reference) | **What data each callback receives** — critical for understanding when to use `on_tool_call` vs `on_log` vs `on_assistant_delta` |
+
 ## Agent Internals
 
 | File | Audience | Description |

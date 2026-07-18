@@ -1,285 +1,292 @@
-# Daedalus - CodeMax Project Analysis
+# Daedalus - Autonomous Coding Agent System
 
-## System Context
+## System Information
 
 | Property | Value |
 |----------|-------|
-| Kernel | Linux 7.0.3-6.stable x86_64 |
-| OS | Ubuntu 26.04 LTS |
+| OS | Ubuntu 26.04 LTS (x86_64) |
+| Kernel | Linux 7.0.3-6.stable |
 | Container | Podman |
-| Session | xterm, local, uid=1000 (ubuntu) |
 | Display | Wayland |
-
----
+| User | ubuntu |
+| Date | 2026-07-18 07:41:42 UTC |
 
 ## Project Overview
 
-**Daedalus** is an autonomous agent library for C++23. It ships as `libdaedalus.a` plus four worked example hosts (`demos/`). Embed it in any C++23 host (CLI, web, IDE plugin, CI bot) and drive one or more `Agent` instances via the public API.
+**Daedalus** is an autonomous coding agent written in modern C++23. It provides:
+- A static library (`libdaedalus.a`) with a clean public API
+- Multiple demo applications (CLI, Manager, Subagent, WebUI)
+- Comprehensive tool system for file operations, bash execution, Git, networking, and MCP integration
+- Session memory and context compression
+- Skill management system
 
-- **Language**: C++23
-- **Build System**: CMake 3.28+
-- **Version**: 0.5.3 (current development version)
-- **Key Dependencies**: libcurl, OpenSSL, SQLite3, libpng, libpoppler-cpp, nlohmann/json, OmniNet
-
----
-
-## Data Storage Status (v0.6.0)
-
-The storage system has been fully migrated from JSON-based configuration to SQLite-backed SettingsStore. Key changes:
-
-### Completed Migration Work (v0.5.0)
-
-1. **SettingsStore is the sole source of truth** for:
-   - LLM models (`models` table)
-   - Key-value settings (`kv_settings` table)
-   - MCP server registry (`mcp_servers` table)
-   - Serper API key (`serper_config` table)
-
-2. **Files migrated**:
-   - `config.json` → `daedalus.db` (models, kv_settings)
-   - `mcp/servers.json` → `daedalus.db` (mcp_servers table)
-   - `mcp/.env` → Still in XDG config path (env vars for MCP servers)
-   - Serper API key → `daedalus.db` (serper_config table)
-
-3. **Legacy `~/.daedalus/` fallback removed** (v0.6.0):
-   - XDG-compliant paths are now the only supported locations
-   - Removed `~/.daedalus/` probe from `Paths::user_root()`
-   - Updated all demos to use XDG paths directly
-   - Removed `test_legacy_deprecation_warning.cpp`
-
-### Bug Fixes During Migration
-
-- **Fixed SettingsStore constructor bug**: The constructor was using uninitialized `path_` instead of the passed `db_path` parameter. Fixed in `src/core/SettingsStore.cpp`.
-- **Updated tests**: `test_phase15_disabled_switches.cpp` and `test_serper_startup.cpp` updated to use the new SettingsStore API.
-
-### Key Files Changed
-
-| File | Change |
-|------|--------|
-| `src/core/SettingsStore.cpp` | Fixed constructor to properly initialize `path_` |
-| `tests/test_phase15_disabled_switches.cpp` | Rewrote to use SettingsStore API |
-| `tests/test_serper_startup.cpp` | Rewrote to test SettingsStore-based storage |
-| `src/core/SerperConfig.h` | Removed unused `load_serper_api_key_from_dirs` declaration |
-| `src/library/paths.cpp` | Removed legacy `~/.daedalus/` fallback from `user_root()` |
-| `src/library/AgentImpl.cpp` | Removed `load_config()` fallback, now uses SQLite only |
-| `tests/test_legacy_deprecation_warning.cpp` | Deleted (no longer needed) |
-| `docs/storage.md` | Updated to reflect XDG-only storage layout |
-
----
+**Current Version:** 0.5.4-dirty
 
 ## Project Structure
 
 ```
 daedalus/
-├── cmake/              # CMake config files
-├── demos/              # Example host applications
-│   ├── daedalus-cli/   # Console REPL demo (canonical embedding example)
-│   ├── daedalus-manager/ # 3-Agent orchestration demo
-│   ├── daedalus-subagent/ # Parent-child agent demo
-│   └── daedalus-webui/  # HTTP + SSE web interface demo
-├── docs/               # Living reference documentation
-├── include/daedalus/   # Public API headers
-├── resources/          # Banner, icons
+├── CMakeLists.txt           # Main build configuration
 ├── src/
-│   ├── api/            # LLMClient, HttpSession, SSE parser
-│   ├── core/            # Core utilities (FileIO, Logger, Settings, etc.)
-│   ├── library/         # AgentImpl (PIMPL for public Agent facade)
-│   ├── mcp/             # MCP client/server manager, transports
-│   └── tools/           # Tool implementations (bash, file, git, etc.)
-├── tests/              # Unit tests (Catch2-based)
-└── CMakeLists.txt      # Root build configuration
+│   ├── api/                 # LLM client and HTTP session handling
+│   ├── core/                # Core utilities (Messages, Logger, SessionMemory, etc.)
+│   ├── library/             # Public API implementation (Agent, paths)
+│   ├── mcp/                 # MCP (Model Context Protocol) client/transport
+│   └── tools/               # Tool implementations (File, Bash, Git, Network, etc.)
+├── include/daedalus/        # Public headers
+├── tests/                   # Unit tests using doctest
+├── demos/                   # Demo executables
+│   ├── daedalus-cli/        # Console REPL interface
+│   ├── daedalus-manager/    # Multi-agent orchestration
+│   ├── daedalus-subagent/   # Parent-child agent pattern
+│   └── daedalus-webui/      # HTTP+SSE web interface
+├── docs/                    # Architecture documentation
+└── build/                   # Build output directory
 ```
 
----
+## Key Dependencies
 
-## Key Components
-
-### Public API (`include/daedalus/`)
-
-| Header | Purpose |
-|--------|---------|
-| `Agent.h` | Top-level facade - main class hosts instantiate |
-| `AgentSink.h` | Callback interface for host to receive events |
-| `types/AgentConfig.h` | Configuration structure |
-| `types/AgentState.h` | State enum (Idle, Thinking, ToolUse, etc.) |
-| `settings.h` | SettingsStore API for SQLite-backed config |
-
-### Core Implementation (`src/library/`)
-
-- **AgentImpl.h/cpp**: PIMPL backing the public Agent facade
-- Owns LLMClient instance (state machine + loop)
-- Translates AgentConfig ↔ AppConfig
-- Routes AgentSink events
-
-### LLM Client (`src/api/`)
-
-- **LLMClient.h/cpp**: Main state machine, HTTP session management, SSE parsing
-- **HttpSession.h/cpp**: HTTP request handling with cancellation support
-- **MiniMaxSseParser.h**: SSE event parsing
-
-### Tool System (`src/tools/`)
-
-| Tool | File | Description |
-|------|------|-------------|
-| Bash | `BashTool.cpp` | Command execution with path checking |
-| File | `FileTool.cpp` | File read/write/edit/delete operations |
-| Git | `GitTool.cpp` | Git operations (status, diff, branch, etc.) |
-| Search | `SearchTool.cpp` | Web search via Serper API |
-| Network | `NetworkTool.cpp` | HTTP/DNS/TCP/TLS/WebSocket tools |
-| MCP | `McpProxiedTool.cpp` | Proxied MCP server tools |
-| Memory | `MemoryTool.cpp` | Session memory management |
-| Skills | `SkillTool.cpp` | Skill loading/execution |
-| System | `SystemInfoTool.cpp` | System information gathering |
-| PDF | `PDFTool.cpp` | PDF text extraction |
-| Background | `BackgroundTool.cpp` | Background process management |
-
-### MCP Integration (`src/mcp/`)
-
-- **McpClient.h/cpp**: MCP protocol client
-- **McpServerManager.h/cpp**: Manages multiple MCP server connections
-- **StdioMcpTransport.cpp**: Stdio transport for MCP
-- **HttpMcpTransport.cpp**: HTTP/SSE transport for MCP
-
-### Core Utilities (`src/core/`)
-
-| Module | Purpose |
-|--------|---------|
-| `FileIO.cpp` | Safe file operations with atomic saves |
-| `Logger.cpp` | Structured logging |
-| `SettingsStore.cpp` | SQLite-backed settings |
-| `SessionMemory.cpp` | Session context management |
-| `SkillManager.cpp` | Skill discovery and loading |
-| `Messages.cpp` | Message chain management, compression |
-| `ThreadPool.cpp` | Thread pool for async operations |
-| `Metrics.cpp` | Token usage and metrics tracking |
-| `SerperConfig.cpp` | Serper API key validation (SettingsStore-backed) |
-
----
+| Dependency | Purpose |
+|------------|---------|
+| OmniNet | HTTP/WebSocket networking (fetched from GitLab) |
+| nlohmann_json | JSON parsing |
+| OpenSSL | TLS/cryptography |
+| libpng | PNG image processing |
+| poppler-cpp | PDF processing |
+| doctest | Unit testing framework |
 
 ## Build System
 
-### Configuration
+### CMake Configuration
+
+- **Minimum CMake Version:** 3.28
+- **C++ Standard:** C++23
+- **Default Compiler:** clang/clang++ (auto-detected, GCC overrideable via `CC=gcc CXX=g++`)
+- **Build Type:** Release (default)
+
+### Build Commands
 
 ```bash
-cmake -S . -B build -DDAEDALUS_DEMO_WEBUI=ON
+# Full build with all demos
+cmake -S . -B build
 cmake --build build -j$(nproc)
+
+# Library only (no demos)
+cmake -S . -B build -DDAEDALUS_BUILD_DEMOS=OFF
+
+# With webui demo
+cmake -S . -B build -DDAEDALUS_DEMO_WEBUI=ON
+
+# Force GCC instead of clang
+CC=gcc CXX=g++ cmake -S . -B build
 ```
 
-### Key Build Options
+### Build Targets
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `DAEDALUS_BUILD_DEMOS` | ON | Build demo executables |
-| `DAEDALUS_DEMO_SUBAGENT` | ON | Build subagent demo |
-| `DAEDALUS_DEMO_MANAGER` | ON | Build manager demo |
-| `DAEDALUS_DEMO_WEBUI` | OFF | Build webui demo |
+| Target | Description |
+|--------|-------------|
+| `daedalus` | Static library (libdaedalus.a) |
+| `daedalus-cli` | Console REPL demo |
+| `daedalus-manager` | Manager mode demo |
+| `daedalus-subagent` | Subagent demo |
+| `daedalus-webui` | WebUI demo (optional) |
+| `daedalus_clang_tidy` | Full static analysis |
+| `daedalus_clang_tidy_lib` | Static analysis for src/ |
+| `daedalus_clang_tidy_tests` | Static analysis for tests/ |
 
-### Compiler Preference
+### Test Commands
 
-- Prefers clang/clang++ when available (better diagnostics)
-- GCC can be forced: `CC=gcc CXX=g++ cmake ...`
+```bash
+# Run all tests
+ctest --test-dir build
 
----
+# Run specific test
+./build/tests/test_messages
 
-## File Locations (XDG-Compliant)
+# Run with verbose output
+ctest --test-dir build -V
+```
 
-| Path | Contents |
-|------|----------|
-| `~/.local/share/daedalus/daedalus.db` | Settings store (models, MCP servers, Serper key) |
-| `~/.local/share/daedalus/skills/installed/` | Agent skills |
-| `~/.local/share/daedalus/memory/` | Session memory |
-| `<project>/.daedalus[-<agent_name>]/messages.json` | Conversation transcript |
-| `<project>/.daedalus[-<agent_name>]/messages.json.crash` | Crash recovery mirror |
-| `~/.config/daedalus/mcp/.env` | MCP server environment variables |
-| `/etc/xdg/daedalus/` | System-wide defaults |
+## Public API
 
----
+The main public API is exposed through `<daedalus.h>`:
 
-## Testing
+```cpp
+#include <daedalus.h>
 
-- **Framework**: Catch2
-- **Location**: `tests/` directory
-- **Build**: Part of standard build (tests/CMakeLists.txt included automatically)
-- **Run**: `./build/tests/<test_name>` or `ctest --test-dir build`
-- **Web UI tests**: Playwright-based (`tests/webui/`)
+// Key types (in include/daedalus/)
+#include <daedalus/Agent.h>        // Main agent class
+#include <daedalus/AgentSink.h>   // Event callbacks
+#include <daedalus/settings.h>    // Configuration
+#include <daedalus/types/AgentConfig.h>
+#include <daedalus/types/AgentState.h>
+#include <daedalus/types/HostTool.h>
+```
 
-### Key Test Files
+### Agent Usage Pattern
 
-| Test | Purpose |
+```cpp
+#include <daedalus.h>
+
+daedalus::AgentConfig config;
+config.project_root = "/path/to/project";
+config.daedalus_home = daedalus::Paths::global().user_root();
+config.session_id = "my-session";
+
+auto sink = std::make_shared<MySink>();
+daedalus::Agent agent(std::move(config), sink);
+agent.initialize();
+
+agent.submit_user_message("Hello, write me a hello world in Python");
+agent.run_one_turn();
+```
+
+### AgentSink Callbacks (Host Interface)
+
+**See [`docs/embedding.md`](docs/embedding.md) → [Callback Data Reference](docs/embedding.md#callback-data-reference) for what data each callback receives.**
+
+The host implements `daedalus::AgentSink` to receive all events. **Only `on_log` is required** (has a stderr default). All other methods have empty defaults.
+
+```cpp
+#include <daedalus/AgentSink.h>
+
+struct daedalus::AgentSink {
+    virtual ~AgentSink() = default;
+
+    // Streaming tokens (one per SSE chunk, typically 1-20 chars)
+    virtual void on_assistant_delta(std::string_view text) noexcept;
+
+    // Tool lifecycle (structured events - use these instead of parsing tokens)
+    virtual void on_tool_call(std::string_view name, const nlohmann::json& args) noexcept;
+    virtual void on_tool_result(std::string_view name, const nlohmann::json& result) noexcept;
+
+    // State machine transitions
+    virtual void on_state_change(int from, int to) noexcept;
+
+    // Logging (route to log window/file)
+    virtual void on_log(daedalus::LogLevel level, std::string_view message) noexcept;
+
+    // Bash command approval (blocking - return true to allow)
+    virtual bool request_command_approval(std::string_view command);
+
+    // Optional notifications
+    virtual void on_bell() noexcept;
+    virtual void on_compaction(std::size_t before, std::size_t after) noexcept;
+};
+```
+
+**Typical event sequence:**
+```
+submit_user_message("fix the bug")     [host]
+run_one_turn()                         [host]
+on_state_change(Idle, Understanding)   [sink]
+on_log(Info, "[PERSIST] ...")
+on_assistant_delta(...)                [sink, many times]
+on_tool_call("grep_search", {...})    [sink]
+on_tool_result("grep_search", {...})   [sink]
+request_command_approval("cmake ...")  [sink - blocking]
+on_tool_result("execute_bash", {...})  [sink]
+on_state_change(Acting, Done)         [sink]
+run_one_turn() returns                 [host]
+```
+
+**Threading:** Sink methods are called on the agent's thread. Marshal to your UI thread as needed (e.g., `g_idle_add()` for GTK4).
+
+> **See [`docs/embedding.md`](docs/embedding.md) for the complete embedding guide with threading examples.**
+
+## Architecture Highlights
+
+### Tool System
+
+- **BaseTool** - Abstract base for all tools
+- **ToolFactory** - Creates tools from definitions
+- **ToolHandler** - Routes tool calls to implementations
+- Tools live in `src/tools/`
+
+### MCP Integration
+
+- **McpClient** - Manages MCP server connections
+- **McpServerManager** - Handles server lifecycle
+- **HttpMcpTransport** / **StdioMcpTransport** - Transport backends
+
+### Message Handling
+
+- **Messages** - Unified message storage, persistence, and compression
+- Context compression triggered at 90% of token limit (200K)
+- Middle messages compressed via LLM
+
+### Session Memory
+
+- Persistent memory with per-project and global tiers
+- Compression support for long sessions
+- XDG Base Directory Specification compliant
+
+## Code Quality
+
+### Static Analysis
+
+```bash
+# Run clang-tidy on all targets
+cmake --build build --target daedalus_clang_tidy
+
+# Individual targets
+cmake --build build --target daedalus_clang_tidy_lib
+cmake --build build --target daedalus_clang_tidy_tests
+cmake --build build --target daedalus_clang_tidy_tools
+cmake --build build --target daedalus_clang_tidy_demos
+```
+
+### Code Formatting
+
+- clang-format configuration should be applied
+- Header guards and `#pragma once` mixed usage (note: some files use both)
+
+## Development Workflow
+
+1. **Edit code** in `src/`, `include/`, `tests/`, or `demos/`
+2. **Build:** `cmake --build build -j$(nproc)`
+3. **Test:** `ctest --test-dir build`
+4. **Analyze:** `cmake --build build --target daedalus_clang_tidy`
+5. **Install:** `cmake --install build`
+
+## Installation
+
+```bash
+cmake --install build
+# Installs to ~/.local/ by default
+# - libdaedalus.a → ~/.local/lib/
+# - headers → ~/.local/include/
+# - settings template → ~/.daedalus/settings/
+```
+
+## Important Files
+
+| File | Purpose |
 |------|---------|
-| `test_settings_store.cpp` | SettingsStore API tests |
-| `test_mcp_load_from_store.cpp` | MCP server loading from SettingsStore |
-| `test_phase15_disabled_switches.cpp` | MCP/Skill disable filtering |
-| `test_serper_startup.cpp` | Serper API key storage tests |
-| `test_migrate_data.cpp` | CLI migration tool tests |
+| `docs/embedding.md` | **Host developer guide** - Complete AgentSink contract, config, lifecycle |
+| `src/core/Messages.h` | Message handling and compression |
+| `src/core/SessionMemory.h` | Session memory management |
+| `src/core/SkillManager.h` | Skill discovery and loading |
+| `src/tools/FileTool.h` | File operations |
+| `src/tools/BashTool.h` | Bash command execution |
+| `src/api/LLMClient.h` | LLM API communication |
+| `src/mcp/McpClient.h` | MCP protocol client |
+| `include/daedalus/Agent.h` | Main public API |
+| `include/daedalus/AgentSink.h` | Sink callback interface |
 
----
+## Documentation
 
-## Key Design Patterns
-
-### 1. PIMPL Pattern
-- Public `Agent` facade hides implementation in `detail::AgentImpl`
-- Clean ABI boundary for library users
-
-### 2. Sink Pattern
-- `AgentSink` callback interface for all host communication
-- Hosts only override what they need (defaults are no-ops)
-
-### 3. Tool Factory
-- Central `ToolFactory` creates/manages all tools
-- Supports MCP-proxied tools dynamically
-
-### 4. Crash Resilience
-- Atomic file saves with crash mirrors
-- Async-signal-safe crash handler
-- Drop-last-message recovery
-
-### 5. SQLite-Backed Settings
-- `SettingsStore` provides type-safe access to all settings
-- `DbPool` manages one connection per unique path
-- Schema migrations handled automatically
-
----
-
-## Important Guidelines
-
-### Threading
-- `Agent` instance is NOT thread-safe to share
-- Construct one `Agent` per session
-- `AgentSink` callbacks called on agent's worker thread
-- Marshal calls to UI thread for GTK/Qt
-
-### Async Signal Safety
-- Library must not use stdio in async-signal handlers
-- All output goes through `AgentSink::on_log`
-- File operations use `FileIO` (not raw `std::fstream`)
-
-### Compression
-- 70/30 context compression algorithm
-- Tool-call-pair integrity maintained
-- Safe split-point rules in `docs/how_compress_works.md`
-
----
-
-## Key Documentation Files
-
-| File | Description |
-|------|-------------|
-| `docs/embedding.md` | Complete embedding guide |
-| `docs/agent_system_prompts.md` | System prompt composition |
-| `docs/how_compress_works.md` | Context compression algorithm |
-| `docs/crash_resilience.md` | Crash recovery mechanism |
-| `docs/tools.md` | All tools reference |
-| `docs/mcp_server.md` | MCP integration guide |
-| `docs/settings.md` | SQLite settings API |
-| `docs/storage.md` | XDG path layout |
-
----
-
-## Version History
-
-- **v0.6.0**: Removed legacy `~/.daedalus/` fallback, XDG-only storage
-- **v0.5.3**: Development version
-- **v0.5.0**: MCP server registry in SettingsStore, Serper key in SettingsStore
-- **v0.4.0**: SQLite-backed settings model
-- See `CHANGELOG.md` for full history
+Detailed docs in `docs/`:
+| Document | Audience | Contents |
+|----------|----------|----------|
+| [`embedding.md`](docs/embedding.md) | **Host developers** | Complete embedding guide: minimum viable host, **AgentSink contract** (all methods + threading), config, lifecycle, cancellation, composition patterns |
+| [`agent_state_machine.md`](docs/agent_state_machine.md) | All | State machine documentation |
+| [`agent_system_prompts.md`](docs/agent_system_prompts.md) | Developers | System prompt composition |
+| [`mcp_server.md`](docs/mcp_server.md) | Developers | MCP server integration |
+| [`skills.md`](docs/skills.md) | Developers | Skill system documentation |
+| [`session_memory.md`](docs/session_memory.md) | Developers | Memory architecture |
+| [`tools.md`](docs/tools.md) | Developers | Tool definitions and behavior |
+| [`storage.md`](docs/storage.md) | Developers | Data storage and paths |
+| [`testing.md`](docs/testing.md) | Developers | Test strategy |
+| [`token_counts.md`](docs/token_counts.md) | Developers | Token management |
+| [`xdg_compliance.md`](docs/xdg_compliance.md) | Developers | XDG compliance |

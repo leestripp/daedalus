@@ -140,6 +140,125 @@ struct daedalus::AgentSink {
 14. run_one_turn() returns                       [host]
 ```
 
+### Callback Data Reference
+
+**IMPORTANT: Know which callback receives what data.**
+
+The callbacks are NOT interchangeable — each has a specific purpose:
+
+| Callback | Data Format | Purpose |
+|----------|-------------|---------|
+| `on_tool_call` | `name` (string) + `args` (JSON object) | **Structured tool input** — the parsed tool name and arguments from LLM |
+| `on_tool_result` | `name` (string) + `result` (JSON object) | **Structured tool output** — tool execution result |
+| `on_assistant_delta` | `text` (string_view) | **Streaming text tokens** — raw text chunks from LLM |
+| `on_tool_progress` | `name` + `progress` (JSON object) | **Tool progress updates** — `{stage, percent, message}` |
+| `on_state_change` | `from` + `to` (int enum values) | **State transitions** |
+| `on_log` | `level` (enum) + `message` (string) | **Library diagnostics only** — NOT LLM data |
+| `on_compaction` | `before` + `after` (size_t) | **Context compression stats** |
+| `on_bell` | none | **Notification signal** |
+| `request_command_approval` | `command` (string) | **Bash approval request** |
+
+#### `on_tool_call(name, args)` — Tool INPUT
+
+Receives the **parsed tool arguments** from the LLM's function_call:
+
+```cpp
+void on_tool_call(std::string_view name,
+                  const nlohmann::json& args) noexcept override
+```
+
+**Example:** LLM wants to grep_search for "malloc"
+```json
+{
+  "name": "grep_search",
+  "args": {
+    "query": "malloc",
+    "include_pattern": "*.cpp"
+  }
+}
+```
+
+#### `on_tool_result(name, result)` — Tool OUTPUT
+
+Receives the **tool execution result**:
+
+```cpp
+void on_tool_result(std::string_view name,
+                    const nlohmann::json& result) noexcept override
+```
+
+**Example:** grep_search returned results
+```json
+{
+  "name": "grep_search",
+  "result": {
+    "matches": [
+      {"file": "src/core/utils.cpp", "line": 42, "text": "void* malloc(size_t);"},
+      {"file": "src/core/logger.cpp", "line": 15, "text": "void* malloc(size_t size) {"}
+    ],
+    "total": 2
+  }
+}
+```
+
+**Example:** Tool error (check for `"error"` key)
+```json
+{
+  "name": "grep_search",
+  "result": {
+    "error": "Pattern not found: nonexistent_pattern_xyz"
+  }
+}
+```
+
+#### `on_assistant_delta(text)` — Streaming Text
+
+Receives **raw text chunks** as they arrive from the LLM (SSE streaming):
+
+```cpp
+void on_assistant_delta(std::string_view text) noexcept override
+```
+
+- Chunks are typically 1-20 characters
+- Accumulate them to build the full response
+- **DO NOT parse tool calls from this** — use `on_tool_call` instead
+
+#### `on_tool_progress(name, progress)` — Progress Updates
+
+Only tools that emit progress (long-running operations):
+
+```cpp
+void on_tool_progress(std::string_view name,
+                     const nlohmann::json& progress) noexcept override
+```
+
+**progress JSON shape:**
+```json
+{
+  "stage": "starting" | "executing" | "finalizing" | "done",
+  "percent": 0-100,
+  "message": "human-readable status"
+}
+```
+
+#### `on_log(level, message)` — Library Diagnostics
+
+**This is NOT for LLM data.** It's for library internal diagnostics:
+
+```cpp
+void on_log(daedalus::LogLevel level,
+            std::string_view message) noexcept override
+```
+
+**Message examples:**
+- `"[PERSIST] Restored 42 messages"`
+- `"[SYSTEM_PROMPT] Merged project override: /path/to/override"`
+- `"[MCP] WARNING: tool schemas consume ~5000 tokens..."`
+- `"Waiting 2 seconds before retry..."`
+- `"[MEMORY] Conversation history wiped"`
+
+If you need the **LLM response data**, use `on_tool_call` / `on_tool_result` / `on_assistant_delta` — NOT `on_log`.
+
 **`on_assistant_delta`**: Called once per SSE chunk (typically 1–20 chars
 for OpenAI/Claude/MiniMax). Don't re-parse streamed text to detect tool
 calls — use the structured `on_tool_call` / `on_tool_result` events.
