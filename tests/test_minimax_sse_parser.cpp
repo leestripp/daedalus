@@ -264,3 +264,28 @@ TEST_CASE("BUG-001 gate: response_json has unexpected shape") {
     // it correctly returns true here (text was accumulated).
     CHECK(is_usage_only_chunk(/*stream=*/true, weird, p));
 }
+
+// =====================================================================
+// §fix (2026-07-18): non-object choices must not throw
+// =====================================================================
+// `data: {"choices":[null]}` made choice.value("delta", ...) throw
+// json::type_error, which escaped the old parse_error-only catch onto
+// HttpSession's detached streaming thread → std::terminate. The parser
+// must skip such entries silently and keep working.
+
+TEST_CASE("non-object choice entries are skipped without throwing") {
+    MiniMaxSseParser p = make_parser();
+    // null, primitive, and array choices are all malformed but survivable.
+    CHECK_NOTHROW(p.on_chunk("data: {\"choices\":[null]}\n\n"));
+    CHECK_NOTHROW(p.on_chunk("data: {\"choices\":[42,\"str\",[1]]}\n\n"));
+    // A "choices" member that isn't an array at all.
+    CHECK_NOTHROW(p.on_chunk("data: {\"choices\":null}\n\n"));
+    p.finish();
+
+    // The parser swallowed the garbage and still works afterwards.
+    CHECK_FALSE(p.had_text_deltas());
+    feed_text_delta(p, "still alive");
+    feed_usage_only_trailer(p);
+    p.finish();
+    CHECK(p.had_text_deltas());
+}

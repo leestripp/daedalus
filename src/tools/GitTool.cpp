@@ -24,6 +24,28 @@ namespace ToolHandler {
     std::filesystem::path get_current_working_directory();
 }
 
+// §Fix: single-quote-escape a shell argument (same pattern as
+// escape_shell_arg in SearchTool.cpp / BashCommandExecutor.cpp).
+// Applied to project_path so paths with spaces or metacharacters
+// cannot break the `cd` or inject commands.
+static std::string escape_shell_arg(const std::string& input) {
+    std::string result;
+    result.reserve(input.size() + 16);
+    result.push_back('\'');
+    for (char c : input) {
+        if (c == '\'') {
+            result.push_back('\'');
+            result.push_back('\\');
+            result.push_back('\'');
+            result.push_back('\'');
+        } else {
+            result.push_back(c);
+        }
+    }
+    result.push_back('\'');
+    return result;
+}
+
 // ========== GitStatusTool ==========
 
 json GitStatusTool::get_definition() const {
@@ -44,7 +66,7 @@ json GitStatusTool::execute(const json& args, FileIO& file_io) {
     (void)args;
     try {
         std::string project_path = file_io.get_project_path().string();
-        std::string command = "cd " + project_path + " && git status";
+        std::string command = "cd " + escape_shell_arg(project_path) + " && git status";
 
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) {
@@ -90,7 +112,7 @@ json GitBranchTool::execute(const json& args, FileIO& file_io) {
     (void)args;
     try {
         std::string project_path = file_io.get_project_path().string();
-        std::string command = "cd " + project_path + " && git branch -a";
+        std::string command = "cd " + escape_shell_arg(project_path) + " && git branch -a";
 
         FILE* pipe = popen(command.c_str(), "r");
         if (!pipe) {
@@ -166,7 +188,7 @@ json GitCommitTool::execute(const json& args, FileIO& file_io) {
         std::string project_path = file_io.get_project_path().string();
 
         // Check if there are any staged changes
-        std::string check_command = "cd " + project_path + " && git status --porcelain";
+        std::string check_command = "cd " + escape_shell_arg(project_path) + " && git status --porcelain";
         FILE* check_pipe = popen(check_command.c_str(), "r");
         if (!check_pipe) {
             return json::object({{"status", "error"}, {"message", "Failed to check git status"}});
@@ -195,13 +217,13 @@ json GitCommitTool::execute(const json& args, FileIO& file_io) {
         }
 
         // Stage all changes and commit
-        std::string add_command = "cd " + project_path + " && git add -A";
+        std::string add_command = "cd " + escape_shell_arg(project_path) + " && git add -A";
         FILE* add_pipe = popen(add_command.c_str(), "r");
         if (add_pipe) {
             pclose(add_pipe);
         }
 
-        std::string commit_command = "cd " + project_path + " && git commit -m '" + escaped_message + "'";
+        std::string commit_command = "cd " + escape_shell_arg(project_path) + " && git commit -m '" + escaped_message + "'";
         FILE* commit_pipe = popen(commit_command.c_str(), "r");
         if (!commit_pipe) {
             return json::object({{"status", "error"}, {"message", "Failed to execute git commit"}});
@@ -213,6 +235,16 @@ json GitCommitTool::execute(const json& args, FileIO& file_io) {
         }
 
         int exit_code = pclose(commit_pipe);
+
+        // §Fix: a failed commit (hook rejection, no identity, ...)
+        // must surface as an error, not success.
+        if (WEXITSTATUS(exit_code) != 0) {
+            return json::object({
+                {"status", "error"},
+                {"message", "Failed to commit. Error: " + result},
+                {"exit_code", WEXITSTATUS(exit_code)}
+            });
+        }
 
         return json::object({
             {"status", "success"},
@@ -280,9 +312,12 @@ json GitAddTool::execute(const json& args, FileIO& file_io) {
 
         std::string add_command;
         if (files == "-A" || files == "all" || files == ".") {
-            add_command = "cd " + project_path + " && git add -A";
+            add_command = "cd " + escape_shell_arg(project_path) + " && git add -A";
         } else {
-            add_command = "cd " + project_path + " && git add \"" + escaped_files + "\"";
+            // §Fix: single-quote the argument — inside double quotes
+            // $(...), backticks and " stay live (injection), and the
+            // '\'' escape is garbage in a double-quoted context.
+            add_command = "cd " + escape_shell_arg(project_path) + " && git add '" + escaped_files + "'";
         }
 
         FILE* pipe = popen(add_command.c_str(), "r");
@@ -378,7 +413,7 @@ json GitSwitchTool::execute(const json& args, FileIO& file_io) {
         std::string project_path = file_io.get_project_path().string();
 
         // First check the current branch
-        std::string branch_command = "cd " + project_path + " && git branch --show-current";
+        std::string branch_command = "cd " + escape_shell_arg(project_path) + " && git branch --show-current";
         FILE* branch_pipe = popen(branch_command.c_str(), "r");
         if (!branch_pipe) {
             return json::object({{"status", "error"}, {"message", "Failed to get current branch"}});
@@ -406,7 +441,7 @@ json GitSwitchTool::execute(const json& args, FileIO& file_io) {
         }
 
         // Execute git switch
-        std::string switch_command = "cd " + project_path + " && git switch";
+        std::string switch_command = "cd " + escape_shell_arg(project_path) + " && git switch";
         if (create) {
             switch_command += " -c";  // Create and switch
         }
@@ -483,7 +518,7 @@ json GitDiffTool::execute(const json& args, FileIO& file_io) {
 
         std::string diff_command;
         if (file.empty()) {
-            diff_command = "cd " + project_path + " && git diff";
+            diff_command = "cd " + escape_shell_arg(project_path) + " && git diff";
         } else {
             // Escape single quotes in file path
             std::string escaped_file = file;
@@ -492,7 +527,8 @@ json GitDiffTool::execute(const json& args, FileIO& file_io) {
                 escaped_file.replace(pos, 1, "'\\''");
                 pos += 4;
             }
-            diff_command = "cd " + project_path + " && git diff \"" + escaped_file + "\"";
+            // §Fix: single-quote the argument (see GitAddTool).
+            diff_command = "cd " + escape_shell_arg(project_path) + " && git diff '" + escaped_file + "'";
         }
 
         FILE* pipe = popen(diff_command.c_str(), "r");
@@ -594,7 +630,7 @@ json GitPushTool::execute(const json& args, FileIO& file_io) {
         std::string project_path = file_io.get_project_path().string();
 
         // Build push command
-        std::string push_command = "cd " + project_path + " && git push";
+        std::string push_command = "cd " + escape_shell_arg(project_path) + " && git push";
         
         if (set_upstream) {
             push_command += " -u";
@@ -617,13 +653,19 @@ json GitPushTool::execute(const json& args, FileIO& file_io) {
 
         int exit_code = pclose(pipe);
 
+        // §Fix: a rejected/failed push must surface as an error,
+        // not success.
+        if (WEXITSTATUS(exit_code) != 0) {
+            return json::object({
+                {"status", "error"},
+                {"message", "Failed to push. Error: " + result},
+                {"exit_code", WEXITSTATUS(exit_code)}
+            });
+        }
+
         // Provide meaningful output even when result is empty
         if (result.empty()) {
-            if (WEXITSTATUS(exit_code) == 0) {
-                result = "Successfully pushed to remote repository.\n";
-            } else {
-                result = "Push completed with warnings or partial output.\n";
-            }
+            result = "Successfully pushed to remote repository.\n";
         }
 
         return json::object({
@@ -715,10 +757,10 @@ json GitMergeTool::execute(const json& args, FileIO& file_io) {
     try {
         std::string project_path = file_io.get_project_path().string();
 
-        std::string merge_command = "cd " + project_path + " && git merge";
+        std::string merge_command = "cd " + escape_shell_arg(project_path) + " && git merge";
 
         if (abort) {
-            merge_command = "cd " + project_path + " && git merge --abort";
+            merge_command = "cd " + escape_shell_arg(project_path) + " && git merge --abort";
         } else {
             if (branch.empty()) {
                 return json::object({{"status", "error"}, {"message", "Missing or empty 'branch' argument"}});

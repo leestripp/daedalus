@@ -26,6 +26,7 @@
 #include "api/HttpSession.h"
 
 #include <iostream>
+#include <sstream>
 #include <utility>
 
 namespace mcp {
@@ -162,7 +163,41 @@ HttpMcpTransport::send_request(
         }
 
         try {
-            nlohmann::json response = nlohmann::json::parse(result->body);
+            // §fix (2026-07-18): the request's Accept header allows
+            // text/event-stream, and some servers legitimately answer
+            // with SSE framing (`event: message\ndata: {...}\n\n`).
+            // json::parse() on the raw body then fails every request.
+            // When the response is SSE, unwrap the `data:` payload
+            // line(s) first (same stripping as McpClient.cpp) and keep
+            // the frame that carries our request "id".
+            nlohmann::json response;
+            if (result->content_type.find("text/event-stream") != std::string::npos) {
+                std::istringstream in(result->body);
+                std::string line;
+                while (std::getline(in, line)) {
+                    if (line.rfind("data:", 0) != 0) continue;
+                    std::string data = line.substr(5);
+                    size_t start = data.find_first_not_of(" \t");
+                    if (start != std::string::npos) {
+                        data = data.substr(start);
+                    }
+                    if (data.empty() || data == "[DONE]") continue;
+                    try {
+                        nlohmann::json msg = nlohmann::json::parse(data);
+                        if (msg.is_object() && msg.contains("id")) {
+                            response = std::move(msg);
+                        }
+                    } catch (const std::exception&) {
+                        // Skip malformed SSE data line; keep looking.
+                    }
+                }
+                if (response.is_null()) {
+                    promise->set_value(std::unexpected(TransportError::InvalidResponse));
+                    return;
+                }
+            } else {
+                response = nlohmann::json::parse(result->body);
+            }
             if (response.contains("error")) {
                 promise->set_value(std::unexpected(TransportError::InvalidResponse));
             } else if (response.contains("result")) {

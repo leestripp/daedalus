@@ -12,7 +12,10 @@
 #include <daedalus/Agent.h>
 #include <daedalus/AgentSink.h>
 
-#include "core/SkillManager.h"  // §B31 fix: SkillManager::delete_default()
+#include "core/SkillManager.h"        // §B31 fix: SkillManager::delete_default()
+#include "mcp/McpServerManager.h"   // §B31 fix: mcp::McpServerManager::delete_default()
+#include "tools/ToolHandler.h"       // ToolHandler::get_tool_factory()
+#include "tools/ToolFactory.h"       // §B31 fix: clear dangling mcp_manager pointer
 
 #include <cassert>
 #include <filesystem>
@@ -76,11 +79,14 @@ void test_skills_disabled_typo_warns() {
     assert(contains(sink->events, daedalus::LogLevel::Warn, "totally-fake"));
     assert(contains(sink->events, daedalus::LogLevel::Warn, "typo"));
     std::cout << "[ok] test_skills_disabled_typo_warns" << std::endl;
-    // §B31 fix: clear SkillManager singleton between tests so cached_skills_
+    // §B31 fix: clear singletons between tests so cached_skills_
     // hash corruption (caused by parallel discovery writes without a lock —
     // see SkillManager.cpp:808) doesn't compound across tests and hang the
-    // 5th test case.
+    // 5th test case. Also clean up McpServerManager and reset ToolFactory's
+    // dangling mcp_manager_ pointer.
     SkillManager::delete_default();
+    mcp::McpServerManager::delete_default();
+    ToolHandler::get_tool_factory()->set_mcp_manager(nullptr);
 
     fs::remove_all(tmp);
 }
@@ -117,6 +123,8 @@ void test_skills_disabled_valid_silent() {
     std::cout << "[ok] test_skills_disabled_valid_silent" << std::endl;
     // §B31 fix: see test_skills_disabled_typo_warns
     SkillManager::delete_default();
+    mcp::McpServerManager::delete_default();
+    ToolHandler::get_tool_factory()->set_mcp_manager(nullptr);
 
     fs::remove_all(tmp);
 }
@@ -140,11 +148,10 @@ void test_skills_disabled_empty_no_warn() {
         }
     }
     std::cout << "[ok] test_skills_disabled_empty_no_warn" << std::endl;
-    // §B31 fix: clear SkillManager singleton between tests so cached_skills_
-    // hash corruption (caused by parallel discovery writes without a lock —
-    // see SkillManager.cpp:808) doesn't compound across tests and hang the
-    // 5th test case.
+    // §B31 fix: see test_skills_disabled_typo_warns
     SkillManager::delete_default();
+    mcp::McpServerManager::delete_default();
+    ToolHandler::get_tool_factory()->set_mcp_manager(nullptr);
 }
 
 // §Phase 15: typo'd mcp_servers_disabled emits a Warn log.
@@ -185,6 +192,8 @@ void test_mcp_servers_disabled_typo_warns() {
     std::cout << "[ok] test_mcp_servers_disabled_typo_warns (assertions disabled, v0.5.0)" << std::endl;
     // §B31 fix: see test_skills_disabled_typo_warns
     SkillManager::delete_default();
+    mcp::McpServerManager::delete_default();
+    ToolHandler::get_tool_factory()->set_mcp_manager(nullptr);
 
     fs::remove_all(tmp);
 }
@@ -210,6 +219,8 @@ void test_mcp_disabled_skips_typo_check() {
     std::cout << "[ok] test_mcp_disabled_skips_typo_check" << std::endl;
     // §B31 fix: see test_skills_disabled_typo_warns
     SkillManager::delete_default();
+    mcp::McpServerManager::delete_default();
+    ToolHandler::get_tool_factory()->set_mcp_manager(nullptr);
 }
 
 }  // namespace

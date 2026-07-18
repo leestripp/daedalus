@@ -1,7 +1,0 @@
-**Remaining OmniNet warnings** (external dependency — can't fix without upstream changes):
-- `unused parameter 'format'` in Logger.h
-- `unused parameter 'from'/'to'` in LogReader.h  
-- `missing field 'separatorLabel'` initializer in table.cpp
-- `unused function 'formatValue<...>'` in Logger.cpp
-- `delete called on non-final 'OmniNet::WebSocket::Connection'` (virtual destructor missing)
-- Various minor warnings in OmniNet demos/tests

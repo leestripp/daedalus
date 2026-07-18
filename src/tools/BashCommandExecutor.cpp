@@ -83,8 +83,14 @@ BashCommandExecutor::Result BashCommandExecutor::execute(const std::string& comm
     // Escape the base_dir for shell
     std::string escaped_dir = escape_shell_arg(base_dir);
     
-    // Build the full command with cd to base_dir
-    std::string full_command = "cd " + escaped_dir + " && " + sanitized_cmd + " 2>&1";
+    // Build the full command with cd to base_dir.
+    // §FIX-heredoc-redirect: wrap the command in a brace group and
+    // redirect the group instead of appending ` 2>&1` after the command.
+    // Appending corrupted heredoc commands — the trailing `2>&1` landed
+    // on the terminator line (`EOF` became `EOF 2>&1`). A trailing
+    // newline before `}` terminates the command list (a `;` there would
+    // be a syntax error for multi-line input).
+    std::string full_command = "cd " + escaped_dir + " && { " + sanitized_cmd + "\n} 2>&1";
     
     return execute_internal(full_command, sanitized_cmd, timeout_seconds);
 }

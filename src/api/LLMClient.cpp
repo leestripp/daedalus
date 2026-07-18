@@ -785,6 +785,12 @@ void MiniMaxSseParser::parse_line(const std::string& line) {
             final_event_ = item;
 
             for (const auto& choice : item.value("choices", nlohmann::json::array())) {
+                // §fix (2026-07-18): a non-object choice (e.g.
+                // `data: {"choices":[null]}`) made value("delta", ...)
+                // throw json::type_error, which escaped the old
+                // parse_error-only catch onto HttpSession's detached
+                // streaming thread → std::terminate.
+                if (!choice.is_object()) continue;
                 const auto& delta = choice.value("delta", nlohmann::json::object());
 
                 // Role (typically "assistant"; MiniMax also puts name here).
@@ -878,8 +884,11 @@ void MiniMaxSseParser::parse_line(const std::string& line) {
                 }
             }
         }
-    } catch (const nlohmann::json::parse_error&) {
-        // Malformed SSE line -- skip silently
+    } catch (const nlohmann::json::exception&) {
+        // §fix (2026-07-18): was parse_error only — a json::type_error
+        // (e.g. value() on a non-object member) escaped onto HttpSession's
+        // detached streaming thread → std::terminate. Malformed SSE
+        // line -- skip silently.
     }
 }
 
@@ -1542,8 +1551,35 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         json tool_results = json::array();
 
         for (const auto& tool_call : tool_calls) {
-            std::string function_name = tool_call["function"]["name"].get<std::string>();
-            std::string call_id = tool_call["id"].get<std::string>();
+            // §fix (2026-07-18): a malformed API tool_call may lack
+            // "function"/"name"/"id" — the unguarded
+            // tool_call["function"]["name"] threw json::out_of_range
+            // outside any try and escaped to the host. Guarded lookups
+            // instead; a missing name yields an error tool-result (same
+            // shape as the _invalid_args path below).
+            std::string function_name;
+            std::string call_id;
+            if (tool_call.is_object()) {
+                if (tool_call.contains("id") && tool_call["id"].is_string()) {
+                    call_id = tool_call["id"].get<std::string>();
+                }
+                if (tool_call.contains("function") && tool_call["function"].is_object()
+                    && tool_call["function"].contains("name")
+                    && tool_call["function"]["name"].is_string()) {
+                    function_name = tool_call["function"]["name"].get<std::string>();
+                }
+            }
+            if (function_name.empty()) {
+                LOG_ERROR("Skipping malformed tool_call (missing function/name): "
+                          + tool_call.dump());
+                tool_results.push_back({
+                    {"role", "tool"},
+                    {"tool_call_id", call_id},
+                    {"content", "[ERROR] Malformed tool_call: missing function name"},
+                    {"status", "error"}
+                });
+                continue;  // Skip execution, go to next tool call
+            }
             
             // Mark as EXECUTING in Messages (ephemeral runtime state)
             messages_->mark_tool_executing(call_id);
@@ -1850,7 +1886,13 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // If execute_bash was called, we just completed BUILD_TEST
         bool has_build_test = false;
         for (const auto& tool_call : tool_calls) {
-            std::string fn = tool_call["function"]["name"].get<std::string>();
+            // §fix (2026-07-18): guarded lookup — malformed tool_calls
+            // (missing function/name) must not throw here.
+            std::string fn;
+            if (tool_call.is_object()
+                && tool_call.contains("function") && tool_call["function"].is_object()) {
+                fn = tool_call["function"].value("name", std::string{});
+            }
             if (fn == "execute_bash") {
                 has_build_test = true;
                 break;
@@ -1863,7 +1905,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
     // If no tool calls, the agent provided a text response
     // This could mean it's done, answering a question, or thinking - display the response
-    if (message.contains("content")) {
+    // §fix (2026-07-18): "content": null (common on reasoning-only turns)
+    // made get<std::string>() throw json::type_error — require a string.
+    if (message.contains("content") && message["content"].is_string()) {
         std::string content = message["content"].get<std::string>();
         if (!content.empty()) {
             // Remove thinking tags like <answer> or ```answer blocks if present
@@ -2416,6 +2460,13 @@ void LLMClient::uninstall_crash_handlers() {
     // ===================================================================
 
 AgentState LLMClient::run_one_turn(const std::string& user_message) {
+    // §fix (2026-07-18): reseat the cancel source. A std::stop_source
+    // can never be un-stopped, so after cancel() fired once, every
+    // subsequent turn saw stop_requested() on its first iteration and
+    // returned CANCELLED forever. Install a fresh source before any
+    // token is taken from it (run_agent_cycle calls get_token()).
+    cancel_source_ = std::stop_source{};
+
     std::string api_url = config_.base_url + config_.chat_endpoint;
 
     // Get current user and datetime for system prompt

@@ -31,6 +31,29 @@
     } while (0)
 namespace mcp {
 
+namespace {
+
+// §fix (2026-07-18): send() may write fewer bytes than requested; loop
+// until the whole frame is on the wire (or a real error occurs).
+// MSG_NOSIGNAL suppresses SIGPIPE if the subprocess has closed stdin
+// (see the §SIGPIPE note in McpClient::initialize()). Returns false on
+// error with errno preserved for the caller.
+bool write_all(int fd, const std::string& data) {
+    size_t off = 0;
+    while (off < data.size()) {
+        ssize_t n = send(fd, data.c_str() + off, data.size() - off,
+                         MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        off += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+} // namespace
+
 McpClient::McpClient()
     : pipes_(nullptr)
     , connected_(false)
@@ -86,16 +109,16 @@ bool McpClient::connect(const std::string& command,
         close(stdin_pipe[1]);  // Close write end of stdin
         close(stdout_pipe[0]); // Close read end of stdout
 
-        // §9.7.A — join the agent's process group so a single
-        // McpServerManager::shutdown() can SIGTERM all MCP children at
-        // once via killpg(), and so the parent's setpgid() / killpg()
-        // race is closed (also set in the parent right after fork
-        // returns).
-        if (setpgid(0, getpgid(getppid())) != 0) {
-            // Not fatal: still continue; just the killpg path won't work
-            // for this particular child. Some MCP servers spawn their own
-            // session — those change pgroup themselves; we override below.
-            // Non-fatal: continue.
+        // §9.7.A-fix (2026-07-18): give the child its OWN process group.
+        // Previously the child joined the AGENT's process group
+        // (setpgid(0, getpgid(getppid()))), so disconnect()'s
+        // killpg(getpgid(child_pid), SIGTERM) signalled the whole group —
+        // including the daedalus host itself. setpgid(0, 0) makes the
+        // child a group leader (same pattern as src/core/Subprocess.cpp),
+        // so killpg() only hits the server's own tree.
+        if (setpgid(0, 0) != 0) {
+            // Not fatal: disconnect() falls back to per-PID kill() when
+            // the group lookup fails. Non-fatal: continue.
             (void)0;
         }
 
@@ -193,20 +216,10 @@ bool McpClient::connect(const std::string& command,
     pipes_->stdout_read = stdout_pipe[0];
     pipes_->child_pid = pid;
 
-    // §9.7.A — also setpgid on the parent side to close the race with
-    // the child's setpgid() (POSIX says either side can do it; some
-    // kernels ignore the child's if not yet exec'd). Best-effort; the
-    // shutdown path falls back to per-PID kill() if killpg() ESRCHs.
-    if (setpgid(pid, getpgid(getpid())) != 0) {
-        if (errno != EACCES && errno != EPERM) {
-            // Best-effort. Common reasons: another thread already set it,
-            // the child exec'd something that reset its pgroup. Either
-            // way, the destructor + shutdown paths still work via per-PID
-            // kill, so we just log and continue.
-            LOG_CERR(INFO, "[MCP] WARNING: setpgid(" << pid << ") failed: "
-                      << strerror(errno));
-        }
-    }
+    // §9.7.A-fix (2026-07-18): no parent-side setpgid() — the child
+    // puts itself in its own process group (setpgid(0, 0) above), so
+    // killpg() in disconnect() can only ever hit the server's tree,
+    // never the agent's own process group.
 
     connected_ = true;
 
@@ -466,33 +479,37 @@ json McpClient::send_request(const std::string& method, const json& params, int 
         last_error_ = "Not connected";
         return json::object();
     }
-    
+
+    // §fix (2026-07-18): serialize the whole request/response exchange.
+    // call_tool_async()/call_tools_batch() run call_tool() on ThreadPool
+    // threads against ONE client; without this lock their frames
+    // interleave on the pipe and next_request_id_ increments race.
+    std::scoped_lock lk(request_mu_);
+
     // Build JSON-RPC request
+    const int request_id = next_request_id_++;
     json request = {
         {"jsonrpc", "2.0"},
-        {"id", next_request_id_++},
+        {"id", request_id},
         {"method", method}
     };
-    
+
     if (!params.is_null()) {
         request["params"] = params;
     }
-    
-    // Send request
-    std::string request_str = request.dump() + "\n";
-    // MSG_NOSIGNAL suppresses SIGPIPE if the subprocess has closed
-    // stdin (e.g. it crashed/exited before reading our request). On
-    // Linux this works for pipe FDs as well as sockets (since 2.6.32).
-    ssize_t written = send(pipes_->stdin_write, request_str.c_str(),
-                           request_str.size(), MSG_NOSIGNAL);
 
-    if (written < 0) {
+    // Send request. write_all() loops on short writes; MSG_NOSIGNAL
+    // suppresses SIGPIPE if the subprocess has closed stdin (e.g. it
+    // crashed/exited before reading our request). On Linux this works
+    // for pipe FDs as well as sockets (since 2.6.32).
+    std::string request_str = request.dump() + "\n";
+    if (!write_all(pipes_->stdin_write, request_str)) {
         last_error_ = "Failed to write to stdin: " + std::string(strerror(errno));
         return json::object();
     }
-    
-    // Read response
-    return read_response(timeout_ms);
+
+    // Read response — only accept the frame whose "id" matches ours.
+    return read_response(timeout_ms, request_id);
 }
 
 void McpClient::send_notification(const std::string& method, const json& params) {
@@ -510,25 +527,120 @@ void McpClient::send_notification(const std::string& method, const json& params)
     }
     
     std::string notif_str = notification.dump() + "\n";
-    // MSG_NOSIGNAL: see send_request() comment. Subprocess may have
-    // closed stdin between initialize() and this notification.
-    [[maybe_unused]] ssize_t rc = send(pipes_->stdin_write, notif_str.c_str(),
-                                       notif_str.size(), MSG_NOSIGNAL);
+    // write_all() loops on short writes; MSG_NOSIGNAL: see send_request()
+    // comment. Subprocess may have closed stdin between initialize() and
+    // this notification.
+    [[maybe_unused]] bool sent = write_all(pipes_->stdin_write, notif_str);
 }
 
-json McpClient::read_response(int timeout_ms) {
+json McpClient::read_response(int timeout_ms, int expected_id) {
     if (!pipes_ || pipes_->stdout_read < 0) {
         return json::object();
     }
-    
+
     std::string buffer;
     struct pollfd pfd = {pipes_->stdout_read, POLLIN, 0};
     int remaining = timeout_ms;
-    
+
+    // §fix (2026-07-18): drain ALL complete '\n'-terminated lines from
+    // `buffer` on every pass. Previously only ONE line was processed per
+    // poll() wakeup, so a server that coalesced a notification and the
+    // real response into a single write left the response sitting in
+    // `buffer` while poll() blocked until timeout.
+    // Returns the parsed response once its "id" matches expected_id;
+    // std::nullopt means "no matching response buffered yet".
+    auto drain_lines = [&]() -> std::optional<json> {
+        size_t newline_pos;
+        while ((newline_pos = buffer.find('\n')) != std::string::npos) {
+            std::string line = buffer.substr(0, newline_pos);
+
+            // Skip SSE headers if present
+            if (line.size() >= 5 && line.substr(0, 5) == "data:") {
+                line = line.substr(5);
+                size_t start = line.find_first_not_of(" \t");
+                if (start != std::string::npos) {
+                    line = line.substr(start);
+                }
+            }
+
+            // Remove the consumed line from buffer (keep any trailing data)
+            buffer = buffer.substr(newline_pos + 1);
+
+            if (line.empty()) {
+                continue;
+            }
+
+            try {
+                json parsed = json::parse(line);
+
+                // §9.7.C — INLINE notification dispatch. A JSON-RPC
+                // notification has a "method" field but no "id"
+                // (server-initiated, not a response to our request).
+                // The only notification we currently care about is
+                // `notifications/tools/list_changed`; fire the
+                // registered callback and keep reading. This
+                // replaces the old separate-thread listener which
+                // raced with the main reader for `read()` on the
+                // shared stdout fd and could lose response bytes.
+                if (!parsed.contains("id") && parsed.contains("method")) {
+                    const std::string& m = parsed["method"].get_ref<const std::string&>();
+                    if (m == "notifications/tools/list_changed" ||
+                        m == "notifications/prompts/list_changed" ||
+                        m == "notifications/resources/list_changed") {
+                        ListChangedCallback cb_copy;
+                        {
+                            std::scoped_lock lk(cb_mu_);
+                            cb_copy = list_changed_cb_;
+                        }
+                        if (cb_copy) {
+                            try { cb_copy(); }
+                            catch (const std::exception& e) {
+                                last_error_ = std::string(
+                                    "list_changed callback threw: ") + e.what();
+                            } catch (...) {
+                                last_error_ = "list_changed callback threw (unknown)";
+                            }
+                        }
+                    }
+                    // Discard the notification and keep draining the
+                    // buffer for our response.
+                    continue;
+                }
+
+                // §fix (2026-07-18): match the response "id" against the
+                // request id. A late response from a timed-out request N
+                // must not be consumed as request N+1's result — discard
+                // it and keep reading until the matching response arrives
+                // (or the overall timeout fires).
+                if (expected_id >= 0 &&
+                    (!parsed.contains("id") || parsed["id"] != json(expected_id))) {
+                    last_error_ = "Discarding response with mismatched id";
+                    continue;
+                }
+
+                return parsed;
+            } catch (const std::exception& e) {
+                // Malformed line - log and continue (B4: don't lose data)
+                last_error_ = std::string("Malformed JSON-RPC line: ") + e.what();
+                // Keep reading - maybe the next line is the real response
+            }
+        }
+        return std::nullopt;
+    };
+
     while (true) {
+        // Only attempt to parse COMPLETE lines (terminated by \n), and
+        // drain everything already buffered before blocking in poll().
+        // B4 FIX: previously, partial lines were dropped on parse failure,
+        // which could cause us to lose data if the server writes a large
+        // response in multiple chunks.
+        if (auto ready = drain_lines()) {
+            return *ready;
+        }
+
         int poll_timeout = std::min(remaining, 100);
         int ret = poll(&pfd, 1, poll_timeout);
-        
+
         if (ret < 0) {
             if (errno == EINTR) {
                 continue;
@@ -536,7 +648,7 @@ json McpClient::read_response(int timeout_ms) {
             last_error_ = "Poll error: " + std::string(strerror(errno));
             return json::object();
         }
-        
+
         if (ret == 0) {
             // Timeout on this iteration
             if (timeout_ms >= 0) {
@@ -548,7 +660,7 @@ json McpClient::read_response(int timeout_ms) {
             }
             continue;
         }
-        
+
         if (pfd.revents & POLLIN) {
             char buf[4096];
             ssize_t n = read(pipes_->stdout_read, buf, sizeof(buf) - 1);
@@ -569,78 +681,16 @@ json McpClient::read_response(int timeout_ms) {
 
             buf[n] = '\0';
             buffer += buf;
-
-            // Only attempt to parse when we have a COMPLETE line (terminated by \n).
-            // B4 FIX: previously, partial lines were dropped on parse failure, which
-            // could cause us to lose data if the server writes a large response in
-            // multiple chunks. Now we only parse complete (\n-terminated) lines, and
-            // on parse failure we discard the malformed line (a real error).
-            size_t newline_pos = buffer.find('\n');
-            if (newline_pos != std::string::npos) {
-                std::string line = buffer.substr(0, newline_pos);
-
-                // Skip SSE headers if present
-                if (line.size() >= 5 && line.substr(0, 5) == "data:") {
-                    line = line.substr(5);
-                    size_t start = line.find_first_not_of(" \t");
-                    if (start != std::string::npos) {
-                        line = line.substr(start);
-                    }
-                }
-
-                // Remove the consumed line from buffer (keep any trailing data)
-                buffer = buffer.substr(newline_pos + 1);
-
-                if (!line.empty()) {
-                    try {
-                        json parsed = json::parse(line);
-
-                        // §9.7.C — INLINE notification dispatch. A JSON-RPC
-                        // notification has a "method" field but no "id"
-                        // (server-initiated, not a response to our request).
-                        // The only notification we currently care about is
-                        // `notifications/tools/list_changed`; fire the
-                        // registered callback and keep reading. This
-                        // replaces the old separate-thread listener which
-                        // raced with the main reader for `read()` on the
-                        // shared stdout fd and could lose response bytes.
-                        if (!parsed.contains("id") && parsed.contains("method")) {
-                            const std::string& m = parsed["method"].get_ref<const std::string&>();
-                            if (m == "notifications/tools/list_changed" ||
-                                m == "notifications/prompts/list_changed" ||
-                                m == "notifications/resources/list_changed") {
-                                ListChangedCallback cb_copy;
-                                {
-                                    std::scoped_lock lk(cb_mu_);
-                                    cb_copy = list_changed_cb_;
-                                }
-                                if (cb_copy) {
-                                    try { cb_copy(); }
-                                    catch (const std::exception& e) {
-                                        last_error_ = std::string(
-                                            "list_changed callback threw: ") + e.what();
-                                    } catch (...) {
-                                        last_error_ = "list_changed callback threw (unknown)";
-                                    }
-                                }
-                            }
-                            // Discard the notification and continue reading
-                            // the byte stream for our response.
-                            continue;
-                        }
-
-                        return parsed;
-                    } catch (const std::exception& e) {
-                        // Malformed line - log and continue (B4: don't lose data)
-                        last_error_ = std::string("Malformed JSON-RPC line: ") + e.what();
-                        // Keep reading - maybe the next line is the real response
-                    }
-                }
-            }
-            // No newline yet - keep accumulating
+            // Newly arrived lines are drained at the top of the loop,
+            // before we block in poll() again.
         }
-        
+
         if (pfd.revents & (POLLHUP | POLLERR | POLLNVAL)) {
+            // Drain whatever arrived alongside the hangup (POLLIN and
+            // POLLHUP can be set together) before giving up.
+            if (auto ready = drain_lines()) {
+                return *ready;
+            }
             last_error_ = "Server disconnected";
             return json::object();
         }

@@ -237,6 +237,14 @@ void AgentImpl::initialize()
     //     migrated yet.
     Paths::global().ensure_directories();
 
+    // §BUG-004 fix: honour cfg_.auto_approve even when no LLMClient is
+    // constructed (e.g. hosts driving Agent::execute_tool() directly).
+    // The LLMClient ctor also sets this from the settings store; doing
+    // it here makes AgentConfig the source of truth for the library.
+    if (auto_approve()) {
+        ToolHandler::set_auto_mode(true);
+    }
+
     // §Phase 1+: only spin up the LLMClient if we have something to talk to.
     // "Explicit creds" now includes three sources (highest first):
     //   1. cfg_.model_name set                (e.g. --model minimax-m3)
@@ -317,11 +325,6 @@ void AgentImpl::initialize()
     // without an LLM, or set up MCP before picking a model.
     // The right gate is `cfg_.mcp_enabled`, not "has an LLM".
     if (cfg_.mcp_enabled) {
-        body_->mcp = std::make_unique<mcp::McpServerManager>();
-        // §Phase 15: install the per-server gate before load_from_store()
-        // so disabled servers never enter configs_ in the first place.
-        body_->mcp->set_disabled_servers(cfg_.mcp_servers_disabled);
-        // Order:
         body_->mcp = std::make_unique<mcp::McpServerManager>();
         // §Phase 15: install the per-server gate before load_from_store()
         // so disabled servers never enter configs_ in the first place.
@@ -779,8 +782,19 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
         }}
     };
 
-    // FileIO needs a base path — use the current working directory.
-    FileIO file_io(std::filesystem::current_path());
+    // §BUG-003 fix: FileIO must be rooted at the configured project
+    // root, not the process CWD — hosts routinely run the agent from
+    // a different directory than the project.
+    FileIO file_io(cfg_.project_root.empty()
+                       ? std::filesystem::current_path()
+                       : cfg_.project_root);
+
+    // §BUG-004 fix: honour cfg_.auto_approve even when no LLMClient
+    // was ever constructed (the LLMClient ctor is otherwise the only
+    // place that flips ToolHandler's auto mode).
+    if (auto_approve()) {
+        ToolHandler::set_auto_mode(true);
+    }
 
     nlohmann::json result = ToolHandler::execute_tool_call(tool_call, file_io);
 

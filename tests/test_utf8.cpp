@@ -447,6 +447,36 @@ TEST(utf8_zero_width) {
     return 0;
 }
 
+TEST(utf8_sanitize_replace_invalid_drops_stray_continuations) {
+    // §fix (2026-07-18): replacing an invalid sequence start with '?'
+    // must also drop the partial continuation bytes already appended
+    // after it — otherwise the output still contains stray 0x80-0xBF
+    // bytes and remains invalid UTF-8.
+
+    // 3-byte lead + 1 valid continuation, then an invalid continuation
+    std::string broken;
+    broken += static_cast<char>(0xE4);
+    broken += static_cast<char>(0xBD);
+    broken += 'A';
+    std::string cleaned = utf8_sanitize_replace_invalid(broken);
+    CHECK_EQ(cleaned, std::string("?A"));
+    CHECK(is_valid_utf8(cleaned));
+
+    // Truncated sequence at end of input
+    std::string truncated = "AB";
+    truncated += static_cast<char>(0xE0);
+    truncated += static_cast<char>(0x80);
+    std::string cleaned2 = utf8_sanitize_replace_invalid(truncated);
+    CHECK_EQ(cleaned2, std::string("AB?"));
+    CHECK(is_valid_utf8(cleaned2));
+
+    // Valid input passes through unchanged
+    CHECK_EQ(utf8_sanitize_replace_invalid(utf8_test_strings::chinese),
+             utf8_test_strings::chinese);
+
+    return 0;
+}
+
 // ============================================================================
 // Main - Test Runner
 // ============================================================================
@@ -511,6 +541,7 @@ int main() {
     failures += test_utf8_whitespace();
     failures += test_utf8_non_breaking_space();
     failures += test_utf8_zero_width();
+    failures += test_utf8_sanitize_replace_invalid_drops_stray_continuations();
     
     std::cout << "\nResults: " << (failures == 0 ? "PASS" : "FAIL") << std::endl;
     std::cout << "Failed: " << failures << " tests" << std::endl;

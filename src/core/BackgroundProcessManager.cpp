@@ -102,7 +102,12 @@ pid_t BackgroundProcessManager::spawn_process(const std::string& command,
         // O_RDWR allows reading even without another writer
         int stdin_fd = open(fifo_path.c_str(), O_RDWR);
         if (stdin_fd < 0) {
-            LOG_CERR(ERROR, "[BackgroundProcess] Failed to open stdin FIFO: " << strerror(errno));
+            // §fix (2026-07-18): between fork() and exec() only
+            // async-signal-safe calls are allowed in a MT program —
+            // LOG_CERR allocates and takes the Logger mutex, which can
+            // deadlock the child. Use write(2) instead.
+            static const char msg[] = "[BackgroundProcess] Failed to open stdin FIFO\n";
+            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
         }
         if (stdin_fd >= 0) {
             // Redirect stdin from FIFO

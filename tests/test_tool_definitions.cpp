@@ -123,4 +123,31 @@ TEST_SUITE("ToolDefinitions") {
         CHECK(std::find(names.begin(), names.end(), "create_file") == names.end());
         CHECK(std::find(names.begin(), names.end(), "read_file") == names.end());
     }
+
+    TEST_CASE("matches_pattern wildcard semantics (§FIX-leading-wildcard)") {
+        // Exact and prefix (no wildcard)
+        CHECK(ToolHandler::matches_pattern("git status", "git status") == true);
+        CHECK(ToolHandler::matches_pattern("git status -s", "git status") == true);
+
+        // Pure wildcard matches everything
+        CHECK(ToolHandler::matches_pattern("anything at all", "*") == true);
+        CHECK(ToolHandler::matches_pattern("ls -la", "***") == true);
+
+        // Trailing wildcard = prefix match
+        CHECK(ToolHandler::matches_pattern("rm -rf build", "rm -rf *") == true);
+        CHECK(ToolHandler::matches_pattern("ls build", "rm -rf *") == false);
+
+        // Leading wildcard = suffix match
+        CHECK(ToolHandler::matches_pattern("cat notes.txt", "*.txt") == true);
+        CHECK(ToolHandler::matches_pattern("cat notes.md", "*.txt") == false);
+
+        // Leading + trailing wildcard = contains match
+        CHECK(ToolHandler::matches_pattern("git status -s", "*status*") == true);
+        CHECK(ToolHandler::matches_pattern("git log", "*status*") == false);
+
+        // Anchored on both ends with middle parts in order
+        CHECK(ToolHandler::matches_pattern("make all install", "make*install") == true);
+        CHECK(ToolHandler::matches_pattern("make install all", "make*all") == true);
+        CHECK(ToolHandler::matches_pattern("xmake all", "make*all") == false);
+    }
 }

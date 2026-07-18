@@ -258,7 +258,17 @@ HttpSession::submit_cancellable(const HttpRequest& request,
                 if (chunk->empty()) continue;
                 std::string_view sv(reinterpret_cast<const char*>(chunk->data()),
                                      chunk->size());
-                stream_callback(sv);
+                // §fix (2026-07-18): a throwing stream callback must never
+                // escape this detached thread (std::terminate). Abort the
+                // stream with an error instead of crashing the host.
+                try {
+                    stream_callback(sv);
+                } catch (...) {
+                    promise->set_value(std::unexpected(HttpError::Unknown));
+                    active_count_.fetch_sub(1, std::memory_order_acq_rel);
+                    completed_count_.fetch_add(1, std::memory_order_acq_rel);
+                    return;
+                }
                 // Some callers accumulate the streamed body themselves via
                 // the callback; we don't store it here.
             }

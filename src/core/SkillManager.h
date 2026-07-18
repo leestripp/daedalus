@@ -8,6 +8,7 @@
 #include <memory>
 #include <set>
 #include <fstream>
+#include <mutex>
 
 #include "SkillsSettings.h"
 
@@ -285,6 +286,10 @@ private:
     
     // Cached skills (discovered skills indexed by name)
     std::unordered_map<std::string, Skill> cached_skills_;
+    // §fix (2026-07-18): guards cached_skills_ writes — discover_all_skills()
+    // runs discover_skills() on ThreadPool workers, which would otherwise
+    // perform concurrent unordered_map writes (UB).
+    std::mutex cache_mutex_;
     std::set<std::string>                  disabled_skills_;  // §Phase 15
     
     // Active skills (currently loaded in context)

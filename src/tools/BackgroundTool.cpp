@@ -54,30 +54,40 @@ json BackgroundTool::get_definition() const {
 }
 
 json BackgroundTool::execute(const json& args, FileIO& /*file_io*/) {
-    std::string action;
-    if (args.contains("action")) {
-        action = args["action"].get<std::string>();
-    } else {
+    // §FIX-json-type-error: the args come from the LLM, which may send
+    // "true" as a string or a number where a bool/string is expected.
+    // Without this catch, nlohmann's type_error escaped the tool.
+    try {
+        std::string action;
+        if (args.contains("action")) {
+            action = args["action"].get<std::string>();
+        } else {
+            return json::object({
+                {"status", "error"},
+                {"message", "Missing 'action' parameter"}
+            });
+        }
+
+        if (action == "start") {
+            return handle_start(args);
+        } else if (action == "send") {
+            return handle_send(args);
+        } else if (action == "poll") {
+            return handle_poll(args);
+        } else if (action == "stop") {
+            return handle_stop(args);
+        } else if (action == "list") {
+            return handle_list(args);
+        } else {
+            return json::object({
+                {"status", "error"},
+                {"message", "Unknown action: " + action + ". Valid actions: start, send, poll, stop, list"}
+            });
+        }
+    } catch (const std::exception& e) {
         return json::object({
             {"status", "error"},
-            {"message", "Missing 'action' parameter"}
-        });
-    }
-    
-    if (action == "start") {
-        return handle_start(args);
-    } else if (action == "send") {
-        return handle_send(args);
-    } else if (action == "poll") {
-        return handle_poll(args);
-    } else if (action == "stop") {
-        return handle_stop(args);
-    } else if (action == "list") {
-        return handle_list(args);
-    } else {
-        return json::object({
-            {"status", "error"},
-            {"message", "Unknown action: " + action + ". Valid actions: start, send, poll, stop, list"}
+            {"message", std::string("Invalid arguments: ") + e.what()}
         });
     }
 }

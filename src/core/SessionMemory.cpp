@@ -10,6 +10,7 @@
 #include <regex>
 #include <random>
 #include <numeric>
+#include <ctime>       // ::timegm / ::_mkgmtime
 
 #include "core/Logger.h"
 
@@ -68,7 +69,14 @@ static std::chrono::system_clock::time_point iso_to_time_point(const std::string
     if (ss.fail()) {
         return std::chrono::system_clock::now();
     }
-    return std::chrono::system_clock::from_time_t(std::mktime(&tm));
+    // §fix (2026-07-18): std::mktime interprets tm as LOCAL time, but
+    // time_point_to_iso() writes UTC ('Z') — persisted timestamps
+    // round-tripped shifted by the host's UTC offset. Use timegm (UTC).
+#ifdef _WIN32
+    return std::chrono::system_clock::from_time_t(::_mkgmtime(&tm));
+#else
+    return std::chrono::system_clock::from_time_t(::timegm(&tm));
+#endif
 }
 
 static std::string generate_uuid() {
@@ -307,9 +315,13 @@ SessionMemory::SessionMemory(std::filesystem::path data_dir)
 
     ensure_memory_dir();
     
-    if (std::filesystem::exists(memory_file_path_)) {
-        load();
-    } else {
+    // §fix (2026-07-18): call load() unconditionally. load() consults
+    // the SQLite mirror FIRST, so gating it on memory.json existing
+    // meant the mirror was never read after backup_and_reset() renamed
+    // a corrupt memory.json — the next session started empty despite a
+    // good mirror. load() already handles both-sources-absent.
+    load();
+    if (updated_at_.time_since_epoch() == std::chrono::system_clock::duration::zero()) {
         // Initialize with defaults
         updated_at_ = std::chrono::system_clock::now();
     }

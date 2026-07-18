@@ -11,11 +11,33 @@
 #include <sys/socket.h>  // send(), MSG_NOSIGNAL
 #include <sys/wait.h>
 #include <unistd.h>
+#include <cerrno>
 #include <cstring>
 #include <iostream>
 #include <sstream>
 
 namespace mcp {
+
+namespace {
+
+// §fix (2026-07-18): send() may write fewer bytes than requested; loop
+// until the whole frame is on the wire (or a real error occurs).
+// MSG_NOSIGNAL suppresses SIGPIPE if the subprocess has closed stdin.
+bool write_all(int fd, const std::string& data) {
+    size_t off = 0;
+    while (off < data.size()) {
+        ssize_t n = send(fd, data.c_str() + off, data.size() - off,
+                         MSG_NOSIGNAL);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            return false;
+        }
+        off += static_cast<size_t>(n);
+    }
+    return true;
+}
+
+} // namespace
 
 StdioMcpTransport::StdioMcpTransport(std::string command,
                                      std::map<std::string, std::string> env)
@@ -166,13 +188,11 @@ StdioMcpTransport::send_request(
         pending_[request_id] = promise;
     }
 
-    // Write request. MSG_NOSIGNAL: see McpClient::send_request() — if
-    // the subprocess has closed stdin we get EPIPE back instead of a
-    // SIGPIPE that would kill the daemon.
+    // Write request. write_all() loops on short writes; MSG_NOSIGNAL:
+    // see McpClient::send_request() — if the subprocess has closed stdin
+    // we get EPIPE back instead of a SIGPIPE that would kill the daemon.
     std::string req_str = request.dump() + "\n";
-    ssize_t written = send(stdin_write_, req_str.c_str(), req_str.size(),
-                           MSG_NOSIGNAL);
-    if (written < 0) {
+    if (!write_all(stdin_write_, req_str)) {
         std::scoped_lock lock(mutex_);
         pending_.erase(request_id);
         promise->promise.set_value(std::unexpected(TransportError::WriteFailed));
@@ -197,11 +217,10 @@ std::expected<void, TransportError> StdioMcpTransport::send_notification(
         notification["params"] = params;
     }
 
-    // MSG_NOSIGNAL: see send_request() above.
+    // write_all() loops on short writes; MSG_NOSIGNAL: see send_request()
+    // above.
     std::string notif_str = notification.dump() + "\n";
-    ssize_t written = send(stdin_write_, notif_str.c_str(), notif_str.size(),
-                           MSG_NOSIGNAL);
-    if (written < 0) {
+    if (!write_all(stdin_write_, notif_str)) {
         return std::unexpected(TransportError::WriteFailed);
     }
     return {};
@@ -209,11 +228,85 @@ std::expected<void, TransportError> StdioMcpTransport::send_notification(
 
 void StdioMcpTransport::reader_loop() {
     std::string buffer;
+
+    // §fix (2026-07-18): helper that fails every pending request — used
+    // when the child dies so callers don't hang until their deadlines.
+    auto fail_pendings = [this](TransportError err) {
+        std::scoped_lock lock(mutex_);
+        for (auto& [id, req] : pending_) {
+            req->promise.set_value(std::unexpected(err));
+        }
+        pending_.clear();
+    };
+
     while (!stop_.load() && connected_.load()) {
         struct pollfd pfd = {stdout_read_, POLLIN, 0};
         int ret = poll(&pfd, 1, 200);
-        if (ret <= 0) {
-            // Check for timeouts
+
+        if (ret > 0 && (pfd.revents & POLLIN)) {
+            char buf[4096];
+            ssize_t n = read(stdout_read_, buf, sizeof(buf) - 1);
+            if (n == 0) {
+                // EOF - server closed
+                stop_.store(true);
+                fail_pendings(TransportError::ReadFailed);
+                break;
+            }
+            if (n > 0) {
+                buf[n] = '\0';
+                buffer += buf;
+
+                // Try to parse complete lines
+                size_t pos;
+                while ((pos = buffer.find('\n')) != std::string::npos) {
+                    std::string line = buffer.substr(0, pos);
+                    buffer = buffer.substr(pos + 1);
+
+                    if (line.empty()) continue;
+
+                    try {
+                        nlohmann::json response = nlohmann::json::parse(line);
+                        if (response.contains("id")) {
+                            int id = response["id"].get<int>();
+                            std::scoped_lock lock(mutex_);
+                            auto it = pending_.find(id);
+                            if (it != pending_.end()) {
+                                if (response.contains("error")) {
+                                    std::string err = response["error"].is_string()
+                                        ? response["error"].get<std::string>()
+                                        : response["error"].dump();
+                                    it->second->promise.set_value(
+                                        std::unexpected(TransportError::InvalidResponse));
+                                } else if (response.contains("result")) {
+                                    it->second->promise.set_value(response["result"]);
+                                } else {
+                                    it->second->promise.set_value(nlohmann::json::object());
+                                }
+                                pending_.erase(it);
+                            }
+                        }
+                    } catch (const std::exception& e) {
+                        // Malformed line - skip (B4 fix)
+                    }
+                }
+            }
+            // n < 0: EAGAIN on the non-blocking fd — fall through to the
+            // hangup/deadline checks below.
+        }
+
+        // §fix (2026-07-18): handle child exit. poll() reports
+        // POLLHUP/POLLERR/POLLNVAL — not POLLIN — when the child dies;
+        // the old loop only checked POLLIN and spun at 100% CPU.
+        if (ret > 0 && (pfd.revents & (POLLHUP | POLLERR | POLLNVAL))) {
+            stop_.store(true);
+            fail_pendings(TransportError::ReadFailed);
+            break;
+        }
+
+        // §fix (2026-07-18): check timeouts EVERY iteration. The old code
+        // only checked when poll() returned <= 0, so steady traffic (or
+        // a spinning revents mask) starved deadline enforcement.
+        {
             auto now = std::chrono::steady_clock::now();
             std::scoped_lock lock(mutex_);
             for (auto it = pending_.begin(); it != pending_.end();) {
@@ -222,55 +315,6 @@ void StdioMcpTransport::reader_loop() {
                     it = pending_.erase(it);
                 } else {
                     ++it;
-                }
-            }
-            continue;
-        }
-
-        if (pfd.revents & POLLIN) {
-            char buf[4096];
-            ssize_t n = read(stdout_read_, buf, sizeof(buf) - 1);
-            if (n <= 0) {
-                if (n == 0) {
-                    // EOF - server closed
-                    stop_.store(true);
-                }
-                continue;
-            }
-            buf[n] = '\0';
-            buffer += buf;
-
-            // Try to parse complete lines
-            size_t pos;
-            while ((pos = buffer.find('\n')) != std::string::npos) {
-                std::string line = buffer.substr(0, pos);
-                buffer = buffer.substr(pos + 1);
-
-                if (line.empty()) continue;
-
-                try {
-                    nlohmann::json response = nlohmann::json::parse(line);
-                    if (response.contains("id")) {
-                        int id = response["id"].get<int>();
-                        std::scoped_lock lock(mutex_);
-                        auto it = pending_.find(id);
-                        if (it != pending_.end()) {
-                            if (response.contains("error")) {
-                                std::string err = response["error"].is_string()
-                                    ? response["error"].get<std::string>()
-                                    : response["error"].dump();
-                                it->second->promise.set_value(
-                                    std::unexpected(TransportError::InvalidResponse));
-                            } else if (response.contains("result")) {
-                                it->second->promise.set_value(response["result"]);
-                            } else {
-                                it->second->promise.set_value(nlohmann::json::object());
-                            }
-                            pending_.erase(it);
-                        }
-                    }
-                } catch (const std::exception& e) {
-                    // Malformed line - skip (B4 fix)
                 }
             }
         }

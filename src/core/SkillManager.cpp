@@ -180,6 +180,9 @@ std::vector<Skill> SkillManager::discover_skills(const std::filesystem::path& di
             if (skill.has_value() && skill->is_valid()) {
                 skills.push_back(*skill);
                 // Also cache by name
+                // §fix (2026-07-18): locked — discover_all_skills() calls
+                // this on ThreadPool workers concurrently.
+                std::lock_guard<std::mutex> lk(cache_mutex_);
                 cached_skills_[skill->metadata.name] = *skill;
             }
         }

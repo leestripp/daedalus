@@ -75,7 +75,7 @@ static size_t utf8_display_width(const std::string& str) {
             // 2-byte sequence (0xC0-0xDF) - width 1
             width += 1;
             pos += 2;
-        } else if ((byte & 0xF0) == 0xE0) {
+        } else if ((byte & 0xF0) == 0xE0 && pos + 2 < len) {
             // 3-byte sequence (0xE0-0xEF)
             // Check for CJK range: U+3000-U+9FFF, U+FF00-U+FFEF, U+2E80-U+2EFF
             // For simplicity, treat most 3-byte as width 2 (covers CJK)
@@ -93,6 +93,12 @@ static size_t utf8_display_width(const std::string& str) {
                 width += 1;
             }
             pos += 3;
+        } else if ((byte & 0xF0) == 0xE0) {
+            // §fix (2026-07-18): truncated 3-byte sequence at the end
+            // of the string — treat as width 1 instead of reading
+            // str[pos+1]/str[pos+2] out of bounds.
+            width += 1;
+            pos += 1;
         } else if ((byte & 0xF8) == 0xF0) {
             // 4-byte sequence (0xF0-0xF7) - typically emoji, width 2
             width += 2;
@@ -128,7 +134,7 @@ static std::string utf8_truncate_by_width(const std::string& str, size_t max_wid
         } else if ((byte & 0xE0) == 0xC0) {
             char_width = 1;
             char_len = 2;
-        } else if ((byte & 0xF0) == 0xE0) {
+        } else if ((byte & 0xF0) == 0xE0 && pos + 2 < len) {
             uint32_t codepoint = ((byte & 0x0F) << 12) |
                                  ((static_cast<uint8_t>(str[pos + 1]) & 0x3F) << 6) |
                                  (static_cast<uint8_t>(str[pos + 2]) & 0x3F);
@@ -141,6 +147,12 @@ static std::string utf8_truncate_by_width(const std::string& str, size_t max_wid
                 char_width = 1;
             }
             char_len = 3;
+        } else if ((byte & 0xF0) == 0xE0) {
+            // §fix (2026-07-18): truncated 3-byte sequence at the end
+            // of the string — treat as width 1 instead of reading
+            // str[pos+1]/str[pos+2] out of bounds.
+            char_width = 1;
+            char_len = 1;
         } else if ((byte & 0xF8) == 0xF0) {
             char_width = 2;
             char_len = 4;
@@ -201,18 +213,21 @@ std::vector<unsigned char> base64_decode_binary(const std::string& input) {
     std::vector<unsigned char> result;
     
     // Remove padding characters
+    // §fix (2026-07-18): size()-2 underflows when input.size() == 1.
     size_t pad_count = 0;
     if (!input.empty() && input[input.size() - 1] == '=') pad_count++;
-    if (!input.empty() && input[input.size() - 2] == '=') pad_count++;
+    if (input.size() >= 2 && input[input.size() - 2] == '=') pad_count++;
     
     size_t len = input.size() - pad_count;
     result.reserve((len * 3) / 4);
     
     for (size_t i = 0; i < len; i += 4) {
+        // §fix (2026-07-18): bounds-check every character — a truncated
+        // input (length not a multiple of 4) used to read past the end.
         int n0 = base64_decode_table[static_cast<unsigned char>(input[i])];
-        int n1 = base64_decode_table[static_cast<unsigned char>(input[i + 1])];
-        int n2 = base64_decode_table[static_cast<unsigned char>(input[i + 2])];
-        int n3 = base64_decode_table[static_cast<unsigned char>(input[i + 3])];
+        int n1 = (i + 1 < len) ? base64_decode_table[static_cast<unsigned char>(input[i + 1])] : 0;
+        int n2 = (i + 2 < len) ? base64_decode_table[static_cast<unsigned char>(input[i + 2])] : 0;
+        int n3 = (i + 3 < len) ? base64_decode_table[static_cast<unsigned char>(input[i + 3])] : 0;
         
         uint32_t n = (static_cast<uint32_t>(n0) << 18) |
                      (static_cast<uint32_t>(n1) << 12) |

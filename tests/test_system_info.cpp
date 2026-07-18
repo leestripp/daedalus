@@ -100,3 +100,51 @@ TEST_CASE("SystemInfoTool - Execute with null") {
     // Should have system info
     CHECK(result.contains("system"));
 }
+
+TEST_CASE("SystemInfoTool - ISO 8601 timezone offset carries colon (§FIX-tz-colon-index)") {
+    SystemInfoTool tool;
+    json dt = tool.get_date_time_info();
+    REQUIRE(dt.contains("iso"));
+    std::string iso = dt["iso"].get<std::string>();
+    // e.g. "2026-07-18T11:00:50+00:00" — when a numeric offset is
+    // present it must be "+HH:MM", not "+HHMM".
+    REQUIRE(iso.size() >= 6);
+    char sign = iso[iso.size() - 6];
+    if (sign == '+' || sign == '-') {
+        CHECK(iso[iso.size() - 3] == ':');
+    }
+}
+
+TEST_CASE("SystemInfoTool - os-release values match the file (§FIX-os-release-offsets)") {
+    // Read the expected values straight from /etc/os-release (if this
+    // host has one) and strip optional surrounding quotes.
+    auto read_key = [](const std::string& key) -> std::string {
+        std::ifstream f("/etc/os-release");
+        if (!f.is_open()) return "";
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.rfind(key, 0) == 0) {
+                std::string v = line.substr(key.size());
+                if (v.size() >= 2 && v.front() == '"' && v.back() == '"') {
+                    v = v.substr(1, v.size() - 2);
+                }
+                return v;
+            }
+        }
+        return "";
+    };
+
+    std::string expected_name = read_key("NAME=");
+    if (expected_name.empty()) return;  // no /etc/os-release on this host
+
+    SystemInfoTool tool;
+    json os = tool.get_os_info();
+    REQUIRE(os.contains("name"));
+    CHECK(os["name"].get<std::string>() == expected_name);
+
+    std::string expected_id = read_key("ID=");
+    if (!expected_id.empty()) {
+        REQUIRE(os.contains("id"));
+        CHECK(os["id"].get<std::string>() == expected_id);
+    }
+}

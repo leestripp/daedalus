@@ -305,6 +305,52 @@ TEST(fuzzy_match_with_typo) {
 }
 
 // ============================================================================
+// Test: fuzzy match on a later line replaces at the correct byte offset,
+// leaving the surrounding lines untouched (regression: offset was
+// re-derived as the line start, ignoring the match column)
+// ============================================================================
+TEST(fuzzy_match_correct_offset) {
+    PatchTest t;
+    write_file(t.test_file, "prefix KEEPME\nHello World\nsuffix KEEPME\n");
+    json args = {
+        {"path", "test.txt"},
+        {"old_str", "Hello Wrold"},  // typo: Wrold instead of World
+        {"new_str", "Goodbye World"},
+        {"fuzzy", true}
+    };
+    auto result = t.tool->execute(args, *t.file_io);
+    CHECK(result["status"] == "success");
+    CHECK_EQ(result["first_match_line"], 2);
+    CHECK_EQ(read_file(t.test_file), "prefix KEEPME\nGoodbye World\nsuffix KEEPME\n");
+    return 0;
+}
+
+// ============================================================================
+// Test: line-based edit on the last line does not add a trailing newline
+// when the original file didn't have one
+// ============================================================================
+TEST(line_edit_no_trailing_newline_preserved) {
+    PatchTest t;
+    write_file(t.test_file, "line1\nline2\nline3");  // no trailing newline
+    auto result = t.patch_lines(3, 3, "REPLACED");
+    CHECK(result["status"] == "success");
+    CHECK_EQ(read_file(t.test_file), "line1\nline2\nREPLACED");
+    return 0;
+}
+
+// ============================================================================
+// Test: line-based edit on the last line keeps the original trailing newline
+// ============================================================================
+TEST(line_edit_trailing_newline_preserved) {
+    PatchTest t;
+    write_file(t.test_file, "line1\nline2\nline3\n");
+    auto result = t.patch_lines(3, 3, "REPLACED");
+    CHECK(result["status"] == "success");
+    CHECK_EQ(read_file(t.test_file), "line1\nline2\nREPLACED\n");
+    return 0;
+}
+
+// ============================================================================
 // Test: file does not exist
 // ============================================================================
 TEST(file_not_found) {
@@ -338,6 +384,9 @@ int main() {
     local_failures += test_empty_old_str();
     local_failures += test_preserves_leading_whitespace();
     local_failures += test_fuzzy_match_with_typo();
+    local_failures += test_fuzzy_match_correct_offset();
+    local_failures += test_line_edit_no_trailing_newline_preserved();
+    local_failures += test_line_edit_trailing_newline_preserved();
     local_failures += test_file_not_found();
 
     std::cout << "\nResults: " << (local_failures == 0 ? "PASS" : "FAIL") << std::endl;

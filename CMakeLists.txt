@@ -109,7 +109,13 @@ set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local")
 find_package(PkgConfig REQUIRED)
 
 # Find other required packages
-find_package(nlohmann_json REQUIRED)
+# §TASK-001 (2026-07-18): nlohmann_json is OPTIONAL via find_package —
+# falls back to FetchContent from GitHub if no system package is present.
+# AGENTS.md previously claimed the dep is fetched automatically, but
+# `find_package(... REQUIRED)` failed out before reaching FetchContent.
+# Pattern: quiet find + always-on FetchContent with FIND_PACKAGE_ARGS so
+# CMake uses the system package if found and fetches otherwise.
+find_package(nlohmann_json QUIET)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PNG REQUIRED libpng)
@@ -121,16 +127,39 @@ pkg_check_modules(POPPLER REQUIRED poppler-cpp)
 
 include(FetchContent)
 
-# Pre-declare nlohmann_json BEFORE OmniNet's CMakeLists.txt runs.
-# OmniNet FetchContents its own copy, but we already have the system
-# nlohmann_json. By declaring it first with FIND_PACKAGE_ARGS, CMake's
-# FetchContent_MakeAvailable inside OmniNet's script will use our existing
-# target instead of trying to create a second one with the same name.
+# §TASK-001 (2026-07-18): nlohmann_json as a fetchable fallback.
+# `find_package(nlohmann_json QUIET)` above may already have populated
+# the target via the system package. FIND_PACKAGE_ARGS tells CMake
+# "use the existing find_package result if it succeeded; otherwise
+# fetch and populate the target". GIT_SHALLOW TRUE keeps the clone
+# small (we only need a single tag's tree to consume nlohmann_json.hpp).
+#
+# Override with -Dnlohmann_json_SOURCE_DIR=/path/to/json for a local
+# checkout (e.g. distro-packaged sources or a vendored copy).
 FetchContent_Declare(
     nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
     FIND_PACKAGE_ARGS
 )
 FetchContent_MakeAvailable(nlohmann_json)
+
+# §TASK-001 (2026-07-18): when FetchContent_MakeAvailable() actually
+# fetches nlohmann_json (i.e. find_package above did NOT find a system
+# copy), its INTERFACE target is not registered in any install export
+# set. Without help, our `install(EXPORT daedalusTargets)` later errors
+# with "target daedalus requires target nlohmann_json that is not in
+# any export set". Install the single-include headers from the fetched
+# source tree ourselves so consumers of `find_package(daedalus)` can
+# still #include <nlohmann/json.hpp>. No-op when nlohmann_json came
+# from a system package (the SOURCE_DIR points to build/_deps/, but
+# the system package's CMake config already handles its own install).
+if(EXISTS "${nlohmann_json_SOURCE_DIR}/single_include/nlohmann/json.hpp")
+    install(DIRECTORY "${nlohmann_json_SOURCE_DIR}/single_include/nlohmann"
+            DESTINATION "include"
+            FILES_MATCHING PATTERN "*.hpp")
+endif()
 
 set(OMNINET_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(OMNINET_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
@@ -160,8 +189,15 @@ endif()
 # KeyValueList::add/bool) that the current main branch has.
 # These patches apply to the fetched source in build/_deps/omninet-src/.
 # Only apply when using the fetched OmniNet (not OMNINET_LOCAL).
+#
+# §TASK-006 (2026-07-18): patches are idempotent — `string(REPLACE)`
+# on a non-matching pattern is a no-op, so once upstream fixes these
+# calls the patches silently stop doing anything. Pinned to OmniNet
+# commit XXXXXXX (TBD via `git describe --tags --always` in CI) so a
+# future clean reconfigure against a fixed upstream won't regress.
+# Tracked as https://gitlab.com/leestripp/omninet/-/issues/1 (placeholder)
+# — when that issue closes, remove this block.
 if(NOT DEFINED OMNINET_LOCAL OR NOT EXISTS "${OMNINET_LOCAL}/CMakeLists.txt")
-    # TODO: remove these patches once upstream OmniNet is fixed.
     file(READ "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/colors.cpp" _colors_src)
     string(REPLACE
         "return kv(key, value ? \"true\" : \"false\");"

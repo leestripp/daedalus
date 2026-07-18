@@ -113,34 +113,37 @@ json SystemInfoTool::get_os_info() const {
     // Parse /etc/os-release for Linux distributions
     std::ifstream os_release("/etc/os-release");
     if (os_release.is_open()) {
+        // §FIX-os-release-offsets: locate the OPENING quote first
+        // (searching from just after '<key>='), then the closing quote
+        // after it. If the value is unquoted (e.g. ID=ubuntu), take it
+        // verbatim. The old code searched for a quote at a fixed offset
+        // past the opening quote (yielding e.g. "buntu" for
+        // NAME="Ubuntu") or, for VERSION=, matched the opening quote as
+        // the closing one and underflowed the length.
+        auto extract_value = [](const std::string& l, size_t key_len) -> std::string {
+            size_t open = l.find('"', key_len);
+            if (open != std::string::npos) {
+                size_t close = l.find('"', open + 1);
+                if (close != std::string::npos) {
+                    return l.substr(open + 1, close - open - 1);
+                }
+                return "";
+            }
+            // Unquoted value — take the remainder verbatim.
+            return l.substr(key_len);
+        };
         std::string line;
         while (std::getline(os_release, line)) {
             if (line.rfind("NAME=", 0) == 0) {
-                size_t end = line.find('"', 7);
-                if (end != std::string::npos) {
-                    info["name"] = line.substr(7, end - 7);
-                }
-            } else if (line.substr(0, 8) == "VERSION=") {
-                size_t start = 8;
-                size_t end = line.find('"', start);
-                if (end != std::string::npos) {
-                    info["version"] = line.substr(start + 1, end - start - 1);
-                }
-            } else if (line.substr(0, 13) == "PRETTY_NAME=\"") {
-                size_t end = line.find('"', 13);
-                if (end != std::string::npos) {
-                    info["pretty_name"] = line.substr(13, end - 13);
-                }
+                info["name"] = extract_value(line, 5);
+            } else if (line.rfind("VERSION=", 0) == 0) {
+                info["version"] = extract_value(line, 8);
+            } else if (line.rfind("PRETTY_NAME=", 0) == 0) {
+                info["pretty_name"] = extract_value(line, 12);
             } else if (line.rfind("ID=", 0) == 0) {
-                size_t end = line.find('"', 6);
-                if (end != std::string::npos) {
-                    info["id"] = line.substr(6, end - 6);
-                }
+                info["id"] = extract_value(line, 3);
             } else if (line.rfind("VERSION_ID=", 0) == 0) {
-                size_t end = line.find('"', 13);
-                if (end != std::string::npos) {
-                    info["version_id"] = line.substr(13, end - 13);
-                }
+                info["version_id"] = extract_value(line, 11);
             }
         }
     }
@@ -285,8 +288,12 @@ json SystemInfoTool::get_date_time_info() const {
     info["iso"] = std::string(datetime_buffer);
     
     // Insert colon in timezone offset (e.g., +0200 -> +02:00)
+    // §FIX-tz-colon-index: %z appends "+HHMM" right after the
+    // 19-char "%Y-%m-%dT%H:%M:%S" prefix, so the sign is at index 19
+    // (the old check at index 22 never fired and the colon was never
+    // inserted).
     std::string tz_str = info["iso"].get<std::string>();
-    if (tz_str.length() == 24 && (tz_str[22] == '+' || tz_str[22] == '-')) {
+    if (tz_str.length() == 24 && (tz_str[19] == '+' || tz_str[19] == '-')) {
         // Insert colon between hours and minutes
         std::string formatted = tz_str.substr(0, 22) + ":" + tz_str.substr(22);
         info["iso"] = formatted;

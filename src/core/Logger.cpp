@@ -113,7 +113,9 @@ void Logger::log(LogLevel level, const std::string& message) {
     
     // Also output to stderr for ERROR level
     if (level == LogLevel::ERROR) {
-        LOG_CERR(INFO,  entry << std::flush);
+        // §fix: write to stderr directly; routing through Logger would
+        // re-acquire log_mutex_ (non-recursive) and self-deadlock.
+        std::cerr << entry << std::flush;
     }
 }
 
@@ -201,7 +203,9 @@ void Logger::rotate_log_if_needed() {
             current_log_path_ = get_log_directory() / generate_log_filename();
         }
     } catch (const fs::filesystem_error& e) {
-        LOG_CERR(ERROR, "Logger: Failed to rotate log: " << e.what());
+        // §fix: stderr directly; callers hold log_mutex_ (see log()),
+        // so LOG_CERR would self-deadlock on the non-recursive mutex.
+        std::cerr << "Logger: Failed to rotate log: " << e.what() << std::endl;
     }
 }
 
@@ -218,10 +222,10 @@ void Logger::cleanup_old_logs() {
             
             // Get file modification time
             auto mtime = fs::last_write_time(entry.path());
-            auto mtime_sys = std::chrono::system_clock::from_time_t(
-                std::chrono::duration_cast<std::chrono::seconds>(
-                    mtime.time_since_epoch()
-                ).count()
+            // §fix: C++17-safe file_clock -> system_clock conversion;
+            // file_clock ticks are not Unix seconds on common stdlibs.
+            auto mtime_sys = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+                mtime - decltype(mtime)::clock::now() + std::chrono::system_clock::now()
             );
             
             // Delete if older than retention period
@@ -230,7 +234,9 @@ void Logger::cleanup_old_logs() {
             }
         }
     } catch (const fs::filesystem_error& e) {
-        LOG_CERR(ERROR, "Logger: Failed to cleanup old logs: " << e.what());
+        // §fix: stderr directly; called from initialize() while holding
+        // log_mutex_, so LOG_CERR would self-deadlock.
+        std::cerr << "Logger: Failed to cleanup old logs: " << e.what() << std::endl;
     }
 }
 
@@ -244,7 +250,9 @@ void Logger::write_to_file(const std::string& entry) {
             file.flush();
         }
     } catch (const std::exception& e) {
-        LOG_CERR(ERROR, "Logger: Failed to write to file: " << e.what());
+        // §fix: stderr directly; LOG_CERR routes back into write_to_file()
+        // which would re-acquire file_mutex_ and self-deadlock.
+        std::cerr << "Logger: Failed to write to file: " << e.what() << std::endl;
     }
 }
 

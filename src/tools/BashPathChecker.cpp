@@ -9,7 +9,7 @@ bool BashPathChecker::contains_privilege_escalation(const std::string& command) 
     // Check for privilege escalation patterns
     const char* patterns[] = {
         "sudo ", "sudo -", "sudo\n", "sudo\t",
-        "su -", "su\n", "su\t",
+        "su ", "su -", "su\n", "su\t",
         "pkexec",
         "doas",
         "dzdo",
@@ -23,6 +23,19 @@ bool BashPathChecker::contains_privilege_escalation(const std::string& command) 
         if (cmd_lower.find(pattern) != std::string::npos) {
             return true;
         }
+    }
+
+    // §FIX-sudo-last-token: catch `sudo`/`su` as the final token of the
+    // command — the patterns above all require a trailing
+    // space/dash/newline/tab, so `sudo`, `su` and `... && su` at the end
+    // of the string slipped through.
+    if (cmd_lower.size() >= 4 &&
+        cmd_lower.compare(cmd_lower.size() - 4, 4, "sudo") == 0) {
+        return true;
+    }
+    if (cmd_lower.size() >= 2 &&
+        cmd_lower.compare(cmd_lower.size() - 2, 2, "su") == 0) {
+        return true;
     }
 
     return false;
@@ -158,31 +171,38 @@ bool BashPathChecker::contains_standalone_ampersand(const std::string& command) 
             // leading tabs are stripped on the marker line before
             // comparison.
             if (c == '\n') {
+                // §FIX-heredoc-line-skip (2026-07-18, retake): the line
+                // extends only to the NEXT '\n', not to the end of the
+                // whole command. We must KEEP the for-loop positioned ON
+                // the '\n' at the end of the line we just inspected (so
+                // its ++i lands on the marker line's '\n' for the next
+                // round of inspection). Setting i = line_end jumped
+                // PAST that '\n', hiding the "EOF\n" line — including
+                // any trailing `&` command — from the rest of the
+                // scanner. Use `line_end - 1` so ++i re-lands on
+                // line_end itself, where the marker check runs again
+                // with the FOLLOWING line as `cmp`.
                 size_t line_start = i + 1;
-                std::string line = command.substr(line_start);
-                std::string cmp = line;
+                size_t line_end = command.find('\n', line_start);
+                if (line_end == std::string::npos) line_end = command.size();
+                std::string cmp = command.substr(line_start, line_end - line_start);
                 if (state == State::InHeredocIndented) {
                     size_t k = 0;
                     while (k < cmp.size() && cmp[k] == '\t') ++k;
                     cmp = cmp.substr(k);
                 }
-                // Strip trailing newline if present (last line of heredoc
-                // before EOF still ends with one).
-                if (!cmp.empty() && cmp.back() == '\n') cmp.pop_back();
+                // Tolerate CRLF line endings on the marker line.
+                if (!cmp.empty() && cmp.back() == '\r') cmp.pop_back();
                 // Marker line must be exactly the marker (after the
                 // indentation strip).
-                if (cmp == heredoc_marker ||
-                    (cmp.size() > heredoc_marker.size() &&
-                     cmp.compare(0, heredoc_marker.size(), heredoc_marker) == 0 &&
-                     (cmp[heredoc_marker.size()] == '\n' ||
-                      cmp[heredoc_marker.size()] == '\r'))) {
+                if (cmp == heredoc_marker) {
                     heredoc_marker.clear();
                     state = State::Normal;
-                    i = line_start + cmp.size(); // skip past the marker
-                    continue;
                 }
-                // Otherwise we're still inside the body — `&` is data.
-                i = line_start + line.size(); // skip to end of line
+                // Park i so the for-loop's ++ lands ON this '\n' at
+                // line_end, which is the boundary between this line and
+                // the next (potential marker) line.
+                i = (line_end > 0) ? line_end - 1 : 0;
                 continue;
             }
             // Inside the body (not at a newline) — just consume.

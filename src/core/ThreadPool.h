@@ -27,6 +27,7 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <stdexcept>
 #include <stop_token>
 #include <thread>
 #include <type_traits>
@@ -197,6 +198,16 @@ auto ThreadPool::submit(TaskPriority priority, F&& f, Args&&... args)
 
     using ReturnType = std::invoke_result_t<F, Args...>;
 
+    // §fix-threadpool-shutdown (2026-07-18): std::packaged_task has no
+    // set_exception() — use std::promise on the stopped-pool fast path
+    // so the returned future resolves with the exception instead of
+    // blocking forever (worker pool will never run the task).
+    auto make_exception_future = [](std::exception_ptr eptr) {
+        std::promise<ReturnType> p;
+        p.set_exception(std::move(eptr));
+        return p.get_future();
+    };
+
     // Wrap the callable in a shared_ptr so the packaged_task can be copied
     auto task_ptr = std::make_shared<std::packaged_task<ReturnType()>>(
         std::bind(std::forward<F>(f), std::forward<Args>(args)...)
@@ -207,11 +218,11 @@ auto ThreadPool::submit(TaskPriority priority, F&& f, Args&&... args)
     {
         std::unique_lock<std::mutex> lock(mutex_);
         if (stop_.load()) {
-            // Pool is shutting down - return a ready future with default value
-            // (can't throw because ReturnType might not be default-constructible)
-            // We instead wrap to return immediately via a no-op task
-            // The simplest approach: enqueue anyway, worker will run it
-            // and the future will be satisfied.
+            // §fix (2026-07-18): pool is stopped — no worker will ever
+            // run this task, so future.get() would block forever.
+            // Return a future holding an exception instead of enqueueing.
+            return make_exception_future(std::make_exception_ptr(
+                std::runtime_error("ThreadPool: submit() after shutdown")));
         }
 
         Task task;

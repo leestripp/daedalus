@@ -373,10 +373,15 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
         pid_t ret = waitpid(pid, nullptr, WNOHANG);
         if (ret == pid) {
             // Process exited, drain remaining output
+            // §fix (2026-07-18): bound the drain — if the child spawned
+            // a grandchild that inherited the pipe write ends, EOF
+            // never arrives and this loop would hang forever.
+            int drain_iters = 0;
             while (!stdout_eof || !stderr_eof) {
                 read_from_pipe(pipe_stdout[0], stdout_output, stdout_eof);
                 read_from_pipe(pipe_stderr[0], stderr_output, stderr_eof);
                 if (stdout_eof && stderr_eof) break;
+                if (++drain_iters > 100) break;  // ~1s at 10ms/iter
                 usleep(10000);
             }
             break;
@@ -447,6 +452,11 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
             } else if (!stderr_output.empty()) {
                 result.stdout = stderr_output;
             }
+            // §fix (2026-07-18): close the pipe read fds — the normal
+            // path closes them below, this early return leaked 2 fds
+            // per timed-out command.
+            close(pipe_stdout[0]);
+            close(pipe_stderr[0]);
             return result;
         }
         

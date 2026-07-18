@@ -9,6 +9,7 @@
 #include <utils/Utils.h>
 
 #include <array>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -453,31 +454,38 @@ json ReadFileTailTool::execute(const json& args, FileIO& file_io) {
             return json::object({{"status", "error"}, {"message", "Failed to open file: " + path}});
         }
 
-        std::vector<std::string> all_lines;
+        // §Fix(perf): keep only the last N lines in a ring buffer while
+        // streaming instead of slurping the whole file into memory.
+        // Total line count is still tracked for the response metadata.
+        std::deque<std::string> tail_lines;
         std::string line;
+        size_t total_lines = 0;
         while (std::getline(file, line)) {
-            all_lines.push_back(line);
+            if (tail_lines.size() >= (size_t)lines) {
+                tail_lines.pop_front();
+            }
+            tail_lines.push_back(line);
+            total_lines++;
         }
 
-        int start_idx = (int)all_lines.size() - lines;
-        if (start_idx < 0) start_idx = 0;
+        size_t start_idx = total_lines - tail_lines.size();
 
         std::string content;
         if (line_numbers) {
-            for (int i = start_idx; i < (int)all_lines.size(); i++) {
-                content += std::to_string(i + 1) + "\t" + all_lines[i] + "\n";
+            for (size_t i = 0; i < tail_lines.size(); i++) {
+                content += std::to_string(start_idx + i + 1) + "\t" + tail_lines[i] + "\n";
             }
         } else {
-            for (int i = start_idx; i < (int)all_lines.size(); i++) {
-                content += all_lines[i] + "\n";
+            for (size_t i = 0; i < tail_lines.size(); i++) {
+                content += tail_lines[i] + "\n";
             }
         }
 
         return json::object({
             {"status", "success"},
             {"path", path},
-            {"lines", (int)all_lines.size() - start_idx},
-            {"total_lines", (int)all_lines.size()},
+            {"lines", (int)tail_lines.size()},
+            {"total_lines", (int)total_lines},
             {"content", content}
         });
     } catch (const std::exception& e) {

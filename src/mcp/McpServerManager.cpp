@@ -428,27 +428,29 @@ bool McpServerManager::is_connected(const std::string& server_name) const {
 // =============================================================================
 
 // §9.7.A — Process lifecycle.
-// Sends SIGTERM to the agent's process group (every stdio MCP child was
-// reparented into it via setpgid() in McpClient::connect), waits up to 2s
-// per child, then escalates to SIGKILL. After this returns, no stdio MCP
-// subprocess should be alive in the agent's process group.
+// Tears down every client/transport: for stdio, McpClient::disconnect()
+// sends SIGTERM to the server's OWN process group (children call
+// setpgid(0, 0) in McpClient::connect), waits up to 2s per child, then
+// escalates to SIGKILL. After this returns, no stdio MCP subprocess
+// should be alive.
 void McpServerManager::shutdown() {
-    static std::once_flag once;
-    std::call_once(once, [this]() {
-        // Tear down clients (sends SIGTERM + waits per child for stdio).
-        for (auto& [name, client] : clients_) {
-            client->disconnect();
-        }
-        for (auto& [name, transport] : http_transports_) {
-            transport->disconnect();
-        }
-        clients_.clear();
-        http_transports_.clear();
-        server_tools_.clear();
-        breakers_.clear();
-        list_changed_supported_.clear();
-        mark_mcp_tools_dirty();
-    });
+    // §fix (2026-07-18): dropped the function-static std::once_flag —
+    // it was shared across ALL manager instances, so the first manager
+    // to shut down consumed it and every later manager's shutdown()
+    // became a no-op, leaking its MCP child processes. The body is
+    // already idempotent (disconnect() + clear()).
+    for (auto& [name, client] : clients_) {
+        client->disconnect();
+    }
+    for (auto& [name, transport] : http_transports_) {
+        transport->disconnect();
+    }
+    clients_.clear();
+    http_transports_.clear();
+    server_tools_.clear();
+    breakers_.clear();
+    list_changed_supported_.clear();
+    mark_mcp_tools_dirty();
 }
 
 McpServerManager::ToolIndex McpServerManager::aggregate_capabilities() {

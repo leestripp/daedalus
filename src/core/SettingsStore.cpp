@@ -486,10 +486,16 @@ fs::path SettingsStore::db_path() const noexcept { return path_; }
 
 bool SettingsStore::has_data() const noexcept
 {
-    if (!list_models().empty()) return true;
-    // Cheap kv_settings probe — one row, one column, no bindings.
-    auto stmt = db_->prepare("SELECT 1 FROM kv_settings LIMIT 1");
-    return stmt.step();
+    // §fix (2026-07-18): SQLite prepare/step can throw; this function is
+    // noexcept, so an escaping exception would call std::terminate.
+    try {
+        if (!list_models().empty()) return true;
+        // Cheap kv_settings probe — one row, one column, no bindings.
+        auto stmt = db_->prepare("SELECT 1 FROM kv_settings LIMIT 1");
+        return stmt.step();
+    } catch (...) {
+        return false;
+    }
 }
 
 // ============================================================================
@@ -757,8 +763,14 @@ void SettingsStore::delete_mcp_server(std::string_view name)
 
 bool SettingsStore::has_mcp_servers() const noexcept
 {
-    auto stmt = db_->prepare("SELECT 1 FROM mcp_servers LIMIT 1");
-    return stmt.step();
+    // §fix (2026-07-18): SQLite prepare/step can throw; this function is
+    // noexcept, so an escaping exception would call std::terminate.
+    try {
+        auto stmt = db_->prepare("SELECT 1 FROM mcp_servers LIMIT 1");
+        return stmt.step();
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace daedalus

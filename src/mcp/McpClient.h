@@ -130,8 +130,11 @@ private:
     // Internal helper to send notification (no response expected)
     void send_notification(const std::string& method, const json& params);
     
-    // Read response from server with timeout
-    json read_response(int timeout_ms = 30000);
+    // Read response from server with timeout. When expected_id >= 0,
+    // only the JSON-RPC frame whose "id" matches is returned;
+    // notifications and stale/mismatched frames are discarded while
+    // reading continues (until the overall timeout).
+    json read_response(int timeout_ms = 30000, int expected_id = -1);
     
     // Parse SSE stream data
     std::string parse_sse_data(const std::string& line);
@@ -159,8 +162,14 @@ private:
     mutable std::mutex cb_mu_;
     ListChangedCallback list_changed_cb_;
 
-    // Request ID counter
+    // Request ID counter. Guarded by request_mu_ (see below).
     int next_request_id_;
+
+    // §fix (2026-07-18): serializes send_request() — id allocation, the
+    // pipe write, and the matching read_response() — so concurrent
+    // call_tool_async()/call_tools_batch() on one client can't interleave
+    // frames on the shared stdio pipe.
+    std::mutex request_mu_;
 
     // Available tools cache
     std::vector<ToolDefinition> tools_;

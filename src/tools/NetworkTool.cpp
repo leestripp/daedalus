@@ -298,7 +298,13 @@ json HttpRequestTool::do_request(const ParsedUrl& url,
     std::string body_out;
     bool truncated = false;
 
-    if (chunked) {
+    // §FIX-head-no-body: HEAD responses carry Content-Length but no
+    // body, and 204/304 never have one either — recvExactly() on them
+    // would block until timeout and throw.
+    const bool no_body = (method == "HEAD" ||
+                          status_code == 204 || status_code == 304);
+
+    if (!no_body && chunked) {
         // §Phase C2.5: chunked transfer has no Content-Length, so
         // we can't compute byte-level percent. Emit just "start" +
         // "end" — the user knows the response is in flight.
@@ -338,7 +344,7 @@ json HttpRequestTool::do_request(const ParsedUrl& url,
         }
         emit_progress(100, "Received " + std::to_string(body_out.size()) +
                           " bytes (chunked)");
-    } else if (content_length > 0) {
+    } else if (!no_body && content_length > 0) {
         // §Phase C2.5: we know the total up front, so emit 0% before
         // the read and milestone updates as bytes arrive. For small
         // responses (<25% of nothing) the only emission is 0% then
@@ -777,6 +783,25 @@ struct X509Holder {
     X509* get() const { return p; }
 };
 
+// §FIX-pkey-leak: same RAII pattern as X509Holder, for the EVP_PKEY*
+// returned by X509_get_pubkey() — previously passed to describe_pkey()
+// and never freed.
+struct EvpPkeyHolder {
+    EVP_PKEY* p = nullptr;
+    EvpPkeyHolder() = default;
+    explicit EvpPkeyHolder(EVP_PKEY* x) : p(x) {}
+    ~EvpPkeyHolder() { if (p) EVP_PKEY_free(p); }
+    EvpPkeyHolder(const EvpPkeyHolder&) = delete;
+    EvpPkeyHolder& operator=(const EvpPkeyHolder&) = delete;
+    EvpPkeyHolder(EvpPkeyHolder&& o) noexcept : p(o.p) { o.p = nullptr; }
+    EvpPkeyHolder& operator=(EvpPkeyHolder&& o) noexcept {
+        if (this != &o) { if (p) EVP_PKEY_free(p); p = o.p; o.p = nullptr; }
+        return *this;
+    }
+    explicit operator bool() const { return p != nullptr; }
+    EVP_PKEY* get() const { return p; }
+};
+
 // Convert ASN1_TIME (e.g. "Jun 26 12:00:00 2026 GMT") to ISO 8601
 // ("2026-06-26T12:00:00Z"). Returns empty string on parse failure.
 std::string asn1_to_iso8601(const ASN1_TIME* t) {
@@ -988,7 +1013,8 @@ json TlsInspectTool::execute(const json& args, FileIO& file_io) {
         const char* sig_name = OBJ_nid2sn(sig_nid);
         cert_json["signature_algorithm"] = sig_name ? sig_name : "unknown";
 
-        cert_json["public_key"] = describe_pkey(X509_get_pubkey(cert.p));
+        EvpPkeyHolder pkey(X509_get_pubkey(cert.p));
+        cert_json["public_key"] = describe_pkey(pkey.p);
         cert_json["subject_alt_names"] = extract_san(cert.p);
 
         // Compute SHA-256 fingerprint directly from our held cert so

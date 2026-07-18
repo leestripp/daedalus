@@ -54,6 +54,13 @@ TEST_CASE("BashPathChecker - Privilege Escalation Detection") {
         // Just "sudo" without a space is not blocked (edge case)
         CHECK(BashPathChecker::contains_privilege_escalation("sudo-test") == false);
     }
+
+    SUBCASE("sudo/su as the last token or bare (§FIX-sudo-last-token)") {
+        CHECK(BashPathChecker::contains_privilege_escalation("sudo") == true);
+        CHECK(BashPathChecker::contains_privilege_escalation("cd /tmp && sudo") == true);
+        CHECK(BashPathChecker::contains_privilege_escalation("su") == true);
+        CHECK(BashPathChecker::contains_privilege_escalation("su root") == true);
+    }
 }
 
 TEST_CASE("BashPathChecker - contains_standalone_ampersand (B3)") {
@@ -95,6 +102,14 @@ TEST_CASE("BashPathChecker - contains_standalone_ampersand (B3)") {
     SUBCASE("Rejects mixed: quoted `&` followed by real `&`") {
         CHECK(BashPathChecker::contains_standalone_ampersand(
             "echo \"x &\" &") == true);
+    }
+    SUBCASE("Detects `&` after the heredoc marker (§FIX-heredoc-line-skip)") {
+        CHECK(BashPathChecker::contains_standalone_ampersand(
+            "cat <<EOF\nhello\nEOF\nsleep 100 &") == true);
+        // ...but `&` inside the body is still data, and a clean command
+        // after the marker is not backgrounded.
+        CHECK(BashPathChecker::contains_standalone_ampersand(
+            "cat <<EOF\nfoo & bar\nEOF\necho done") == false);
     }
 }
 

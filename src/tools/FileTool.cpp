@@ -163,94 +163,101 @@ json ListDirectoryTool::execute(const json& args, FileIO& file_io) {
         return json::object({{"status", "error"}, {"message", std::string("Error parsing path argument: ") + e.what()}});
     }
 
-    // Resolve path relative to tracked current working directory
-    std::filesystem::path base_dir = ToolHandler::is_cwd_initialized() ? 
-        ToolHandler::get_current_working_directory() : file_io.get_project_path();
-    std::filesystem::path path;
-    if (std::filesystem::path(path_str).is_absolute()) {
-        path = std::filesystem::absolute(path_str);
-    } else {
-        path = std::filesystem::absolute(base_dir / path_str);
-    }
+    // §Fix: wrap the listing body in try/catch like every sibling tool —
+    // std::filesystem calls (absolute/exists/directory_iterator) throw on
+    // e.g. permission-denied directories and previously escaped execute().
+    try {
+        // Resolve path relative to tracked current working directory
+        std::filesystem::path base_dir = ToolHandler::is_cwd_initialized() ?
+            ToolHandler::get_current_working_directory() : file_io.get_project_path();
+        std::filesystem::path path;
+        if (std::filesystem::path(path_str).is_absolute()) {
+            path = std::filesystem::absolute(path_str);
+        } else {
+            path = std::filesystem::absolute(base_dir / path_str);
+        }
 
-    // Trust OS permissions - any accessible directory can be listed
-    if (!std::filesystem::exists(path) || !std::filesystem::is_directory(path)) {
-        return json::object({{"status", "error"}, {"message", "Path is not a valid directory: " + path_str}});
-    }
+        // Trust OS permissions - any accessible directory can be listed
+        if (!std::filesystem::exists(path) || !std::filesystem::is_directory(path)) {
+            return json::object({{"status", "error"}, {"message", "Path is not a valid directory: " + path_str}});
+        }
 
-    json contents = json::array();
-    for (const auto& entry : std::filesystem::directory_iterator(path)) {
-        json entry_json = {
-            {"name", entry.path().filename().string()},
-            {"type", entry.is_directory() ? "directory" : "file"}
-        };
-        
-        // Add file size
-        if (entry.is_regular_file()) {
-            try {
-                entry_json["size"] = entry.file_size();
-            } catch (...) {
-                // Ignore errors
-            }
-        }
-        
-        // Add modification timestamp (ISO 8601 format)
-        try {
-            auto time = entry.last_write_time();
-            auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
-            std::time_t time_st = std::chrono::system_clock::to_time_t(sctp);
-            std::tm* tm = std::localtime(&time_st);
-            char buffer[32];
-            std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm);
-            entry_json["modified"] = std::string(buffer);
-        } catch (...) {
-            // Ignore errors
-        }
-        
-        // Add permissions (like -rwxr-xr-x)
-        try {
-            auto status = entry.status();
-            auto perms = status.permissions();
-            std::string perm_str;
-            perm_str += (entry.is_directory() ? 'd' : '-');
-            perm_str += ((perms & std::filesystem::perms::owner_read) != std::filesystem::perms::none ? 'r' : '-');
-            perm_str += ((perms & std::filesystem::perms::owner_write) != std::filesystem::perms::none ? 'w' : '-');
-            perm_str += ((perms & std::filesystem::perms::owner_exec) != std::filesystem::perms::none ? 'x' : '-');
-            perm_str += ((perms & std::filesystem::perms::group_read) != std::filesystem::perms::none ? 'r' : '-');
-            perm_str += ((perms & std::filesystem::perms::group_write) != std::filesystem::perms::none ? 'w' : '-');
-            perm_str += ((perms & std::filesystem::perms::group_exec) != std::filesystem::perms::none ? 'x' : '-');
-            perm_str += ((perms & std::filesystem::perms::others_read) != std::filesystem::perms::none ? 'r' : '-');
-            perm_str += ((perms & std::filesystem::perms::others_write) != std::filesystem::perms::none ? 'w' : '-');
-            perm_str += ((perms & std::filesystem::perms::others_exec) != std::filesystem::perms::none ? 'x' : '-');
-            entry_json["permissions"] = perm_str;
-        } catch (...) {
-            // Ignore errors
-        }
-        
-        // Add line count for files
-        if (entry.is_regular_file()) {
-            try {
-                std::ifstream file(entry.path());
-                if (file.is_open()) {
-                    size_t line_count = 0;
-                    std::string line;
-                    while (std::getline(file, line)) {
-                        line_count++;
-                    }
-                    entry_json["lines"] = line_count;
+        json contents = json::array();
+        for (const auto& entry : std::filesystem::directory_iterator(path)) {
+            json entry_json = {
+                {"name", entry.path().filename().string()},
+                {"type", entry.is_directory() ? "directory" : "file"}
+            };
+
+            // Add file size
+            if (entry.is_regular_file()) {
+                try {
+                    entry_json["size"] = entry.file_size();
+                } catch (...) {
+                    // Ignore errors
                 }
+            }
+
+            // Add modification timestamp (ISO 8601 format)
+            try {
+                auto time = entry.last_write_time();
+                auto sctp = std::chrono::time_point_cast<std::chrono::system_clock::duration>(time - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+                std::time_t time_st = std::chrono::system_clock::to_time_t(sctp);
+                std::tm* tm = std::localtime(&time_st);
+                char buffer[32];
+                std::strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", tm);
+                entry_json["modified"] = std::string(buffer);
             } catch (...) {
                 // Ignore errors
             }
-        }
-        contents.push_back(entry_json);
-    }
 
-    return json::object({
-        {"status", "success"},
-        {"path", path_str},
-        {"contents", contents}
-    });
+            // Add permissions (like -rwxr-xr-x)
+            try {
+                auto status = entry.status();
+                auto perms = status.permissions();
+                std::string perm_str;
+                perm_str += (entry.is_directory() ? 'd' : '-');
+                perm_str += ((perms & std::filesystem::perms::owner_read) != std::filesystem::perms::none ? 'r' : '-');
+                perm_str += ((perms & std::filesystem::perms::owner_write) != std::filesystem::perms::none ? 'w' : '-');
+                perm_str += ((perms & std::filesystem::perms::owner_exec) != std::filesystem::perms::none ? 'x' : '-');
+                perm_str += ((perms & std::filesystem::perms::group_read) != std::filesystem::perms::none ? 'r' : '-');
+                perm_str += ((perms & std::filesystem::perms::group_write) != std::filesystem::perms::none ? 'w' : '-');
+                perm_str += ((perms & std::filesystem::perms::group_exec) != std::filesystem::perms::none ? 'x' : '-');
+                perm_str += ((perms & std::filesystem::perms::others_read) != std::filesystem::perms::none ? 'r' : '-');
+                perm_str += ((perms & std::filesystem::perms::others_write) != std::filesystem::perms::none ? 'w' : '-');
+                perm_str += ((perms & std::filesystem::perms::others_exec) != std::filesystem::perms::none ? 'x' : '-');
+                entry_json["permissions"] = perm_str;
+            } catch (...) {
+                // Ignore errors
+            }
+
+            // Add line count for files
+            if (entry.is_regular_file()) {
+                try {
+                    std::ifstream file(entry.path());
+                    if (file.is_open()) {
+                        size_t line_count = 0;
+                        std::string line;
+                        while (std::getline(file, line)) {
+                            line_count++;
+                        }
+                        entry_json["lines"] = line_count;
+                    }
+                } catch (...) {
+                    // Ignore errors
+                }
+            }
+            contents.push_back(entry_json);
+        }
+
+        return json::object({
+            {"status", "success"},
+            {"path", path_str},
+            {"contents", contents}
+        });
+    } catch (const std::exception& e) {
+        return json::object({{"status", "error"}, {"message", std::string(e.what())}});
+    }
 }
 
 // ========== CreateFileTool ==========
@@ -579,37 +586,55 @@ static size_t levenshtein_distance(const std::string& a, const std::string& b, s
     const size_t n = b.size();
     if (m == 0) return n;
     if (n == 0) return m;
-    if (std::abs((long long)m - (long long)n) > (long long)max_threshold) {
+    // §Fix: compare in unsigned arithmetic — the old
+    // `(long long)max_threshold` cast turned the default SIZE_MAX
+    // into -1, making this short-circuit fire unconditionally.
+    if ((m > n ? m - n : n - m) > max_threshold) {
         return max_threshold + 1;  // Short-circuit: too different
     }
-    std::vector<std::vector<size_t>> dp(m + 1, std::vector<size_t>(n + 1));
-    for (size_t i = 0; i <= m; ++i) dp[i][0] = i;
-    for (size_t j = 0; j <= n; ++j) dp[0][j] = j;
+    // §Fix(perf): two-row DP instead of a full (m+1)x(n+1) matrix,
+    // with early abandon once every cell of a row exceeds the
+    // threshold (the distance can only grow from there).
+    std::vector<size_t> prev(n + 1), cur(n + 1);
+    for (size_t j = 0; j <= n; ++j) prev[j] = j;
     for (size_t i = 1; i <= m; ++i) {
+        cur[0] = i;
+        size_t row_min = cur[0];
         for (size_t j = 1; j <= n; ++j) {
             size_t cost = (a[i-1] == b[j-1]) ? 0 : 1;
-            dp[i][j] = std::min({
-                dp[i-1][j] + 1,         // deletion
-                dp[i][j-1] + 1,         // insertion
-                dp[i-1][j-1] + cost     // substitution
+            cur[j] = std::min({
+                prev[j] + 1,            // deletion
+                cur[j-1] + 1,           // insertion
+                prev[j-1] + cost        // substitution
             });
+            row_min = std::min(row_min, cur[j]);
         }
+        if (row_min > max_threshold) {
+            return max_threshold + 1;  // Early abandon: cannot recover
+        }
+        std::swap(prev, cur);
     }
-    return dp[m][n];
+    return prev[n];
 }
 
-// Helper: find best fuzzy match position (returns pair of {line, col} or {-1, -1})
-static std::pair<int, int> find_fuzzy_match(
+// §Fix: returns the exact byte position of the best match (or
+// std::string::npos). Previously only {line, col} was returned and the
+// caller re-derived the offset of the line START, so a match beginning
+// mid-line overwrote unrelated leading text.
+// §Fix(perf): only windows starting at line starts are evaluated, so
+// the DP runs O(lines) times instead of O(file_size) times.
+static size_t find_fuzzy_match(
     const std::string& content,
     const std::string& pattern,
     int max_distance
 ) {
-    if (content.size() < pattern.size()) return {-1, -1};
+    if (content.size() < pattern.size()) return std::string::npos;
 
-    // Sliding window: check each position
+    // Sliding window over line starts: check each position
     size_t best_pos = std::string::npos;
     size_t best_dist = max_distance + 1;
     for (size_t i = 0; i <= content.size() - pattern.size(); ++i) {
+        if (i > 0 && content[i-1] != '\n') continue;  // line starts only
         std::string window = content.substr(i, pattern.size());
         size_t dist = levenshtein_distance(window, pattern, max_distance);
         if (dist < best_dist) {
@@ -618,15 +643,7 @@ static std::pair<int, int> find_fuzzy_match(
             if (dist == 0) break;  // exact match
         }
     }
-    if (best_pos == std::string::npos) return {-1, -1};
-
-    // Convert byte position to line/col
-    int line = 1, col = 1;
-    for (size_t i = 0; i < best_pos; ++i) {
-        if (content[i] == '\n') { line++; col = 1; }
-        else { col++; }
-    }
-    return {line, col};
+    return best_pos;
 }
 
 // Helper: show context around a line in the file
@@ -778,9 +795,14 @@ json EditFilePatchTool::execute(const json& args, FileIO& file_io) {
             for (const auto& nl : new_lines) result.push_back(nl);
             for (size_t i = line_end + 1; i <= lines.size(); ++i) result.push_back(lines[i-1]);
 
+            // §Fix: only restore a trailing newline if the ORIGINAL
+            // content ended with one — previously this fired whenever
+            // the edit reached the last line, adding a newline the
+            // original file didn't have.
+            bool original_had_trailing_newline = !content.empty() && content.back() == '\n';
             content = join_lines(result);
             // Preserve trailing newline if original had one
-            if (!content.empty() && content.back() != '\n' && lines.size() == (size_t)line_end) {
+            if (original_had_trailing_newline && !content.empty() && content.back() != '\n' && lines.size() == (size_t)line_end) {
                 content += '\n';
             }
             replacements_made = 1;
@@ -890,21 +912,14 @@ json EditFilePatchTool::execute(const json& args, FileIO& file_io) {
             if (replacements_made == 0 && fuzzy) {
                 // Try fuzzy match
                 int max_dist = std::max(2, (int)(old_str.size() / 20));  // 5% tolerance
-                auto [line, col] = find_fuzzy_match(content, old_str, max_dist);
-                if (line > 0) {
-                    // Replace the fuzzy match
-                    size_t found = 0;
-                    for (size_t i = 0; i < content.size(); ++i) {
-                        if (i > 0 && content[i-1] == '\n') {
-                            int l = 1;
-                            for (size_t k = 0; k < i; ++k) if (content[k] == '\n') l++;
-                            if (l == line) { found = i; break; }
-                        }
-                    }
-                    if (found == 0 && line == 1) found = 0;
+                // §Fix: find_fuzzy_match returns the exact byte offset of
+                // the match; replace there directly instead of re-deriving
+                // the start of the line (which ignored the column).
+                size_t found = find_fuzzy_match(content, old_str, max_dist);
+                if (found != std::string::npos) {
+                    first_match_line = (int)std::count(content.begin(), content.begin() + found, '\n') + 1;
                     content.replace(found, old_str.size(), new_str);
                     replacements_made = 1;
-                    first_match_line = line;
                 }
             }
             if (replacements_made == 0) {

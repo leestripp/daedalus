@@ -169,6 +169,41 @@ TEST(stdio_transport_disconnect) {
 }
 
 // ============================================================================
+// Test: StdioMcpTransport fails pending requests when the child exits
+// ============================================================================
+// §fix (2026-07-18): reader_loop used to check only POLLIN, so a dead
+// child (POLLHUP) made it spin at 100% CPU and pending requests hung
+// until their deadline. Now the pending future resolves promptly with
+// an error.
+TEST(stdio_transport_child_exit_fails_pending) {
+    // "true" exits immediately without writing anything.
+    StdioMcpTransport transport("true");
+    auto result = transport.connect();
+    if (!result) {
+        std::cerr << "SKIP: fork failed\n";
+        return 0;
+    }
+
+    // Long timeout — the point is the future resolves LONG before it.
+    auto fut = transport.send_request("ping", nlohmann::json::object(),
+                                      /*timeout_ms=*/30000);
+    auto status = fut.wait_for(5s);
+    CHECK(status == std::future_status::ready);
+    if (status == std::future_status::ready) {
+        auto response = fut.get();
+        CHECK(!response.has_value());
+        if (!response) {
+            // ReadFailed when the reader thread saw POLLHUP; WriteFailed
+            // is also acceptable (child died before our write → EPIPE).
+            CHECK(response.error() == TransportError::ReadFailed ||
+                  response.error() == TransportError::WriteFailed);
+        }
+    }
+    transport.disconnect();
+    return 0;
+}
+
+// ============================================================================
 // Test: Virtual dispatch through base pointer
 // ============================================================================
 TEST(virtual_dispatch) {
@@ -196,6 +231,7 @@ int main() {
     local_failures += test_stdio_transport_echo_with_cat();
     local_failures += test_stdio_transport_name();
     local_failures += test_stdio_transport_disconnect();
+    local_failures += test_stdio_transport_child_exit_fails_pending();
     local_failures += test_virtual_dispatch();
 
     std::cout << "\nResults: " << (local_failures == 0 ? "PASS" : "FAIL") << std::endl;

@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -111,9 +112,13 @@ json ReadPDFTool::execute(const json& args, FileIO& file_io) {
             });
         }
 
-        // Load the PDF document (returns raw pointer)
-        poppler::document* doc = poppler::document::load_from_file(full_path.string());
-        
+        // Load the PDF document.
+        // §FIX-pdf-doc-leak: unique_ptr so the document is also freed on
+        // the exception path below — the raw pointer leaked when the
+        // catch returned.
+        std::unique_ptr<poppler::document> doc(
+            poppler::document::load_from_file(full_path.string()));
+
         if (!doc) {
             return json::object({
                 {"status", "error"},
@@ -123,7 +128,6 @@ json ReadPDFTool::execute(const json& args, FileIO& file_io) {
 
         // Check if document is encrypted
         if (doc->is_encrypted()) {
-            delete doc;
             return json::object({
                 {"status", "error"},
                 {"path", full_path.string()},
@@ -133,7 +137,6 @@ json ReadPDFTool::execute(const json& args, FileIO& file_io) {
 
         int num_pages = doc->pages();
         if (num_pages == 0) {
-            delete doc;
             return json::object({
                 {"status", "error"},
                 {"message", "PDF file has no pages"}
@@ -177,9 +180,7 @@ json ReadPDFTool::execute(const json& args, FileIO& file_io) {
         }
 
         std::string result_text = extracted_text.str();
-        
-        delete doc;  // Clean up document pointer
-        
+
         if (result_text.empty()) {
             return json::object({
                 {"status", "success"},

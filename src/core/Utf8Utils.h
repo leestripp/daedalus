@@ -317,10 +317,9 @@ inline bool is_ascii_only(const std::string& str) {
  */
 /**
  * @brief Replace invalid UTF-8 bytes with '?' using a state-machine.
- * Correctly handles multi-byte sequences: replaces only the start byte
- * of an invalid sequence with '?', preserving any trailing bytes that
- * are valid standalone bytes (they will be re-evaluated on the next
- * iteration as fresh ASCII or new sequence starts).
+ * Correctly handles multi-byte sequences: replaces an invalid sequence
+ * (start byte plus any partial continuations) with a single '?', then
+ * re-evaluates the offending byte as a fresh sequence start.
  * @param input The string to sanitize
  * @return A new string with invalid bytes replaced by '?'
  */
@@ -339,9 +338,13 @@ inline std::string utf8_sanitize_replace_invalid(const std::string& input) {
             } else {
                 // Invalid continuation byte: replace the sequence start with '?'
                 result[sequence_start_pos] = '?';
-                // §B12 fix: do NOT resize here — keep trailing bytes already
-                // appended after the sequence start. They are independent
-                // sequences that will be re-evaluated on the next loop iteration.
+                // §fix (2026-07-18): drop the partial continuation bytes
+                // already appended after the sequence start — they are
+                // stray 0x80-0xBF bytes and would leave the output
+                // invalid UTF-8. (Supersedes the §B12 note: appended
+                // continuations are NOT re-evaluated by the loop; only
+                // the current byte is.)
+                result.resize(sequence_start_pos + 1);
                 expected_continuations = 0;
                 // Re-evaluate current byte as a fresh start
                 if (c < 0x80) {
@@ -386,8 +389,9 @@ inline std::string utf8_sanitize_replace_invalid(const std::string& input) {
     // Handle trailing incomplete sequences at end of input
     if (expected_continuations > 0) {
         result[sequence_start_pos] = '?';
-        // Do not resize — any trailing bytes after sequence_start_pos that
-        // were appended during the sequence are valid standalone bytes.
+        // §fix (2026-07-18): drop the partial continuations too (same
+        // reasoning as the invalid-continuation branch above).
+        result.resize(sequence_start_pos + 1);
     }
 
     return result;

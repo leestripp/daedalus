@@ -17,6 +17,8 @@
 #include <algorithm>
 #include <set>
 #include <cctype>
+#include <atomic>
+#include <mutex>
 
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
@@ -31,6 +33,13 @@
 namespace ToolHandler {
     std::shared_ptr<ToolFactory> g_tool_factory;
 
+    // §FIX-global-state-races: these globals are read/written from tool
+    // execution paths that can run on multiple threads (subagents,
+    // ThreadPool). One mutex guards the approval sets and the cwd path;
+    // the two flags are atomic so their simple load/store sites stay
+    // lock-free.
+    std::mutex g_state_mutex;
+
     // Session-level cache for approved commands (in-memory only)
     std::set<std::string> session_approved_commands;
 
@@ -39,10 +48,10 @@ namespace ToolHandler {
 
     // Current working directory tracker
     std::filesystem::path current_working_directory;
-    bool cwd_initialized = false;
+    std::atomic<bool> cwd_initialized{false};
 
     // Auto mode - automatically approve tool executions
-    bool auto_mode_enabled = false;
+    std::atomic<bool> auto_mode_enabled{false};
 
     // §Phase 3 — sink set by LLMClient::set_sink(). Tools use this for
     // blocking I/O like execute_bash approval. weak_ptr because the host
@@ -86,6 +95,7 @@ namespace ToolHandler {
                 json data = json::parse(infile);
                 infile.close();
                 if (data.contains("approved_commands") && data["approved_commands"].is_array()) {
+                    std::lock_guard<std::mutex> lock(g_state_mutex);
                     for (const auto& cmd : data["approved_commands"]) {
                         persisted_approved_commands.insert(cmd.get<std::string>());
                     }
@@ -106,8 +116,11 @@ namespace ToolHandler {
             }
             json data;
             data["approved_commands"] = json::array();
-            for (const auto& cmd : persisted_approved_commands) {
-                data["approved_commands"].push_back(cmd);
+            {
+                std::lock_guard<std::mutex> lock(g_state_mutex);
+                for (const auto& cmd : persisted_approved_commands) {
+                    data["approved_commands"].push_back(cmd);
+                }
             }
             std::ofstream outfile(approvals_file);
             outfile << data.dump(2);
@@ -119,28 +132,34 @@ namespace ToolHandler {
 
     // Clear the session-approved commands cache
     void clear_session_approved_commands() {
+        std::lock_guard<std::mutex> lock(g_state_mutex);
         session_approved_commands.clear();
     }
 
     // Add a command to session approved commands (internal use by BashTool)
     void add_session_approved_command_internal(const std::string& command) {
+        std::lock_guard<std::mutex> lock(g_state_mutex);
         session_approved_commands.insert(command);
     }
 
     // Initialize current working directory with project root
     void init_current_working_directory(const std::filesystem::path& project_root) {
-        current_working_directory = project_root;
+        {
+            std::lock_guard<std::mutex> lock(g_state_mutex);
+            current_working_directory = project_root;
+        }
         cwd_initialized = true;
     }
 
     // Get current working directory (must be initialized first)
     std::filesystem::path get_current_working_directory() {
+        std::lock_guard<std::mutex> lock(g_state_mutex);
         return current_working_directory;
     }
 
     // Check if cwd has been initialized
     bool is_cwd_initialized() {
-        return cwd_initialized;
+        return cwd_initialized.load();
     }
 
     // Set auto mode (automatically approve tool executions)
@@ -150,7 +169,7 @@ namespace ToolHandler {
 
     // Check if auto mode is enabled
     bool is_auto_mode_enabled() {
-        return auto_mode_enabled;
+        return auto_mode_enabled.load();
     }
 
     // §Phase 3 — sink storage. Tools (e.g. execute_bash approval) use this
@@ -186,7 +205,10 @@ namespace ToolHandler {
 
     // Clear persisted approvals file
     void clear_persisted_approvals(const std::filesystem::path& project_path) {
-        persisted_approved_commands.clear();
+        {
+            std::lock_guard<std::mutex> lock(g_state_mutex);
+            persisted_approved_commands.clear();
+        }
         std::filesystem::path approvals_file = get_approvals_file_path(project_path);
         if (std::filesystem::exists(approvals_file)) {
             std::filesystem::remove(approvals_file);
@@ -200,7 +222,10 @@ namespace ToolHandler {
     // Add a command to persisted approvals and save to file
     void add_persisted_approval(const std::filesystem::path& project_path, const std::string& command) {
         // Add to persisted set
-        persisted_approved_commands.insert(command);
+        {
+            std::lock_guard<std::mutex> lock(g_state_mutex);
+            persisted_approved_commands.insert(command);
+        }
         // Save to file
         save_persisted_approvals(project_path);
     }
@@ -212,79 +237,76 @@ namespace ToolHandler {
             return true;
         }
 
-        // Check if pattern has wildcards
-        if (pattern.find('*') != std::string::npos) {
-            // Split pattern by '*' to get multiple parts
-            std::vector<std::string> parts;
-            std::string current;
-            for (char c : pattern) {
-                if (c == '*') {
-                    if (!current.empty()) {
-                        parts.push_back(current);
-                    }
-                    current.clear();
-                } else {
-                    current += c;
-                }
-            }
-            if (!current.empty()) {
-                parts.push_back(current);
-            }
-
-            // Handle patterns ending with * (like "rm -rf *", "ls *")
-            if (parts.size() == 1 && pattern.back() == '*') {
-                // Pattern is like "cmd *" - check if command starts with the prefix
-                std::string prefix = parts[0];
-                if (command.size() >= prefix.size() && 
-                    command.compare(0, prefix.size(), prefix) == 0) {
-                    return true;
-                }
-                return false;
-            }
-
-            // Need at least 2 parts (before and after wildcard) to check
-            if (parts.size() >= 2) {
-                // Check if command starts with first part
-                if (command.compare(0, parts[0].size(), parts[0]) != 0) {
-                    return false;
-                }
-
-                // Only check if command ends with last part if the pattern does NOT end with '*'
-                // If pattern ends with '*', the last part is just a literal string in the middle
-                // that must appear somewhere between wildcards, not at the end
-                bool pattern_ends_with_wildcard = (pattern.back() == '*');
-                if (!pattern_ends_with_wildcard) {
-                    if (command.size() < parts.back().size()) {
-                        return false;
-                    }
-                    if (command.compare(command.size() - parts.back().size(), parts.back().size(), parts.back()) != 0) {
-                        return false;
-                    }
-                }
-
-                // Check if all middle parts appear in order
-                size_t search_start = parts[0].size();
-                // When pattern ends with wildcard, check all parts after the first as middle parts
-                // (the ending is handled by the trailing wildcard, not as a literal suffix)
-                size_t end_idx = pattern_ends_with_wildcard ? parts.size() : parts.size() - 1;
-                for (size_t i = 1; i < end_idx; i++) {
-                    size_t pos = command.find(parts[i], search_start);
-                    if (pos == std::string::npos) {
-                        return false;
-                    }
-                    search_start = pos + parts[i].size();
-                }
-
-                return true;
-            }
+        // No wildcards — prefix match (original behavior)
+        if (pattern.find('*') == std::string::npos) {
+            return command.compare(0, pattern.size(), pattern) == 0;
         }
 
-        // Also check prefix match (original behavior)
-        if (command.compare(0, pattern.size(), pattern) == 0) {
+        // Split pattern by '*' to get the literal parts
+        std::vector<std::string> parts;
+        std::string current;
+        for (char c : pattern) {
+            if (c == '*') {
+                if (!current.empty()) {
+                    parts.push_back(current);
+                }
+                current.clear();
+            } else {
+                current += c;
+            }
+        }
+        if (!current.empty()) {
+            parts.push_back(current);
+        }
+
+        // §FIX-leading-wildcard: a pure-"*" pattern (no literal parts)
+        // matches everything. A leading '*' must NOT anchor the first
+        // part as a prefix — "*.txt" is a suffix match and "*foo*" is
+        // a contains match.
+        if (parts.empty()) {
             return true;
         }
 
-        return false;
+        const bool anchored_start = (pattern.front() != '*');
+        const bool anchored_end   = (pattern.back() != '*');
+
+        size_t search_start = 0;
+        size_t part_begin = 0;
+
+        // Pattern is like "cmd *" — command must start with the prefix.
+        if (anchored_start) {
+            if (command.size() < parts[0].size() ||
+                command.compare(0, parts[0].size(), parts[0]) != 0) {
+                return false;
+            }
+            search_start = parts[0].size();
+            part_begin = 1;
+        }
+
+        // Middle parts (everything except a possibly-anchored suffix)
+        // must appear in order.
+        size_t part_end = parts.size();
+        if (anchored_end) part_end -= 1;
+        for (size_t i = part_begin; i < part_end; i++) {
+            size_t pos = command.find(parts[i], search_start);
+            if (pos == std::string::npos) {
+                return false;
+            }
+            search_start = pos + parts[i].size();
+        }
+
+        // Pattern does not end with '*' — command must end with the
+        // last part, at or after the position reached so far.
+        if (anchored_end) {
+            const std::string& suffix = parts.back();
+            if (command.size() < suffix.size() ||
+                command.size() - suffix.size() < search_start ||
+                command.compare(command.size() - suffix.size(), suffix.size(), suffix) != 0) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // List of safe read-only diagnostic tools
@@ -311,6 +333,7 @@ namespace ToolHandler {
         // Note: Chained commands are handled specially in BashTool::execute
         // This function checks individual commands only
 
+        std::lock_guard<std::mutex> lock(g_state_mutex);
         for (const auto& approved : session_approved_commands) {
             if (matches_pattern(command, approved)) {
                 return true;
