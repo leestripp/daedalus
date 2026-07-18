@@ -1374,6 +1374,29 @@ add_test(NAME ensure_directories_tests
     COMMAND daedalus_ensure_directories_tests)
 
 # ============================================================================
+# §FIX-PLAN-R3-REAL (2026-07-18): REAL end-to-end test that uses the
+# canonical `Testing/test-cli-bare/project/sum.cpp` fixture to drive
+# the actual library code paths through the public API.
+# ============================================================================
+add_executable(daedalus_real_world_tools_tests
+    test_real_world_tools.cpp
+)
+target_include_directories(daedalus_real_world_tools_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/tools
+)
+target_link_libraries(daedalus_real_world_tools_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME real_world_tools_tests COMMAND daedalus_real_world_tools_tests)
+set_tests_properties(real_world_tools_tests PROPERTIES
+    LABELS "real-world"
+)
+
+# ============================================================================
 # §FIX-PLAN-R3-DEMOS (2026-07-18): Hello-world smoke test for the 4 demo
 # apps. Each demo binary is launched with --version; we verify exit 0
 # and the canonical banner. We also compile + run a trivial C++

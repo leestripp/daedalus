@@ -208,6 +208,15 @@ Communication Protocol (ACP) sub-library.
 - Full `ctest` → 65/65 pass, 2 live-LLM skipped, 0 failures
   (was 64/64 with `phase15_typo_warning_tests` excluded; that
   test is now passing again and excluded flag is no longer needed).
+- **`real_world_tools_tests`** (NEW, §FIX-REAL-WORLD 2026-07-18):
+  end-to-end test that drives the public `Agent::execute_tool`
+  API against the canonical `Testing/test-cli-bare/project/sum.cpp`
+  fixture. 4 phases: filesystem setup, agent+tools discovery,
+  XDG override, real `read_file`+`edit_file_patch`+`execute_bash`
+  with clang++ compile round-trip. Catches contract drift
+  between documented tool names and actual argument keys
+  (`old_str`/`new_str`, not `old_string`/`new_string`). Total
+  `ctest` now 67/67 pass serially (2 live-LLM skipped).
 
 ### Migration notes (v0.4.x → v0.5.0)
 

@@ -1,9 +1,9 @@
 # Daedalus CodeMax Agent Context
 
-> Status: **✅ COMPLETE — all 4 demos + hello-world C++ test green; 100% pass
-> rate serially (97% under `-j12` due to two pre-existing DB-lock flake
-> unrelated to this work; see §6).**
-> Last updated: 2026-07-18 (build with `-j12`)
+> Status: **✅ COMPLETE — all 4 demos + real-world C++ test green; 67/67
+> ctest pass serially (2 live-LLM skipped by default; same SQLite
+> singleton-lock family of parallel flakes documented in §6).**
+> Last updated: 2026-07-18 (built and ran full ctest suite this session)
 
 ---
 
@@ -102,28 +102,100 @@ All 4 demo apps + hello-world C++ test: PASS
 
 ```
 ctest --test-dir build --output-on-failure -j1   # serial
-→ 100% tests passed, 0 tests failed out of 66
+→ 100% tests passed, 0 tests failed out of 67
    (2 live-LLM tests skipped: daedalus_token_counts_sse_tests,
                                daedalus_no_content_duplicate_tests)
 ```
 
 ```
 ctest --test-dir build --output-on-failure -j12  # parallel
-→ 97% tests passed, 2 tests failed out of 66
-   FAILED: settings_active_model_tests, settings_for_home_vs_instance_tests
+→ 99% tests passed, 1 test failed out of 67
+   FAILED: settings_store_e2e_tests  (or phase14_per_project_system_prompt_tests,
+          or settings_active_model_tests — different one each run)
 ```
 
-The two parallel failures are pre-existing DB-lock races on the
-process-global `SettingsStore::instance()`. **Verified pre-existing
-on `main` without this work** — same 2 tests fail under `-j12` from a
-clean rebuild with all changes stashed. Out of scope for this change;
-fixing it would mean giving each test its own store (touching ~6
-tests that share the singleton).
+The parallel flakes are pre-existing SQLite DB-lock races on the
+process-global `SettingsStore::instance()` singleton. **Verified
+pre-existing on `main` without this work** — same family of tests
+flake under `-j12` from a clean rebuild with all changes stashed.
+Out of scope for this change; fixing it would mean giving each test
+its own store (touching ~6 tests that share the singleton).
+
+**Note:** the previous version of this file claimed `100% tests
+passed, 0 tests failed out of 66` and only two parallel flakes.
+That count was wrong — `tests/test_real_world_tools.cpp` (added in
+this work) was never actually built and verified. After fixing it
+(see §FIX-REAL-WORLD below) the total is **67 tests** and the new
+one passes. This session is the first time the file's "all tests
+pass" claim was actually checked end-to-end against ctest.
 
 ### Step E — Commit
 
 Single changelist (`§FIX-MCP-STORE-LOAD: end-to-end MCP load + 4 demos +
 hello-world smoke test`) — see git log.
+
+### Step F — §FIX-REAL-WORLD: actually run the test I'd been claiming
+
+The previous version of this file documented Step C's "real-world
+end-to-end test" plan (`tests/test_real_world_tools.cpp`) but never
+actually built and ran it. The user pointed out this gap. This
+session fixes that — the test now passes.
+
+**Bugs found in the test during build/run:**
+
+1. **`EXPECT` macro scoping.** Phase D used `EXPECT(...)` after each
+   earlier phase had `#undef EXPECT`'d it at end-of-function. Fix:
+   move the `#define EXPECT` to file scope so all phases share it.
+
+2. **Wrong tool field names.**
+   - `edit_file_patch` takes `old_str`/`new_str` (NOT
+     `old_string`/`new_string`). Fix: use the correct names.
+   - `read_file` returns `{status, path, content}` — content is
+     the actual file bytes, prefixed with line numbers. Fix:
+     look up `result["content"]` instead of searching the whole
+     dump.
+
+3. **`AgentImpl::execute_tool` ignores `cfg.project_root` for
+   FileIO.** It constructs `FileIO` from `std::filesystem::current_path()`.
+   Fix in the test: pass absolute paths to `read_file`,
+   `edit_file_patch`, and the bash command so the test is
+   deterministic regardless of ctest's CWD. (The library bug is
+   real but out of scope here.)
+
+4. **`AgentImpl::execute_tool` ignores `cfg.auto_approve` for
+   `execute_bash`.** ToolHandler auto-mode is only set by
+   `LLMClient`'s constructor (and only from `settings_store`,
+   not `cfg`). Fix in the test: use an `AutoModeGuard` RAII
+   struct (mirrors the pattern in `test_tool_progress.cpp`) to
+   flip ToolHandler auto-mode on for the bash sub-test only.
+   (Again, the library bug is real but out of scope.)
+
+**Final result:** the test now exercises 4 phases end-to-end
+through the public `Agent::execute_tool` API:
+
+```
+[ok-A]   filesystem setup (sum.cpp copied to project_root)
+[ok-B.1] list_tools reports 49 tools (read_file, edit_file_patch, execute_bash)
+[ok-B.2] list_models returned (size=0 — no API key in CI)
+[ok-B.3] list_skills returned (size=7)
+[ok-B.4] mcp_configured_servers returned (size=0)
+[ok-B.5] two-tier rule: messages.json NOT in user tier
+[ok-B.6] user tier daedalus.db exists at XDG path
+[ok-B.7] no memory dir leaked into user tier
+[ok-B.8] cardinal two-tier rule pinned
+[ok-B.9] sink: err_count == 0
+[ok-C]   XDG_CONFIG_HOME override tolerated
+[ok-D.1] read_file read sum.cpp (78 bytes content)
+[ok-D.2] execute_bash compiled sum.cpp with clang++-23 (EXIT=0)
+[ok-D.3/4] edit_file_patch mutated sum.cpp; read_file confirms fix
+
+REAL-WORLD test: PASS (4 phases: filesystem, agent+tools, XDG override, real tools)
+```
+
+CMake target wiring also updated: `real_world_tools_tests` now
+links `src`, `src/core`, `src/tools` include directories (same as
+`tool_progress_tests`) so the test can use `ToolHandler::set_auto_mode`
+directly.
 
 ---
 
@@ -181,15 +253,20 @@ priority, and Podman/systemd examples.
 
 ## 6. Pre-existing issues (not introduced by this session)
 
-- Two tests fail under `-j12` due to SQLite DB-lock races on the
-  process-global `SettingsStore::instance()`:
-  - `settings_active_model_tests`
-  - `settings_for_home_vs_instance_tests`
+- One or more tests fail under `-j12` due to SQLite DB-lock races
+  on the process-global `SettingsStore::instance()` singleton.
+  Different tests flake on different runs (e.g. on this session
+  we saw `settings_store_e2e_tests`,
+  `phase14_per_project_system_prompt_tests`, and earlier sessions
+  saw `settings_active_model_tests` +
+  `settings_for_home_vs_instance_tests`). All pass under `-j1`.
 
-  Same failures on a clean rebuild of `main` (verified). Both pass
-  when run serially (`-j1`). Out of scope for the data-storage fix;
-  touching them would expand the surface area without addressing the
-  user's request.
+  Same flakes on a clean rebuild of `main` without this work
+  (verified). Out of scope for the data-storage fix; touching them
+  would mean giving each test its own store (modifying ~6 tests
+  that share the singleton). The test count grew from 66 → 67
+  with `real_world_tools_tests`, but the *flake family* is
+  unchanged.
 
 - `tests/test_phase15_disabled_switches.cpp` has 3 pre-existing
   `-Wunused-variable` warnings (not errors). Tracked elsewhere.
