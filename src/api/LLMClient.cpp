@@ -1407,13 +1407,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                  {"message", synth_message},
                  {"finish_reason", "stop"}}
             });
-            if (sink_) sink_->on_log(daedalus::LogLevel::Info,
-                "[LLM] Stream finished with usage-only final chunk "
-                "(recovered via synthesized_message; usage was "
-                + std::string(response_json.contains("usage") &&
-                              response_json["usage"].is_null() ? "null"
-                                                                : "non-null")
-                + ")");
+            // §Phase 9.10 / §BUG-001: this path is normal for streaming
+            // responses. Keep the trace in the file log only so TUI/CLI
+            // hosts are not spammed with a routine SSE housekeeping message.
+            LOG_INFO("Stream finished with usage-only final chunk "
+                     "(recovered via synthesized_message)");
             // Fall through to message/tool-call processing below.
         }
         else

@@ -26,9 +26,10 @@
  * §Threading contract
  *
  *   - The class owns exactly one `std::thread`. Its destructor sets
- *     a stop flag, joins the thread, and restores terminal mode.
- *     Destruction is safe to call from any context, including the
- *     SIGINT handler path through main()'s catch block.
+ *     a stop flag, writes to an internal wake-up pipe, joins the thread,
+ *     and restores terminal mode. Destruction is safe to call from any
+ *     context, including the SIGINT handler path through main()'s catch
+ *     block.
  *   - `next_line()` blocks on a condition variable. It returns
  *     `std::nullopt` on EOF; an empty string on ESC; the typed text
  *     on Enter.
@@ -82,18 +83,44 @@ public:
         } else {
             saved_tio_ok_ = true;
         }
+
+        // §Demo fix: self-pipe used by the destructor to wake the watcher
+        // thread out of a blocking select()/read() so shutdown does not hang
+        // waiting for an extra keystroke.
+        if (::pipe(wake_pipe_) != 0) {
+            wake_pipe_[0] = -1;
+            wake_pipe_[1] = -1;
+        }
+
         th_ = std::thread([this] { thread_main(); });
+
+        // §Demo fix: wait until the watcher thread has finished switching
+        // stdin into raw mode before returning. Otherwise the host may print
+        // the first "> " prompt while the terminal is still transitioning,
+        // which can cause that prompt to vanish.
+        if (saved_tio_ok_) {
+            constexpr int kMaxWaitMs = 1000;
+            constexpr int kSleepMs = 5;
+            for (int waited = 0; waited < kMaxWaitMs; waited += kSleepMs) {
+                if (raw_mode_active_.load(std::memory_order_acquire)) break;
+                std::this_thread::sleep_for(std::chrono::milliseconds(kSleepMs));
+            }
+        }
     }
 
     /// @brief Stop the thread, join, restore terminal mode.
     ~RawStdinWatcher() {
         stop_.store(true, std::memory_order_release);
-        // Closing stdin from another thread makes any blocked read()
-        // in the watcher return 0 (EOF). That's enough to wake it.
-        // But POSIX-y portable wakeup is just to join — the watcher
-        // loop checks stop_ every read.
+        // §Demo fix: write to the wake pipe so the watcher thread returns
+        // from select()/read() immediately. Without this the destructor
+        // would hang until the user pressed Enter.
+        if (wake_pipe_[1] >= 0) {
+            char c = 1;
+            ::write(wake_pipe_[1], &c, 1);
+        }
         if (th_.joinable()) th_.join();
         restore_terminal_mode();
+        close_pipes();
     }
 
     // Disable copy: each instance owns a thread + a termios save.
@@ -138,11 +165,13 @@ private:
 
         while (!stop_.load(std::memory_order_acquire)) {
             char c = 0;
-            ssize_t n = ::read(STDIN_FILENO, &c, 1);
-            if (n <= 0) {
-                // EOF or interrupted read. Treat as quit signal.
-                eof_.store(true, std::memory_order_release);
-                cv_.notify_all();
+            if (!read_byte(c)) {
+                // EOF or stop requested. Only signal EOF if we were not
+                // explicitly asked to stop.
+                if (!stop_.load(std::memory_order_acquire)) {
+                    eof_.store(true, std::memory_order_release);
+                    cv_.notify_all();
+                }
                 break;
             }
 
@@ -227,6 +256,40 @@ private:
         }
     }
 
+    /// Block until a byte is available on stdin or the watcher is stopped.
+    /// Returns true with `out` set to the byte read, or false on EOF/stop/error.
+    bool read_byte(char& out) {
+        while (!stop_.load(std::memory_order_acquire)) {
+            fd_set fds;
+            FD_ZERO(&fds);
+            FD_SET(STDIN_FILENO, &fds);
+            if (wake_pipe_[0] >= 0) {
+                FD_SET(wake_pipe_[0], &fds);
+            }
+            int max_fd = (wake_pipe_[0] > STDIN_FILENO) ? wake_pipe_[0] : STDIN_FILENO;
+
+            int ret = ::select(max_fd + 1, &fds, nullptr, nullptr, nullptr);
+            if (ret < 0) {
+                if (errno == EINTR) continue;
+                return false;
+            }
+            if (ret == 0) continue;
+
+            if (wake_pipe_[0] >= 0 && FD_ISSET(wake_pipe_[0], &fds)) {
+                char dummy = 0;
+                ::read(wake_pipe_[0], &dummy, 1);
+                continue;  // loop will see stop_ == true and exit
+            }
+
+            if (FD_ISSET(STDIN_FILENO, &fds)) {
+                ssize_t n = ::read(STDIN_FILENO, &out, 1);
+                if (n <= 0) return false;
+                return true;
+            }
+        }
+        return false;
+    }
+
     void push(std::string s) {
         std::lock_guard<std::mutex> lk(mu_);
         lines_.push_back(std::move(s));
@@ -234,16 +297,28 @@ private:
     }
 
     /// Wait up to `ms` for one byte on stdin. Returns true if it
-    /// arrived (and that byte is consumed), false on timeout.
+    /// arrived (and that byte is consumed), false on timeout or stop.
     bool wait_for_byte(int ms) {
         struct timeval tv{};
         tv.tv_usec = ms * 1000;
         fd_set fds;
         FD_ZERO(&fds);
         FD_SET(STDIN_FILENO, &fds);
-        if (::select(STDIN_FILENO + 1, &fds, nullptr, nullptr, &tv) <= 0) {
-            return false;
+        if (wake_pipe_[0] >= 0) {
+            FD_SET(wake_pipe_[0], &fds);
         }
+        int max_fd = (wake_pipe_[0] > STDIN_FILENO) ? wake_pipe_[0] : STDIN_FILENO;
+
+        int ret = ::select(max_fd + 1, &fds, nullptr, nullptr, &tv);
+        if (ret <= 0) return false;
+
+        if (wake_pipe_[0] >= 0 && FD_ISSET(wake_pipe_[0], &fds)) {
+            char dummy = 0;
+            ::read(wake_pipe_[0], &dummy, 1);
+            return false;  // stop requested
+        }
+        if (!FD_ISSET(STDIN_FILENO, &fds)) return false;
+
         char c;
         return ::read(STDIN_FILENO, &c, 1) == 1;
     }
@@ -281,14 +356,25 @@ private:
         raw.c_cc[VMIN] = 1;
         raw.c_cc[VTIME] = 0;
         ::tcsetattr(STDIN_FILENO, TCSANOW, &raw);
-        raw_mode_active_ = true;
+        raw_mode_active_.store(true, std::memory_order_release);
     }
 
     void restore_terminal_mode() {
-        if (raw_mode_active_ && saved_tio_ok_) {
+        if (raw_mode_active_.load(std::memory_order_acquire) && saved_tio_ok_) {
             ::tcsetattr(STDIN_FILENO, TCSANOW, &saved_tio_);
         }
-        raw_mode_active_ = false;
+        raw_mode_active_.store(false, std::memory_order_release);
+    }
+
+    void close_pipes() {
+        if (wake_pipe_[0] >= 0) {
+            ::close(wake_pipe_[0]);
+            wake_pipe_[0] = -1;
+        }
+        if (wake_pipe_[1] >= 0) {
+            ::close(wake_pipe_[1]);
+            wake_pipe_[1] = -1;
+        }
     }
 
     daedalus::Agent& agent_;
@@ -296,7 +382,9 @@ private:
 
     struct termios saved_tio_{};
     bool saved_tio_ok_ = false;
-    bool raw_mode_active_ = false;
+    std::atomic<bool> raw_mode_active_{false};
+
+    int wake_pipe_[2] = {-1, -1};
 
     std::thread th_;
     std::atomic<bool> stop_{false};

@@ -152,6 +152,12 @@ int main(int argc, char* argv[]) {
                      args.agent_name,
                      data_dir.string());
 
+        // §Demo fix: flush banner + any initialization logs before the
+        // raw-mode watcher takes over, so the first "> " prompt is not
+        // visually interleaved with startup output.
+        std::cout << "\n" << std::flush;
+        std::cerr << std::flush;
+
         // §Demo fix 2026-07-14: raw-mode stdin watcher.
         //
         // Replaces the old `std::getline` loop. Two improvements:
