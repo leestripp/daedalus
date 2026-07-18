@@ -1615,7 +1615,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             }
             // §Phase 5.1: render the tool header as a string and
             // route it through the sink instead of std::cout.
-            if (sink_) sink_->on_log(daedalus::LogLevel::Info,
+            if (sink_) sink_->on_tool_display(
                 format_tool_header_before(function_name, action_desc, args_for_display));
 
             // §Phase 9.6: notify the host that a tool is about to run.
@@ -1696,25 +1696,17 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
                 // Always show formatted result so the user sees exit codes,
                 // output excerpts, and error details for both successes and failures.
-                // The separator and token usage that follow are also always shown
-                // so the visual block is complete regardless of the outcome.
-                if (sink_) {
-                    if (status == "error") {
-                        const std::string msg = result.value("message",
-                                                  result.value("error", "unknown error"));
-                        LOG_ERROR("Tool " + function_name + " failed: " + msg);
-                        sink_->on_log(daedalus::LogLevel::Error,
-                            format_tool_result(result));
-                    } else {
-                        // Success (or non-error status like "compress_context")
-                        sink_->on_log(daedalus::LogLevel::Info,
-                            format_tool_result(result));
-                    }
+                // The separator that follows is also always shown so the visual
+                // block is complete regardless of the outcome.
+                if (status == "error") {
+                    const std::string msg = result.value("message",
+                                              result.value("error", "unknown error"));
+                    LOG_ERROR("Tool " + function_name + " failed: " + msg);
                 }
+                if (sink_) sink_->on_tool_display(format_tool_result(result));
 
                 // OUTPUT: separator after result
-                if (sink_) sink_->on_log(daedalus::LogLevel::Info,
-                    format_tool_separator());
+                if (sink_) sink_->on_tool_display(format_tool_separator());
 
             } catch (const std::exception& e) {
                 result = json{{"status", "error"}, {"message", std::string(e.what())}};
