@@ -131,6 +131,15 @@ bool McpClient::connect(const std::string& command,
             _exit(127);
         }
 
+        // §Demo fix: MCP server installers (uv/pip) print progress
+        // spinners to stderr. Route stderr to /dev/null so the host
+        // terminal stays clean and the CLI prompt isn't overwritten.
+        int devnull = ::open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            ::dup2(devnull, STDERR_FILENO);
+            ::close(devnull);
+        }
+
         close(stdin_pipe[0]);
         close(stdout_pipe[1]);
         
