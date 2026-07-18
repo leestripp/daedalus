@@ -465,11 +465,32 @@ public:
     void clear_executing_markers();
 
 private:
+    /**
+     * @brief §fix (2026-07-18): unsynchronized persistence core. Caller
+     * must hold save_mutex_. Factored out so flush_now() can wait for an
+     * in-progress save and then flush any remaining dirty state.
+     */
+    void save_impl() const;
+
     std::filesystem::path data_dir_;     // §Phase 8.8: per-agent namespace dir
     std::filesystem::path messages_file_;
     std::string session_id_ = "default"; // §Plan.md v0.3.5: SQLite mirror key
     json messages_;
     MessageCompressionConfig config_;
+
+    // §fix (2026-07-18): guards messages_ against the background flush
+    // worker. The worker calls save() concurrently with main-thread
+    // add_*/set_messages/clear/compress; every mutation of messages_
+    // holds this mutex, and save() takes its snapshot under it.
+    // Read-only helpers called only from the main thread may stay
+    // unlocked; private helpers never lock it themselves (the public
+    // entry point does), so there is no recursive-lock hazard.
+    mutable std::mutex messages_mutex_;
+
+    // §fix (2026-07-18): serializes concurrent save() calls (flush
+    // worker vs. a main-thread flush_now()) so the mutable
+    // crash_payload_/crash_fd_ writes at the end of save() don't race.
+    mutable std::mutex save_mutex_;
 
     // Ephemeral runtime state only (NOT persisted)
     // Tracks which tools are currently executing

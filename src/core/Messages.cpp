@@ -322,6 +322,7 @@ Messages::~Messages() {
 // ============================================================================
 
 std::string Messages::get_system_content() const {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     if (messages_.empty()) return "";
     if (messages_[0].value("role", "") == "system") {
         return messages_[0].value("content", "");
@@ -330,6 +331,7 @@ std::string Messages::get_system_content() const {
 }
 
 std::string Messages::get_last_assistant_content() const {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     for (int i = static_cast<int>(messages_.size()) - 1; i >= 0; --i) {
         if (messages_[i].value("role", "") == "assistant") {
             return messages_[i].value("content", "");
@@ -343,11 +345,14 @@ std::string Messages::get_last_assistant_content() const {
 // ============================================================================
 
 void Messages::add_system(const std::string& content) {
-    if (!messages_.empty()) {
-        LOG_CERR(INFO,  "[Messages] Warning: System message already exists, not adding" << '\n');
-        return;
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        if (!messages_.empty()) {
+            LOG_CERR(INFO,  "[Messages] Warning: System message already exists, not adding" << '\n');
+            return;
+        }
+        messages_.push_back({{"role", "system"}, {"content", content}});
     }
-    messages_.push_back({{"role", "system"}, {"content", content}});
     // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
     dirty_.store(true, std::memory_order_release);
     if (config_.auto_flush_enabled) {
@@ -369,7 +374,10 @@ void Messages::add_user(const std::string& content, const std::string& image_url
         msg["content"] = content;
     }
 
-    messages_.push_back(msg);
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        messages_.push_back(msg);
+    }
     // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
     dirty_.store(true, std::memory_order_release);
     if (config_.auto_flush_enabled) {
@@ -378,7 +386,10 @@ void Messages::add_user(const std::string& content, const std::string& image_url
 }
 
 void Messages::add_assistant(const std::string& content) {
-    messages_.push_back({{"role", "assistant"}, {"content", content}});
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        messages_.push_back({{"role", "assistant"}, {"content", content}});
+    }
     // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
     dirty_.store(true, std::memory_order_release);
     if (config_.auto_flush_enabled) {
@@ -391,12 +402,15 @@ void Messages::add_tool_result(const std::string& tool_call_id, const std::strin
     if (!is_error && content.find("Error:") == 0) {
         is_error = true;
     }
-    messages_.push_back({
-        {"role", "tool"},
-        {"tool_call_id", tool_call_id},
-        {"content", content},
-        {"status", is_error ? "error" : "success"}
-    });
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        messages_.push_back({
+            {"role", "tool"},
+            {"tool_call_id", tool_call_id},
+            {"content", content},
+            {"status", is_error ? "error" : "success"}
+        });
+    }
     // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
     dirty_.store(true, std::memory_order_release);
     if (config_.auto_flush_enabled) {
@@ -405,7 +419,10 @@ void Messages::add_tool_result(const std::string& tool_call_id, const std::strin
 }
 
 void Messages::add_message(const json& msg) {
-    messages_.push_back(msg);
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        messages_.push_back(msg);
+    }
     // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
     dirty_.store(true, std::memory_order_release);
     if (config_.auto_flush_enabled) {
@@ -414,6 +431,7 @@ void Messages::add_message(const json& msg) {
 }
 
 void Messages::set_messages(const json& msgs) {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     messages_ = msgs;
 }
 
@@ -433,6 +451,7 @@ bool Messages::load() {
             try {
                 json saved = json::parse(blob);
                 if (saved.is_array() && !saved.empty()) {
+                    std::lock_guard<std::mutex> lk(messages_mutex_);
                     messages_ = saved;
                     messages_ = sanitize_message_chain(messages_);
                     LOG_INFO("Loaded " + std::to_string(messages_.size())
@@ -480,10 +499,13 @@ bool Messages::load() {
             return false;
         }
 
-        messages_ = saved;
+        {
+            std::lock_guard<std::mutex> lk(messages_mutex_);
+            messages_ = saved;
 
-        // Always sanitize on load to remove orphaned tool results
-        messages_ = sanitize_message_chain(messages_);
+            // Always sanitize on load to remove orphaned tool results
+            messages_ = sanitize_message_chain(messages_);
+        }
 
         LOG_INFO("Loaded " + std::to_string(messages_.size()) + " messages from " + messages_file_.string());
         return true;
@@ -566,8 +588,11 @@ bool Messages::load_from_crash_file(const std::string& crash_path) {
             }
         }
 
-        messages_ = saved;
-        messages_ = sanitize_message_chain(messages_);
+        {
+            std::lock_guard<std::mutex> lk(messages_mutex_);
+            messages_ = saved;
+            messages_ = sanitize_message_chain(messages_);
+        }
         LOG_INFO("Loaded " + std::to_string(messages_.size()) + " messages from .crash mirror " + crash_path);
         return true;
     } catch (const json::parse_error& e) {
@@ -626,7 +651,29 @@ bool Messages::validate_message_for_recovery(const json& msg) const {
 }
 
 void Messages::save() const {
-    if (messages_.empty()) {
+    // §fix (2026-07-18): serialize concurrent save() calls — the flush
+    // worker and a main-thread flush_now() can run save() at the same
+    // time and would race on crash_payload_/crash_fd_.
+    std::lock_guard<std::mutex> save_lock(save_mutex_);
+    save_impl();
+}
+
+// §fix (2026-07-18): unsynchronized persistence core. Caller must hold
+// save_mutex_ so that crash_payload_/crash_fd_ mutations and the atomic
+// dirty_/snapshot dance are serialized.
+void Messages::save_impl() const {
+    // §fix (2026-07-18): snapshot messages_ under messages_mutex_ so the
+    // flush worker can save while the main thread mutates the chain.
+    // Clear dirty_ atomically with the snapshot; it is re-set on failure
+    // below so the worker retries on the next tick.
+    json snapshot;
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        snapshot = messages_;
+        dirty_.store(false, std::memory_order_release);
+    }
+
+    if (snapshot.empty()) {
         // Remove empty messages file
         if (std::filesystem::exists(messages_file_)) {
             std::filesystem::remove(messages_file_);
@@ -640,11 +687,19 @@ void Messages::save() const {
             std::filesystem::remove(messages_file_.string() + ".tmp");
             std::filesystem::remove(messages_file_.string() + ".crash");
         } catch (...) { /* best-effort */ }
+        // §fix (2026-07-18): also delete the SQLite mirror. load()
+        // consults the mirror FIRST, so without this a cleared history
+        // would be resurrected from the mirror on the next session.
+        try {
+            auto store = daedalus::SettingsStore::for_home(
+                messages_file_.parent_path());
+            store.delete_messages_json(session_id_);
+        } catch (...) { /* best-effort */ }
         return;
     }
 
     // Sanitize before saving - remove orphaned tool results
-    json to_save = sanitize_message_chain(messages_);
+    json to_save = sanitize_message_chain(snapshot);
 
     // §CRASH-4 (2026-07-16): declare `contents` at function scope so
     // it's visible after the try block where crash_payload_ is updated.
@@ -727,30 +782,27 @@ void Messages::save() const {
 
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to save messages: " + std::string(e.what()));
-        // Don't clear dirty_; let the worker try again on the next tick.
+        // §fix: dirty_ was already cleared at snapshot time; re-set it
+        // so the worker tries again on the next tick.
+        dirty_.store(true, std::memory_order_release);
         return;
     }
 
     // §Plan.md v0.3.5: write-through mirror to SQLite (best-effort).
+    // The empty case is handled above (mirror deleted); here the
+    // snapshot is always non-empty.
     try {
-        if (!messages_.empty()) {
-            json mirror = sanitize_message_chain(messages_);
-            auto store = daedalus::SettingsStore::for_home(
-                messages_file_.parent_path());
-            store.set_messages_json(session_id_, mirror.dump());
-        } else {
-            auto store = daedalus::SettingsStore::for_home(
-                messages_file_.parent_path());
-            store.delete_messages_json(session_id_);
-        }
+        json mirror = sanitize_message_chain(snapshot);
+        auto store = daedalus::SettingsStore::for_home(
+            messages_file_.parent_path());
+        store.set_messages_json(session_id_, mirror.dump());
     } catch (const std::exception& e) {
         LOG_WARNING("Messages: SQLite mirror save failed ("
                     + std::string(e.what()) + ")");
     }
 
-    // §CRASH-2 (2026-07-16): save() succeeded — clear dirty so the
-    // background flush worker doesn't immediately re-save.
-    dirty_.store(false, std::memory_order_release);
+    // §fix: dirty_ stays cleared (done at snapshot time). A concurrent
+    // add_*() after the snapshot re-sets it, so nothing is lost.
 
     // §CRASH-4 (2026-07-16): cache the JSON payload so the crash
     // handler can re-write it verbatim without re-entering save()
@@ -837,9 +889,12 @@ void Messages::uninstall_crash_handlers() {
 
 void Messages::flush_now() const {
     // Caller wants the data on disk *now* (e.g. before dispatching an
-    // LLM call). Blocks until save() completes.
+    // LLM call). We must wait for any in-progress background save() to
+    // finish (dirty_ may already be cleared while the worker is still
+    // writing/renaming the file), then flush any remaining dirty state.
+    std::lock_guard<std::mutex> save_lock(save_mutex_);
     if (dirty_.load(std::memory_order_acquire)) {
-        save();
+        save_impl();
     }
 }
 
@@ -887,6 +942,7 @@ void Messages::flush_worker_main() {
 }
 
 void Messages::clear() {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     messages_ = json::array();
     executing_tools_.clear();
 }
@@ -938,6 +994,10 @@ size_t Messages::compute_safe_split() const {
 
     // Extend target to include any tool-result that belongs to a first_ids call
     // (so the full chain is kept in the compressed region, not orphaned).
+    // §fix (2026-07-18): off-by-one — `target` is a COUNT of non-system
+    // messages (absolute index i is included when i <= target), but `i`
+    // here is an ABSOLUTE index. `target = i + 1` pulled one extra
+    // message into the compressed region.
     bool changed = true;
     while (changed) {
         changed = false;
@@ -946,8 +1006,8 @@ size_t Messages::compute_safe_split() const {
             if (m.value("role", "") == "tool") {
                 std::string id = m.value("tool_call_id", "");
                 if (!id.empty() && first_ids.count(id) > 0) {
-                    if (i + 1 > target) {
-                        target = i + 1;
+                    if (i > target) {
+                        target = i;
                         changed = true;
                     }
                     break;  // one extension per tool-result is enough
@@ -1198,21 +1258,33 @@ std::string Messages::extract_summary_text(const std::string& response_body) {
 
 std::optional<std::string> Messages::compress() {
 
-    // Get the indices of messages to delete (given section)
-    auto [start_idx, end_idx] = get_compression_indices();  // 70/30 split with safe point
+    // §fix (2026-07-18): snapshot the compression range under
+    // messages_mutex_ — the flush worker saves concurrently. The LLM
+    // call below runs unlocked; messages_ is re-locked for the
+    // mutation afterwards.
+    size_t start_idx, end_idx, middle_count, before_count;
+    json middle_copy;
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
 
-    // If no messages, nothing to compress
-    if (start_idx >= end_idx) {
-        return std::nullopt;
-    }
+        // Get the indices of messages to delete (given section)
+        auto [s, e] = get_compression_indices();  // 70/30 split with safe point
 
-    size_t middle_count = end_idx - start_idx;
-    size_t before_count = messages_.size();
+        // If no messages, nothing to compress
+        if (s >= e) {
+            return std::nullopt;
+        }
+        start_idx = s;
+        end_idx = e;
 
-    // Make a COPY of messages to compress (do NOT delete originals yet)
-    json middle_copy = json::array();
-    for (size_t i = start_idx; i < end_idx && i < messages_.size(); ++i) {
-        middle_copy.push_back(messages_[i]);
+        middle_count = end_idx - start_idx;
+        before_count = messages_.size();
+
+        // Make a COPY of messages to compress (do NOT delete originals yet)
+        middle_copy = json::array();
+        for (size_t i = start_idx; i < end_idx && i < messages_.size(); ++i) {
+            middle_copy.push_back(messages_[i]);
+        }
     }
 
     if (middle_copy.empty()) {
@@ -1252,6 +1324,7 @@ std::optional<std::string> Messages::compress() {
         // it loses the history of what it was doing earlier.
         // ============================================================================
 
+        std::lock_guard<std::mutex> lk(messages_mutex_);
         size_t total = messages_.size();
         if (total <= 5) {
             // Too few messages to safely delete 70% - just give up
@@ -1293,48 +1366,58 @@ std::optional<std::string> Messages::compress() {
     }
 
     // SUCCESS: Now safe to delete the middle messages and rebuild
-    messages_.erase(messages_.begin() + start_idx, messages_.begin() + end_idx);
-    // §Phase 5.1: route through Logger instead of std::cout.
-    LOG_CERR(INFO, "[CONTEXT] Deleted " << middle_count << " middle messages (indices "
-              << start_idx << "-" << end_idx << ")");
+    // §fix (2026-07-18): the mutation below runs under messages_mutex_
+    // (the flush worker saves concurrently).
+    json new_messages;
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
 
-    // SUCCESS: Rebuild messages in correct order
-    // Structure: system + compress_context pair + suffix (last 50%)
-    json new_messages = json::array();
+        messages_.erase(messages_.begin() + start_idx, messages_.begin() + end_idx);
+        // §Phase 5.1: route through Logger instead of std::cout.
+        LOG_CERR(INFO, "[CONTEXT] Deleted " << middle_count << " middle messages (indices "
+                  << start_idx << "-" << end_idx << ")");
 
-    // 1. Add system message (must be first)
-    if (!messages_.empty() && messages_[0].value("role", "") == "system") {
-        new_messages.push_back(messages_[0]);
-    }
+        // SUCCESS: Rebuild messages in correct order
+        // Structure: system + compress_context pair + suffix (last 50%)
+        new_messages = json::array();
 
-    // 2. Add assistant message with compress_context tool call
-    std::string summary_content = "Context was compressed. Summary of first half:\n" + summary;
-    new_messages.push_back({
-        {"role", "assistant"},
-        {"tool_calls", json::array({
-            {
-                {"id", "compress_internal"},
-                {"type", "function"},
-                {"function", {
-                    {"name", "compress_context"},
-                    {"arguments", "{}"}
-                }}
-            }
-        })}
-    });
+        // 1. Add system message (must be first)
+        if (!messages_.empty() && messages_[0].value("role", "") == "system") {
+            new_messages.push_back(messages_[0]);
+        }
 
-    // 3. Add tool result with the summary (completes the tool call pair)
-    new_messages.push_back({
-        {"role", "tool"},
-        {"tool_call_id", "compress_internal"},
-        {"content", summary_content}
-    });
+        // 2. Add assistant message with compress_context tool call
+        std::string summary_content = "Context was compressed. Summary of first half:\n" + summary;
+        new_messages.push_back({
+            {"role", "assistant"},
+            {"tool_calls", json::array({
+                {
+                    {"id", "compress_internal"},
+                    {"type", "function"},
+                    {"function", {
+                        {"name", "compress_context"},
+                        {"arguments", "{}"}
+                    }}
+                }
+            })}
+        });
 
-    // 4. Add suffix messages (last remaining messages already in messages_ after deletion)
-    //    These are the messages AFTER the given messages we just deleted
-    //    (messages_ currently has: system + suffix)
-    for (size_t i = 1; i < messages_.size(); ++i) {  // Start at 1 to skip system
-        new_messages.push_back(messages_[i]);
+        // 3. Add tool result with the summary (completes the tool call pair)
+        new_messages.push_back({
+            {"role", "tool"},
+            {"tool_call_id", "compress_internal"},
+            {"content", summary_content}
+        });
+
+        // 4. Add suffix messages (last remaining messages already in messages_ after deletion)
+        //    These are the messages AFTER the given messages we just deleted
+        //    (messages_ currently has: system + suffix)
+        for (size_t i = 1; i < messages_.size(); ++i) {  // Start at 1 to skip system
+            new_messages.push_back(messages_[i]);
+        }
+
+        // Clear ephemeral executing markers after compression
+        executing_tools_.clear();
     }
 
     size_t after_count = new_messages.size();
@@ -1346,17 +1429,19 @@ std::optional<std::string> Messages::compress() {
 
     std::string result = new_messages.dump();
 
-    // Clear ephemeral executing markers after compression
-    executing_tools_.clear();
-
     return result;
 }
 
 void Messages::replace_messages(const std::string& compressed_json) {
     try {
-        messages_ = json::parse(compressed_json);
+        json parsed = json::parse(compressed_json);
+        const size_t count = parsed.size();
+        {
+            std::lock_guard<std::mutex> lk(messages_mutex_);
+            messages_ = std::move(parsed);
+        }
         // §Phase 5.1: route through Logger instead of std::cout.
-        LOG_CERR(INFO, "[CONTEXT] Replaced " << messages_.size() << " messages with compressed version");
+        LOG_CERR(INFO, "[CONTEXT] Replaced " << count << " messages with compressed version");
     } catch (const std::exception& e) {
         LOG_CERR(ERROR,  "[Messages] Failed to replace messages: " << e.what() << '\n');
     }
@@ -1631,6 +1716,7 @@ bool Messages::is_error_result(const std::string& id) const {
 // ============================================================================
 
 size_t Messages::estimate_tokens() const {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     return estimate_tokens_from_json(messages_);
 }
 
@@ -1639,6 +1725,7 @@ size_t Messages::estimate_tokens_from_json(const json& j) const {
 }
 
 void Messages::inject_context_stats(size_t current_tokens, size_t iteration, size_t max_iterations) {
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     if (messages_.empty()) return;
 
     json& system = messages_[0];
@@ -1711,6 +1798,9 @@ void Messages::write_debug_file(const std::string& filename, const std::string& 
     }
 }
 json Messages::truncate_if_needed(size_t max_size) {
+    // §fix (2026-07-18): this function rewrites messages_; the flush
+    // worker saves concurrently, so hold messages_mutex_ throughout.
+    std::lock_guard<std::mutex> lk(messages_mutex_);
     // §B5 fix: rewrite of the backward tool-chain walk.
     //
     // Pre-fix bug: the inner `while (i >= 1)` loop read `prev_role`

@@ -3,36 +3,32 @@
 //
 // Unit tests for daedalus config/settings path resolution.
 //
-// What we pin (as of the XDG migration: ~./daedalus/settings/settings.json
-//   → $XDG_CONFIG_HOME/daedalus/config.json → SQLite SettingsStore):
+// As of v0.5.0 settings live in a SQLite database, not config.json:
+//   - Global DB:  $XDG_DATA_HOME/daedalus/daedalus.db
+//                 (fallback ~/.local/share/daedalus/daedalus.db)
+//   - Per-agent DB when cfg.daedalus_home is set: <daedalus_home>/daedalus.db
 //
-//   L1. Paths::global().user_config_root() / "config.json" is the canonical
-//       settings path — NOT settings.json, NOT settings/settings.json.
-//   L2. `AgentImpl` derives settings from `cfg.daedalus_home` as
-//       `<daedalus_home>/config.json` when no explicit path is passed.
-//   L3. `Agent::initialize()` actually loads from the resolved path.
-//   L4. SettingsStore is populated from config.json during migration.
-//       Agent::list_models() returns non-empty for a valid config with
-//       a real (non-placeholder) API key.
-//   L5. `Paths::global().user_config_root()` honours $DAEDALUS_CONFIG_HOME.
+// What we pin:
 //
-// NOTE: default_settings_path() / default_mcp_servers_path() were removed
-// in v0.5.2 — use Paths::global().user_config_root() directly.
+//   L1. Paths::global().user_data_root() / "daedalus.db" is the canonical
+//       settings database path — NOT config.json.
+//   L2. AgentConfig with daedalus_home set reads from <daedalus_home>/daedalus.db.
+//   L3. Agent with no explicit daedalus_home uses the global SettingsStore DB.
+//   L4. SettingsStore populated directly (upsert_model + set_default_model_name)
+//       is visible to Agent::list_models().
+//   L5. Paths::global().user_data_root() honours $DAEDALUS_DATA_HOME.
 
-#include <cassert>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
 
 #include <daedalus.h>
 #include <daedalus/paths.h>
-#include <nlohmann/json.hpp>
+#include <daedalus/settings.h>
 
 namespace fs = std::filesystem;
-using json = nlohmann::json;
 
 namespace {
 
@@ -65,190 +61,185 @@ private:
     bool m_had_prev;
 };
 
-// Write a minimal-but-valid config.json at <dir>/config.json with the
-// given default_model + api_key. Other fields use safe defaults.
-void write_config(const fs::path& dir, const std::string& default_model,
-                  const std::string& api_key = "test-api-key-not-placeholder") {
-    fs::create_directories(dir);
-    json j = {
-        {"default_model", default_model},
-        {"max_agent_iterations", 50},
-        {"auto_approve", false},
-        {"models", {
-            {default_model, {
-                {"host", "http://test.invalid"},
-                {"api_key", api_key},
-                {"model", "test-model-id"},
-                {"endpoints", {{"chat", "/v1/chat/completions"}}},
-                {"max_context_size", 100000},
-                {"temperature", 0.0}
-            }}
-        }}
-    };
-    std::ofstream(dir / "config.json") << j.dump(2);
+// Build a minimal ModelConfig for testing.
+daedalus::ModelConfig make_test_model(const std::string& name) {
+    daedalus::ModelConfig m;
+    m.name             = name;
+    m.host             = "http://test.invalid";
+    m.api_key          = "sk-test-not-placeholder";
+    m.model_id         = "model-" + name;
+    m.chat_endpoint    = "/v1/chat/completions";
+    m.max_context_size = 100000;
+    m.temperature      = 0.0;
+    return m;
 }
 
+struct NullSink : daedalus::AgentSink {
+    void on_log(daedalus::LogLevel, std::string_view) noexcept override {}
+    void on_assistant_delta(std::string_view) noexcept override {}
+    void on_tool_call(std::string_view, const nlohmann::json&) noexcept override {}
+    void on_tool_result(std::string_view, const nlohmann::json&) noexcept override {}
+    void on_state_change(int, int) noexcept override {}
+};
+
 // ===========================================================================
-// L1. Paths::global().user_config_root() / "config.json" is canonical
+// L1. user_data_root() / "daedalus.db" is the canonical settings DB path.
 // ===========================================================================
-void test_user_config_root_config_json_is_canonical() {
-    auto root = daedalus::Paths::global().user_config_root();
-    auto expected = root / "config.json";
-    // The expected path ends in config.json (not settings.json).
-    assert(expected.filename() == "config.json");
-    std::cout << "[ok] L1: canonical settings path ends in config.json: "
+bool test_user_data_root_db_is_canonical() {
+    auto root = daedalus::Paths::global().user_data_root();
+    auto expected = root / "daedalus.db";
+    if (expected.filename() != "daedalus.db") {
+        std::cerr << "FAIL: L1 expected daedalus.db, got " << expected << "\n";
+        return false;
+    }
+    std::cout << "[ok] L1: canonical settings DB is daedalus.db: "
               << expected.string() << "\n";
+    return true;
 }
 
 // ===========================================================================
-// L2. AgentConfig with daedalus_home set derives settings_path = home/config.json
+// L2. AgentConfig with daedalus_home set reads from <home>/daedalus.db.
 // ===========================================================================
-void test_agent_resolves_daedalus_home_to_config_json() {
-    ScopedEnv home("HOME", "/tmp");  // irrelevant, we override below
-    ScopedEnv cfg_home("DAEDALUS_CONFIG_HOME", "/tmp/l2-daedalus-home");
+bool test_agent_uses_daedalus_home_db() {
+    auto home = fs::temp_directory_path() / "l2-daedalus-home";
+    fs::remove_all(home);
+    fs::create_directories(home);
 
-    auto root = daedalus::Paths::global().user_config_root();
-    write_config(root, "l2-model");
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_model(make_test_model("l2-model"));
+        store.set_default_model_name("l2-model");
+    }
 
     daedalus::AgentConfig cfg;
     cfg.project_root  = "/tmp";
-    cfg.daedalus_home = root;  // explicit
+    cfg.daedalus_home = home;
 
-    std::vector<std::string> loaded;
-    struct Sink : daedalus::AgentSink {
-        std::vector<std::string>* log;
-        explicit Sink(std::vector<std::string>* l) : log(l) {}
-        void on_log(daedalus::LogLevel, std::string_view msg) noexcept override {
-            log->emplace_back(msg);
-        }
-        void on_assistant_delta(std::string_view) noexcept override {}
-        void on_tool_call(std::string_view, const nlohmann::json&) noexcept override {}
-        void on_tool_result(std::string_view, const nlohmann::json&) noexcept override {}
-        void on_state_change(int, int) noexcept override {}
-    };
-    auto sink = std::make_shared<Sink>(&loaded);
+    auto sink = std::make_shared<NullSink>();
     daedalus::Agent agent(cfg, sink);
     agent.initialize();
-
-    bool saw_init = false;
-    for (const auto& m : loaded) {
-        if (m.find("Agent::initialize()") != std::string::npos) {
-            saw_init = true;
-        }
-    }
-    assert(saw_init);
 
     auto models = agent.list_models();
     bool found_l2 = false;
     for (const auto& m : models) {
         if (m.name == "l2-model") found_l2 = true;
     }
-    assert(found_l2);
+    if (!found_l2) {
+        std::cerr << "FAIL: L2 did not find l2-model\n";
+        return false;
+    }
 
-    fs::remove_all(root);
-    std::cout << "[ok] L2: AgentImpl resolves cfg.daedalus_home -> config.json\n";
+    fs::remove_all(home);
+    std::cout << "[ok] L2: AgentImpl resolves cfg.daedalus_home -> daedalus.db\n";
+    return true;
 }
 
 // ===========================================================================
-// L3. Agent::initialize() with no explicit paths uses the XDG default.
+// L3. Agent with no explicit paths uses the global SettingsStore DB.
 // ===========================================================================
-void test_agent_uses_xdg_default_when_no_paths() {
+bool test_agent_uses_global_db_when_no_home() {
     auto tmp_home = fs::temp_directory_path() / "l3-daedalus-home";
     fs::remove_all(tmp_home);
-    fs::create_directories(tmp_home / ".config" / "daedalus");
+    fs::create_directories(tmp_home / ".local" / "share" / "daedalus");
 
     ScopedEnv home("HOME", tmp_home.string());
-    ScopedEnv xdg_cfg("XDG_CONFIG_HOME", "");
     ScopedEnv xdg_data("XDG_DATA_HOME", "");
-    ScopedEnv cfg_home("DAEDALUS_CONFIG_HOME", "");
+    ScopedEnv daedalus_data("DAEDALUS_DATA_HOME", "");
 
-    auto root = daedalus::Paths::global().user_config_root();
-    write_config(root, "l3-model");
+    {
+        auto& store = daedalus::SettingsStore::instance();
+        store.upsert_model(make_test_model("l3-model"));
+        store.set_default_model_name("l3-model");
+    }
 
     daedalus::AgentConfig cfg;
     cfg.project_root = "/tmp";
-    // NO daedalus_home set — must fall back to user_config_root / "config.json"
+    // NO daedalus_home set — must fall back to the global SettingsStore.
 
-    auto models = [&]() {
-        struct Sink : daedalus::AgentSink {
-            void on_log(daedalus::LogLevel, std::string_view) noexcept override {}
-            void on_assistant_delta(std::string_view) noexcept override {}
-            void on_tool_call(std::string_view, const nlohmann::json&) noexcept override {}
-            void on_tool_result(std::string_view, const nlohmann::json&) noexcept override {}
-            void on_state_change(int, int) noexcept override {}
-        };
-        auto sink = std::make_shared<Sink>();
-        daedalus::Agent agent(cfg, sink);
-        agent.initialize();
-        return agent.list_models();
-    }();
+    auto sink = std::make_shared<NullSink>();
+    daedalus::Agent agent(cfg, sink);
+    agent.initialize();
 
+    auto models = agent.list_models();
     bool found_l3 = false;
     for (const auto& m : models) {
         if (m.name == "l3-model") found_l3 = true;
     }
-    assert(found_l3);
+    if (!found_l3) {
+        std::cerr << "FAIL: L3 did not find l3-model\n";
+        return false;
+    }
 
     fs::remove_all(tmp_home);
-    std::cout << "[ok] L3: Agent uses XDG default (no explicit path)\n";
+    std::cout << "[ok] L3: Agent uses global SettingsStore (no explicit home)\n";
+    return true;
 }
 
 // ===========================================================================
-// L4. SettingsStore is populated from config.json during migration.
+// L4. SettingsStore populated directly is visible through Agent::list_models().
 // ===========================================================================
-void test_settings_manager_loads_real_config() {
-    auto tmp = fs::temp_directory_path() / "l4-cfg";
-    fs::remove_all(tmp);
-    fs::create_directories(tmp);
+bool test_settings_store_direct_population() {
+    auto home = fs::temp_directory_path() / "l4-cfg";
+    fs::remove_all(home);
+    fs::create_directories(home);
 
-    auto good = tmp / "good";
-    write_config(good, "l4-good", "sk-real-not-placeholder");
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_model(make_test_model("l4-good"));
+        store.set_default_model_name("l4-good");
+    }
 
     daedalus::AgentConfig cfg;
     cfg.project_root  = "/tmp";
-    cfg.daedalus_home = good;
-    {
-        struct Sink : daedalus::AgentSink {
-            void on_log(daedalus::LogLevel, std::string_view) noexcept override {}
-            void on_assistant_delta(std::string_view) noexcept override {}
-            void on_tool_call(std::string_view, const nlohmann::json&) noexcept override {}
-            void on_tool_result(std::string_view, const nlohmann::json&) noexcept override {}
-            void on_state_change(int, int) noexcept override {}
-        };
-        auto sink = std::make_shared<Sink>();
-        daedalus::Agent agent(cfg, sink);
-        agent.initialize();
-        auto models = agent.list_models();
-        bool found = false;
-        for (const auto& m : models) {
-            if (m.name == "l4-good") found = true;
-        }
-        assert(found);
+    cfg.daedalus_home = home;
+
+    auto sink = std::make_shared<NullSink>();
+    daedalus::Agent agent(cfg, sink);
+    agent.initialize();
+
+    auto models = agent.list_models();
+    bool found_l4 = false;
+    for (const auto& m : models) {
+        if (m.name == "l4-good") found_l4 = true;
     }
-    fs::remove_all(tmp);
+    if (!found_l4) {
+        std::cerr << "FAIL: L4 did not find l4-good\n";
+        return false;
+    }
+
+    fs::remove_all(home);
     std::cout << "[ok] L4: SettingsStore populated, Agent lists model\n";
+    return true;
 }
 
 // ===========================================================================
-// L5. $DAEDALUS_CONFIG_HOME short-circuits the XDG resolution so tests
-// don't touch the user's real ~/.config.
+// L5. $DAEDALUS_DATA_HOME short-circuits the global data root resolution.
 // ===========================================================================
-void test_daedalus_config_home_override() {
-    ScopedEnv env("DAEDALUS_CONFIG_HOME", "/tmp/l5-override");
-    auto root = daedalus::Paths::global().user_config_root();
-    assert(root == "/tmp/l5-override");
-    std::cout << "[ok] L5: $DAEDALUS_CONFIG_HOME redirects config root\n";
+bool test_daedalus_data_home_override() {
+    ScopedEnv env("DAEDALUS_DATA_HOME", "/tmp/l5-override");
+    auto root = daedalus::Paths::global().user_data_root();
+    if (root != "/tmp/l5-override") {
+        std::cerr << "FAIL: L5 expected /tmp/l5-override, got " << root << "\n";
+        return false;
+    }
+    std::cout << "[ok] L5: $DAEDALUS_DATA_HOME redirects data root\n";
+    return true;
 }
 
 }  // namespace
 
 int main() {
-    test_user_config_root_config_json_is_canonical(); // L1
-    test_agent_resolves_daedalus_home_to_config_json();   // L2
-    test_agent_uses_xdg_default_when_no_paths();          // L3
-    test_settings_manager_loads_real_config();            // L4
-    test_daedalus_config_home_override();                 // L5
+    bool ok = true;
+    ok &= test_user_data_root_db_is_canonical();     // L1
+    ok &= test_agent_uses_daedalus_home_db();        // L2
+    ok &= test_agent_uses_global_db_when_no_home();  // L3
+    ok &= test_settings_store_direct_population();   // L4
+    ok &= test_daedalus_data_home_override();        // L5
 
-    std::cout << "\ntest_config_locations: 5 tests passed\n";
-    return 0;
+    if (ok) {
+        std::cout << "\ntest_config_locations: 5 tests passed\n";
+        return 0;
+    }
+    std::cerr << "\ntest_config_locations: FAILED\n";
+    return 1;
 }
