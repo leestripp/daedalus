@@ -8,7 +8,7 @@
 //   MS4. list_mcp_servers() returns all rows.
 //   MS5. delete_mcp_server removes the row.
 //   MS6. has_mcp_servers() reflects the table state.
-//   MS7. Migrating a legacy mcp/servers.json writes to the table.
+//   MS7. Upsert of HTTP server with empty args (zero-arg stdio regression).
 
 #include <cassert>
 #include <chrono>
@@ -21,7 +21,6 @@
 #include <nlohmann/json.hpp>
 
 #include <daedalus/settings.h>
-#include "core/SettingsMigrator.h"
 
 namespace fs = std::filesystem;
 using json = nlohmann::json;
@@ -201,53 +200,31 @@ void test_ms6_upsert_replaces() {
     std::cout << "[ok] MS6: upsert replaces existing row\n";
 }
 
-// MS7: migrator writes to mcp_servers table
-void test_ms7_migrator_writes_table() {
+// MS7: HTTP server with bearer_token serialises correctly (HTTP store path)
+// MS7: HTTP server with bearer_token + empty args (stdio zero-arg regression)
+void test_ms7_http_empty_args() {
     TmpHome h("ms7");
-    // Write legacy mcp/servers.json
-    json j = {
-        {"mcpServers", {
-            {"legacy-stdio", {
-                {"command", "echo"},
-                {"args", {"hello", "world"}},
-                {"env", {{"TOKEN", "abc"}}},
-                {"description", "Legacy stdio server"},
-                {"enabled", true}
-            }},
-            {"legacy-http", {
-                {"transport", "streamable-http"},
-                {"url", "https://mcp.example.com/api"},
-                {"bearer_token", "Bearer tok"},
-                {"description", "Legacy HTTP server"},
-                {"enabled", true}
-            }}
-        }}
-    };
-    std::ofstream(h.mcp_json()) << j.dump(2);
-
     auto store = daedalus::SettingsStore::for_home(h.data_root());
-    daedalus::SettingsMigrator::run(
-        store, h.config_json(), h.mcp_json(), /*mark_files=*/false);
 
-    // Both should be present in the table.
-    EXPECT(store.has_mcp_servers());
+    // HTTP server — url and bearer_token are required, args are irrelevant.
+    daedalus::SettingsStore::McpServer s;
+    s.name         = "http-zero-args";
+    s.transport    = "streamable-http";
+    s.url          = "https://mcp.example.com/mcp";
+    s.bearer_token = "Bearer tok123";
+    s.args         = {};  // HTTP servers don't use args — must be accepted
+    s.description  = "HTTP with zero args";
+    store.upsert_mcp_server(s);
 
-    auto stdio = store.get_mcp_server("legacy-stdio");
-    EXPECT(stdio.has_value());
-    if (stdio) {
-        EXPECT(stdio->command == "echo");
-        EXPECT(stdio->args.size() == 2);
-        EXPECT(stdio->env.at("TOKEN") == "abc");
+    auto loaded = store.get_mcp_server("http-zero-args");
+    EXPECT(loaded.has_value());
+    if (loaded) {
+        EXPECT(loaded->transport == "streamable-http");
+        EXPECT(loaded->url == "https://mcp.example.com/mcp");
+        EXPECT(loaded->bearer_token == "Bearer tok123");
+        EXPECT(loaded->args.empty());  // zero args is valid for HTTP
     }
-
-    auto http = store.get_mcp_server("legacy-http");
-    EXPECT(http.has_value());
-    if (http) {
-        EXPECT(http->transport == "streamable-http");
-        EXPECT(http->url == "https://mcp.example.com/api");
-        EXPECT(http->bearer_token == "Bearer tok");
-    }
-    std::cout << "[ok] MS7: migrator writes legacy JSON into mcp_servers table\n";
+    std::cout << "[ok] MS7: HTTP server with zero args (store path)\n";
 }
 
 }  // namespace
@@ -259,7 +236,7 @@ int main() {
     test_ms4_list_all();
     test_ms5_delete();
     test_ms6_upsert_replaces();
-    test_ms7_migrator_writes_table();
+    test_ms7_http_empty_args();
 
     if (failures) {
         std::cerr << "\ntest_mcp_servers_store: " << failures

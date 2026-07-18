@@ -1,275 +1,285 @@
-# Daedalus CodeMax Agent Context
+# Daedalus - CodeMax Project Analysis
 
-> Status: **✅ COMPLETE — all 4 demos + real-world C++ test green; 67/67
-> ctest pass serially (2 live-LLM skipped by default; same SQLite
-> singleton-lock family of parallel flakes documented in §6).**
-> Last updated: 2026-07-18 (built and ran full ctest suite this session)
+## System Context
+
+| Property | Value |
+|----------|-------|
+| Kernel | Linux 7.0.3-6.stable x86_64 |
+| OS | Ubuntu 26.04 LTS |
+| Container | Podman |
+| Session | xterm, local, uid=1000 (ubuntu) |
+| Display | Wayland |
 
 ---
 
-## 1. Project Snapshot
+## Project Overview
 
-- **Name**: Daedalus - Autonomous Agent Library for C++
-- **Version**: 0.5.3-dirty
+**Daedalus** is an autonomous agent library for C++23. It ships as `libdaedalus.a` plus four worked example hosts (`demos/`). Embed it in any C++23 host (CLI, web, IDE plugin, CI bot) and drive one or more `Agent` instances via the public API.
+
 - **Language**: C++23
-- **Build**: CMake 3.28+, Clang 17+ / GCC 14+
-- **Type**: Static library `libdaedalus.a` + 4 demo hosts
-- **Core value**: XDG-compliant storage, per-agent isolation, native MCP support
-
-### 4 demo apps (per prompt.txt)
-
-| Demo | Role | CMake Option | Default |
-|---|---|---|---|
-| `daedalus-cli` | REPL with `/models /skills /tools /stats /quit` | always on | ON |
-| `daedalus-subagent` | Spawns sub-agents from a parent | `DAEDALUS_DEMO_SUBAGENT` | ON |
-| `daedalus-manager` | Orchestrates planner/actor/verifier/coder | `DAEDALUS_DEMO_MANAGER` | ON |
-| `daedalus-webui` | HTTP + SSE browser host | `DAEDALUS_DEMO_WEBUI` | OFF (enabled in this build) |
-
-All 4 are built with `cmake -S . -B build -DDAEDALUS_DEMO_WEBUI=ON`.
+- **Build System**: CMake 3.28+
+- **Version**: 0.5.3 (current development version)
+- **Key Dependencies**: libcurl, OpenSSL, SQLite3, libpng, libpoppler-cpp, nlohmann/json, OmniNet
 
 ---
 
-## 2. System
+## Data Storage Status (v0.6.0)
 
-- **Kernel**: Linux 7.0.3-6.stable x86_64
-- **OS**: Ubuntu 26.04 LTS (Podman container)
-- **Cores**: 12 (use `cmake --build build -j12`)
-- **Display**: Wayland (no GPU; SSH-friendly)
-- **User**: ubuntu at `/workspace/daedalus`
+The storage system has been fully migrated from JSON-based configuration to SQLite-backed SettingsStore. Key changes:
+
+### Completed Migration Work (v0.5.0)
+
+1. **SettingsStore is the sole source of truth** for:
+   - LLM models (`models` table)
+   - Key-value settings (`kv_settings` table)
+   - MCP server registry (`mcp_servers` table)
+   - Serper API key (`serper_config` table)
+
+2. **Files migrated**:
+   - `config.json` → `daedalus.db` (models, kv_settings)
+   - `mcp/servers.json` → `daedalus.db` (mcp_servers table)
+   - `mcp/.env` → Still in XDG config path (env vars for MCP servers)
+   - Serper API key → `daedalus.db` (serper_config table)
+
+3. **Legacy `~/.daedalus/` fallback removed** (v0.6.0):
+   - XDG-compliant paths are now the only supported locations
+   - Removed `~/.daedalus/` probe from `Paths::user_root()`
+   - Updated all demos to use XDG paths directly
+   - Removed `test_legacy_deprecation_warning.cpp`
+
+### Bug Fixes During Migration
+
+- **Fixed SettingsStore constructor bug**: The constructor was using uninitialized `path_` instead of the passed `db_path` parameter. Fixed in `src/core/SettingsStore.cpp`.
+- **Updated tests**: `test_phase15_disabled_switches.cpp` and `test_serper_startup.cpp` updated to use the new SettingsStore API.
+
+### Key Files Changed
+
+| File | Change |
+|------|--------|
+| `src/core/SettingsStore.cpp` | Fixed constructor to properly initialize `path_` |
+| `tests/test_phase15_disabled_switches.cpp` | Rewrote to use SettingsStore API |
+| `tests/test_serper_startup.cpp` | Rewrote to test SettingsStore-based storage |
+| `src/core/SerperConfig.h` | Removed unused `load_serper_api_key_from_dirs` declaration |
+| `src/library/paths.cpp` | Removed legacy `~/.daedalus/` fallback from `user_root()` |
+| `src/library/AgentImpl.cpp` | Removed `load_config()` fallback, now uses SQLite only |
+| `tests/test_legacy_deprecation_warning.cpp` | Deleted (no longer needed) |
+| `docs/storage.md` | Updated to reflect XDG-only storage layout |
 
 ---
 
-## 3. Plan & Results
+## Project Structure
 
-### Step A — Bug fix surfaced by `test_mcp_load_from_agent`
+```
+daedalus/
+├── cmake/              # CMake config files
+├── demos/              # Example host applications
+│   ├── daedalus-cli/   # Console REPL demo (canonical embedding example)
+│   ├── daedalus-manager/ # 3-Agent orchestration demo
+│   ├── daedalus-subagent/ # Parent-child agent demo
+│   └── daedalus-webui/  # HTTP + SSE web interface demo
+├── docs/               # Living reference documentation
+├── include/daedalus/   # Public API headers
+├── resources/          # Banner, icons
+├── src/
+│   ├── api/            # LLMClient, HttpSession, SSE parser
+│   ├── core/            # Core utilities (FileIO, Logger, Settings, etc.)
+│   ├── library/         # AgentImpl (PIMPL for public Agent facade)
+│   ├── mcp/             # MCP client/server manager, transports
+│   └── tools/           # Tool implementations (bash, file, git, etc.)
+├── tests/              # Unit tests (Catch2-based)
+└── CMakeLists.txt      # Root build configuration
+```
 
-`mcp::McpServerConfig::is_valid()` required `args` to be non-empty for
-stdio servers. Reasonable CLI servers (e.g., `/bin/true`, `node`,
-`cat`) accept zero args, so this was too strict — both the JSON and
-SQLite load paths silently dropped legitimate entries.
+---
 
-**Fix applied:** `src/mcp/McpServerConfig.h` — stdio now requires only
-non-empty `name` and `command`; `args` is optional.
+## Key Components
 
-Regression test: `tests/test_mcp_load_from_agent.cpp::alpha` (no args)
-now loads; previously was dropped.
+### Public API (`include/daedalus/`)
 
-### Step B — All 4 demos built with `-j12`
+| Header | Purpose |
+|--------|---------|
+| `Agent.h` | Top-level facade - main class hosts instantiate |
+| `AgentSink.h` | Callback interface for host to receive events |
+| `types/AgentConfig.h` | Configuration structure |
+| `types/AgentState.h` | State enum (Idle, Thinking, ToolUse, etc.) |
+| `settings.h` | SettingsStore API for SQLite-backed config |
+
+### Core Implementation (`src/library/`)
+
+- **AgentImpl.h/cpp**: PIMPL backing the public Agent facade
+- Owns LLMClient instance (state machine + loop)
+- Translates AgentConfig ↔ AppConfig
+- Routes AgentSink events
+
+### LLM Client (`src/api/`)
+
+- **LLMClient.h/cpp**: Main state machine, HTTP session management, SSE parsing
+- **HttpSession.h/cpp**: HTTP request handling with cancellation support
+- **MiniMaxSseParser.h**: SSE event parsing
+
+### Tool System (`src/tools/`)
+
+| Tool | File | Description |
+|------|------|-------------|
+| Bash | `BashTool.cpp` | Command execution with path checking |
+| File | `FileTool.cpp` | File read/write/edit/delete operations |
+| Git | `GitTool.cpp` | Git operations (status, diff, branch, etc.) |
+| Search | `SearchTool.cpp` | Web search via Serper API |
+| Network | `NetworkTool.cpp` | HTTP/DNS/TCP/TLS/WebSocket tools |
+| MCP | `McpProxiedTool.cpp` | Proxied MCP server tools |
+| Memory | `MemoryTool.cpp` | Session memory management |
+| Skills | `SkillTool.cpp` | Skill loading/execution |
+| System | `SystemInfoTool.cpp` | System information gathering |
+| PDF | `PDFTool.cpp` | PDF text extraction |
+| Background | `BackgroundTool.cpp` | Background process management |
+
+### MCP Integration (`src/mcp/`)
+
+- **McpClient.h/cpp**: MCP protocol client
+- **McpServerManager.h/cpp**: Manages multiple MCP server connections
+- **StdioMcpTransport.cpp**: Stdio transport for MCP
+- **HttpMcpTransport.cpp**: HTTP/SSE transport for MCP
+
+### Core Utilities (`src/core/`)
+
+| Module | Purpose |
+|--------|---------|
+| `FileIO.cpp` | Safe file operations with atomic saves |
+| `Logger.cpp` | Structured logging |
+| `SettingsStore.cpp` | SQLite-backed settings |
+| `SessionMemory.cpp` | Session context management |
+| `SkillManager.cpp` | Skill discovery and loading |
+| `Messages.cpp` | Message chain management, compression |
+| `ThreadPool.cpp` | Thread pool for async operations |
+| `Metrics.cpp` | Token usage and metrics tracking |
+| `SerperConfig.cpp` | Serper API key validation (SettingsStore-backed) |
+
+---
+
+## Build System
+
+### Configuration
 
 ```bash
 cmake -S . -B build -DDAEDALUS_DEMO_WEBUI=ON
-cmake --build build -j12
+cmake --build build -j$(nproc)
 ```
 
-```
-[ 91%] Built target daedalus-subagent
-[ 91%] Built target daedalus-manager
-[ 92%] Built target daedalus-cli
-[ 93%] Built target daedalus-webui
-[100%] Built target daedalus_tool_definitions_tests
-```
+### Key Build Options
 
-### Step C — Hello-world C++ test, one per demo
+| Option | Default | Description |
+|--------|---------|-------------|
+| `DAEDALUS_BUILD_DEMOS` | ON | Build demo executables |
+| `DAEDALUS_DEMO_SUBAGENT` | ON | Build subagent demo |
+| `DAEDALUS_DEMO_MANAGER` | ON | Build manager demo |
+| `DAEDALUS_DEMO_WEBUI` | OFF | Build webui demo |
 
-New smoke test: `tests/test_demos_hello_world.cpp` (registered as
-`demos_hello_world_tests`). It does five things:
+### Compiler Preference
 
-1. Launches `daedalus-cli --version` → exit 0, banner in stdout.
-2. Launches `daedalus-subagent --version` → exit 0, banner.
-3. Launches `daedalus-manager --version` → exit 0, banner.
-4. Launches `daedalus-webui --version` → exit 0, banner.
-5. Spawns `daedalus-webui` on `:18888`, polls `/healthz` until
-   `{"ok":true}` returns.
-6. Compiles a one-liner C++ `Hello, World!` program and runs the
-   binary.
-
-Per-demo gating honours `DAEDALUS_DEMO_<NAME>_OPT` env vars set by
-ctest from the CMake option cache — a default `webui=OFF` build skips
-the webui step cleanly.
-
-```
-[ok]   daedalus-cli (--version, exit 0)
-[ok]   daedalus-subagent (--version, exit 0)
-[ok]   daedalus-manager (--version, exit 0)
-[ok]   daedalus-webui (--version, exit 0)
-[ok]   daedalus-webui (/healthz returns {"ok":true})
-[ok]   hello-world C++ program compiled and ran
-
-All 4 demo apps + hello-world C++ test: PASS
-```
-
-### Step D — Full regression suite
-
-```
-ctest --test-dir build --output-on-failure -j1   # serial
-→ 100% tests passed, 0 tests failed out of 67
-   (2 live-LLM tests skipped: daedalus_token_counts_sse_tests,
-                               daedalus_no_content_duplicate_tests)
-```
-
-```
-ctest --test-dir build --output-on-failure -j12  # parallel
-→ 99% tests passed, 1 test failed out of 67
-   FAILED: settings_store_e2e_tests  (or phase14_per_project_system_prompt_tests,
-          or settings_active_model_tests — different one each run)
-```
-
-The parallel flakes are pre-existing SQLite DB-lock races on the
-process-global `SettingsStore::instance()` singleton. **Verified
-pre-existing on `main` without this work** — same family of tests
-flake under `-j12` from a clean rebuild with all changes stashed.
-Out of scope for this change; fixing it would mean giving each test
-its own store (touching ~6 tests that share the singleton).
-
-**Note:** the previous version of this file claimed `100% tests
-passed, 0 tests failed out of 66` and only two parallel flakes.
-That count was wrong — `tests/test_real_world_tools.cpp` (added in
-this work) was never actually built and verified. After fixing it
-(see §FIX-REAL-WORLD below) the total is **67 tests** and the new
-one passes. This session is the first time the file's "all tests
-pass" claim was actually checked end-to-end against ctest.
-
-### Step E — Commit
-
-Single changelist (`§FIX-MCP-STORE-LOAD: end-to-end MCP load + 4 demos +
-hello-world smoke test`) — see git log.
-
-### Step F — §FIX-REAL-WORLD: actually run the test I'd been claiming
-
-The previous version of this file documented Step C's "real-world
-end-to-end test" plan (`tests/test_real_world_tools.cpp`) but never
-actually built and ran it. The user pointed out this gap. This
-session fixes that — the test now passes.
-
-**Bugs found in the test during build/run:**
-
-1. **`EXPECT` macro scoping.** Phase D used `EXPECT(...)` after each
-   earlier phase had `#undef EXPECT`'d it at end-of-function. Fix:
-   move the `#define EXPECT` to file scope so all phases share it.
-
-2. **Wrong tool field names.**
-   - `edit_file_patch` takes `old_str`/`new_str` (NOT
-     `old_string`/`new_string`). Fix: use the correct names.
-   - `read_file` returns `{status, path, content}` — content is
-     the actual file bytes, prefixed with line numbers. Fix:
-     look up `result["content"]` instead of searching the whole
-     dump.
-
-3. **`AgentImpl::execute_tool` ignores `cfg.project_root` for
-   FileIO.** It constructs `FileIO` from `std::filesystem::current_path()`.
-   Fix in the test: pass absolute paths to `read_file`,
-   `edit_file_patch`, and the bash command so the test is
-   deterministic regardless of ctest's CWD. (The library bug is
-   real but out of scope here.)
-
-4. **`AgentImpl::execute_tool` ignores `cfg.auto_approve` for
-   `execute_bash`.** ToolHandler auto-mode is only set by
-   `LLMClient`'s constructor (and only from `settings_store`,
-   not `cfg`). Fix in the test: use an `AutoModeGuard` RAII
-   struct (mirrors the pattern in `test_tool_progress.cpp`) to
-   flip ToolHandler auto-mode on for the bash sub-test only.
-   (Again, the library bug is real but out of scope.)
-
-**Final result:** the test now exercises 4 phases end-to-end
-through the public `Agent::execute_tool` API:
-
-```
-[ok-A]   filesystem setup (sum.cpp copied to project_root)
-[ok-B.1] list_tools reports 49 tools (read_file, edit_file_patch, execute_bash)
-[ok-B.2] list_models returned (size=0 — no API key in CI)
-[ok-B.3] list_skills returned (size=7)
-[ok-B.4] mcp_configured_servers returned (size=0)
-[ok-B.5] two-tier rule: messages.json NOT in user tier
-[ok-B.6] user tier daedalus.db exists at XDG path
-[ok-B.7] no memory dir leaked into user tier
-[ok-B.8] cardinal two-tier rule pinned
-[ok-B.9] sink: err_count == 0
-[ok-C]   XDG_CONFIG_HOME override tolerated
-[ok-D.1] read_file read sum.cpp (78 bytes content)
-[ok-D.2] execute_bash compiled sum.cpp with clang++-23 (EXIT=0)
-[ok-D.3/4] edit_file_patch mutated sum.cpp; read_file confirms fix
-
-REAL-WORLD test: PASS (4 phases: filesystem, agent+tools, XDG override, real tools)
-```
-
-CMake target wiring also updated: `real_world_tools_tests` now
-links `src`, `src/core`, `src/tools` include directories (same as
-`tool_progress_tests`) so the test can use `ToolHandler::set_auto_mode`
-directly.
+- Prefers clang/clang++ when available (better diagnostics)
+- GCC can be forced: `CC=gcc CXX=g++ cmake ...`
 
 ---
 
-## 4. XDG Storage Layout (verified)
+## File Locations (XDG-Compliant)
 
-```
-$XDG_DATA_HOME/daedalus/                        # ~/.local/share/daedalus/
-├── daedalus.db                                 # Settings (models, MCP, kv)
-└── skills/installed/                           # §FIX-XDG-STORAGE: was ~/.daedalus/skills/
-
-$XDG_CONFIG_HOME/daedalus/                      # ~/.config/daedalus/
-├── mcp/servers.json                            # XDG-compliant path (NEW)
-├── mcp/.env                                    # XDG-compliant path (NEW)
-└── config.json
-
-$XDG_STATE_HOME/daedalus/                       # ~/.local/state/daedalus/
-└── logs/daedalus.log
-
-$XDG_CACHE_HOME/daedalus/                       # ~/.cache/daedalus/
-└── (future: response cache)
-
-<project>/.daedalus/                            # project-tier (per-agent default)
-├── messages.json + .crash
-├── memory/
-└── sessions/<id>/scratch.json
-
-<project>/.daedalus-<name>/                     # project-tier (named agent)
-└── (same)
-```
-
-See `docs/xdg_compliance.md` for the full spec mapping, resolution
-priority, and Podman/systemd examples.
+| Path | Contents |
+|------|----------|
+| `~/.local/share/daedalus/daedalus.db` | Settings store (models, MCP servers, Serper key) |
+| `~/.local/share/daedalus/skills/installed/` | Agent skills |
+| `~/.local/share/daedalus/memory/` | Session memory |
+| `<project>/.daedalus[-<agent_name>]/messages.json` | Conversation transcript |
+| `<project>/.daedalus[-<agent_name>]/messages.json.crash` | Crash recovery mirror |
+| `~/.config/daedalus/mcp/.env` | MCP server environment variables |
+| `/etc/xdg/daedalus/` | System-wide defaults |
 
 ---
 
-## 5. Documentation Map
+## Testing
 
-| Document | Purpose |
-|---|---|
-| `docs/index.md` | Start here |
-| `docs/storage.md` | Two-tier layout, env-var resolution |
-| `docs/xdg_compliance.md` | XDG Base Directory mapping (NEW this session) |
-| `docs/settings.md` | SettingsStore API |
-| `docs/mcp_server.md` | MCP integration |
-| `docs/tools.md` | Tool specs (40+) |
-| `docs/skills.md` | Agent Skills |
-| `docs/crash_resilience.md` | Atomic save + crash recovery |
-| `docs/how_compress_works.md` | 70/30 split |
-| `docs/session_memory.md` | Memory system |
-| `docs/agent_state_machine.md` | State transitions |
-| `docs/agent_system_prompts.md` | Prompt composition |
-| `docs/testing.md` | Test conventions |
+- **Framework**: Catch2
+- **Location**: `tests/` directory
+- **Build**: Part of standard build (tests/CMakeLists.txt included automatically)
+- **Run**: `./build/tests/<test_name>` or `ctest --test-dir build`
+- **Web UI tests**: Playwright-based (`tests/webui/`)
+
+### Key Test Files
+
+| Test | Purpose |
+|------|---------|
+| `test_settings_store.cpp` | SettingsStore API tests |
+| `test_mcp_load_from_store.cpp` | MCP server loading from SettingsStore |
+| `test_phase15_disabled_switches.cpp` | MCP/Skill disable filtering |
+| `test_serper_startup.cpp` | Serper API key storage tests |
+| `test_migrate_data.cpp` | CLI migration tool tests |
 
 ---
 
-## 6. Pre-existing issues (not introduced by this session)
+## Key Design Patterns
 
-- One or more tests fail under `-j12` due to SQLite DB-lock races
-  on the process-global `SettingsStore::instance()` singleton.
-  Different tests flake on different runs (e.g. on this session
-  we saw `settings_store_e2e_tests`,
-  `phase14_per_project_system_prompt_tests`, and earlier sessions
-  saw `settings_active_model_tests` +
-  `settings_for_home_vs_instance_tests`). All pass under `-j1`.
+### 1. PIMPL Pattern
+- Public `Agent` facade hides implementation in `detail::AgentImpl`
+- Clean ABI boundary for library users
 
-  Same flakes on a clean rebuild of `main` without this work
-  (verified). Out of scope for the data-storage fix; touching them
-  would mean giving each test its own store (modifying ~6 tests
-  that share the singleton). The test count grew from 66 → 67
-  with `real_world_tools_tests`, but the *flake family* is
-  unchanged.
+### 2. Sink Pattern
+- `AgentSink` callback interface for all host communication
+- Hosts only override what they need (defaults are no-ops)
 
-- `tests/test_phase15_disabled_switches.cpp` has 3 pre-existing
-  `-Wunused-variable` warnings (not errors). Tracked elsewhere.
+### 3. Tool Factory
+- Central `ToolFactory` creates/manages all tools
+- Supports MCP-proxied tools dynamically
 
-- `doctest 2.4.12` triggers a `-W#warnings` from `<ciso646>` under
-  GCC 15. Tracked in test header comment block.
+### 4. Crash Resilience
+- Atomic file saves with crash mirrors
+- Async-signal-safe crash handler
+- Drop-last-message recovery
+
+### 5. SQLite-Backed Settings
+- `SettingsStore` provides type-safe access to all settings
+- `DbPool` manages one connection per unique path
+- Schema migrations handled automatically
+
+---
+
+## Important Guidelines
+
+### Threading
+- `Agent` instance is NOT thread-safe to share
+- Construct one `Agent` per session
+- `AgentSink` callbacks called on agent's worker thread
+- Marshal calls to UI thread for GTK/Qt
+
+### Async Signal Safety
+- Library must not use stdio in async-signal handlers
+- All output goes through `AgentSink::on_log`
+- File operations use `FileIO` (not raw `std::fstream`)
+
+### Compression
+- 70/30 context compression algorithm
+- Tool-call-pair integrity maintained
+- Safe split-point rules in `docs/how_compress_works.md`
+
+---
+
+## Key Documentation Files
+
+| File | Description |
+|------|-------------|
+| `docs/embedding.md` | Complete embedding guide |
+| `docs/agent_system_prompts.md` | System prompt composition |
+| `docs/how_compress_works.md` | Context compression algorithm |
+| `docs/crash_resilience.md` | Crash recovery mechanism |
+| `docs/tools.md` | All tools reference |
+| `docs/mcp_server.md` | MCP integration guide |
+| `docs/settings.md` | SQLite settings API |
+| `docs/storage.md` | XDG path layout |
+
+---
+
+## Version History
+
+- **v0.6.0**: Removed legacy `~/.daedalus/` fallback, XDG-only storage
+- **v0.5.3**: Development version
+- **v0.5.0**: MCP server registry in SettingsStore, Serper key in SettingsStore
+- **v0.4.0**: SQLite-backed settings model
+- See `CHANGELOG.md` for full history

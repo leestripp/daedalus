@@ -206,31 +206,23 @@ Keys are prefixed `mem.<session_id>` and `msg.<session_id>` in the
 
 ## 4. Migration from JSON
 
-On first run with existing JSON config, the auto-migrator:
+Run the CLI migrator once to move data from legacy JSON files to the
+SQLite store:
+
+```bash
+daedalus-cli --migrate-data
+```
+
+The migrator (implemented in `src/tools/migrate.cpp`):
 1. Reads `config.json`, `mcp/servers.json`, `mcp/.env`
 2. Writes rows to `daedalus.db`
 3. Renames originals to `*.migrated`
 
-No user action required. Placeholder API keys (`YOUR_API_KEY_HERE`) are
-skipped by the migrator.
+After migration, all subsequent runs read exclusively from SQLite. No
+auto-migration happens at runtime — if the DB is empty, daedalus starts
+with an empty config rather than trying to read JSON again.
 
-### 4.1 Migration Code
-
-```cpp
-#include <daedalus/settings.h>
-
-// Check if migration is needed
-bool needs_migration = daedalus::SettingsMigrator::needs_migration(
-    store, config_json_path, mcp_servers_path, mcp_env_path);
-
-// Run migration
-daedalus::SettingsMigrator::MigrateReport report =
-    daedalus::SettingsMigrator::run(store, config_json_path,
-                                     mcp_servers_path, mcp_env_path);
-```
-
----
-
+Placeholder API keys (`YOUR_API_KEY_HERE`) are skipped by the migrator.
 ## 5. Legacy SettingsManager (Deprecated)
 
 `SettingsManager` (in `src/core/SettingsManager.h`) is a **deprecated shim**
@@ -355,25 +347,7 @@ Both APIs are interchangeable.
 
 ---
 
-## v0.5.0 — Auto-migration on SettingsStore::instance()
-
-`SettingsStore::instance()` runs `SettingsMigrator::run()` once on first
-DB open. Idempotent — short-circuits if the store is already populated
-or no legacy JSON exists. Fixes the silent data-loss UX bug where legacy
-users upgrading daedalus had no models visible until they ran
-`--migrate-data` manually.
-
----
-
 ## 8. File Locations Summary
-
-| What | Where |
-|------|-------|
-| Settings database | `$XDG_DATA_HOME/daedalus/daedalus.db` |
-| Per-agent database | `<agent_home>/daedalus.db` |
-| Legacy JSON (migrated) | `*.migrated` in original location |
-| Session memory (v0.3.5+) | `daedalus.db` under `mem.<session_id>` keys |
-| Conversation messages (v0.3.5+) | `daedalus.db` under `msg.<session_id>` keys |
 
 ---
 
@@ -381,10 +355,8 @@ users upgrading daedalus had no models visible until they ran
 
 - `include/daedalus/settings.h` — public SettingsStore API
 - `src/core/SettingsStore.cpp` — implementation
-- `src/core/SettingsMigrator.cpp` — JSON→SQLite migrator
-- `tests/test_settings_store.cpp` — 9 unit tests
-- `tests/test_settings_migrator.cpp` — 10 migrator tests
-- `tests/test_settings_v040_cutover.cpp` — 5 cutover tests
+- `src/tools/migrate.cpp` — CLI JSON→SQLite migration tool
+- `tests/test_settings_store.cpp` — unit tests
 - `tests/test_settings_store_e2e.cpp` — end-to-end wire test
 
-*Last updated 2026-07-15 (v0.5.0).*
+*Last updated 2026-07-18 (v0.5.2: removed auto-migration, removed SettingsMigrator).*

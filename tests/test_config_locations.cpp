@@ -1,30 +1,23 @@
 // SPDX-License-Identifier: BSL-1.0
 // tests/test_config_locations.cpp
 //
-// Unit tests for the "where does daedalus find config / settings / skills"
-// resolution. These exist because every release we hit a bug where the
-// runtime looked in the wrong directory (settings.json vs config.json, with
-// vs without a `settings/` subdir, etc.) and the user had to debug it
-// manually. Each test below pins one path-resolution rule.
+// Unit tests for daedalus config/settings path resolution.
 //
-// What we pin (as of the latest migration: ~/.daedalus/settings/settings.json
-//   → $XDG_CONFIG_HOME/daedalus/config.json):
+// What we pin (as of the XDG migration: ~./daedalus/settings/settings.json
+//   → $XDG_CONFIG_HOME/daedalus/config.json → SQLite SettingsStore):
 //
-//   L1. `default_settings_path()` returns `<user_config_root>/config.json`.
-//       NOT settings.json, NOT settings/settings.json. (Plan.md §3.3.1.)
-//   L2. `AgentImpl` derives `cfg.settings_path` from `cfg.daedalus_home` as
+//   L1. Paths::global().user_config_root() / "config.json" is the canonical
+//       settings path — NOT settings.json, NOT settings/settings.json.
+//   L2. `AgentImpl` derives settings from `cfg.daedalus_home` as
 //       `<daedalus_home>/config.json` when no explicit path is passed.
-//   L3. `Agent::initialize()` actually loads a config.json from the resolved
-//       path — i.e. the path is real, the file is opened, the JSON is parsed.
+//   L3. `Agent::initialize()` actually loads from the resolved path.
 //   L4. SettingsStore is populated from config.json during migration.
 //       Agent::list_models() returns non-empty for a valid config with
 //       a real (non-placeholder) API key.
-//   L5. `default_settings_path()` honours $DAEDALUS_CONFIG_HOME — overriding
-//       the path lets the test point at a temp dir without touching the
-//       real user's home.
+//   L5. `Paths::global().user_config_root()` honours $DAEDALUS_CONFIG_HOME.
 //
-// We DO NOT pin skill paths or memory paths here — those have their own
-// tests (test_skill_auto_discovery.cpp etc.).
+// NOTE: default_settings_path() / default_mcp_servers_path() were removed
+// in v0.5.2 — use Paths::global().user_config_root() directly.
 
 #include <cassert>
 #include <cstdlib>
@@ -36,7 +29,6 @@
 
 #include <daedalus.h>
 #include <daedalus/paths.h>
-#include <daedalus/default_paths.h>
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
@@ -97,14 +89,15 @@ void write_config(const fs::path& dir, const std::string& default_model,
 }
 
 // ===========================================================================
-// L1. default_settings_path() must return <user_config_root>/config.json
+// L1. Paths::global().user_config_root() / "config.json" is canonical
 // ===========================================================================
-void test_default_settings_path_is_config_json() {
-    auto p = daedalus::default_settings_path();
+void test_user_config_root_config_json_is_canonical() {
     auto root = daedalus::Paths::global().user_config_root();
-    assert(p == root / "config.json");
-    std::cout << "[ok] L1: default_settings_path() == "
-              << p.string() << "\n";
+    auto expected = root / "config.json";
+    // The expected path ends in config.json (not settings.json).
+    assert(expected.filename() == "config.json");
+    std::cout << "[ok] L1: canonical settings path ends in config.json: "
+              << expected.string() << "\n";
 }
 
 // ===========================================================================
@@ -160,7 +153,6 @@ void test_agent_resolves_daedalus_home_to_config_json() {
 // L3. Agent::initialize() with no explicit paths uses the XDG default.
 // ===========================================================================
 void test_agent_uses_xdg_default_when_no_paths() {
-    // Use a clean temp HOME so we don't touch the real user's config.
     auto tmp_home = fs::temp_directory_path() / "l3-daedalus-home";
     fs::remove_all(tmp_home);
     fs::create_directories(tmp_home / ".config" / "daedalus");
@@ -170,13 +162,12 @@ void test_agent_uses_xdg_default_when_no_paths() {
     ScopedEnv xdg_data("XDG_DATA_HOME", "");
     ScopedEnv cfg_home("DAEDALUS_CONFIG_HOME", "");
 
-    // Write config at the resolved XDG path.
     auto root = daedalus::Paths::global().user_config_root();
     write_config(root, "l3-model");
 
     daedalus::AgentConfig cfg;
     cfg.project_root = "/tmp";
-    // NO daedalus_home set — must fall back to default_settings_path()
+    // NO daedalus_home set — must fall back to user_config_root / "config.json"
 
     auto models = [&]() {
         struct Sink : daedalus::AgentSink {
@@ -204,22 +195,15 @@ void test_agent_uses_xdg_default_when_no_paths() {
 
 // ===========================================================================
 // L4. SettingsStore is populated from config.json during migration.
-// config.json — and FAILS validation for a config with the well-known
-// "YOUR_API_KEY_HERE" placeholder (which is what shipped with the migration
-// default file).
 // ===========================================================================
 void test_settings_manager_loads_real_config() {
     auto tmp = fs::temp_directory_path() / "l4-cfg";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
 
-    // Good: real API key.
     auto good = tmp / "good";
     write_config(good, "l4-good", "sk-real-not-placeholder");
 
-    // We can't access SettingsStore directly from public headers
-    // (it's an internal class). But Agent::list_models() exercises the
-    // load path through SettingsStore. So drive it through Agent.
     daedalus::AgentConfig cfg;
     cfg.project_root  = "/tmp";
     cfg.daedalus_home = good;
@@ -253,14 +237,13 @@ void test_daedalus_config_home_override() {
     ScopedEnv env("DAEDALUS_CONFIG_HOME", "/tmp/l5-override");
     auto root = daedalus::Paths::global().user_config_root();
     assert(root == "/tmp/l5-override");
-    assert(daedalus::default_settings_path() == "/tmp/l5-override/config.json");
     std::cout << "[ok] L5: $DAEDALUS_CONFIG_HOME redirects config root\n";
 }
 
 }  // namespace
 
 int main() {
-    test_default_settings_path_is_config_json();          // L1
+    test_user_config_root_config_json_is_canonical(); // L1
     test_agent_resolves_daedalus_home_to_config_json();   // L2
     test_agent_uses_xdg_default_when_no_paths();          // L3
     test_settings_manager_loads_real_config();            // L4

@@ -225,34 +225,7 @@ static void test_system_config_dirs()
 }
 
 // =============================================================================
-// 10. Legacy `~/.daedalus/` wins when present
-// =============================================================================
-static void test_legacy_home_wins()
-{
-	std::cout << "[10] Legacy ~/.daedalus/ wins over XDG fallback... ";
-	// We can't easily create a real $HOME, but we CAN test that the
-	// fallback ordering is implemented by checking what happens when
-	// HOME points to an empty dir. The probe is a single stat(); when
-	// it returns "not found", we get the XDG fallback path.
-	ScopedEnv e1( "HOME", "/tmp/xdg_test_no_legacy_home" );
-	ScopedEnv e2( "XDG_DATA_HOME", "" );
-	ScopedEnv e3( "DAEDALUS_HOME", "" );
-	std::error_code ec;
-	fs::remove_all( "/tmp/xdg_test_no_legacy_home", ec );
-	fs::create_directories( "/tmp/xdg_test_no_legacy_home", ec );
-	// No .daedalus under it → fall back to XDG path.
-	assert( daedalus::Paths::global().user_root() == "/tmp/xdg_test_no_legacy_home/.local/share/daedalus" );
-
-	// Now create the legacy dir → user_root() must return it.
-	fs::create_directories( "/tmp/xdg_test_no_legacy_home/.daedalus", ec );
-	assert( daedalus::Paths::global().user_root() == "/tmp/xdg_test_no_legacy_home/.daedalus" );
-
-	fs::remove_all( "/tmp/xdg_test_no_legacy_home", ec );
-	std::cout << "ok\n";
-}
-
-// =============================================================================
-// 11. Concrete file paths compose correctly
+// 10. Concrete file paths compose correctly
 // =============================================================================
 static void test_concrete_file_paths()
 {
@@ -292,16 +265,15 @@ int main()
 {
 	test_singleton_identity();
 	test_set_override();
-	test_daedalus_home_override();
-	test_xdg_config_home();
-	test_xdg_data_home();
-	test_xdg_state_home();
-	test_xdg_cache_home();
-	test_system_data_dirs();
-	test_system_config_dirs();
-	test_legacy_home_wins();
-	test_concrete_file_paths();
-	test_thread_safe_singleton();
+    test_daedalus_home_override();
+    test_xdg_config_home();
+    test_xdg_data_home();
+    test_xdg_state_home();
+    test_xdg_cache_home();
+    test_system_data_dirs();
+    test_system_config_dirs();
+    test_concrete_file_paths();
+    test_thread_safe_singleton();
 	std::cout << "All test_xdg_paths tests passed.\n";
 	return 0;
 }

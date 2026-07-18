@@ -173,31 +173,8 @@ add_test(NAME serper_settings_tests COMMAND daedalus_serper_settings_tests)
 # MCP HTTP-transport config tests (regression for the "Loaded 3 configured
 # server(s)" bug — the user's apollocore entry was being silently dropped).
 # ============================================================================
-
-add_executable(daedalus_mcp_server_config_http_tests
-    test_mcp_server_config_http.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-)
-target_include_directories(daedalus_mcp_server_config_http_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/mcp
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_mcp_server_config_http_tests PRIVATE
-    daedalus
-    nlohmann_json::nlohmann_json
-
-    OmniNet
-    pthread
-)
-add_test(NAME mcp_server_config_http_tests COMMAND daedalus_mcp_server_config_http_tests)
+# ============================================================================
+# §18.9 — McpProxiedTool: per-tool MCP adapter tests.
 
 # ============================================================================
 # §18.9 — McpProxiedTool: per-tool MCP adapter tests.
@@ -845,61 +822,9 @@ target_link_libraries(daedalus_settings_for_home_vs_instance_tests PRIVATE
 )
 add_test(NAME settings_for_home_vs_instance_tests COMMAND daedalus_settings_for_home_vs_instance_tests)
 
-# SettingsMigrator — JSON → SQLite auto-migrator (v0.3.1).
-# See test_settings_migrator.cpp for what each pin covers.
-add_executable(daedalus_settings_migrator_tests
-    test_settings_migrator.cpp
-)
-target_include_directories(daedalus_settings_migrator_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_settings_migrator_tests PRIVATE
-    daedalus
-    pthread
-)
-add_test(NAME settings_migrator_tests COMMAND daedalus_settings_migrator_tests)
-
-# SettingsStore v0.4.0 cutover: pins the behaviour change that
-# SettingsStore reads ONLY from SQLite. See
-# test_settings_v040_cutover.cpp for what each pin covers.
-add_executable(daedalus_settings_v040_cutover_tests
-    test_settings_v040_cutover.cpp
-)
-target_include_directories(daedalus_settings_v040_cutover_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_settings_v040_cutover_tests PRIVATE
-    daedalus
-    pthread
-)
-add_test(NAME settings_v040_cutover_tests COMMAND daedalus_settings_v040_cutover_tests)
-
-# SettingsStore v0.5.0 auto-migration tests:
-# Pins the behaviour that instance() runs the JSON→SQLite migrator on
-# first DB open. See test_auto_migrate.cpp for what each pin covers.
-add_executable(daedalus_auto_migrate_tests
-    test_auto_migrate.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsMigrator.cpp
-)
-target_include_directories(daedalus_auto_migrate_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_auto_migrate_tests PRIVATE
-    daedalus
-    pthread
-)
-add_test(NAME auto_migrate_tests COMMAND daedalus_auto_migrate_tests)
-
-# SettingsStore v0.5.0 mcp_servers table: tests CRUD + migrator writes.
+# SettingsStore v0.5.0 mcp_servers table: tests CRUD operations.
 add_executable(daedalus_mcp_servers_store_tests
     test_mcp_servers_store.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsMigrator.cpp
 )
 target_include_directories(daedalus_mcp_servers_store_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
@@ -911,8 +836,6 @@ target_link_libraries(daedalus_mcp_servers_store_tests PRIVATE
     pthread
 )
 add_test(NAME mcp_servers_store_tests COMMAND daedalus_mcp_servers_store_tests)
-
-# McpServerManager::load_from_store wires SettingsStore → McpServerManager.
 add_executable(daedalus_mcp_load_from_store_tests
     test_mcp_load_from_store.cpp
     ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
@@ -956,24 +879,6 @@ target_link_libraries(daedalus_mcp_load_from_agent_tests PRIVATE
     pthread
 )
 add_test(NAME mcp_load_from_agent_tests COMMAND daedalus_mcp_load_from_agent_tests)
-
-# Instance() auto-migration test. Runs in its own process so the
-# SettingsStore singleton is fresh. Verifies the constructor's
-# auto_migrate=true path actually fires against the user's real DB.
-add_executable(daedalus_instance_automigrate_tests
-    test_instance_automigrate.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SettingsMigrator.cpp
-)
-target_include_directories(daedalus_instance_automigrate_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_instance_automigrate_tests PRIVATE
-    daedalus
-    pthread
-)
-add_test(NAME instance_automigrate_tests COMMAND daedalus_instance_automigrate_tests)
 
 # Messages class tests
 add_executable(daedalus_messages_tests
@@ -1317,25 +1222,8 @@ add_test(NAME two_tier_rule_tests COMMAND daedalus_two_tier_rule_tests)
 
 # ============================================================================
 # Plan.md Phase 4: legacy ~/.daedalus/ deprecation warning.
-# Verifies Agent::initialize() emits exactly one [DEPRECATION] event
-# via sink_->on_log(Warn,...) when the legacy layout is in use, and
-# stays silent when $DAEDALUS_HOME / $XDG_DATA_HOME override or the
-# legacy dir doesn't exist.
 # ============================================================================
-add_executable(daedalus_legacy_deprecation_warning_tests
-    test_legacy_deprecation_warning.cpp
-)
-target_include_directories(daedalus_legacy_deprecation_warning_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-)
-target_link_libraries(daedalus_legacy_deprecation_warning_tests PRIVATE
-    daedalus
-    pthread
-)
-add_test(NAME legacy_deprecation_warning_tests
-    COMMAND daedalus_legacy_deprecation_warning_tests)
-
-# ============================================================================
+# Plan.md Phase 5: --migrate-data subcommand (logic-level tests).
 # Plan.md Phase 5: --migrate-data subcommand (logic-level tests).
 # Tests the MigratePlan/apply functions from demos/daedalus-cli/migrate.h
 # directly. The CLI wrapper is one line of plumbing.

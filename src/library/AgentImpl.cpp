@@ -322,27 +322,14 @@ void AgentImpl::initialize()
         // so disabled servers never enter configs_ in the first place.
         body_->mcp->set_disabled_servers(cfg_.mcp_servers_disabled);
         // Order:
-        //   1. load_from_store() — preferred (SQLite, v0.5.0+).
-        //      RESETS configs_ before loading (see McpServerManager.cpp).
-        //   2. If the store had zero servers, fall back to load_config()
-        //      — the legacy JSON path for users who haven't run
-        //      --migrate-data yet. load_config() is ALSO exclusive, so
-        //      we don't call it unconditionally (it would wipe out the
-        //      store-loaded entries).
-        //   3. load_env_file() — populates env_vars_ from $XDG_CONFIG_HOME/daedalus/mcp/.env
-        //      (or the legacy ~/.daedalus/mcp/.env fallback).
+        body_->mcp = std::make_unique<mcp::McpServerManager>();
+        // §Phase 15: install the per-server gate before load_from_store()
+        // so disabled servers never enter configs_ in the first place.
+        body_->mcp->set_disabled_servers(cfg_.mcp_servers_disabled);
+        // Load servers from SettingsStore (SQLite).
+        // load_env_file() populates env_vars_ from $XDG_CONFIG_HOME/daedalus/mcp/.env
         body_->mcp->load_from_store(*body_->store);
-        if (body_->mcp->list_configured_servers().empty()) {
-            body_->mcp->load_config();
-        }
         body_->mcp->load_env_file();
-
-        // §Phase 11: inject McpServerManager* into ToolFactory BEFORE
-        // LLMClient::initialize() is called (which calls refresh_mcp_tools()).
-        // This replaces all ::instance() call sites in ToolFactory.
-        // Done here (outside has_explicit_creds) so MCP tools are
-        // wired even when the LLM hasn't been initialised yet — useful
-        // for hosts that surface MCP availability before model pick.
         if (auto factory = ToolHandler::get_tool_factory()) {
             factory->set_mcp_manager(body_->mcp.get());
         }

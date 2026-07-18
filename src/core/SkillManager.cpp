@@ -1,7 +1,7 @@
 #include "SkillManager.h"
 #include "core/ThreadPool.h"
-#include "daedalus/paths.h"      // §FIX-XDG-STORAGE: use Paths::global() for skill dirs
-#include "daedalus/settings.h"   // v0.5.0: SettingsStore for skill settings
+#include "daedalus/paths.h"
+#include "daedalus/settings.h"
 #include <nlohmann/json.hpp>
 #include <fstream>
 #include <sstream>
@@ -80,9 +80,6 @@ void SkillManager::init_after_settings() {
     //      ~/.local/share/daedalus/skills/installed)
     //   2. ~/.agents/skills/                - Anthropic Agent Skills standard (user-global)
     //   3. .agents/skills/                  - Anthropic Agent Skills standard (project-local)
-    // §FIX-XDG-STORAGE (2026-07-17): the daedalus-specific user-global
-    // path was hardcoded to `~/.daedalus/skills/` — moved to the
-    // XDG-compliant data root via Paths::global().global_skills_dir().
     const char* home = std::getenv("HOME");
     settings_.directories.push_back(
         daedalus::Paths::global().global_skills_dir().string());
@@ -389,13 +386,7 @@ void SkillManager::deactivate_all_skills() {
 // =========================================================================
 
 static std::filesystem::path get_default_active_skills_path() {
-    // §FIX-XDG-STORAGE (2026-07-17): was hardcoded to
-    // `~/.daedalus/skills/active.json`. Moved to the XDG data root:
-    //   <data_root>/skills/active.json
-    //   (XDG_DATA_HOME/daedalus/skills/active.json, default
-    //    ~/.local/share/daedalus/skills/active.json)
-    // That sits alongside the global_skills_dir() siblings and stays
-    // out of the legacy ~/.daedalus/ tree entirely.
+    // Stored at: <data_root>/skills/active.json
     return daedalus::Paths::global().user_data_root() / "skills" / "active.json";
 }
 
@@ -808,16 +799,7 @@ std::vector<std::filesystem::path> SkillManager::expand_skill_directories() cons
         expanded.push_back(expanded_dir);
     }
 
-    // §Phase 9.7: dedupe by canonical path. Without this, a host that
-    // passes "/home/user/.daedalus/skills/" while the singleton's
-    // init_after_settings() already registered "~/.daedalus/skills/"
-    // (which expands to the same string) ends up with the same
-    // directory listed twice. discover_all_skills() then parallelises
-    // over the list, and two worker threads call discover_skills()
-    // on the same directory concurrently. They both write to the
-    // shared cached_skills_ map (no lock), which corrupts the hash
-    // table — observed as the same skill appearing twice in the
-    // catalog. Canonicalise-then-dedupe fixes that root cause.
+    // Dedup by canonical path to avoid processing the same directory twice.
     std::vector<std::filesystem::path> deduped;
     for (auto& dir : expanded) {
         std::error_code ec;

@@ -85,15 +85,8 @@ McpServerManager::~McpServerManager() {
 }
 
 std::string McpServerManager::get_env_file_path() const {
-    if (!config_path_.empty()) {
-        // Derive from the resolved config path: foo/servers.json → foo/.env
-        std::filesystem::path p(config_path_);
-        return (p.parent_path() / ".env").string();
-    }
-
-    // §FIX-MCP-STORE-LOAD (2026-07-17): was hardcoded to
-    // `~/.daedalus/mcp/.env` — legacy path. Use the same XDG-compliant
-    // location the JSON fallback is read from (see load_config()).
+    // Always use the XDG-compliant path. The .env file contains global
+    // env vars (e.g. MINIMAX_API_KEY) needed by MCP servers at runtime.
     const char* xdg = std::getenv("XDG_CONFIG_HOME");
     const char* home = std::getenv("HOME");
     if (!home) {
@@ -207,158 +200,9 @@ std::string McpServerManager::build_command_string(const McpServerConfig& config
     }
     return cmd.str();
 }
-
-bool McpServerManager::load_config(const std::string& config_path) {
-    // §FIX-MCP-STORE-LOAD (2026-07-17): load_config() is exclusive —
-    // it RESETS the configs_ map before loading. Tests that use the
-    // singleton (McpServerManager::instance()) rely on this so
-    // back-to-back load_config() calls don't accumulate state.
-    //
-    // Production callers that want BOTH the SQLite store AND the
-    // legacy JSON fallback should call clear() then load_from_store()
-    // then load_config() — AgentImpl does this. The explicit clear()
-    // is the caller's responsibility; see clear() in McpServerManager.h.
-    configs_.clear();
-    config_loaded_ = false;
-    clients_.clear();
-    http_transports_.clear();
-    server_tools_.clear();
-    mark_mcp_tools_dirty();
-
-    // Determine config path.
-    // §FIX-MCP-STORE-LOAD (2026-07-17): was hardcoded to
-    // `~/.daedalus/mcp/servers.json` — the legacy location. After the
-    // v0.5.0 cutover to SQLite (SettingsStore), the canonical user-tier
-    // location is `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (default
-    // `~/.config/daedalus/mcp/servers.json`). Honour the XDG var first,
-    // then fall back to the XDG default. The legacy `~/.daedalus/` path
-    // is checked last as a one-shot read-fallback for pre-v0.5.0 users
-    // who haven't run --migrate-data yet — NEVER written to, only read.
-    std::string path = config_path;
-    if (path.empty()) {
-        const char* xdg = std::getenv("XDG_CONFIG_HOME");
-        const char* home = std::getenv("HOME");
-        if (!home) {
-            struct passwd* pw = getpwuid(getuid());
-            if (pw) home = pw->pw_dir;
-        }
-        std::vector<std::string> candidates;
-        if (xdg && *xdg) candidates.emplace_back(std::string(xdg) + "/daedalus/mcp/servers.json");
-        if (home && *home) {
-            candidates.emplace_back(std::string(home) + "/.config/daedalus/mcp/servers.json");
-            // Legacy fallback — read once, never written.
-            candidates.emplace_back(std::string(home) + "/.daedalus/mcp/servers.json");
-        }
-        for (const auto& c : candidates) {
-            std::ifstream probe(c);
-            if (probe.is_open()) { path = c; break; }
-        }
-        if (path.empty() && !candidates.empty()) {
-            // Use the canonical XDG path as the canonical config_path_
-            // value even when no file exists yet, so error messages point
-            // the user at the right place to create one.
-            path = candidates.front();
-        }
-    }
-
-    config_path_ = path;
-
-    // Load .env file first
-    std::string env_path = get_env_file_path();
-    load_env_file(env_path);
-
-    // Load servers.json
-    std::ifstream file(path);
-    if (!file.is_open()) {
-        last_error_ = "Failed to open config file: " + path;
-        return false;
-    }
-
-    try {
-        json config = json::parse(file);
-
-        if (!config.contains("mcpServers") || !config["mcpServers"].is_object()) {
-            last_error_ = "Config file missing 'mcpServers' object";
-            return false;
-        }
-
-        for (const auto& [name, server_config] : config["mcpServers"].items()) {
-            McpServerConfig sc;
-            sc.name = name;
-
-            // --- stdio fields ---
-            sc.command    = server_config.value("command", "");
-            sc.description = server_config.value("description", "");
-            sc.enabled    = server_config.value("enabled", true);
-
-            // Parse args array
-            if (server_config.contains("args") && server_config["args"].is_array()) {
-                for (const auto& arg : server_config["args"]) {
-                    sc.args.push_back(substitute_env_vars(arg.get<std::string>()));
-                }
-            }
-
-            // Parse env object
-            if (server_config.contains("env") && server_config["env"].is_object()) {
-                for (const auto& [key, value] : server_config["env"].items()) {
-                    sc.env[key] = substitute_env_vars(value.get<std::string>());
-                }
-            }
-
-            // --- http transport fields (new) ---
-            // Default to "stdio" if transport is omitted, so existing
-            // servers.json files keep working.
-            sc.transport = server_config.value("transport", "stdio");
-            // Allow env-var substitution in the URL too.
-            if (server_config.contains("url") && server_config["url"].is_string()) {
-                sc.url = substitute_env_vars(server_config["url"].get<std::string>());
-            } else {
-                sc.url = "";
-            }
-            if (server_config.contains("bearer_token") && server_config["bearer_token"].is_string()) {
-                sc.bearer_token = substitute_env_vars(server_config["bearer_token"].get<std::string>());
-            } else if (server_config.contains("bearerToken") && server_config["bearerToken"].is_string()) {
-                // camelCase alias for parity with common MCP docs.
-                sc.bearer_token = substitute_env_vars(server_config["bearerToken"].get<std::string>());
-            }
-
-            if (sc.is_valid()) {
-                configs_[name] = sc;
-            } else {
-                // Reject loudly rather than silently. The previous behaviour
-                // (silent filter) hid an "apollocore"-style HTTP server from
-                // the user; an explicit warning here is the minimum fix.
-                LOG_CERR(INFO,  "[MCP] WARNING: rejected server entry '"
-                          << name << "' in " << path << " - ");
-                if (sc.is_http()) {
-                    LOG_CERR(INFO,  "transport is http but 'url' is missing or empty");
-                } else {
-                    LOG_CERR(INFO,  "stdio requires non-empty 'command' and 'args'");
-                }
-                LOG_CERR(INFO,  '\n');
-            }
-        }
-
-        // §Phase 15: skip servers the host has disabled.
-        // Removes both the config entry (so list_configured_servers
-        // also excludes them) and any later connect attempts.
-        for (auto it = configs_.begin(); it != configs_.end(); ) {
-            if (is_server_disabled(it->first)) {
-                LOG_CERR(INFO, "[MCP] skipping disabled server '" << it->first << "'\n");
-                it = configs_.erase(it);
-            } else {
-                ++it;
-            }
-        }
-
-        config_loaded_ = true;
-        return true;
-
-    } catch (const json::parse_error& e) {
-        last_error_ = "Failed to parse config file: " + std::string(e.what());
-        return false;
-    }
-}
+// §v0.5.0: Concrete loader called from the templated public API. Touches
+// daedalus::SettingsStore directly. Returning through void* keeps the
+// SettingsStore header out of McpServerManager.h.
 
 // §v0.5.0: Concrete loader called from the templated public API. Touches
 // daedalus::SettingsStore directly. Returning through void* keeps the
@@ -367,18 +211,11 @@ bool McpServerManager::load_from_store_impl(void* store_ptr)
 {
     auto& store = *static_cast<daedalus::SettingsStore*>(store_ptr);
 
-    // §FIX-MCP-STORE-LOAD (2026-07-17): load_from_store() is exclusive
-    // — it RESETS the configs_ map before loading. This matches the
-    // historical exclusive-load semantics of load_config() and the test
-    // contract in test_mcp_load_from_store.cpp (ML5: after disabling a
-    // server, calling load_from_store() again removes the disabled
-    // entry from the visible set — merge semantics would leave the
-    // stale entry in the map).
-    //
-    // Production callers that want both the SQLite store AND the legacy
-    // JSON fallback should load the store first and only fall back to
-    // load_config() if zero servers were loaded — AgentImpl follows
-    // this pattern (see the conditional in AgentImpl::initialize()).
+    // load_from_store() is exclusive — it RESETS the configs_ map before
+    // loading. This matches the test contract in test_mcp_load_from_store.cpp
+    // (ML5: after disabling a server, calling load_from_store() again removes
+    // the disabled entry from the visible set — merge semantics would leave
+    // the stale entry in the map).
     configs_.clear();
     config_loaded_ = false;
     clients_.clear();

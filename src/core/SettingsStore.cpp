@@ -38,7 +38,6 @@
 
 #include "daedalus/paths.h"   // Paths::global() for the default DB path
 #include "core/Logger.h"
-#include "core/SettingsMigrator.h"   // §v0.5.0: auto-migration on first DB open
 
 namespace fs = std::filesystem;
 
@@ -327,27 +326,13 @@ private:
 // §B2 fix (v0.5.1): Impl fields (path_ + db_) are now inlined into the
 // class. This constructor directly initialises those members instead of
 // allocating a separate Impl struct.
-SettingsStore::SettingsStore(fs::path db_path, bool auto_migrate)
-{
+//
+// Note: the second constructor argument is kept for source compatibility
+// but has no effect — auto-migration was removed in v0.5.2.
+SettingsStore::SettingsStore(fs::path db_path, bool /*auto_migrate*/) {
     path_ = std::move(db_path);
     db_   = &DbPool::instance().get(path_);
-
-    // §v0.5.0: Auto-migrate legacy JSON on first DB open.
-    // Idempotent — SettingsMigrator::run() short-circuits if the store
-    // is already populated or no legacy JSON exists. Failure is
-    // non-fatal: the JSON fallback still works.
-    //
-    // Tests opt out via the second constructor arg so unit tests with
-    // temp paths don't accidentally trigger user-data migration.
-    if (auto_migrate) {
-        try {
-            daedalus::SettingsMigrator::run(*this, {}, {}, /*mark_files=*/true);
-        } catch (...) {
-            // Swallow — migration is best-effort. The store is still usable.
-        }
-    }
 }
-
 // ============================================================================
 // instance() / for_home()
 // ============================================================================
@@ -362,14 +347,10 @@ fs::path default_db_path()
 
 SettingsStore& SettingsStore::instance()
 {
-    // auto_migrate=true: first call on the user's real DB will migrate
-    // any legacy JSON config. Subsequent calls hit the static (singleton)
-    // so the migration runs exactly once per process.
-    //
-    // Returns by reference — the static `s` is a true singleton, so all
-    // callers get the same address. Unlike for_home(), this does NOT
-    // leak: the static lives for the program duration.
-    static SettingsStore s(default_db_path(), /*auto_migrate=*/true);
+    // v0.5.0: no auto-migration — the DB is the source of truth.
+    // Populate it via the CLI or API before first use. (The migration
+    // was a one-time event; there is no ongoing JSON→SQLite sync.)
+    static SettingsStore s(default_db_path(), /*auto_migrate=*/false);
     return s;
 }
 
@@ -683,7 +664,8 @@ void SettingsStore::set_serper_api_key(std::string_view api_key) {
 // These accessors store McpServer entries in the `mcp_servers` table.
 // Hosts (or McpServerManager) call list_mcp_servers() on startup to
 // load the user's configured MCP servers, replacing the old JSON file
-// path. SettingsMigrator handles the one-shot JSON→SQLite migration.
+// path. The one-shot JSON→SQLite migration is handled by daedalus-cli's
+// --migrate-data flag (see src/tools/migrate.cpp).
 
 namespace {
 SettingsStore::McpServer row_to_mcp(const std::vector<std::string>& r)

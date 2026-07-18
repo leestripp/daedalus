@@ -4,7 +4,7 @@
 > resolution, and migration recipes.** If anything in `Readme.md` or
 > other docs conflicts with this file, this file wins.
 >
-> *Last updated 2026-07-15.*
+> *Last updated 2026-07-18.*
 
 ---
 
@@ -36,7 +36,7 @@ Hosts can inject a custom implementation for testing via
 
 ### 1.1 Env-var resolution chain
 
-For each of the seven user-tier roots, the same algorithm applies:
+For each of the four user-tier roots, the same algorithm applies:
 *explicit daedalus var → standard XDG var → XDG default*.
 
 | Variable (read in this order) | Default value (no env vars set) | Purpose |
@@ -63,40 +63,22 @@ DAEDALUS_HOME=/tmp/daedalus-test daedalus-cli --migrate-data-apply
 
 | Concrete file / dir | Resolves to | Notes |
 |---|---|---|
-| `daedalus.db` (settings store) | `<data_root>/daedalus.db` | **v0.4.0+**: SQLite-backed settings. Replaces `config.json`, `mcp/servers.json`, `mcp/.env`. See [`settings.md`](settings.md). |
-| `config.json` (LLM keys + model list) | `<config_root>/config.json` | **Legacy**: read as fallback during v0.4.0 migration. Migrated to `daedalus.db` on first run. |
-| `mcp/servers.json` (MCP registry) | `<config_root>/mcp/servers.json` | **Legacy**: read as fallback during v0.4.0 migration. |
-| `mcp/.env` (MCP secrets) | `<config_root>/mcp/.env` | **Legacy**: read as fallback during v0.4.0 migration. |
-| Globally-installed skill packs | `<data_root>/skills/installed/` | Unchanged. |
-| Library logs | `<state_root>/logs/daedalus.log` | Unchanged. |
-| Conversation history (v0.3.5+) | `daedalus.db` under `msg.<session_id>` keys | SQLite, not a JSON file. |
-| Session memory (v0.3.5+) | `daedalus.db` under `mem.<session_id>` keys | SQLite, not a JSON file. |
-| Response replay cache (future) | `<cache_root>/responses/` | Future. |
-| Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` | Future. |
+| `daedalus.db` (settings store) | `<data_root>/daedalus.db` | **v0.4.0+**: SQLite-backed settings. Stores models, MCP servers, Serper key. |
+| `mcp/.env` | `<config_root>/mcp/.env` | MCP server environment variables (env vars for subprocesses) |
+| Globally-installed skill packs | `<data_root>/skills/installed/` | User-global skill packs |
+| Library logs | `<state_root>/logs/daedalus.log` | Agent logs |
+| Conversation history (v0.3.5+) | `daedalus.db` under `msg.<session_id>` keys | SQLite |
+| Session memory (v0.3.5+) | `daedalus.db` under `mem.<session_id>` keys | SQLite |
+| Response replay cache (future) | `<cache_root>/responses/` | Future |
+| Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` | Future |
 
 `<config_root>` defaults to `$XDG_CONFIG_HOME/daedalus` or `~/.config/daedalus`.
 `<data_root>` defaults to `$XDG_DATA_HOME/daedalus` or `~/.local/share/daedalus`.
 And so on.
 
-> **Migration note:** Original JSON files are renamed to `*.migrated` after
-> successful import into `daedalus.db`. You can delete them after verifying
-> the new layout works. See [`settings.md`](settings.md) §4.
+### 1.3 XDG directory permissions
 
-### 1.3 The legacy fallback
-
-Per the legacy-readback policy below, the legacy `~/.daedalus/` layout
-is **honoured as a read-fallback for one release cycle**. Specifically:
-
-- If `$DAEDALUS_HOME` AND `$XDG_DATA_HOME` are both unset, AND
-  `$HOME/.daedalus/` exists on disk,
-- then `user_root()` returns `$HOME/.daedalus/` (legacy wins).
-
-When this happens, `Agent::initialize()` emits a one-shot `[DEPRECATION]`
-warning via the sink (not to stderr — the no-stdio rule applies to the
-library; the warning goes through `AgentSink::on_log`). The warning tells
-the user to run `daedalus-cli --migrate-data` to move to XDG.
-
-`Agent::initialize()` also calls `Paths::ensure_directories()` which
+`Agent::initialize()` calls `Paths::ensure_directories()` which
 auto-creates the four XDG roots with the secure permissions
 (`0750` for config/data, `0700` for state/cache). Hosts can call it
 explicitly earlier if they need to:
@@ -151,36 +133,22 @@ get different `agent_dir()` paths, so:
 |---|---|---|
 | `agent_dir/messages.json` | Conversation transcript. Atomic write via temp + rename + `fsync`; survives `kill -9` mid-save. Write-through auto-flush keeps it within ~100 ms of every `add_*()` call. | Yes (rebuilds from the agent loop on next turn) |
 | `agent_dir/messages.json.crash` | Crash mirror — written by the SIGSEGV/SIGABRT/SIGFPE/SIGILL signal handlers and re-written on every save. Read on next launch if `messages.json` is missing/corrupt. Defensive "drop last message" recovery. | Yes |
-| `agent_dir/messages.sqlite` | Conversation mirror (v0.3.5+) — SQLite, in `daedalus.db` | Yes |
-| `agent_dir/memory/memory.sqlite` | Long-term facts (THE cardinal file) | No — losing this loses project memory |
-| `agent_dir/memory/memory.json` | Legacy memory format (v0.3.5+: backed up to `daedalus.db`) | No |
+| `agent_dir/messages.sqlite` | Conversation mirror (v0.3.5+) — SQLite | Yes |
+| `agent_dir/memory/memory.sqlite` | Long-term facts | No — losing this loses project memory |
+| `agent_dir/memory/memory.json` | Legacy memory format (backed up to `daedalus.db`) | No |
 | `agent_dir/sessions/<sid>/` | Per-session scratch state | Yes |
 | `agent_dir/cache/` | Project-specific regenerable caches | Yes |
 | `agent_dir/skills/active/` | Project-local skill overrides | No — losing this drops overrides |
-| `agent_dir/agents/<sub_name>/` | Sub-agent state (for `daedalus-manager` / `daedalus-subagent`) | Depends on sub-agent |
-| `agent_dir/.lock` | Lock file (always present, prevents concurrent writes) | No — recreated on next write |
-
-> **Note (v0.4.0+):** per-project *settings* (model overrides, kv
-> pairs) live in the user-level SQLite DB (`daedalus.db`), not in
-> `agent_dir/`. The per-project runtime state under `agent_dir/`
-> is purely the conversation + memory + skill overrides; config
-> lives at the user tier.
-
-### 2.3 (Removed 2026-07-16)
-
-The previous "legacy `.codemax[-<name>]/` read-fallback" section has
-been removed. The library never reads from `.codemax[-<name>]/` —
-`codemax` is a different tool, not a previous name for daedalus.
-See `CodeMax.md §B2-fix` in the project repo for the rationale.
+| `agent_dir/agents/<sub_name>/` | Sub-agent state | Depends on sub-agent |
+| `agent_dir/.lock` | Lock file (prevents concurrent writes) | No — recreated on next write |
 
 ---
 
 ## 3. Migration recipes
 
-### 3.1 Laptop / desktop user — `~/.daedalus/` → XDG
+### 3.1 From old JSON config to SQLite
 
-If you've been running daedalus for a while and have a populated
-`~/.daedalus/` directory:
+If you have an old `config.json` or `mcp/servers.json`:
 
 ```bash
 # 1. See what will migrate.
@@ -189,11 +157,12 @@ daedalus-cli --migrate-data
 # 2. Apply (copies, doesn't remove).
 daedalus-cli --migrate-data-apply
 
-# 3. Verify the new layout works (run the agent normally).
+# 3. Verify the new layout works.
 daedalus-cli /path/to/your/project
 
-# 4. When satisfied, manually remove the legacy dir.
-rm -rf ~/.daedalus
+# 4. When satisfied, manually remove the old files.
+rm -rf ~/.config/daedalus/config.json
+rm -rf ~/.config/daedalus/mcp/servers.json
 ```
 
 You can override the destinations:
@@ -218,17 +187,13 @@ daedalus-cli --agent-name actor    /path/to/project   # in another
 daedalus-cli --agent-name verifier /path/to/project   # in a third
 ```
 
-(That's exactly what `daedalus-manager` does internally.)
-
 ---
 
 ## 4. Deployment shapes
 
 ### 4.1 Local user install (no env vars)
 
-Defaults to `~/.config/daedalus/`, `~/.local/share/daedalus/`, etc. The
-legacy `~/.daedalus/` fallback kicks in if the XDG dirs don't exist yet —
-one-time migration prompt via the deprecation warning.
+Defaults to `~/.config/daedalus/`, `~/.local/share/daedalus/`, etc.
 
 ### 4.2 System service (systemd)
 
@@ -247,10 +212,6 @@ RuntimeDirectory=daedalus
 ExecStart=/usr/bin/daedalus-daemon
 ```
 
-systemd's `ConfigurationDirectory=` / `StateDirectory=` directives
-auto-create the dirs at `/etc/daedalus/`, `/var/lib/daedalus/`, etc.,
-with correct ownership for the daemon user.
-
 ### 4.3 Rootless Podman
 
 ```bash
@@ -267,19 +228,6 @@ podman run --rm -it \
     -w /work -v /path/to/your/project:/work \
     localhost/daedalus:latest
 ```
-
-Or with the minimum-effort bind-mount:
-
-```bash
-podman run --rm -it \
-    --userns=keep-id \
-    -v $HOME/.daedalus:/home/me/.daedalus:rw \
-    -w /work -v /path/to/your/project:/work \
-    localhost/daedalus:latest
-```
-
-(The second form skips XDG entirely — `$HOME/.daedalus/` is still honoured
-as the legacy fallback for one release cycle.)
 
 ### 4.4 Rootful Docker
 
@@ -309,8 +257,7 @@ volumes:
 
 ### 4.5 nix / snap / flatpak
 
-These sandboxes rewrite `$HOME`. Set the XDG vars explicitly to canonical
-locations the sandbox maps back to the real host:
+These sandboxes rewrite `$HOME`. Set the XDG vars explicitly:
 
 ```bash
 XDG_CONFIG_HOME=/home/user/.config \
@@ -319,8 +266,6 @@ XDG_STATE_HOME=/home/user/.local/state \
 XDG_CACHE_HOME=/home/user/.cache \
 daedalus-cli /path/to/project
 ```
-
-In a Nix flake, wrap the binary with `wrapProgram` to bake these in.
 
 ---
 
@@ -335,40 +280,19 @@ full API reference.
 
 ### Q. Where is memory stored?
 
-**Per-project, always.** Two storage modes:
-
-1. **v0.4.0+** (default): Session memory stored in `daedalus.db` under
-   `mem.<session_id>` keys. The `SessionMemory` class falls back to the
-   JSON file at `<project>/.daedalus[-<agent_name>]/memory/memory.json` if
-   the DB key is empty.
-
-2. **Legacy**: `<project_root>/.daedalus[-<agent_name>]/memory/memory.json`.
-   Read as fallback during v0.4.0 migration.
+**Per-project, always.** Memory is stored in `daedalus.db` under
+`mem.<session_id>` keys. The `SessionMemory` class falls back to the
+JSON file at `<project>/.daedalus[-<agent_name>]/memory/memory.json` if
+the DB key is empty.
 
 **Never** in XDG. See `tests/test_two_tier_rule.cpp` for the test that
-enforces this. See [`settings.md`](settings.md) §3 for the DB schema.
+enforces this.
 
 ### Q. How do I run two agents on the same project without their memory mixing?
 
 Use `--agent-name` (CLI) or `cfg.agent_name` (API). Each name gets its own
 subdir under `<project_root>/`. See `daedalus-manager` for the canonical
 3-agent composition.
-
-### Q. Why is `~/.daedalus/` deprecated?
-
-It violates the [XDG Base Directory Specification 0.8](https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html)
-— every modern distro (Fedora, Debian, Ubuntu, Arch, openSUSE) enforces this
-in their packaging guidelines. It forces `--userns=keep-id` bind-mounts in
-containers; XDG-compliant tools work with named volumes. It conflates config,
-state, data, and cache. Distribution packagers will write autoload migration
-scripts per distro if we don't fix it ourselves.
-
-### Q. Why does my agent emit a `[DEPRECATION]` warning?
-
-Because `~/.daedalus/` exists on your system and you haven't set `$DAEDALUS_HOME`
-or any `$XDG_*` var. Run `daedalus-cli --migrate-data-apply` to copy your
-state to the new XDG-compliant locations, then `rm -rf ~/.daedalus` once
-you've verified the new layout works.
 
 ### Q. How do I point daedalus at a single root for CI / sandboxing?
 
@@ -401,9 +325,8 @@ daedalus::Paths::set_override(nullptr);
 - `tests/test_xdg_paths.cpp` — env-var resolution tests.
 - `tests/test_project_paths.cpp` — per-agent namespace tests.
 - `tests/test_two_tier_rule.cpp` — XDG-vs-project enforcement test.
-- `tests/test_legacy_deprecation_warning.cpp` — deprecation warning tests.
 - `tests/test_migrate_data.cpp` — `--migrate-data` tests.
 - `tests/test_ensure_directories.cpp` — XDG-permissions test.
 - `demos/daedalus-cli/migrate.cpp` — migration CLI implementation.
 
-*Last updated 2026-07-15.*
+*Last updated 2026-07-18 (legacy fallback removed).*

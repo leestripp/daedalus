@@ -190,13 +190,10 @@ public:
     /// Get server_error settings from kv_settings. Returns defaults if none set.
     ServerErrorSettings get_server_error_settings() const;
 
-    // -----------------------------------------------------------------------
     // v0.5.0: Serper.dev API key.
     //
     // Stored in the `serper_config` table (singleton row, id=1).
-    // Migration from JSON config (`serper-search.api_key`) happens in
-    // SettingsMigrator::run() — see Phase 2 notes in src/core/SerperConfig.cpp.
-    // -----------------------------------------------------------------------
+    // Populated by daedalus-cli --migrate-data or via set_serper_api_key().
 
     /// Get the Serper API key from the store. Empty string if not set.
     std::string get_serper_api_key() const;
@@ -236,9 +233,9 @@ public:
     void delete_messages_json(std::string_view session_id);
 
     // -----------------------------------------------------------------------
-    // v0.5.0: MCP server registry. The `mcp_servers` table replaces
-    // `~/.config/daedalus/mcp/servers.json` — see SettingsMigrator for the
-    // auto-migration path.
+    // v0.5.0: MCP server registry. The `mcp_servers` table replaces the
+    // legacy `servers.json` file. Populated via upsert_mcp_server() or
+    // daedalus-cli --migrate-data.
     // ----------------------------------------------------------------------
 
     /// One MCP server config. Mirrors the McpServerConfig struct but lives
@@ -282,8 +279,8 @@ private:
     std::filesystem::path path_;
     OmniNet::DB::Database* db_ = nullptr;
 
-    /// Internal ctor. `auto_migrate=true` runs SettingsMigrator::run()
-    /// once on first open; `false` skips it (used by `for_home()` and tests).
+    /// Internal ctor. `auto_migrate` is accepted for source compatibility
+    /// but has no effect — auto-migration was removed in v0.5.2.
     SettingsStore(std::filesystem::path db_path, bool auto_migrate = false);
 };
 

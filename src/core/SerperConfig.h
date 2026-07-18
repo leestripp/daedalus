@@ -82,21 +82,6 @@ inline std::ostream& operator<<(std::ostream& os,
 SerperApiKeyResult load_serper_api_key();
 
 /**
- * @brief Test-only variant of load_serper_api_key() that uses the supplied
- *        directories instead of the default $HOME/cwd lookup.
- *
- * Each entry in @p candidate_dirs is treated as a settings *directory*
- * (i.e. the loader will look for `settings.json` inside it). The first
- * existing file wins. This exists so unit tests can verify the loader's
- * behaviour against synthetic settings files in a temp dir without
- * touching the user's real $HOME/.daedalus/settings/settings.json.
- *
- * If @p candidate_dirs is empty, behaviour falls back to load_serper_api_key().
- */
-SerperApiKeyResult load_serper_api_key_from_dirs(
-    const std::vector<std::filesystem::path>& candidate_dirs);
-
-/**
  * @brief Print a one-line, human-readable startup status for the Serper key.
  *
  * Designed to be called once at agent startup. Behaviour:

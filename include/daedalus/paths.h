@@ -22,8 +22,9 @@
  * directory. Enforced by `tests/test_two_tier_rule.cpp`.
  *
  * **Backward compat:** existing user code calling
- * `daedalus::default_daedalus_home()` / `default_settings_path()` /
- * `default_mcp_servers_path()` / `default_mcp_env_path()` keeps
+ * If you used `daedalus::default_settings_path()` or
+ * `daedalus::default_mcp_servers_path()` in existing code, replace those
+ * with `daedalus::SettingsStore::instance()` (for the store) or
  * compiling — those helpers now forward into `Paths::global()`.
  * The only behaviour change is: when an `$XDG_*` variable is set in
  * the environment, the helpers honour it (previously they did not).

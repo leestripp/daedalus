@@ -5,7 +5,7 @@
 //
 // Verifies that AgentConfig::mcp_servers_disabled and
 // AgentConfig::skills_disabled actually hide their targets from:
-//   - McpServerManager::list_configured_servers() (after load_config)
+//   - McpServerManager::list_configured_servers() (after load_from_store)
 //   - McpServerManager::list_connected_servers()
 //   - McpServerManager::get_all_tools()
 //   - SkillManager::get_visible_cached_skills()
@@ -15,11 +15,15 @@
 //
 // All tests are hermetic — no network, no API calls. We just exercise
 // the API surface directly.
+//
+// v0.5.0: Updated to use SettingsStore + load_from_store() instead of
+// the deprecated servers.json / load_config() approach.
 // ============================================================================
 
 #include "mcp/McpServerManager.h"
 #include "mcp/McpServerConfig.h"
 #include "core/SkillManager.h"
+#include <daedalus/settings.h>
 
 #include <cassert>
 #include <cstdio>
@@ -39,27 +43,41 @@ namespace {
 // ============================================================================
 
 // §Phase 15: a server in the disabled set is dropped from configs_ at
-// load_config() time, so list_configured_servers() and
+// load_from_store() time, so list_configured_servers() and
 // list_connected_servers() never report it.
 void test_mcp_disabled_skips_config_entry() {
-    mcp::McpServerManager mgr;
-
-    // Write a minimal servers.json with two servers.
+    // Create an isolated SettingsStore for this test
     fs::path tmp = fs::temp_directory_path() / "phase15-mcp-test";
+    fs::remove_all(tmp);
     fs::create_directories(tmp);
-    fs::path cfg = tmp / "servers.json";
+
     {
-        std::ofstream f(cfg);
-        f << R"({
-            "mcpServers": {
-                "wanted":  {"command": "echo", "args": ["hi"]},
-                "banned":  {"command": "echo", "args": ["bye"]}
-            }
-        })";
+        auto store = daedalus::SettingsStore::for_home(tmp);
+
+        // Write two servers via SettingsStore (v0.5.0 approach)
+        daedalus::SettingsStore::McpServer wanted;
+        wanted.name      = "wanted";
+        wanted.transport = "stdio";
+        wanted.command   = "echo";
+        wanted.args      = {"hi"};
+        wanted.enabled   = true;
+        store.upsert_mcp_server(wanted);
+
+        daedalus::SettingsStore::McpServer banned;
+        banned.name      = "banned";
+        banned.transport = "stdio";
+        banned.command   = "echo";
+        banned.args      = {"bye"};
+        banned.enabled   = true;
+        store.upsert_mcp_server(banned);
     }
 
+    mcp::McpServerManager mgr;
     mgr.set_disabled_servers({"banned"});
-    bool ok = mgr.load_config(cfg.string());
+
+    // Load from SettingsStore (v0.5.0 approach)
+    auto store = daedalus::SettingsStore::for_home(tmp);
+    bool ok = mgr.load_from_store(store);
     assert(ok);
 
     auto configured = mgr.list_configured_servers();
@@ -77,22 +95,35 @@ void test_mcp_disabled_skips_config_entry() {
 // get_all_tools(). (Defensive filter at the output boundary, in case
 // set_disabled_servers is called post-load.)
 void test_mcp_disabled_filters_after_load() {
-    mcp::McpServerManager mgr;
-
+    // Create an isolated SettingsStore for this test
     fs::path tmp = fs::temp_directory_path() / "phase15-mcp-filter-test";
+    fs::remove_all(tmp);
     fs::create_directories(tmp);
-    fs::path cfg = tmp / "servers.json";
+
     {
-        std::ofstream f(cfg);
-        f << R"({
-            "mcpServers": {
-                "alive": {"command": "echo", "args": ["x"]},
-                "dead":  {"command": "echo", "args": ["y"]}
-            }
-        })";
+        auto store = daedalus::SettingsStore::for_home(tmp);
+
+        // Write two servers via SettingsStore
+        daedalus::SettingsStore::McpServer alive;
+        alive.name      = "alive";
+        alive.transport = "stdio";
+        alive.command   = "echo";
+        alive.args      = {"x"};
+        alive.enabled   = true;
+        store.upsert_mcp_server(alive);
+
+        daedalus::SettingsStore::McpServer dead;
+        dead.name      = "dead";
+        dead.transport = "stdio";
+        dead.command   = "echo";
+        dead.args      = {"y"};
+        dead.enabled   = true;
+        store.upsert_mcp_server(dead);
     }
 
-    bool ok = mgr.load_config(cfg.string());
+    auto store = daedalus::SettingsStore::for_home(tmp);
+    mcp::McpServerManager mgr;
+    bool ok = mgr.load_from_store(store);
     assert(ok);
 
     // No servers are actually *connected* here (we don't spawn
@@ -119,23 +150,36 @@ void test_mcp_disabled_filters_after_load() {
 // §Phase 15: an empty disabled set is backward-compatible — all
 // servers remain enabled.
 void test_mcp_empty_disabled_means_all_enabled() {
-    mcp::McpServerManager mgr;
-
+    // Create an isolated SettingsStore for this test
     fs::path tmp = fs::temp_directory_path() / "phase15-mcp-empty-test";
+    fs::remove_all(tmp);
     fs::create_directories(tmp);
-    fs::path cfg = tmp / "servers.json";
+
     {
-        std::ofstream f(cfg);
-        f << R"({
-            "mcpServers": {
-                "a": {"command": "echo", "args": ["1"]},
-                "b": {"command": "echo", "args": ["2"]}
-            }
-        })";
+        auto store = daedalus::SettingsStore::for_home(tmp);
+
+        // Write two servers via SettingsStore
+        daedalus::SettingsStore::McpServer a;
+        a.name      = "a";
+        a.transport = "stdio";
+        a.command   = "echo";
+        a.args      = {"1"};
+        a.enabled   = true;
+        store.upsert_mcp_server(a);
+
+        daedalus::SettingsStore::McpServer b;
+        b.name      = "b";
+        b.transport = "stdio";
+        b.command   = "echo";
+        b.args      = {"2"};
+        b.enabled   = true;
+        store.upsert_mcp_server(b);
     }
 
+    auto store = daedalus::SettingsStore::for_home(tmp);
+    mcp::McpServerManager mgr;
     mgr.set_disabled_servers({});  // explicitly empty
-    bool ok = mgr.load_config(cfg.string());
+    bool ok = mgr.load_from_store(store);
     assert(ok);
 
     auto configured = mgr.list_configured_servers();
@@ -331,11 +375,9 @@ void test_skill_disabled_filters_active_at_runtime() {
     assert(sm->is_skill_active("drop") == false);
     {
         auto active = sm->get_visible_active_skills();
-        bool found_drop = false;
         for (const auto& s : active) {
-            if (s.metadata.name == "drop") { found_drop = true; break; }
+            assert(s.metadata.name != "drop");  // disabled skill should not appear
         }
-        assert(!found_drop);
     }
     assert(sm->is_skill_active("keep") == true);  // still visible
 

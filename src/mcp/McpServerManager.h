@@ -15,10 +15,9 @@
 
 namespace mcp {
 
-// Manages multiple MCP server connections
-// Loads configuration from ~/.daedalus/mcp/servers.json
-//
-// Two transport kinds are supported per server:
+// Manages multiple MCP server connections.
+// Servers are loaded from the SQLite SettingsStore via load_from_store().
+// Two transport kinds are supported per server:er:
 //   - stdio  : spawn a subprocess, talk JSON-RPC over its stdin/stdout (via McpClient).
 //   - http   : POST JSON-RPC to a URL (via McpTransport/HTTP implementation).
 //
@@ -42,17 +41,10 @@ public:
     McpServerManager(const McpServerManager&) = delete;
     McpServerManager& operator=(const McpServerManager&) = delete;
 
-    // §Phase 15: per-server gate. Set of server names (matching keys in
-    // servers.json) that the host has disabled. Empty = all enabled.
-    // load_config() skips disabled servers; list_connected_servers() /
-    // get_all_tools() also exclude them so disabled servers don't
-    // appear in the system prompt.
+    // §Phase 15: per-server gate. Set of server names that the host has
+    // disabled. Empty = all enabled. load_from_store() skips disabled servers.
     void set_disabled_servers(const std::set<std::string>& names) { disabled_servers_ = names; }
     bool is_server_disabled(const std::string& name) const { return disabled_servers_.count(name) > 0; }
-
-    // Load configuration from servers.json
-    // Returns true on success, false on error (check get_last_error())
-    bool load_config(const std::string& config_path = "");
 
     // §v0.5.0: Load configuration from a SettingsStore (SQLite).
     // Pops McpServer entries out of the daedalus.db's mcp_servers table
@@ -127,13 +119,10 @@ public:
     // Get path to .env file for loading environment variables
     std::string get_env_file_path() const;
 
-    // Get path to the loaded configuration file
-    std::string get_config_path() const { return config_path_; }
-
-    // §FIX-MCP-STORE-LOAD (2026-07-17): explicit reset. Both
-    // load_config() (JSON) and load_from_store() (SQLite) MERGE into
-    // configs_; call clear() before a sequence of loads if you want
-    // exclusive semantics. AgentImpl does this on Agent init.
+    // §FIX-MCP-STORE-LOAD (2026-07-17): explicit reset.
+    // load_from_store() MERGE into configs_; call clear() before a
+    // sequence of loads if you want exclusive semantics. AgentImpl does
+    // this on Agent init.
     void clear()
     {
         configs_.clear();
@@ -287,10 +276,7 @@ private:
     // Whether config has been loaded
     bool config_loaded_ = false;
 
-    // Config file path
-    std::string config_path_;
-
-    // Set by connect()/disconnect()/load_config() to signal that the
+    // Set by connect()/disconnect()/load_from_store() to signal that the
     // ToolFactory should rebuild its McpProxiedTool surface.
     std::atomic<bool> mcp_tools_dirty_{true};
 
