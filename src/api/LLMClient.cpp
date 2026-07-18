@@ -1658,18 +1658,22 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     }
                 }
 
-                // Check if tool returned error status.
-                // Tools return the message under either "message" (the
-                // daedalus-wide convention) or "error" (a few older tools).
-                // Check both so log lines are useful.
-                if (status == "error") {
-                    const std::string msg = result.value("message",
-                                              result.value("error", "unknown error"));
-                    LOG_ERROR("Tool " + function_name + " failed: " + msg);
-                } else {
-                    // Success (or non-error status like "compress_context")
-                    if (sink_) sink_->on_log(daedalus::LogLevel::Info,
-                        format_tool_result(result));
+                // Always show formatted result so the user sees exit codes,
+                // output excerpts, and error details for both successes and failures.
+                // The separator and token usage that follow are also always shown
+                // so the visual block is complete regardless of the outcome.
+                if (sink_) {
+                    if (status == "error") {
+                        const std::string msg = result.value("message",
+                                                  result.value("error", "unknown error"));
+                        LOG_ERROR("Tool " + function_name + " failed: " + msg);
+                        sink_->on_log(daedalus::LogLevel::Error,
+                            format_tool_result(result));
+                    } else {
+                        // Success (or non-error status like "compress_context")
+                        sink_->on_log(daedalus::LogLevel::Info,
+                            format_tool_result(result));
+                    }
                 }
 
                 // OUTPUT: separator after result
