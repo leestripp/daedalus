@@ -55,7 +55,6 @@
 #include <daedalus/paths.h>
 #include <daedalus/project_paths.h>
 #include <daedalus/settings.h>
-#include "tools/ToolHandler.h"  // for ToolHandler::set_auto_mode (Phase D bash test)
 
 namespace fs = std::filesystem;
 
@@ -89,21 +88,6 @@ struct CountingSink : public daedalus::AgentSink {
         ++approvals_granted;
         return true;
     }
-};
-
-// RAII helper — flips ToolHandler into auto-approve while in scope and
-// restores the previous value on destruction. Needed for D.2 because
-// AgentImpl::execute_tool() does NOT wire cfg.auto_approve into
-// ToolHandler (only LLMClient ctor does, and only for the settings
-// store's auto_approve, not the cfg one).
-struct AutoModeGuard {
-    AutoModeGuard() {
-        prev_ = ToolHandler::is_auto_mode_enabled();
-        ToolHandler::set_auto_mode(true);
-    }
-    ~AutoModeGuard() { ToolHandler::set_auto_mode(prev_); }
-private:
-    bool prev_ = false;
 };
 
 // Locate the test fixture `sum.cpp`. Order:
@@ -327,19 +311,16 @@ int main() {
 
     // ── Phase D — exercise real tools against sum.cpp ───────────
     //
-    // Two preconditions for this phase to work through the public
-    // Agent::execute_tool API:
-    //   1. ReadFileTool / EditFilePatchTool resolve relative paths
-    //      against FileIO::project_path_, which AgentImpl constructs
-    //      from std::filesystem::current_path() (NOT cfg.project_root).
-    //      → Either pass absolute paths OR chdir beforehand.
-    //      → This test uses absolute paths (more deterministic).
-    //   2. BashTool consults ToolHandler auto-mode for command
-    //      approval. LLMClient ctor wires the settings_store's
-    //      auto_approve into ToolHandler, but AgentImpl::execute_tool
-    //      does NOT propagate cfg.auto_approve. → Flip auto-mode on
-    //      locally via AutoModeGuard for the bash sub-test only.
+    // Regression coverage for BUG-003 and BUG-004:
+    //   1. Change the process CWD away from project_root and use
+    //      relative paths in tool calls. This proves AgentImpl now
+    //      roots FileIO at cfg.project_root, not std::filesystem::current_path().
+    //   2. cfg.auto_approve=true must let execute_bash run without
+    //      calling back into the host sink. This proves AgentImpl now
+    //      propagates cfg.auto_approve to ToolHandler.
+    fs::path original_cwd;
     try {
+        original_cwd = fs::current_path();
         daedalus::AgentConfig cfg;
         cfg.project_root  = project_root;
         cfg.daedalus_home = daedalus_home;
@@ -350,46 +331,41 @@ int main() {
         daedalus::Agent agentD(cfg, sinkD);
         agentD.initialize();
 
-        const std::string abs_sum = (project_root / "sum.cpp").string();
-        const std::string abs_o   = "/tmp/sum_test.o";
+        // Deliberately run from a different directory than the project.
+        // Relative paths below must still resolve to project_root/sum.cpp.
+        fs::current_path("/tmp");
 
-        // D.1 — execute_tool("read_file") with absolute path returns
-        // {status, path, content} where content is line-numbered
-        // ("N\tline"). Look up "content" explicitly, not the dump.
-        nlohmann::json read_args = {{"path", abs_sum}};
+        const std::string rel_o = "/tmp/sum_test.o";
+
+        // D.1 — execute_tool("read_file") with a relative path resolves
+        // against cfg.project_root (BUG-003).
+        nlohmann::json read_args = {{"path", "sum.cpp"}};
         auto read_result = agentD.execute_tool("read_file", read_args);
         EXPECT(read_result.value("status", std::string{}) == "success");
         std::string read_content = read_result.value("content", std::string{});
         EXPECT(read_content.find("return a - b") != std::string::npos);
         EXPECT(read_content.find("should be a + b") != std::string::npos);
-        std::cout << "[ok-D.1] read_file read sum.cpp ("
+        std::cout << "[ok-D.1] read_file resolved relative path against project_root ("
                   << read_content.size() << " bytes content)\n";
 
-        // D.2 — execute_tool("execute_bash") compiles sum.cpp with
-        // clang++ to verify BashTool integration.
-        //
-        // Note: BashTool cd's to file_io.get_project_path() which is
-        // the process CWD (see AgentImpl::execute_tool), not the
-        // agent's project_root. So we pass absolute paths to make
-        // the test deterministic regardless of where ctest is invoked.
-        {
-            AutoModeGuard am;  // flip ToolHandler auto-mode for this scope only
-            nlohmann::json bash_args = {{"command",
-                "clang++ -std=c++23 -c '" + abs_sum + "' -o " + abs_o +
-                " 2>&1; echo EXIT=$?"}};
-            auto bash_result = agentD.execute_tool("execute_bash", bash_args);
-            EXPECT(bash_result.value("status", std::string{}) == "success");
-            std::string bash_output = bash_result.value("output", std::string{});
-            EXPECT(bash_output.find("EXIT=0") != std::string::npos);
-            std::cout << "[ok-D.2] execute_bash compiled sum.cpp with clang++-23\n";
-        }
+        // D.2 — execute_tool("execute_bash") compiles sum.cpp using a
+        // relative path. BashTool runs in file_io.get_project_path(), which
+        // now equals cfg.project_root (BUG-003), and auto-approval is
+        // granted via cfg.auto_approve (BUG-004) without host sink callback.
+        nlohmann::json bash_args = {{"command",
+            "clang++ -std=c++23 -c sum.cpp -o " + rel_o +
+            " 2>&1; echo EXIT=$?"}};
+        auto bash_result = agentD.execute_tool("execute_bash", bash_args);
+        EXPECT(bash_result.value("status", std::string{}) == "success");
+        std::string bash_output = bash_result.value("output", std::string{});
+        EXPECT(bash_output.find("EXIT=0") != std::string::npos);
+        EXPECT(sinkD->approvals_granted == 0);  // BUG-004: host was not asked
+        std::cout << "[ok-D.2] execute_bash ran in project_root with cfg.auto_approve\n";
 
-        // D.3 — execute_tool("edit_file_patch") actually fixes the
-        // bug. NOTE: argument keys are `old_str`/`new_str`, NOT
-        // `old_string`/`new_string` (see EditFilePatchTool::execute
-        // in src/tools/FileTool.cpp).
+        // D.3 — execute_tool("edit_file_patch") mutates the file via a
+        // relative path (BUG-003). Argument keys are `old_str`/`new_str`.
         nlohmann::json patch_args = {
-            {"path", abs_sum},
+            {"path", "sum.cpp"},
             {"old_str", "return a - b;"},
             {"new_str", "return a + b;"},
             {"replace_all", false}
@@ -409,6 +385,13 @@ int main() {
     } catch (const std::exception& e) {
         std::cerr << "EXC [D] " << e.what() << "\n";
         ++failures;
+    }
+
+    // Restore CWD before cleanup so remove_all uses absolute paths reliably.
+    try {
+        if (!original_cwd.empty()) fs::current_path(original_cwd);
+    } catch (const std::exception& e) {
+        std::cerr << "WARNING: failed to restore original CWD: " << e.what() << "\n";
     }
 
     // Cleanup

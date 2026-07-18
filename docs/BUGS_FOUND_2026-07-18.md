@@ -228,5 +228,21 @@ written to document.
 
 | ID   | Title                                                  | Status      | Filed |
 |------|--------------------------------------------------------|-------------|-------|
-| BUG-003 | `AgentImpl::execute_tool` ignores `cfg.project_root` | 🟡 OPEN (in this file) | no (here) |
-| BUG-004 | `AgentImpl::execute_tool` ignores `cfg.auto_approve` | 🟡 OPEN (in this file) | no (here) |
+| BUG-003 | `AgentImpl::execute_tool` ignores `cfg.project_root` | 🟢 FIXED in `d73ef12`, regression test updated | no (here) |
+| BUG-004 | `AgentImpl::execute_tool` ignores `cfg.auto_approve` | 🟢 FIXED in `d73ef12`, regression test updated | no (here) |
+
+### Fix details
+
+- **BUG-003**: `AgentImpl::execute_tool()` now builds `FileIO` from `cfg_.project_root`
+  (falling back to `std::filesystem::current_path()` only when the config field is empty).
+  Relative paths passed to `read_file`, `edit_file_patch`, `execute_bash`, etc. therefore
+  resolve against the configured project root, not the process CWD.
+
+- **BUG-004**: `AgentImpl::execute_tool()` now calls `ToolHandler::set_auto_mode(true)`
+  whenever the effective `auto_approve()` is true, so `cfg.auto_approve` works even when
+  no `LLMClient` was constructed.
+
+The real-world regression test in `tests/test_real_world_tools.cpp` (Phase D) was updated
+to exercise both fixes: it changes CWD away from the project root, uses relative paths,
+removes the manual `AutoModeGuard`, and asserts that the host sink is never asked for
+command approval.
