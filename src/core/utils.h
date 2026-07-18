@@ -115,10 +115,4 @@ std::string format_tool_header_before(
     const nlohmann::json& args = nlohmann::json::object(),
     int width = 62);
 
-/**
- * @brief Formats token usage stats after tool execution.
- * §Phase 5.1: was `print_token_usage` writing to std::cout.
- */
-std::string format_token_usage(size_t current_tokens, size_t max_tokens,
-                                size_t message_count,
-                                int iteration_count, int max_iterations);
+

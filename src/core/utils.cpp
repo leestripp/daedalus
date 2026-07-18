@@ -516,50 +516,6 @@ std::string format_tool_header_before(const std::string& tool_name, const std::s
 }
 
 /**
- * @brief Prints token usage stats after tool execution.
- * @param current_tokens Current token count.
- * @param max_tokens Maximum context size.
- * @param message_count Number of messages in conversation.
- * @param iteration_count Current iteration number.
- * @param max_iterations Maximum iterations allowed.
- */
-std::string format_token_usage(size_t current_tokens, size_t max_tokens, size_t message_count,
-                       int iteration_count, int max_iterations) {
-    std::ostringstream out;
-    float token_percent = 0.0f;
-    if (max_tokens > 0) {
-        token_percent = (static_cast<float>(current_tokens) / max_tokens) * 100.0f;
-    }
-
-    float iter_percent = 0.0f;
-    if (max_iterations > 0) {
-        iter_percent = (static_cast<float>(iteration_count) / max_iterations) * 100.0f;
-    }
-
-    // Build progress bar
-    std::ostringstream bar;
-    bar << "[";
-    int bar_width = 25;
-    int filled = static_cast<int>((token_percent / 100.0f) * bar_width);
-    for (int i = 0; i < bar_width; i++) {
-        if (i < filled) {
-            bar << "\xE2\x96\x88"; // █
-        } else {
-            bar << "\xE2\x96\x91"; // ░
-        }
-    }
-    bar << "]";
-
-    out << "\n  \xF0\x9F\x93\x88 Token Usage: " << current_tokens << "/" << max_tokens
-        << " (" << std::fixed << std::setprecision(1) << token_percent << "%)\n"
-        << "  " << bar.str() << "\n"
-        << "  \xF0\x9F\x93\xAC Messages: " << message_count << "\n"
-        << "  \xF0\x9F\x97\x84 Iterations: " << iteration_count << "/" << max_iterations
-        << " (" << std::fixed << std::setprecision(1) << iter_percent << "%)\n";
-    return out.str();
-}
-
-/**
  * @brief Helper to truncate long strings for display.
  * 
  * Uses UTF-8 aware truncation to prevent splitting multi-byte characters.

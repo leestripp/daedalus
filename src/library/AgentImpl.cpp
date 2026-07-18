@@ -611,6 +611,7 @@ AgentStats AgentImpl::stats() const noexcept
         s.completion_tokens = body_->client->get_completion_tokens();
         s.total_tokens      = body_->client->get_total_tokens();
         s.max_context_size  = body_->client->get_max_context_size();
+        s.message_count     = body_->client->get_message_count();
     }
     return s;
 }

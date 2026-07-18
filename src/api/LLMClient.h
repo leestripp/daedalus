@@ -254,6 +254,9 @@ public:
     }
     int get_iteration_count() const { return iteration_count_; }
     int get_max_iterations() const { return max_iterations_; }
+    [[nodiscard]] int get_message_count() const noexcept {
+        return messages_ ? static_cast<int>(messages_->size()) : 0;
+    }
 
     /// §Phase 6: return the body of the most recent assistant message,
     /// or empty string if no assistant turn has completed yet. Hosts use
@@ -263,11 +266,6 @@ public:
         if (messages_) return messages_->get_last_assistant_content();
         return {};
     }
-    
-    // Display token/stats bar
-    void display_token_stats(int message_count) const;
-    void display_subagent_stats(int message_count) const;
-    void display_manager_stats(int message_count) const;
     
     // Inject context statistics into system message before API calls
     // This allows the agent to see token usage, memory stats, etc.

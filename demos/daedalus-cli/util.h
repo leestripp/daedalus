@@ -12,6 +12,8 @@
 #include <cerrno>
 #include <csignal>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -181,9 +183,53 @@ inline void print_help(const char* program_name) {
     std::cout << "  /models         List models\n";
     std::cout << "  /skills         List loaded skills\n";
     std::cout << "  /tools          List registered tools\n";
-    std::cout << "  /stats          Show token + iteration stats\n";
+    std::cout << "  /usage          Show token/context usage summary\n";
+    std::cout << "  /stats          Show raw token + iteration stats\n";
     std::cout << "  /state          Show current Agent state\n";
     std::cout << "  /help           Show this help\n";
+}
+
+// =============================================================================
+// §CLI usage: clean, host-side formatting of AgentStats.
+// The library only exposes raw numbers; the CLI demo decides how to draw them.
+// =============================================================================
+
+inline void print_usage(std::ostream& out, const daedalus::AgentStats& st) {
+    float token_percent = 0.0f;
+    if (st.max_context_size > 0) {
+        token_percent = (static_cast<float>(st.total_tokens) /
+                         static_cast<float>(st.max_context_size)) * 100.0f;
+    }
+
+    float iter_percent = 0.0f;
+    if (st.max_iterations > 0) {
+        iter_percent = (static_cast<float>(st.iteration) /
+                        static_cast<float>(st.max_iterations)) * 100.0f;
+    }
+
+    constexpr int bar_width = 30;
+    int filled = static_cast<int>((token_percent / 100.0f) * bar_width);
+    if (filled > bar_width) filled = bar_width;
+    if (filled < 0) filled = 0;
+
+    std::ostringstream bar;
+    bar << '[';
+    for (int i = 0; i < bar_width; ++i) {
+        bar << (i < filled ? "\xE2\x96\x88" : "\xE2\x96\x91");
+    }
+    bar << ']';
+
+    std::ostringstream msg;
+    msg << "Usage:\n"
+        << "  Tokens:     " << st.total_tokens << " / " << st.max_context_size
+        << " (" << std::fixed << std::setprecision(1) << token_percent << "%)\n"
+        << "  " << bar.str() << "\n"
+        << "  Prompt:     " << st.prompt_tokens << "\n"
+        << "  Completion: " << st.completion_tokens << "\n"
+        << "  Messages:   " << st.message_count << "\n"
+        << "  Iterations: " << st.iteration << " / " << st.max_iterations
+        << " (" << std::fixed << std::setprecision(1) << iter_percent << "%)\n";
+    out << msg.str();
 }
 
 // =============================================================================

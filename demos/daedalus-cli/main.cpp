@@ -226,6 +226,10 @@ int main(int argc, char* argv[]) {
                     std::cout << "  - " << t.name << ": " << t.description << "\n";
                 continue;
             }
+            if (line == "/usage") {
+                print_usage(std::cout, agent.stats());
+                continue;
+            }
             if (line == "/stats") {
                 auto st = agent.stats();
                 std::cout << "Stats: iteration=" << st.iteration
