@@ -26,7 +26,7 @@ class DeleteDirectoryTool;
 class ReadFileTool : public BaseTool {
 public:
     std::string get_name() const override { return "read_file"; }
-    std::string get_description() const override { return "Read the contents of a file and return them as a string"; }
+    std::string get_description() const override { return "Read the full contents of a file. Set line_numbers=true to include line numbers in the output."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
     // §Phase C2: 3-arg overload for streaming tool-call progress.
@@ -42,7 +42,7 @@ public:
 class ListDirectoryTool : public BaseTool {
 public:
     std::string get_name() const override { return "list_directory"; }
-    std::string get_description() const override { return "List all files and directories in a given directory path"; }
+    std::string get_description() const override { return "List files and directories in a path, including size, modified time, permissions, and line counts."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };
@@ -69,7 +69,7 @@ public:
 class ModifyFileTool : public BaseTool {
 public:
     std::string get_name() const override { return "modify_file"; }
-    std::string get_description() const override { return "Modify an existing file with new content"; }
+    std::string get_description() const override { return "Overwrite an existing file with new content. Use edit_file_patch for small, targeted changes."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };

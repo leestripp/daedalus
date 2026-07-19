@@ -23,7 +23,7 @@ class ListDirectoryTreeTool;
 class GrepSearchTool : public BaseTool {
 public:
     std::string get_name() const override { return "grep_search"; }
-    std::string get_description() const override { return "Search string/regex across project"; }
+    std::string get_description() const override { return "Search for a string or regex across project files. Use include_pattern to limit file types."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };

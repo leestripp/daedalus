@@ -24,7 +24,7 @@ using BuildEventCallback = std::function<void(const std::string& command, bool s
 class BashTool : public BaseTool {
 public:
     [[nodiscard]] std::string get_name() const override { return "execute_bash"; }
-    [[nodiscard]] std::string get_description() const override { return "Execute shell commands"; }
+    [[nodiscard]] std::string get_description() const override { return "Execute shell commands in the project root (build, test, git, package installs, etc.)."; }
     [[nodiscard]] json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
     json execute(const json& args, FileIO& file_io, ToolProgressFn progress) override;

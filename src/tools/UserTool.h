@@ -21,7 +21,7 @@ class StopTool;
 class TellUserTool : public BaseTool {
 public:
     std::string get_name() const override { return "tell_user"; }
-    std::string get_description() const override { return "Send a message to the user"; }
+    std::string get_description() const override { return "Send a message, status update, or question to the user."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };

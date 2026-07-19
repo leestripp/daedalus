@@ -29,7 +29,7 @@ public:
     /**
      * Get the description of this tool
      */
-    std::string get_description() const override { return "Gather system information about the current environment"; }
+    std::string get_description() const override { return "Gather system information: OS, kernel, container, display server, session, and current time."; }
     
     /**
      * Get the tool definition in JSON format for LLM

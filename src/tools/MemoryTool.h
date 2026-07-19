@@ -20,7 +20,7 @@ public:
     static void set_session_memory(SessionMemory* memory) { session_memory_ = memory; }
     
     std::string get_name() const override { return "remember"; }
-    std::string get_description() const override { return "Save a memory for future sessions"; }
+    std::string get_description() const override { return "Save a fact, preference, or note to long-term memory for future sessions."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };
@@ -52,7 +52,7 @@ public:
     static void set_session_memory(SessionMemory* memory) { session_memory_ = memory; }
     
     std::string get_name() const override { return "memories"; }
-    std::string get_description() const override { return "List all memories with optional filtering"; }
+    std::string get_description() const override { return "List saved memories, optionally filtered by category or tags."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };

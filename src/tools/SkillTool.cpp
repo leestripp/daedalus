@@ -13,7 +13,7 @@ using json = nlohmann::json;
 
 DiscoverSkillsTool::DiscoverSkillsTool() {
     name_ = "discover_skills";
-    description_ = "Lists all available skills with their metadata";
+    description_ = "List available skills and their metadata. Use this to find relevant skills for the task.";
 }
 
 json DiscoverSkillsTool::get_definition() const {
@@ -76,7 +76,7 @@ json DiscoverSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
 
 LoadSkillTool::LoadSkillTool() {
     name_ = "load_skill";
-    description_ = "Load a specific skill and add it to active skills";
+    description_ = "Load a skill by name so its instructions are included in the agent context.";
 }
 
 json LoadSkillTool::get_definition() const {
@@ -151,7 +151,7 @@ json LoadSkillTool::execute(const json& args, FileIO& /*file_io*/) {
 
 GetActiveSkillsTool::GetActiveSkillsTool() {
     name_ = "get_active_skills";
-    description_ = "Return currently active (loaded) skills";
+    description_ = "List the skills currently active in the agent context.";
 }
 
 json GetActiveSkillsTool::get_definition() const {
@@ -201,7 +201,7 @@ json GetActiveSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
 
 SearchSkillsTool::SearchSkillsTool() {
     name_ = "search_skills";
-    description_ = "Search skills by query";
+    description_ = "Search available skills by name or description.";
 }
 
 json SearchSkillsTool::get_definition() const {
@@ -269,7 +269,7 @@ json SearchSkillsTool::execute(const json& args, FileIO& /*file_io*/) {
 
 DeactivateSkillTool::DeactivateSkillTool() {
     name_ = "deactivate_skill";
-    description_ = "Deactivate a skill by name";
+    description_ = "Deactivate a skill by name, removing it from the active context.";
 }
 
 json DeactivateSkillTool::get_definition() const {
@@ -333,7 +333,7 @@ json DeactivateSkillTool::execute(const json& args, FileIO& /*file_io*/) {
 
 GetSkillContextTool::GetSkillContextTool() {
     name_ = "get_skill_context";
-    description_ = "Return the combined context from all active skills";
+    description_ = "Show the combined instructions from all active skills.";
 }
 
 json GetSkillContextTool::get_definition() const {
