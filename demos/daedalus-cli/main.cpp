@@ -153,7 +153,7 @@ int main(int argc, char* argv[]) {
                      data_dir.string());
 
         // §Demo fix: flush banner + any initialization logs before the
-        // raw-mode watcher takes over, so the first "> " prompt is not
+        // raw-mode watcher takes over, so the first "\n> " prompt is not
         // visually interleaved with startup output.
         std::cout << "\n" << std::flush;
         std::cerr << std::flush;
@@ -174,13 +174,15 @@ int main(int argc, char* argv[]) {
         //
         // The watcher is RAII: its destructor restores terminal
         // mode and joins the thread.
-        daedalus_cli::RawStdinWatcher watcher(agent, "> ");
+        daedalus_cli::RawStdinWatcher watcher(agent, "\n> ");
 
         while (!g_shutting_down.load() && !watcher.esc_seen()) {
             // Single canonical site for the prompt — printed just before
             // reading, never after. The watcher handles its own input
-            // echoing and does not print the prompt.
-            std::cout << "> " << std::flush;
+            // echoing and does not print the prompt. The leading '\n'
+            // ensures the prompt never appends to the previous line of
+            // tool/agent output.
+            std::cout << "\n> " << std::flush;
             auto line_opt = watcher.next_line();
             if (!line_opt) break;          // EOF / Ctrl+D / shutdown
 

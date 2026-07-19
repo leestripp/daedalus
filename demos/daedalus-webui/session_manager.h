@@ -121,13 +121,28 @@ public:
         sess->sink->bind_sse(sess->sse.get());
         sess->sse->attach(server_);
 
-        sess->agent->initialize();
-
-        // Long-lived worker thread: pulls from `queued_[id]` and runs
-        // one turn per message. Stops when `stop` flips true.
+        // §webui-init: initialize the Agent on the worker thread, NOT the
+        // HTTP handler thread. Agent::initialize() can block for several
+        // seconds while MCP servers time out / skills are discovered; the
+        // POST /sessions response must return immediately so the UI can
+        // show a "creating session…" state and the user can queue input.
+        // The worker loop starts only after initialize() succeeds; queued
+        // messages submitted in the meantime are processed normally.
         const std::string captured_id = sess->id;
         Session* sptr = sess.get();
         sess->worker = std::thread([this, sptr, captured_id]() {
+            try {
+                sptr->agent->initialize();
+            } catch (const std::exception& e) {
+                if (sptr->sink) {
+                    sptr->sink->on_log(daedalus::LogLevel::Error,
+                        std::string("Agent initialization failed: ") + e.what());
+                }
+                return;
+            }
+
+            // Long-lived worker loop: pulls from `queued_[id]` and runs
+            // one turn per message. Stops when `stop` flips true.
             while (!sptr->stop.load()) {
                 std::string msg;
                 {

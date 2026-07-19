@@ -465,7 +465,7 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     </div>
     <form id="composer">
       <textarea id="input" autocomplete="off" rows="1"
-                placeholder="Send a message... (Ctrl+Enter)" disabled></textarea>
+                placeholder="Send a message... (Enter sends, Shift+Enter newline)" disabled></textarea>
       <button type="submit" id="send" disabled>Send</button>
       <button type="button" id="cancel" disabled>Cancel</button>
     </form>
@@ -628,6 +628,9 @@ let sessionId = null;
 let es = null;
 let currentDelta = null;
 let statsInterval = null;
+// §webui-init: message typed before the session is ready is buffered
+// and submitted as soon as POST /sessions resolves.
+let pendingMessage = null;
 
 // §Phase 9.5: expose handle on window for debugging (devtools, BiDi tests).
 // This is a tiny one-line change that makes "what session am I in?"
@@ -679,9 +682,13 @@ function setState(name) {
   const running = (name === "Running" || name === "Planning" ||
                    name === "Acting"   || name === "Verifying" ||
                    name === "Understanding" || name === "Compressing");
-  sendBtn.disabled   = !sessionId || running;
+  // §webui-init: keep input enabled while waiting for the session so
+  // the user can type; only disable it while the agent is running.
+  // The Send button is disabled while a message is already buffered
+  // for the upcoming session.
+  sendBtn.disabled   = running || (pendingMessage !== null);
   cancelBtn.disabled = !sessionId || !running;
-  inputEl.disabled   = !sessionId || running;
+  inputEl.disabled   = running;
 }
 
 // §webui-usage: poll /sessions/<id>/stats and render a compact HUD.
@@ -746,13 +753,12 @@ inputEl.addEventListener("input", () => {
   inputEl.style.height = Math.min(200, inputEl.scrollHeight) + "px";
 });
 inputEl.addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter" && !ev.shiftKey && (ev.ctrlKey || ev.metaKey)) {
+  // §webui-init: plain Enter sends; Shift+Enter inserts a newline for
+  // multi-line input. This matches the behaviour of most chat UIs and
+  // fixes the "nothing happens" symptom when the user hits Enter.
+  if (ev.key === "Enter" && !ev.shiftKey) {
     ev.preventDefault();
     document.getElementById("composer").dispatchEvent(new Event("submit"));
-  } else if (ev.key === "Enter" && !ev.shiftKey) {
-    // Plain Enter in a textarea inserts a newline; require Ctrl/Cmd+Enter
-    // to send. This matches chat apps and prevents accidental sends while
-    // typing multi-line code.
   }
 });
 
@@ -870,9 +876,21 @@ function newSession() {
 
       openEventStream();
       startStatsPolling();
-      inputEl.disabled = false;
-      sendBtn.disabled = false;
+      // §webui-init: enable controls through setState() so the pending-
+      // message gate is evaluated correctly.
+      setState(stateEl.dataset.lastName || "Idle");
       inputEl.focus();
+
+      // §webui-init: flush any message the user sent while the session
+      // was still being created.
+      if (pendingMessage) {
+        const text = pendingMessage;
+        pendingMessage = null;
+        hideThinkingBubble();
+        setStage("Idle");
+        submitMessageToServer(text);
+        setState(stateEl.dataset.lastName || "Idle");
+      }
     })
     .catch(e => appendLog("Error", "create session failed: " + e));
 }
@@ -1190,26 +1208,46 @@ function openEventStream() {
   });
 }
 
-document.getElementById("composer").addEventListener("submit", (ev) => {
-  ev.preventDefault();
-  const text = inputEl.value.trim();
-  if (!text || !sessionId) return;
-  inputEl.value = "";
-  inputEl.style.height = "auto";
-  append(transcriptEl, "› " + escapeHtml(text), "log");
-  // §Phase 9.10: clean up any leftover indicator from a previous turn
-  // (the chip row was hidden on the previous terminal state, but be
-  // defensive). The next state_change event will re-show them.
-  hideThinkingBubble();
-  setStage("Idle");
+// §webui-init: shared network send helper. Parses JSON only when the
+// server actually returns a JSON body, so a future 204 refactor won't
+// throw on the client.
+function submitMessageToServer(text) {
   fetch("/sessions/" + sessionId + "/messages", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ message: text }),
   })
-    .then(r => r.json())
-    .then(j => { if (j.error) appendLog("Error", j.error); })
+    .then(async r => {
+      const ct = r.headers.get("content-type") || "";
+      const j = ct.includes("application/json") ? await r.json() : {};
+      if (j.error) appendLog("Error", j.error);
+    })
     .catch(e => appendLog("Error", "send failed: " + e));
+}
+
+document.getElementById("composer").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const text = inputEl.value.trim();
+  if (!text) return;
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  append(transcriptEl, "› " + escapeHtml(text), "log");
+
+  // §webui-init: if the session is still being created, buffer this
+  // message and submit it as soon as POST /sessions resolves. The UI
+  // already shows the message, so it doesn't feel like a no-op.
+  if (!sessionId) {
+    pendingMessage = text;
+    setState(stateEl.dataset.lastName);
+    return;
+  }
+
+  // §Phase 9.10: clean up any leftover indicator from a previous turn
+  // (the chip row was hidden on the previous terminal state, but be
+  // defensive). The next state_change event will re-show them.
+  hideThinkingBubble();
+  setStage("Idle");
+  submitMessageToServer(text);
 });
 
 cancelBtn.addEventListener("click", () => {
@@ -1560,8 +1598,11 @@ async function deleteMcpServer(name) {
   }
 }
 
-setState("Idle");
+// §webui-init: start creating the session BEFORE enabling the input so
+// any transcript-clear in newSession() happens while the user still can't
+// type. setState("Idle") enables the composer once the UI is ready.
 newSession();
+setState("Idle");
 
 // §Phase 9.6: populate the top-right "model:" and "cwd:" labels.
 //  - cwd  : fetched from GET /info (server-wide, captured at startup).

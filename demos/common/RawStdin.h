@@ -72,9 +72,9 @@ public:
     ///               Must outlive this object (typically a stack
     ///               variable in main()).
     /// @param prompt Prompt printed at the start of each line
-    ///               (e.g. `"> "`). Defaults to `"> "`.
+    ///               (e.g. `"\n> "`). Defaults to `"> "`.
     explicit RawStdinWatcher(class daedalus::Agent& agent,
-                             std::string prompt = "> ")
+                             std::string prompt = "\n> ")
         : agent_(agent), prompt_(std::move(prompt)) {
         // Save termios BEFORE the thread starts so it can restore on
         // any path (normal exit, exception in main, signal).
@@ -227,7 +227,7 @@ private:
             // ---- Ctrl+C (0x03) ----------------------------------
             // The SIGINT handler does the real work (sets
             // g_shutting_down + cancel()). Here we just echo ^C
-            // and clear the partial line. The main loop prints "> "
+            // and clear the partial line. The main loop prints "\n> "
             // on the next iteration.
             if (c == 0x03) {
                 std::cout << "^C\r\n" << std::flush;
