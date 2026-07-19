@@ -53,6 +53,19 @@ static std::string extract_message(const HTTP::Request& req) {
     return {};
 }
 
+static bool extract_approval(const HTTP::Request& req, bool& approved, bool& sticky) {
+    try {
+        auto body = req.bodyAsString();
+        if (body.empty()) return false;
+        auto j = json::parse(body);
+        if (!j.contains("approved") || !j["approved"].is_boolean()) return false;
+        approved = j["approved"].get<bool>();
+        sticky   = j.value("sticky", false);
+        return true;
+    } catch (...) {}
+    return false;
+}
+
 // ============================================================================
 // Route registration
 // ============================================================================
@@ -122,6 +135,29 @@ static void register_routes(HTTP::Server& server, SessionManager& mgr) {
             resp.setBody(R"({"status":"cancelled"})");
         });
 
+    // POST /sessions/<id>/approve — approve or deny a pending bash command.
+    // §webui-approval: the browser sends {approved: true/false, sticky: bool}.
+    server.router().post(R"(/sessions/([^/]+)/approve)",
+        [&mgr](const Req& req, Resp& resp) {
+            std::string sid = extract_session_id(req.path());
+            bool approved = false, sticky = false;
+            if (sid.empty() || !extract_approval(req, approved, sticky)) {
+                resp.setStatus(HTTP::StatusCode::BAD_REQUEST);
+                resp.setContentType("application/json");
+                resp.setBody(json_error("missing session_id or approved boolean"));
+                return;
+            }
+            if (!mgr.resolve_approval(sid, approved, sticky)) {
+                resp.setStatus(HTTP::StatusCode::NOT_FOUND);
+                resp.setContentType("application/json");
+                resp.setBody(json_error("no such session"));
+                return;
+            }
+            resp.setStatus(HTTP::StatusCode::OK);
+            resp.setContentType("application/json");
+            resp.setBody(R"({"status":"resolved"})");
+        });
+
     // GET /sessions/<id>/state — return agent state as JSON.
     server.router().get(R"(/sessions/([^/]+)/state)",
         [&mgr](const Req& req, Resp& resp) {
@@ -129,6 +165,16 @@ static void register_routes(HTTP::Server& server, SessionManager& mgr) {
             resp.setStatus(HTTP::StatusCode::OK);
             resp.setContentType("application/json");
             resp.setBody(mgr.get_state(sid));
+        });
+
+    // GET /sessions/<id>/stats — return AgentStats as JSON.
+    // §webui-usage: polled by the header HUD.
+    server.router().get(R"(/sessions/([^/]+)/stats)",
+        [&mgr](const Req& req, Resp& resp) {
+            std::string sid = extract_session_id(req.path());
+            resp.setStatus(HTTP::StatusCode::OK);
+            resp.setContentType("application/json");
+            resp.setBody(mgr.get_stats(sid));
         });
 
     // GET /healthz — liveness probe.

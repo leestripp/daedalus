@@ -51,6 +51,8 @@ static void print_help(const char* argv0) {
               << "      --home PATH  Use PATH as the daedalus home (model store).\n"
               << "                   Overrides the XDG default. Useful when\n"
               << "                   testing with an isolated config.\n"
+              << "      --auto          Auto-approve all bash commands (no browser\n"
+              << "                   approval dialog). Use with caution.\n"
               << "      --cors-origins CSV  Override CORS allowed origins (default:\n"
               << "                   http://localhost,http://127.0.0.1).\n"
               << "                   Pass '*' for wildcard (NOT recommended;\n"
@@ -66,6 +68,8 @@ static void print_help(const char* argv0) {
               << "  POST /sessions/<id>/messages Submit a user message\n"
               << "  POST /sessions/<id>/cancel   Cancel current turn\n"
               << "  GET  /sessions/<id>/state    Get current AgentState\n"
+              << "  GET  /sessions/<id>/stats    Get AgentStats (tokens, iterations)\n"
+              << "  POST /sessions/<id>/approve  Approve/deny a pending bash command\n"
               << "  GET  /sessions/<id>/events   SSE event stream (text/event-stream)\n"
               << "  GET  /healthz                Liveness probe\n"
               << "  GET  /info                   Server-side metadata (cwd, etc.)\n";
@@ -76,6 +80,7 @@ int main(int argc, char* argv[]) {
     std::string model_name;
     std::filesystem::path project_root = std::filesystem::current_path();
     std::filesystem::path daedalus_home;   // empty = use default
+    bool auto_approve = false;
     // §webui-6: default to loopback + localhost origins. Hosts that
     // genuinely need wildcard (or a LAN origin) can override via
     // --cors-origins on the CLI.
@@ -99,6 +104,9 @@ int main(int argc, char* argv[]) {
                 return 2;
             }
             model_name = argv[++i];
+        }
+        else if (arg == "--auto") {
+            auto_approve = true;
         }
         else if (arg == "--cors-origins") {
             // §webui-6: explicit override. Use "*" for wildcard
@@ -173,13 +181,14 @@ int main(int argc, char* argv[]) {
     cfg.corsAllowedOrigins = cors_origins;
 
     OmniNet::HTTP::Server server(cfg);
-    websse::SessionManager mgr(server, model_name, project_root);
+    websse::SessionManager mgr(server, model_name, project_root, auto_approve);
     websse::register_routes(server, mgr);
 
     std::cerr << "[daedalus-webui] listening on http://"
               << cfg.address << ":" << cfg.port << "/\n"
               << "[daedalus-webui] open in a browser; one Agent per session\n"
-              << "[daedalus-webui] project_root=" << project_root << "\n";
+              << "[daedalus-webui] project_root=" << project_root << "\n"
+              << "[daedalus-webui] auto_approve=" << (auto_approve ? "yes" : "no") << "\n";
 
     server.start();      // blocks
 

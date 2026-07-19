@@ -8,6 +8,8 @@
 
 #include <string>
 #include <string_view>
+#include <condition_variable>
+#include <mutex>
 #include <nlohmann/json.hpp>
 
 #include "OmniNet.h"
@@ -20,7 +22,11 @@ using namespace OmniNet;
 
 class WebSseSink : public daedalus::AgentSink {
 public:
+    explicit WebSseSink(bool auto_approve = false) : auto_approve_(auto_approve) {}
+
     void bind_sse(SSE::Handler* sse) { sse_ = sse; }
+
+    void set_auto_approve(bool v) { auto_approve_ = v; }
 
     void on_assistant_delta(std::string_view text) noexcept override {
         if (!sse_) return;
@@ -104,19 +110,71 @@ public:
         sse_->broadcast("bell", "{}");
     }
 
-    // For this demo we auto-approve all bash commands. A real host would
-    // forward the prompt to the browser and wait for user click.
+    // §webui-approval: if --auto is set, approve immediately. Otherwise
+    // emit an approval_required SSE event and block the agent's worker
+    // thread until the browser POSTs a decision to /sessions/<id>/approve.
     bool request_command_approval(std::string_view command) override {
-        if (sse_) {
-            json j = { {"approved", true},
-                       {"command", std::string(command)} };
-            sse_->broadcast("command_approval", j.dump());
+        if (auto_approve_) {
+            if (sse_) {
+                json j = { {"auto_approved", true},
+                           {"command", std::string(command)} };
+                sse_->broadcast("command_approval", j.dump());
+            }
+            return true;
         }
-        return true;
+
+        {
+            std::lock_guard<std::mutex> lock(approval_mu_);
+            pending_command_ = std::string(command);
+            approval_ready_  = false;
+        }
+
+        if (sse_) {
+            json j = { {"command", std::string(command)} };
+            sse_->broadcast("approval_required", j.dump());
+        }
+
+        std::unique_lock<std::mutex> lock(approval_mu_);
+        approval_cv_.wait(lock, [this] {
+            return approval_ready_ || shutdown_;
+        });
+
+        // If the session is shutting down while we wait, deny so the
+        // agent can unwind cleanly.
+        if (shutdown_) return false;
+
+        return approval_approved_;
+    }
+
+    // Called from the HTTP handler thread when the browser decides.
+    // sticky is accepted for API symmetry but not persisted in this demo.
+    void resolve_approval(bool approved, bool /*sticky*/) {
+        {
+            std::lock_guard<std::mutex> lock(approval_mu_);
+            approval_ready_    = true;
+            approval_approved_ = approved;
+        }
+        approval_cv_.notify_one();
+    }
+
+    void shutdown() {
+        {
+            std::lock_guard<std::mutex> lock(approval_mu_);
+            shutdown_ = true;
+        }
+        approval_cv_.notify_one();
     }
 
 private:
     SSE::Handler* sse_{nullptr};
+    bool auto_approve_ = false;
+
+    std::mutex              approval_mu_;
+    std::condition_variable approval_cv_;
+    std::string             pending_command_;
+    bool                    approval_ready_  = false;
+    bool                    approval_approved_ = false;
+    bool                    shutdown_        = false;
 };
 
 

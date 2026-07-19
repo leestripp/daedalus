@@ -49,15 +49,17 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   .body .error { color: #f85149; }
   .body .tool-call   { color: #58a6ff; margin-top: 6px; }
   .body .tool-result { color: #8b949e; margin: 2px 0 8px 12px; font-size: 12px; }
-  form { display: flex; gap: 8px; padding: 8px 12px;
+  form { display: flex; gap: 8px; padding: 8px 12px; align-items: flex-end;
          border-top: 1px solid #2a2f36; background: #0f1115; }
-  input[type=text] { flex: 1; padding: 6px 10px; border: 1px solid #2a2f36;
-                     border-radius: 4px; background: #161b22; color: #d6d9dc;
-                     font: inherit; }
-  input[type=text]:focus { outline: none; border-color: #1f6feb; }
+  textarea#input { flex: 1; padding: 6px 10px; border: 1px solid #2a2f36;
+                   border-radius: 4px; background: #161b22; color: #d6d9dc;
+                   font: inherit; resize: none; min-height: 20px;
+                   max-height: 200px; field-sizing: content; }
+  textarea#input:focus { outline: none; border-color: #1f6feb; }
   button { padding: 6px 14px; background: #238636; color: #fff;
            border: none; border-radius: 4px; font: inherit; cursor: pointer; }
   button.cancel { background: #6e7681; }
+  button.deny { background: #da3633; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .empty { color: #6e7681; font-style: italic; }
   /* Right-side header group: holds the model name + cwd label.
@@ -304,6 +306,48 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     font-family: inherit;
   }
   .tool-card-collapse:hover { background: #1f6feb22; }
+
+  /* §webui-approval: modal dialog for bash command approval */
+  #approval-modal {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.7);
+    display: none; align-items: center; justify-content: center;
+  }
+  #approval-modal.visible { display: flex; }
+  .approval-box {
+    background: #161b22; border: 1px solid #2a2f36;
+    border-radius: 8px; padding: 16px; max-width: 600px; width: 90%;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .approval-box h3 { margin: 0 0 10px; font-size: 14px; color: #d6d9dc; }
+  .approval-box pre {
+    background: #0d1117; border: 1px solid #2a2f36; border-radius: 4px;
+    padding: 10px; overflow-x: auto; white-space: pre-wrap; word-break: break-all;
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    color: #d6d9dc; max-height: 200px;
+  }
+  .approval-box .buttons {
+    display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;
+  }
+
+  /* §webui-usage: compact token/iteration HUD in the header */
+  #usage-hud {
+    font-size: 11px; color: #8b949e;
+    display: flex; gap: 10px; align-items: center;
+    padding: 2px 8px; border-radius: 4px;
+    background: #161b22; border: 1px solid #2a2f36;
+    white-space: nowrap;
+  }
+  #usage-hud .bar {
+    width: 60px; height: 6px; background: #2a2f36; border-radius: 3px;
+    overflow: hidden; display: inline-block; vertical-align: middle;
+  }
+  #usage-hud .bar-fill {
+    height: 100%; background: #1f6feb; width: 0%;
+    transition: width 200ms ease-out;
+  }
+  #usage-hud .bar-fill.warn { background: #d29922; }
+  #usage-hud .bar-fill.danger { background: #f85149; }
 </style>
 </head>
 <body>
@@ -311,6 +355,7 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   <h1>daedalus-webui</h1>
   <span id="state">Idle</span>
   <span id="stats" class="empty">no session yet</span>
+  <span id="usage-hud" title="Tokens and iterations"></span>
   <div id="right-info">
     <span id="model" title="" class="empty info-pill">…</span>
     <span id="cwd"   title="" class="empty info-pill">…</span>
@@ -330,8 +375,8 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
       <span class="stage-chip terminal" data-stage="Done">✓ Done</span>
     </div>
     <form id="composer">
-      <input type="text" id="input" autocomplete="off"
-             placeholder="Send a message..." disabled>
+      <textarea id="input" autocomplete="off" rows="1"
+                placeholder="Send a message... (Ctrl+Enter)" disabled></textarea>
       <button type="submit" id="send" disabled>Send</button>
       <button type="button" id="cancel" disabled>Cancel</button>
     </form>
@@ -346,6 +391,18 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   </section>
 </main>
 
+<!-- §webui-approval: bash command approval modal -->
+<div id="approval-modal">
+  <div class="approval-box">
+    <h3>Approve bash command?</h3>
+    <pre id="approval-command"></pre>
+    <div class="buttons">
+      <button type="button" id="approval-deny" class="deny">Deny</button>
+      <button type="button" id="approval-approve">Approve</button>
+    </div>
+  </div>
+</div>
+
 <script>
 "use strict";
 
@@ -355,13 +412,19 @@ const toolsEl      = $("tools");
 const logEl        = $("log");
 const stateEl      = $("state");
 const statsEl      = $("stats");
+const usageHudEl   = $("usage-hud");
 const inputEl      = $("input");
 const sendBtn      = $("send");
 const cancelBtn    = $("cancel");
+const approvalModal = $("approval-modal");
+const approvalCommandEl = $("approval-command");
+const approvalApproveBtn = $("approval-approve");
+const approvalDenyBtn    = $("approval-deny");
 
 let sessionId = null;
 let es = null;
 let currentDelta = null;
+let statsInterval = null;
 
 // §Phase 9.5: expose handle on window for debugging (devtools, BiDi tests).
 // This is a tiny one-line change that makes "what session am I in?"
@@ -417,6 +480,78 @@ function setState(name) {
   cancelBtn.disabled = !sessionId || !running;
   inputEl.disabled   = !sessionId || running;
 }
+
+// §webui-usage: poll /sessions/<id>/stats and render a compact HUD.
+function renderUsageHud(st) {
+  if (!st || st.error) {
+    usageHudEl.textContent = "";
+    return;
+  }
+  const pct = st.max_context_size > 0
+              ? Math.min(100, Math.round(st.total_tokens / st.max_context_size * 100))
+              : 0;
+  const iterPct = st.max_iterations > 0
+                  ? Math.min(100, Math.round(st.iteration / st.max_iterations * 100))
+                  : 0;
+  const barClass = pct >= 95 ? "danger" : pct >= 80 ? "warn" : "";
+  usageHudEl.innerHTML =
+    '<span title="tokens">tk ' + st.total_tokens + '/' + st.max_context_size +
+    ' (' + pct + '%)</span>' +
+    '<span class="bar"><span class="bar-fill ' + barClass +
+    '" style="width:' + pct + '%"></span></span>' +
+    '<span title="iterations">it ' + st.iteration + '/' + st.max_iterations +
+    ' (' + iterPct + '%)</span>';
+}
+function startStatsPolling() {
+  if (statsInterval) clearInterval(statsInterval);
+  statsInterval = setInterval(() => {
+    if (!sessionId) return;
+    fetch("/sessions/" + sessionId + "/stats")
+      .then(r => r.json())
+      .then(renderUsageHud)
+      .catch(() => { /* ignore transient poll failures */ });
+  }, 2000);
+}
+function stopStatsPolling() {
+  if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
+}
+
+// §webui-approval: show/hide the bash approval modal.
+function showApproval(command) {
+  approvalCommandEl.textContent = command;
+  approvalModal.classList.add("visible");
+}
+function hideApproval() {
+  approvalModal.classList.remove("visible");
+  approvalCommandEl.textContent = "";
+}
+function sendApproval(approved) {
+  if (!sessionId) return;
+  fetch("/sessions/" + sessionId + "/approve", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ approved: approved, sticky: false }),
+  }).catch(e => appendLog("Error", "approval failed: " + e));
+  hideApproval();
+}
+approvalApproveBtn.addEventListener("click", () => sendApproval(true));
+approvalDenyBtn.addEventListener("click", () => sendApproval(false));
+
+// §webui-textarea: auto-resize and keyboard shortcuts.
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(200, inputEl.scrollHeight) + "px";
+});
+inputEl.addEventListener("keydown", (ev) => {
+  if (ev.key === "Enter" && !ev.shiftKey && (ev.ctrlKey || ev.metaKey)) {
+    ev.preventDefault();
+    document.getElementById("composer").dispatchEvent(new Event("submit"));
+  } else if (ev.key === "Enter" && !ev.shiftKey) {
+    // Plain Enter in a textarea inserts a newline; require Ctrl/Cmd+Enter
+    // to send. This matches chat apps and prevents accidental sends while
+    // typing multi-line code.
+  }
+});
 
 // === Phase 9.10: thinking bubble + stage chips =====================
 //
@@ -494,9 +629,14 @@ function setStage(name) {
 
 function newSession() {
   if (es) { es.close(); es = null; }
+  stopStatsPolling();
   transcriptEl.innerHTML = "";
   toolsEl.innerHTML      = '<span class="empty">No tool calls yet.</span>';
   logEl.innerHTML        = '<span class="empty">No events yet.</span>';
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  usageHudEl.textContent = "";
+  hideApproval();
   // §Phase D2.1: clear the counter badge (the JS counters live in
   // the SSE-closure scope and reset implicitly when openEventStream
   // runs again, but the DOM element persists across sessions).
@@ -526,6 +666,7 @@ function newSession() {
       }
 
       openEventStream();
+      startStatsPolling();
       inputEl.disabled = false;
       sendBtn.disabled = false;
       inputEl.focus();
@@ -600,6 +741,19 @@ function openEventStream() {
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   });
   es.addEventListener("assistant_end", () => { currentDelta = null; });
+  // §webui-approval: the backend is blocked waiting for the user to
+  // approve or deny this bash command. Show the modal and let the user
+  // POST a decision back to /sessions/<id>/approve.
+  es.addEventListener("approval_required", (e) => {
+    const d = JSON.parse(e.data);
+    showApproval(d.command || "(unknown command)");
+  });
+  es.addEventListener("command_approval", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.auto_approved) {
+      appendLog("Info", "auto-approved: " + (d.command || ""));
+    }
+  });
   // §Phase D1: Tool Calls panel — each invocation gets its own card
   // keyed by OpenAI-style call_id so tool_call/progress/result events
   // for the same invocation land in one place.
@@ -838,6 +992,7 @@ document.getElementById("composer").addEventListener("submit", (ev) => {
   const text = inputEl.value.trim();
   if (!text || !sessionId) return;
   inputEl.value = "";
+  inputEl.style.height = "auto";
   append(transcriptEl, "› " + escapeHtml(text), "log");
   // §Phase 9.10: clean up any leftover indicator from a previous turn
   // (the chip row was hidden on the previous terminal state, but be
@@ -856,6 +1011,7 @@ document.getElementById("composer").addEventListener("submit", (ev) => {
 
 cancelBtn.addEventListener("click", () => {
   if (!sessionId) return;
+  hideApproval();
   fetch("/sessions/" + sessionId + "/cancel", { method: "POST" })
     .catch(e => appendLog("Error", "cancel failed: " + e));
 });

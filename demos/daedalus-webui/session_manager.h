@@ -37,6 +37,12 @@ namespace fs = std::filesystem;
 // ============================================================================
 
 struct Session {
+    ~Session() {
+        stop = true;
+        if (sink) sink->shutdown();  // wake any pending approval wait
+        if (worker.joinable()) worker.join();
+    }
+
     std::string id;
     std::unique_ptr<daedalus::Agent> agent;
     std::shared_ptr<WebSseSink>     sink;       // shared_ptr so the Agent
@@ -55,10 +61,12 @@ class SessionManager {
 public:
     explicit SessionManager(HTTP::Server& server,
                             std::string model_name = "",
-                            std::filesystem::path project_root = {})
+                            std::filesystem::path project_root = {},
+                            bool auto_approve = false)
         : server_(server)
         , default_model_name_(std::move(model_name))
-        , project_root_(std::move(project_root)) {}
+        , project_root_(std::move(project_root))
+        , auto_approve_(auto_approve) {}
 
     std::string create() {
         auto sess = std::make_unique<Session>();
@@ -102,7 +110,7 @@ public:
         // to work, so use user_root().
         cfg.daedalus_home = daedalus::Paths::global().user_root();
 
-        sess->sink  = std::make_shared<WebSseSink>();
+        sess->sink  = std::make_shared<WebSseSink>(auto_approve_);
         sess->agent = std::make_unique<daedalus::Agent>(std::move(cfg), sess->sink);
 
         // SSE handler for this session's event stream at a unique path.
@@ -159,7 +167,19 @@ public:
     void cancel(const std::string& id) {
         std::lock_guard<std::mutex> lock(mu_);
         auto it = sessions_.find(id);
-        if (it != sessions_.end()) it->second->agent->cancel();
+        if (it != sessions_.end()) {
+            it->second->agent->cancel();
+            it->second->sink->shutdown();  // wake any pending approval wait
+        }
+    }
+
+    // §webui-approval: resolve a pending command approval for this session.
+    bool resolve_approval(const std::string& id, bool approved, bool sticky) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = sessions_.find(id);
+        if (it == sessions_.end()) return false;
+        it->second->sink->resolve_approval(approved, sticky);
+        return true;
     }
 
     std::string get_state(const std::string& id) {
@@ -190,10 +210,33 @@ public:
         return j.dump();
     }
 
+    // §webui-usage: expose AgentStats as JSON for the HUD.
+    std::string get_stats(const std::string& id) {
+        std::lock_guard<std::mutex> lock(mu_);
+        auto it = sessions_.find(id);
+        if (it == sessions_.end()) return R"({"error":"no such session"})";
+        const auto& st = it->second->agent->stats();
+        json j = {
+            {"iteration",           st.iteration},
+            {"max_iterations",      st.max_iterations},
+            {"prompt_tokens",       st.prompt_tokens},
+            {"completion_tokens",   st.completion_tokens},
+            {"total_tokens",        st.total_tokens},
+            {"max_context_size",    st.max_context_size},
+            {"message_count",       st.message_count},
+            {"pending_tool_calls",  st.pending_tool_calls},
+            {"executing_tool_calls",st.executing_tool_calls},
+            {"completed_tool_calls",st.completed_tool_calls},
+            {"failed_tool_calls",  st.failed_tool_calls},
+        };
+        return j.dump();
+    }
+
 private:
     HTTP::Server& server_;
     std::string default_model_name_;
     std::filesystem::path project_root_;
+    bool auto_approve_;
     std::mutex mu_;
     std::unordered_map<std::string, std::unique_ptr<Session>> sessions_;
     std::mutex queued_mu_;
