@@ -13,6 +13,7 @@
 .daedalus-*/
 .agents/
 prompt.txt                  # design source-of-truth, not source code
+Testing/
 
 # ---------------------------------------------------------------------------
 # Build artifacts
