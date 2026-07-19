@@ -16,6 +16,7 @@
 
 #include "index_html.h"
 #include "session_manager.h"
+#include "settings_routes.h"
 
 namespace websse {
 using namespace OmniNet;
@@ -198,6 +199,9 @@ static void register_routes(HTTP::Server& server, SessionManager& mgr) {
         };
         resp.setBody(j.dump());
     });
+
+    // §webui-settings: settings-management routes (models, general, MCP).
+    register_settings_routes(server);
 }
 
 

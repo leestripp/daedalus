@@ -348,6 +348,94 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   }
   #usage-hud .bar-fill.warn { background: #d29922; }
   #usage-hud .bar-fill.danger { background: #f85149; }
+
+  /* §webui-settings: header settings button */
+  .settings-btn {
+    background: transparent; color: #8b949e;
+    border: 1px solid #2a2f36; padding: 4px 10px;
+    font-size: 12px; border-radius: 4px;
+  }
+  .settings-btn:hover { background: #1f6feb22; color: #58a6ff; border-color: #1f6feb; }
+
+  /* §webui-settings: full-page settings overlay */
+  #settings-page {
+    position: fixed; inset: 0; z-index: 50;
+    background: #0f1115;
+    display: none; flex-direction: column;
+  }
+  #settings-page.visible { display: flex; }
+  .settings-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; border-bottom: 1px solid #2a2f36;
+  }
+  .settings-header h2 { margin: 0; font-size: 16px; }
+  .settings-body {
+    flex: 1; display: flex; overflow: hidden;
+  }
+  .settings-tabs {
+    width: 160px; border-right: 1px solid #2a2f36;
+    display: flex; flex-direction: column; padding: 8px;
+    background: #161b22;
+  }
+  .settings-tab {
+    text-align: left; background: transparent; color: #8b949e;
+    border: none; padding: 8px 10px; border-radius: 4px;
+    font-size: 13px; cursor: pointer;
+  }
+  .settings-tab.active { background: #1f6feb; color: #fff; }
+  .settings-tab:hover:not(.active) { background: #2a2f36; }
+  .settings-panel {
+    flex: 1; padding: 16px; overflow-y: auto; display: none;
+  }
+  .settings-panel.active { display: block; }
+  .settings-panel h3 { margin-top: 0; font-size: 14px; color: #d6d9dc; }
+  .settings-form {
+    max-width: 700px;
+    display: grid; grid-template-columns: 140px 1fr; gap: 10px 12px;
+    align-items: center; margin-bottom: 20px;
+  }
+  .settings-form label {
+    color: #8b949e; font-size: 12px; text-align: right;
+  }
+  .settings-form input, .settings-form select, .settings-form textarea {
+    background: #161b22; color: #d6d9dc; border: 1px solid #2a2f36;
+    border-radius: 4px; padding: 6px 8px; font: inherit; font-size: 12px;
+  }
+  .settings-form input:focus, .settings-form select:focus, .settings-form textarea:focus {
+    outline: none; border-color: #1f6feb;
+  }
+  .settings-form input[type=checkbox] {
+    justify-self: start;
+  }
+  .settings-form textarea { resize: vertical; min-height: 60px; }
+  .settings-form .full-width { grid-column: 1 / -1; text-align: left; }
+  .settings-actions {
+    grid-column: 1 / -1; display: flex; gap: 8px; justify-content: flex-end;
+    margin-top: 8px;
+  }
+  .settings-card-list { max-width: 700px; }
+  .settings-card {
+    background: #161b22; border: 1px solid #2a2f36; border-radius: 6px;
+    padding: 10px 12px; margin-bottom: 10px;
+  }
+  .settings-card h4 { margin: 0 0 6px; font-size: 13px; color: #58a6ff; }
+  .settings-card p { margin: 0; font-size: 12px; color: #8b949e; }
+  .settings-card .actions {
+    display: flex; gap: 8px; justify-content: flex-end; margin-top: 8px;
+  }
+  .settings-card .actions button {
+    padding: 3px 10px; font-size: 11px;
+  }
+  .settings-card .actions button.danger {
+    background: #da3633;
+  }
+  .settings-note {
+    font-size: 11px; color: #8b949e; margin-top: 8px;
+  }
+  .settings-path {
+    font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px;
+    color: #6e7681;
+  }
 </style>
 </head>
 <body>
@@ -356,6 +444,7 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   <span id="state">Idle</span>
   <span id="stats" class="empty">no session yet</span>
   <span id="usage-hud" title="Tokens and iterations"></span>
+  <button type="button" id="settings-btn" class="settings-btn">⚙ Settings</button>
   <div id="right-info">
     <span id="model" title="" class="empty info-pill">…</span>
     <span id="cwd"   title="" class="empty info-pill">…</span>
@@ -390,6 +479,120 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     <div id="log" class="body"><span class="empty">No events yet.</span></div>
   </section>
 </main>
+
+<!-- §webui-settings: full-page settings overlay -->
+<div id="settings-page">
+  <div class="settings-header">
+    <h2>Settings</h2>
+    <span class="settings-note">Stored in <span id="settings-db-path" class="settings-path">…</span></span>
+    <div style="margin-left:auto; display:flex; gap:8px;">
+      <button type="button" id="settings-reload" class="cancel">Reload</button>
+      <button type="button" id="settings-close">Close</button>
+    </div>
+  </div>
+  <div class="settings-body">
+    <div class="settings-tabs">
+      <button type="button" class="settings-tab active" data-tab="models">Models</button>
+      <button type="button" class="settings-tab" data-tab="general">General</button>
+      <button type="button" class="settings-tab" data-tab="mcp">MCP Servers</button>
+    </div>
+
+    <!-- Models panel -->
+    <div class="settings-panel active" id="tab-models">
+      <h3>Configured Models</h3>
+      <div id="models-list" class="settings-card-list">
+        <span class="empty">Loading…</span>
+      </div>
+      <h3>Add / Edit Model</h3>
+      <form id="model-form" class="settings-form">
+        <input type="hidden" id="model-original-name" value="">
+        <label for="model-name">Name</label>
+        <input type="text" id="model-name" placeholder="minimax-m2.7" required>
+        <label for="model-host">Host URL</label>
+        <input type="text" id="model-host" placeholder="https://api.minimax.io">
+        <label for="model-id">Model ID</label>
+        <input type="text" id="model-id" placeholder="MiniMax-M2.7">
+        <label for="model-key">API Key</label>
+        <input type="password" id="model-key" placeholder="sk-…">
+        <label for="model-endpoint">Chat Endpoint</label>
+        <input type="text" id="model-endpoint" value="/v1/chat/completions">
+        <label for="model-ctx">Max Context</label>
+        <input type="number" id="model-ctx" placeholder="0 = auto" min="0">
+        <label for="model-temp">Temperature</label>
+        <input type="number" id="model-temp" step="0.1" min="0" max="2" value="0">
+        <div class="settings-actions">
+          <button type="button" id="model-clear" class="cancel">Clear</button>
+          <button type="submit">Save Model</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- General panel -->
+    <div class="settings-panel" id="tab-general">
+      <h3>General Agent Settings</h3>
+      <form id="general-form" class="settings-form">
+        <label for="general-default">Default Model</label>
+        <select id="general-default"></select>
+        <label for="general-auto">Auto-approve bash</label>
+        <input type="checkbox" id="general-auto">
+        <label for="general-max-iter">Max Iterations</label>
+        <input type="number" id="general-max-iter" min="1">
+        <label for="general-tool-size">Max Tool Result Size</label>
+        <input type="number" id="general-tool-size" min="1">
+        <label for="general-req-size">Max Request Size</label>
+        <input type="number" id="general-req-size" min="1">
+        <label for="general-res-size">Max Response Size</label>
+        <input type="number" id="general-res-size" min="1">
+        <label for="general-mcp-cap">MCP Schema Soft Cap %</label>
+        <input type="number" id="general-mcp-cap" min="0" max="100">
+        <div class="settings-actions">
+          <button type="submit">Save General Settings</button>
+        </div>
+      </form>
+      <p class="settings-note">
+        Note: the webui process reads these values on session creation.
+        Existing browser sessions continue using the values they started with.
+      </p>
+    </div>
+
+    <!-- MCP panel -->
+    <div class="settings-panel" id="tab-mcp">
+      <h3>Configured MCP Servers</h3>
+      <div id="mcp-list" class="settings-card-list">
+        <span class="empty">Loading…</span>
+      </div>
+      <h3>Add / Edit MCP Server</h3>
+      <form id="mcp-form" class="settings-form">
+        <input type="hidden" id="mcp-original-name" value="">
+        <label for="mcp-name">Name</label>
+        <input type="text" id="mcp-name" placeholder="wikipedia" required>
+        <label for="mcp-transport">Transport</label>
+        <select id="mcp-transport">
+          <option value="stdio">stdio</option>
+          <option value="streamable-http">streamable-http</option>
+        </select>
+        <label for="mcp-command">Command</label>
+        <input type="text" id="mcp-command" placeholder="mcp-server-wikipedia">
+        <label for="mcp-args">Args (one per line)</label>
+        <textarea id="mcp-args" placeholder="--verbose"></textarea>
+        <label for="mcp-env">Env (KEY=VALUE per line)</label>
+        <textarea id="mcp-env" placeholder="API_KEY=abc"></textarea>
+        <label for="mcp-url">URL</label>
+        <input type="text" id="mcp-url" placeholder="http://localhost:3000/sse">
+        <label for="mcp-token">Bearer Token</label>
+        <input type="password" id="mcp-token">
+        <label for="mcp-desc">Description</label>
+        <input type="text" id="mcp-desc">
+        <label for="mcp-enabled">Enabled</label>
+        <input type="checkbox" id="mcp-enabled" checked>
+        <div class="settings-actions">
+          <button type="button" id="mcp-clear" class="cancel">Clear</button>
+          <button type="submit">Save Server</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
 
 <!-- §webui-approval: bash command approval modal -->
 <div id="approval-modal">
@@ -1015,6 +1218,347 @@ cancelBtn.addEventListener("click", () => {
   fetch("/sessions/" + sessionId + "/cancel", { method: "POST" })
     .catch(e => appendLog("Error", "cancel failed: " + e));
 });
+
+// ============================================================================
+// §webui-settings: settings page logic
+// ============================================================================
+const settingsPage      = $("settings-page");
+const settingsBtn       = $("settings-btn");
+const settingsCloseBtn  = $("settings-close");
+const settingsReloadBtn = $("settings-reload");
+const settingsDbPathEl  = $("settings-db-path");
+const settingsTabs      = document.querySelectorAll(".settings-tab");
+const settingsPanels    = document.querySelectorAll(".settings-panel");
+
+let cachedModels = [];
+let cachedGeneral = {};
+
+settingsBtn.addEventListener("click", () => {
+  settingsPage.classList.add("visible");
+  loadSettings();
+});
+settingsCloseBtn.addEventListener("click", () => settingsPage.classList.remove("visible"));
+settingsReloadBtn.addEventListener("click", loadSettings);
+
+settingsTabs.forEach(tab => {
+  tab.addEventListener("click", () => {
+    settingsTabs.forEach(t => t.classList.remove("active"));
+    settingsPanels.forEach(p => p.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById("tab-" + tab.dataset.tab).classList.add("active");
+  });
+});
+
+function showToast(msg) {
+  appendLog("Info", msg);
+}
+
+async function loadSettings() {
+  try {
+    const [modelsResp, generalResp, mcpResp] = await Promise.all([
+      fetch("/settings/models"),
+      fetch("/settings/general"),
+      fetch("/settings/mcp"),
+    ]);
+    const modelsData = await modelsResp.json();
+    const generalData = await generalResp.json();
+    const mcpData = await mcpResp.json();
+
+    cachedModels = (modelsData.models || []).sort((a, b) => a.name.localeCompare(b.name));
+    cachedGeneral = generalData;
+    settingsDbPathEl.textContent = generalData.db_path || "(unknown)";
+
+    renderModelsList();
+    populateDefaultModelDropdown();
+    renderGeneralForm();
+    renderMcpList(mcpData.servers || []);
+  } catch (e) {
+    appendLog("Error", "failed to load settings: " + e);
+  }
+}
+
+// ---- Models ----
+function renderModelsList() {
+  const list = $("models-list");
+  if (cachedModels.length === 0) {
+    list.innerHTML = '<span class="empty">No models configured.</span>';
+    return;
+  }
+  list.innerHTML = "";
+  cachedModels.forEach(m => {
+    const card = document.createElement("div");
+    card.className = "settings-card";
+    const title = document.createElement("h4");
+    title.textContent = m.name + (cachedGeneral.default_model === m.name ? " (default)" : "");
+    card.appendChild(title);
+    const meta = document.createElement("p");
+    meta.textContent = (m.model_id || "(no model id)") + " @ " + (m.host || "(no host)") +
+                       " | ctx=" + (m.max_context_size || "auto") +
+                       " | temp=" + m.temperature;
+    card.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => populateModelForm(m));
+    const defaultBtn = document.createElement("button");
+    defaultBtn.type = "button";
+    defaultBtn.textContent = "Set default";
+    defaultBtn.addEventListener("click", () => setDefaultModel(m.name));
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "danger";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteModel(m.name));
+    actions.appendChild(editBtn);
+    actions.appendChild(defaultBtn);
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+}
+
+function populateModelForm(m) {
+  $("model-original-name").value = m.name || "";
+  $("model-name").value = m.name || "";
+  $("model-host").value = m.host || "";
+  $("model-id").value = m.model_id || "";
+  // The API key returned by GET is masked; leave the field blank so the
+  // user only has to type a new key when they actually want to change it.
+  $("model-key").value = "";
+  $("model-endpoint").value = m.chat_endpoint || "/v1/chat/completions";
+  $("model-ctx").value = m.max_context_size || "";
+  $("model-temp").value = m.temperature;
+}
+
+$("model-clear").addEventListener("click", () => {
+  $("model-form").reset();
+  $("model-original-name").value = "";
+  $("model-endpoint").value = "/v1/chat/completions";
+  $("model-temp").value = 0;
+});
+
+$("model-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const original = $("model-original-name").value;
+  const name = $("model-name").value.trim();
+  if (!name) return;
+  const payload = {
+    name: name,
+    host: $("model-host").value.trim(),
+    model_id: $("model-id").value.trim(),
+    api_key: $("model-key").value,
+    chat_endpoint: $("model-endpoint").value.trim() || "/v1/chat/completions",
+    max_context_size: parseInt($("model-ctx").value, 10) || 0,
+    temperature: parseFloat($("model-temp").value) || 0,
+  };
+  try {
+    const r = await fetch("/settings/models", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("Model saved: " + name);
+    $("model-form").reset();
+    $("model-original-name").value = "";
+    $("model-endpoint").value = "/v1/chat/completions";
+    $("model-temp").value = 0;
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "save model failed: " + e);
+  }
+});
+
+async function setDefaultModel(name) {
+  try {
+    const r = await fetch("/settings/models/default", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("Default model set: " + name);
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "set default model failed: " + e);
+  }
+}
+
+async function deleteModel(name) {
+  if (!confirm("Delete model '" + name + "'?")) return;
+  try {
+    const r = await fetch("/settings/models/" + encodeURIComponent(name), { method: "DELETE" });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("Model deleted: " + name);
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "delete model failed: " + e);
+  }
+}
+
+function populateDefaultModelDropdown() {
+  const sel = $("general-default");
+  sel.innerHTML = '<option value="">(none)</option>';
+  cachedModels.forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.name;
+    opt.textContent = m.name;
+    if (cachedGeneral.default_model === m.name) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
+// ---- General ----
+function renderGeneralForm() {
+  $("general-auto").checked = !!cachedGeneral.auto_approve;
+  $("general-max-iter").value = cachedGeneral.max_agent_iterations ?? 100;
+  $("general-tool-size").value = cachedGeneral.max_tool_result_size ?? 10000;
+  $("general-req-size").value = cachedGeneral.max_request_size ?? 4000000;
+  $("general-res-size").value = cachedGeneral.max_response_size ?? 5000000;
+  $("general-mcp-cap").value = cachedGeneral.mcp_tool_schema_soft_cap_percent ?? 5;
+}
+
+$("general-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const payload = {
+    default_model: $("general-default").value,
+    auto_approve: $("general-auto").checked,
+    max_agent_iterations: parseInt($("general-max-iter").value, 10),
+    max_tool_result_size: parseInt($("general-tool-size").value, 10),
+    max_request_size: parseInt($("general-req-size").value, 10),
+    max_response_size: parseInt($("general-res-size").value, 10),
+    mcp_tool_schema_soft_cap_percent: parseInt($("general-mcp-cap").value, 10),
+  };
+  try {
+    const r = await fetch("/settings/general", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("General settings saved");
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "save general settings failed: " + e);
+  }
+});
+
+// ---- MCP ----
+function renderMcpList(servers) {
+  const list = $("mcp-list");
+  if (servers.length === 0) {
+    list.innerHTML = '<span class="empty">No MCP servers configured.</span>';
+    return;
+  }
+  list.innerHTML = "";
+  servers.sort((a, b) => a.name.localeCompare(b.name));
+  servers.forEach(s => {
+    const card = document.createElement("div");
+    card.className = "settings-card";
+    const title = document.createElement("h4");
+    title.textContent = s.name + (s.enabled ? "" : " (disabled)");
+    card.appendChild(title);
+    const meta = document.createElement("p");
+    meta.textContent = s.transport + " | " +
+                       (s.transport === "stdio" ? (s.command || "(no command)") : (s.url || "(no url)"));
+    card.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => populateMcpForm(s));
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "danger";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteMcpServer(s.name));
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+}
+
+function populateMcpForm(s) {
+  $("mcp-original-name").value = s.name || "";
+  $("mcp-name").value = s.name || "";
+  $("mcp-transport").value = s.transport || "stdio";
+  $("mcp-command").value = s.command || "";
+  $("mcp-args").value = (s.args || []).join("\n");
+  $("mcp-env").value = Object.entries(s.env || {}).map(([k, v]) => k + "=" + v).join("\n");
+  $("mcp-url").value = s.url || "";
+  // The bearer token returned by GET is masked; leave the field blank so
+  // the user only has to type a new token when they actually want to change it.
+  $("mcp-token").value = "";
+  $("mcp-desc").value = s.description || "";
+  $("mcp-enabled").checked = s.enabled !== false;
+}
+
+$("mcp-clear").addEventListener("click", () => {
+  $("mcp-form").reset();
+  $("mcp-original-name").value = "";
+  $("mcp-transport").value = "stdio";
+  $("mcp-enabled").checked = true;
+});
+
+$("mcp-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const name = $("mcp-name").value.trim();
+  if (!name) return;
+  const env = {};
+  $("mcp-env").value.split("\n").forEach(line => {
+    const eq = line.indexOf("=");
+    if (eq > 0) env[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+  });
+  const payload = {
+    name: name,
+    transport: $("mcp-transport").value,
+    command: $("mcp-command").value.trim(),
+    args: $("mcp-args").value.split("\n").map(s => s.trim()).filter(Boolean),
+    env: env,
+    url: $("mcp-url").value.trim(),
+    bearer_token: $("mcp-token").value,
+    description: $("mcp-desc").value.trim(),
+    enabled: $("mcp-enabled").checked,
+  };
+  try {
+    const r = await fetch("/settings/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("MCP server saved: " + name);
+    $("mcp-form").reset();
+    $("mcp-original-name").value = "";
+    $("mcp-transport").value = "stdio";
+    $("mcp-enabled").checked = true;
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "save MCP server failed: " + e);
+  }
+});
+
+async function deleteMcpServer(name) {
+  if (!confirm("Delete MCP server '" + name + "'?")) return;
+  try {
+    const r = await fetch("/settings/mcp/" + encodeURIComponent(name), { method: "DELETE" });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("MCP server deleted: " + name);
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "delete MCP server failed: " + e);
+  }
+}
 
 setState("Idle");
 newSession();

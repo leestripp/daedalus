@@ -72,7 +72,17 @@ static void print_help(const char* argv0) {
               << "  POST /sessions/<id>/approve  Approve/deny a pending bash command\n"
               << "  GET  /sessions/<id>/events   SSE event stream (text/event-stream)\n"
               << "  GET  /healthz                Liveness probe\n"
-              << "  GET  /info                   Server-side metadata (cwd, etc.)\n";
+              << "  GET  /info                   Server-side metadata (cwd, etc.)\n"
+              << "  Settings:\n"
+              << "    GET  /settings/models      List configured models\n"
+              << "    POST /settings/models      Add/update a model\n"
+              << "    DEL  /settings/models/<n>  Delete a model\n"
+              << "    POST /settings/models/default  Set default model\n"
+              << "    GET  /settings/general     General/agent settings\n"
+              << "    POST /settings/general     Update general settings\n"
+              << "    GET  /settings/mcp         List MCP servers\n"
+              << "    POST /settings/mcp         Add/update MCP server\n"
+              << "    DEL  /settings/mcp/<n>     Delete MCP server\n";
 }
 
 int main(int argc, char* argv[]) {
