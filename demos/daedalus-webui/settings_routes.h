@@ -21,6 +21,7 @@
 
 #include <daedalus/settings.h>
 #include <daedalus/Agent.h>
+#include <daedalus/model_discovery.h>
 
 namespace websse {
 using namespace OmniNet;
@@ -219,6 +220,50 @@ inline void register_settings_routes(HTTP::Server& server) {
             resp.setContentType("application/json");
             resp.setBody(json_ok());
         });
+
+    // GET /settings/providers/discover?name=<provider> — query the provider's
+    // /v1/models endpoint directly.
+    server.router().get("/settings/providers/discover", [](const Req& req, Resp& resp) {
+        std::string name;
+        if (auto q = req.queryParameter("name"); q.has_value()) {
+            name = *q;
+        }
+        if (name.empty()) {
+            resp.setStatus(HTTP::StatusCode::BAD_REQUEST);
+            resp.setContentType("application/json");
+            resp.setBody(json_error("missing 'name' query parameter"));
+            return;
+        }
+        auto provider = daedalus::SettingsStore::instance().get_provider(name);
+        if (!provider) {
+            resp.setStatus(HTTP::StatusCode::NOT_FOUND);
+            resp.setContentType("application/json");
+            resp.setBody(json_error("provider not found"));
+            return;
+        }
+        auto result = daedalus::discover_models(
+            provider->host, provider->api_key, provider->discovery_endpoint);
+        if (!result.success) {
+            resp.setStatus(HTTP::StatusCode::BAD_GATEWAY);
+            resp.setContentType("application/json");
+            resp.setBody(json_error(result.error_message));
+            return;
+        }
+        json arr = json::array();
+        for (const auto& m : result.models) {
+            arr.push_back(json{
+                {"id", m.id},
+                {"owned_by", m.owned_by},
+                {"created", m.created},
+                {"context_length", m.context_length},
+                {"supports_vision", m.supports_vision},
+                {"supports_reasoning", m.supports_reasoning}
+            });
+        }
+        resp.setStatus(HTTP::StatusCode::OK);
+        resp.setContentType("application/json");
+        resp.setBody(json_ok({{"models", arr}}));
+    });
 
     // ------------------------------------------------------------------------
     // Models

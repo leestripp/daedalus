@@ -74,15 +74,20 @@ static void print_help(const char* argv0) {
               << "  GET  /healthz                Liveness probe\n"
               << "  GET  /info                   Server-side metadata (cwd, etc.)\n"
               << "  Settings:\n"
-              << "    GET  /settings/models      List configured models\n"
-              << "    POST /settings/models      Add/update a model\n"
-              << "    DEL  /settings/models/<n>  Delete a model\n"
-              << "    POST /settings/models/default  Set default model\n"
-              << "    GET  /settings/general     General/agent settings\n"
-              << "    POST /settings/general     Update general settings\n"
-              << "    GET  /settings/mcp         List MCP servers\n"
-              << "    POST /settings/mcp         Add/update MCP server\n"
-              << "    DEL  /settings/mcp/<n>     Delete MCP server\n";
+              << "    GET  /settings/providers        List configured providers\n"
+              << "    POST /settings/providers        Add/update a provider\n"
+              << "    DEL  /settings/providers/<n>    Delete a provider\n"
+              << "    GET  /settings/providers/discover?name=<n>  Discover provider models\n"
+              << "    GET  /settings/models           List configured models\n"
+              << "    POST /settings/models           Add/update a model\n"
+              << "    DEL  /settings/models/<n>       Delete a model\n"
+              << "    GET  /settings/models/discover?name=<n>  Discover models via model's provider\n"
+              << "    POST /settings/models/default   Set default model\n"
+              << "    GET  /settings/general          General/agent settings\n"
+              << "    POST /settings/general          Update general settings\n"
+              << "    GET  /settings/mcp              List MCP servers\n"
+              << "    POST /settings/mcp              Add/update MCP server\n"
+              << "    DEL  /settings/mcp/<n>          Delete MCP server\n";
 }
 
 int main(int argc, char* argv[]) {

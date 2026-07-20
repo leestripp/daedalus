@@ -493,6 +493,7 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   <div class="settings-body">
     <div class="settings-tabs">
       <button type="button" class="settings-tab active" data-tab="models">Models</button>
+      <button type="button" class="settings-tab" data-tab="providers">Providers</button>
       <button type="button" class="settings-tab" data-tab="general">General</button>
       <button type="button" class="settings-tab" data-tab="mcp">MCP Servers</button>
     </div>
@@ -503,19 +504,24 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
       <div id="models-list" class="settings-card-list">
         <span class="empty">Loading…</span>
       </div>
+      <h3>Discover Models</h3>
+      <div id="discover-panel" class="settings-form">
+        <label for="discover-source">Source model / provider</label>
+        <select id="discover-source"></select>
+        <div class="settings-actions">
+          <button type="button" id="discover-run">Discover</button>
+        </div>
+        <div id="discover-results" class="settings-card-list" style="margin-top:12px;"></div>
+      </div>
       <h3>Add / Edit Model</h3>
       <form id="model-form" class="settings-form">
         <input type="hidden" id="model-original-name" value="">
         <label for="model-name">Name</label>
         <input type="text" id="model-name" placeholder="minimax-m2.7" required>
-        <label for="model-host">Host URL</label>
-        <input type="text" id="model-host" placeholder="https://api.minimax.io">
+        <label for="model-provider">Provider</label>
+        <select id="model-provider"></select>
         <label for="model-id">Model ID</label>
         <input type="text" id="model-id" placeholder="MiniMax-M2.7">
-        <label for="model-key">API Key</label>
-        <input type="password" id="model-key" placeholder="sk-…">
-        <label for="model-endpoint">Chat Endpoint</label>
-        <input type="text" id="model-endpoint" value="/v1/chat/completions">
         <label for="model-ctx">Max Context</label>
         <input type="number" id="model-ctx" placeholder="0 = auto" min="0">
         <label for="model-temp">Temperature</label>
@@ -523,6 +529,34 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
         <div class="settings-actions">
           <button type="button" id="model-clear" class="cancel">Clear</button>
           <button type="submit">Save Model</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Providers panel -->
+    <div class="settings-panel" id="tab-providers">
+      <h3>Configured Providers</h3>
+      <div id="providers-list" class="settings-card-list">
+        <span class="empty">Loading…</span>
+      </div>
+      <h3>Add / Edit Provider</h3>
+      <form id="provider-form" class="settings-form">
+        <input type="hidden" id="provider-original-name" value="">
+        <label for="provider-name">Name</label>
+        <input type="text" id="provider-name" placeholder="minimax" required>
+        <label for="provider-host">Host URL</label>
+        <input type="text" id="provider-host" placeholder="https://api.minimax.io">
+        <label for="provider-key">API Key</label>
+        <input type="password" id="provider-key" placeholder="sk-…">
+        <label for="provider-chat-endpoint">Chat Endpoint</label>
+        <input type="text" id="provider-chat-endpoint" value="/v1/chat/completions">
+        <label for="provider-discovery-endpoint">Discovery Endpoint</label>
+        <input type="text" id="provider-discovery-endpoint" value="/v1/models">
+        <label for="provider-timeout">Timeout (seconds)</label>
+        <input type="number" id="provider-timeout" min="1" value="30">
+        <div class="settings-actions">
+          <button type="button" id="provider-clear" class="cancel">Clear</button>
+          <button type="submit">Save Provider</button>
         </div>
       </form>
     </div>
@@ -1269,6 +1303,7 @@ const settingsTabs      = document.querySelectorAll(".settings-tab");
 const settingsPanels    = document.querySelectorAll(".settings-panel");
 
 let cachedModels = [];
+let cachedProviders = [];
 let cachedGeneral = {};
 
 settingsBtn.addEventListener("click", () => {
@@ -1293,21 +1328,27 @@ function showToast(msg) {
 
 async function loadSettings() {
   try {
-    const [modelsResp, generalResp, mcpResp] = await Promise.all([
+    const [modelsResp, providersResp, generalResp, mcpResp] = await Promise.all([
       fetch("/settings/models"),
+      fetch("/settings/providers"),
       fetch("/settings/general"),
       fetch("/settings/mcp"),
     ]);
     const modelsData = await modelsResp.json();
+    const providersData = await providersResp.json();
     const generalData = await generalResp.json();
     const mcpData = await mcpResp.json();
 
     cachedModels = (modelsData.models || []).sort((a, b) => a.name.localeCompare(b.name));
+    cachedProviders = (providersData.providers || []).sort((a, b) => a.name.localeCompare(b.name));
     cachedGeneral = generalData;
     settingsDbPathEl.textContent = generalData.db_path || "(unknown)";
 
     renderModelsList();
+    populateModelProviderDropdown();
+    populateDiscoverSourceDropdown();
     populateDefaultModelDropdown();
+    renderProvidersList();
     renderGeneralForm();
     renderMcpList(mcpData.servers || []);
   } catch (e) {
@@ -1330,7 +1371,8 @@ function renderModelsList() {
     title.textContent = m.name + (cachedGeneral.default_model === m.name ? " (default)" : "");
     card.appendChild(title);
     const meta = document.createElement("p");
-    meta.textContent = (m.model_id || "(no model id)") + " @ " + (m.host || "(no host)") +
+    meta.textContent = (m.model_id || "(no model id)") +
+                       " @ " + (m.provider || "(no provider)") +
                        " | ctx=" + (m.max_context_size || "auto") +
                        " | temp=" + m.temperature;
     card.appendChild(meta);
@@ -1357,15 +1399,22 @@ function renderModelsList() {
   });
 }
 
+function populateModelProviderDropdown() {
+  const sel = $("model-provider");
+  sel.innerHTML = '<option value="">(none)</option>';
+  cachedProviders.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.textContent = p.name;
+    sel.appendChild(opt);
+  });
+}
+
 function populateModelForm(m) {
   $("model-original-name").value = m.name || "";
   $("model-name").value = m.name || "";
-  $("model-host").value = m.host || "";
+  $("model-provider").value = m.provider || "";
   $("model-id").value = m.model_id || "";
-  // The API key returned by GET is masked; leave the field blank so the
-  // user only has to type a new key when they actually want to change it.
-  $("model-key").value = "";
-  $("model-endpoint").value = m.chat_endpoint || "/v1/chat/completions";
   $("model-ctx").value = m.max_context_size || "";
   $("model-temp").value = m.temperature;
 }
@@ -1373,7 +1422,6 @@ function populateModelForm(m) {
 $("model-clear").addEventListener("click", () => {
   $("model-form").reset();
   $("model-original-name").value = "";
-  $("model-endpoint").value = "/v1/chat/completions";
   $("model-temp").value = 0;
 });
 
@@ -1384,10 +1432,8 @@ $("model-form").addEventListener("submit", async (ev) => {
   if (!name) return;
   const payload = {
     name: name,
-    host: $("model-host").value.trim(),
+    provider: $("model-provider").value.trim(),
     model_id: $("model-id").value.trim(),
-    api_key: $("model-key").value,
-    chat_endpoint: $("model-endpoint").value.trim() || "/v1/chat/completions",
     max_context_size: parseInt($("model-ctx").value, 10) || 0,
     temperature: parseFloat($("model-temp").value) || 0,
   };
@@ -1402,7 +1448,6 @@ $("model-form").addEventListener("submit", async (ev) => {
     showToast("Model saved: " + name);
     $("model-form").reset();
     $("model-original-name").value = "";
-    $("model-endpoint").value = "/v1/chat/completions";
     $("model-temp").value = 0;
     await loadSettings();
   } catch (e) {
@@ -1436,6 +1481,187 @@ async function deleteModel(name) {
     await loadSettings();
   } catch (e) {
     appendLog("Error", "delete model failed: " + e);
+  }
+}
+
+// ---- Model discovery ----
+function populateDiscoverSourceDropdown() {
+  const sel = $("discover-source");
+  sel.innerHTML = '<option value="">(select source)</option>';
+  // Prefer configured models: discover uses the model's provider.
+  cachedModels.forEach(m => {
+    const opt = document.createElement("option");
+    opt.value = m.name;
+    opt.textContent = "model: " + m.name;
+    sel.appendChild(opt);
+  });
+  // Also allow discovering directly from a provider.
+  cachedProviders.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = "provider:" + p.name;
+    opt.textContent = "provider: " + p.name;
+    sel.appendChild(opt);
+  });
+}
+
+$("discover-run").addEventListener("click", async () => {
+  const sel = $("discover-source");
+  const source = sel.value;
+  if (!source) return;
+  const isProvider = source.startsWith("provider:");
+  const name = isProvider ? source.slice("provider:".length) : source;
+  const endpoint = isProvider
+      ? "/settings/providers/discover?name=" + encodeURIComponent(name)
+      : "/settings/models/discover?name=" + encodeURIComponent(name);
+  const providerName = isProvider ? name : "";
+  const resultsEl = $("discover-results");
+  resultsEl.innerHTML = '<span class="empty">Discovering…</span>';
+  try {
+    const r = await fetch(endpoint);
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    const models = j.models || [];
+    if (models.length === 0) {
+      resultsEl.innerHTML = '<span class="empty">No models discovered.</span>';
+      return;
+    }
+    resultsEl.innerHTML = "";
+    models.forEach(m => {
+      const card = document.createElement("div");
+      card.className = "settings-card";
+      const title = document.createElement("h4");
+      title.textContent = m.id;
+      card.appendChild(title);
+      const meta = document.createElement("p");
+      const badges = [];
+      if (m.owned_by) badges.push("owned by " + m.owned_by);
+      if (m.context_length) badges.push("ctx=" + m.context_length);
+      if (m.supports_vision) badges.push("vision");
+      if (m.supports_reasoning) badges.push("reasoning");
+      meta.textContent = badges.join(" | ") || "(no metadata)";
+      card.appendChild(meta);
+      const actions = document.createElement("div");
+      actions.className = "actions";
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.textContent = "Add as Model";
+      addBtn.addEventListener("click", () => {
+        $("model-name").value = m.id;
+        $("model-provider").value = providerName;
+        $("model-id").value = m.id;
+        $("model-ctx").value = m.context_length || "";
+        $("model-temp").value = 0;
+        document.querySelector('.settings-tab[data-tab="models"]').click();
+      });
+      actions.appendChild(addBtn);
+      card.appendChild(actions);
+      resultsEl.appendChild(card);
+    });
+  } catch (e) {
+    resultsEl.innerHTML = '<span class="empty">Discovery failed: ' + e + '</span>';
+    appendLog("Error", "model discovery failed: " + e);
+  }
+});
+
+// ---- Providers ----
+function renderProvidersList() {
+  const list = $("providers-list");
+  if (cachedProviders.length === 0) {
+    list.innerHTML = '<span class="empty">No providers configured.</span>';
+    return;
+  }
+  list.innerHTML = "";
+  cachedProviders.forEach(p => {
+    const card = document.createElement("div");
+    card.className = "settings-card";
+    const title = document.createElement("h4");
+    title.textContent = p.name;
+    card.appendChild(title);
+    const meta = document.createElement("p");
+    meta.textContent = p.host +
+                       " | chat=" + p.chat_endpoint +
+                       " | discover=" + p.discovery_endpoint +
+                       " | timeout=" + p.timeout_seconds + "s";
+    card.appendChild(meta);
+    const actions = document.createElement("div");
+    actions.className = "actions";
+    const editBtn = document.createElement("button");
+    editBtn.type = "button";
+    editBtn.textContent = "Edit";
+    editBtn.addEventListener("click", () => populateProviderForm(p));
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "danger";
+    delBtn.textContent = "Delete";
+    delBtn.addEventListener("click", () => deleteProvider(p.name));
+    actions.appendChild(editBtn);
+    actions.appendChild(delBtn);
+    card.appendChild(actions);
+    list.appendChild(card);
+  });
+}
+
+function populateProviderForm(p) {
+  $("provider-original-name").value = p.name || "";
+  $("provider-name").value = p.name || "";
+  $("provider-host").value = p.host || "";
+  // API key is masked on GET; leave blank to preserve existing secret.
+  $("provider-key").value = "";
+  $("provider-chat-endpoint").value = p.chat_endpoint || "/v1/chat/completions";
+  $("provider-discovery-endpoint").value = p.discovery_endpoint || "/v1/models";
+  $("provider-timeout").value = p.timeout_seconds || 30;
+}
+
+$("provider-clear").addEventListener("click", () => {
+  $("provider-form").reset();
+  $("provider-original-name").value = "";
+  $("provider-chat-endpoint").value = "/v1/chat/completions";
+  $("provider-discovery-endpoint").value = "/v1/models";
+  $("provider-timeout").value = 30;
+});
+
+$("provider-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const name = $("provider-name").value.trim();
+  if (!name) return;
+  const payload = {
+    name: name,
+    host: $("provider-host").value.trim(),
+    api_key: $("provider-key").value,
+    chat_endpoint: $("provider-chat-endpoint").value.trim() || "/v1/chat/completions",
+    discovery_endpoint: $("provider-discovery-endpoint").value.trim() || "/v1/models",
+    timeout_seconds: parseInt($("provider-timeout").value, 10) || 30,
+  };
+  try {
+    const r = await fetch("/settings/providers", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("Provider saved: " + name);
+    $("provider-form").reset();
+    $("provider-original-name").value = "";
+    $("provider-chat-endpoint").value = "/v1/chat/completions";
+    $("provider-discovery-endpoint").value = "/v1/models";
+    $("provider-timeout").value = 30;
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "save provider failed: " + e);
+  }
+});
+
+async function deleteProvider(name) {
+  if (!confirm("Delete provider '" + name + "'? Models referencing it will no longer resolve.")) return;
+  try {
+    const r = await fetch("/settings/providers/" + encodeURIComponent(name), { method: "DELETE" });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("Provider deleted: " + name);
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "delete provider failed: " + e);
   }
 }
 
