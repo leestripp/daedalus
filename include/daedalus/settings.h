@@ -53,6 +53,7 @@ struct ServerErrorSettings
 struct ModelConfig
 {
     std::string name;              // key in config.json::models ("minimax-m3", ...)
+    std::string provider;          // provider label, e.g. "kimi", "minimax", "openai"
     std::string host;              // https://api.example.com
     std::string api_key;           // plaintext — same as the old config.json
     std::string model_id;          // actual model id ("MiniMax-M3", ...)
@@ -132,6 +133,15 @@ public:
 
     /// Set the default model name in kv_settings.
     void set_default_model_name(std::string_view name);
+
+    /// Get the current provider label from kv_settings. Empty if none set.
+    std::string get_current_provider() const;
+
+    /// Set the current provider label in kv_settings.
+    void set_current_provider(std::string_view provider);
+
+    /// Unique non-empty provider labels across configured models.
+    std::vector<std::string> list_providers() const;
 
     /// Get auto_approve from kv_settings. Default false.
     bool get_auto_approve() const;

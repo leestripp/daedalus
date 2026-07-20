@@ -71,6 +71,7 @@ inline std::string mask_secret(std::string_view s) {
 inline json model_to_json(const daedalus::ModelConfig& m) {
     return json{
         {"name",            m.name},
+        {"provider",        m.provider},
         {"host",            m.host},
         {"api_key",         mask_secret(m.api_key)},
         {"model_id",        m.model_id},
@@ -84,6 +85,7 @@ inline std::optional<daedalus::ModelConfig> json_to_model(const json& j) {
     if (!j.contains("name") || !j["name"].is_string()) return std::nullopt;
     daedalus::ModelConfig m;
     m.name             = j.value("name", "");
+    m.provider         = j.value("provider", "");
     m.host             = j.value("host", "");
     m.api_key          = j.value("api_key", "");
     m.model_id         = j.value("model_id", "");

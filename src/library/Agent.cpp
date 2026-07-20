@@ -94,6 +94,21 @@ bool Agent::switch_model(const std::string& model_name)
     return impl_->switch_model(model_name);
 }
 
+std::vector<std::string> Agent::list_providers() const
+{
+    return impl_->list_providers();
+}
+
+bool Agent::switch_provider(const std::string& provider)
+{
+    return impl_->switch_provider(provider);
+}
+
+ModelDiscoveryResult Agent::discover_provider_models() const
+{
+    return impl_->discover_provider_models();
+}
+
 std::string Agent::last_assistant_text() const
 {
     return impl_->last_assistant_text();

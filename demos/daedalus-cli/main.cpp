@@ -278,13 +278,55 @@ int main(int argc, char* argv[]) {
                 std::cout << "[CLEAR] Session reset\n";
                 continue;
             }
+            if (line == "/providers") {
+                auto providers = agent.list_providers();
+                std::cout << "Configured providers:\n";
+                if (providers.empty()) std::cout << "  (none)\n";
+                else for (const auto& p : providers)
+                    std::cout << "  " << p << "\n";
+                continue;
+            }
+            if (line.rfind("/provider ", 0) == 0) {
+                std::string provider = line.substr(10);
+                if (provider.empty()) {
+                    std::cout << "Usage: /provider <name>\n";
+                } else if (agent.switch_provider(provider)) {
+                    std::cout << "[PROVIDER] Switched to " << provider << "\n";
+                } else {
+                    std::cout << "[PROVIDER] Failed to switch to " << provider
+                              << " (no configured models for this provider)\n";
+                }
+                continue;
+            }
             if (line == "/models") {
-                auto models = agent.list_models();
-                std::cout << "Available models:\n";
-                if (models.empty()) std::cout << "  (none)\n";
-                else for (const auto& m : models)
-                    std::cout << "  " << m.name << " (model=" << m.model_id
-                              << ", temperature=" << m.temperature << ")\n";
+                auto result = agent.discover_provider_models();
+                if (!result.success) {
+                    std::cout << "[MODELS] Discovery failed: " << result.error_message << "\n";
+                } else if (result.models.empty()) {
+                    std::cout << "[MODELS] No models returned by provider\n";
+                } else {
+                    std::cout << "Provider models:\n";
+                    for (const auto& m : result.models) {
+                        std::cout << "  " << m.id;
+                        if (m.context_length > 0)
+                            std::cout << " [ctx=" << m.context_length << "]";
+                        if (m.supports_vision) std::cout << " [vision]";
+                        if (m.supports_reasoning) std::cout << " [reasoning]";
+                        std::cout << "\n";
+                    }
+                }
+                continue;
+            }
+            if (line.rfind("/model ", 0) == 0) {
+                std::string name = line.substr(7);
+                if (name.empty()) {
+                    std::cout << "Usage: /model <name>\n";
+                } else if (agent.switch_model(name)) {
+                    std::cout << "[MODEL] Switched to " << name << "\n";
+                } else {
+                    std::cout << "[MODEL] Failed to switch to " << name
+                              << " (not a configured model)\n";
+                }
                 continue;
             }
             if (line == "/skills") {

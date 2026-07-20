@@ -104,12 +104,14 @@ void test_s3_model_roundtrip() {
     auto s = daedalus::SettingsStore::for_home(h.path);
 
     auto m = make_model("alpha");
+    m.provider = "test-provider";
     s.upsert_model(m);
 
     auto got = s.get_model("alpha");
     EXPECT(got.has_value());
     if (got) {
         EXPECT(got->name             == m.name);
+        EXPECT(got->provider         == m.provider);
         EXPECT(got->host             == m.host);
         EXPECT(got->api_key          == m.api_key);
         EXPECT(got->model_id         == m.model_id);

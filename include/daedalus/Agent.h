@@ -177,6 +177,19 @@ public:
     ///        context window than the previous one).
     bool switch_model(const std::string& model_name);
 
+    /// @brief Unique non-empty provider labels across configured models.
+    [[nodiscard]] std::vector<std::string> list_providers() const;
+
+    /// @brief Switch the current provider. Persisted in SettingsStore.
+    ///        If the current model does not belong to the new provider,
+    ///        switches to the first configured model of that provider.
+    bool switch_provider(const std::string& provider);
+
+    /// @brief Discover models from the current provider's /v1/models endpoint.
+    ///        Uses the first configured model of the current provider for
+    ///        host/api_key credentials. Returns an error if no provider is set.
+    [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
+
     /// @brief Return the body of the most recent assistant message,
     ///        or empty string if no assistant turn has completed yet.
     ///        Useful for hosts that need the agent's final text after

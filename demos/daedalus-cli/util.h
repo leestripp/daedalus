@@ -183,7 +183,10 @@ inline void print_help(const char* program_name) {
     std::cout << "\nIn-session commands:\n";
     std::cout << "  /quit, /exit    Exit\n";
     std::cout << "  /clear          Clear session state\n";
-    std::cout << "  /models         List models\n";
+    std::cout << "  /providers      List configured providers\n";
+    std::cout << "  /provider NAME  Switch to provider NAME\n";
+    std::cout << "  /models         Discover models for current provider\n";
+    std::cout << "  /model NAME     Switch active model (configured name or provider model id)\n";
     std::cout << "  /skills         List loaded skills\n";
     std::cout << "  /tools          List registered tools\n";
     std::cout << "  /usage          Show token/context usage summary\n";

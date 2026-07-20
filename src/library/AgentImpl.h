@@ -94,6 +94,9 @@ public:
     void register_tool(std::unique_ptr<BaseTool> tool);
     void clear_memory();
     bool switch_model(const std::string& model_name);
+    [[nodiscard]] std::vector<std::string> list_providers() const;
+    bool switch_provider(const std::string& provider);
+    [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
     [[nodiscard]] std::string last_assistant_text() const;
 
 private:

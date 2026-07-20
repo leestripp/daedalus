@@ -39,9 +39,11 @@ fs::path make_temp_home(const std::string& tag) {
 
 daedalus::ModelConfig make_model(const std::string& name,
                                  const std::string& host,
-                                 int max_context_size) {
+                                 int max_context_size,
+                                 const std::string& provider = "") {
     daedalus::ModelConfig m;
     m.name             = name;
+    m.provider         = provider;
     m.host             = host;
     m.api_key          = name + "-key";
     m.model_id         = name + "-model";
@@ -53,8 +55,8 @@ daedalus::ModelConfig make_model(const std::string& name,
 
 void write_settings(const fs::path& daedalus_home) {
     auto store = daedalus::SettingsStore::for_home(daedalus_home);
-    store.upsert_model(make_model("small", "http://small.example", 10000));
-    store.upsert_model(make_model("large", "http://large.example", 100000));
+    store.upsert_model(make_model("small", "http://small.example", 10000, "p1"));
+    store.upsert_model(make_model("large", "http://large.example", 100000, "p1"));
     store.set_default_model_name("small");
 }
 
@@ -164,6 +166,84 @@ TEST_CASE("switch_model updates compression config for new context size") {
     bool switched = agent.switch_model("large");
     CHECK(switched);
     CHECK(agent.active_model().max_context_size == 100000);
+
+    agent.shutdown();
+    fs::remove_all(home);
+}
+
+
+TEST_CASE("switch_provider persists provider and switches to a model of that provider") {
+    fs::path home = make_temp_home("provider");
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_model(make_model("p1-a", "http://p1.example", 10000, "p1"));
+        store.upsert_model(make_model("p1-b", "http://p1.example", 20000, "p1"));
+        store.upsert_model(make_model("p2-a", "http://p2.example", 30000, "p2"));
+        store.set_default_model_name("p1-a");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root  = project;
+    cfg.daedalus_home = home;
+    cfg.session_id    = "switch-provider";
+
+    auto sink = std::make_shared<NullSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    CHECK(agent.active_model().name == "p1-a");
+    CHECK(agent.list_providers() == std::vector<std::string>{"p1", "p2"});
+
+    bool switched = agent.switch_provider("p2");
+    CHECK(switched);
+    CHECK(agent.active_model().name == "p2-a");
+    CHECK(daedalus::SettingsStore::for_home(home).get_current_provider() == "p2");
+
+    // Unknown provider fails.
+    CHECK_FALSE(agent.switch_provider("p3"));
+
+    agent.shutdown();
+    fs::remove_all(home);
+}
+
+TEST_CASE("switch_model creates config for discovered provider model id") {
+    fs::path home = make_temp_home("discovered");
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_model(make_model("kimi-ref", "http://kimi.example", 256000, "kimi"));
+        store.set_current_provider("kimi");
+        store.set_default_model_name("kimi-ref");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root  = project;
+    cfg.daedalus_home = home;
+    cfg.session_id    = "switch-discovered";
+
+    auto sink = std::make_shared<NullSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    CHECK(agent.active_model().name == "kimi-ref");
+
+    // Switch to a model id that is not yet configured; the library should
+    // synthesize a ModelConfig from the current provider's host/api_key.
+    bool switched = agent.switch_model("kimi-k2.5");
+    CHECK(switched);
+    CHECK(agent.active_model().name == "kimi-k2.5");
+    CHECK(agent.active_model().model_id == "kimi-k2.5");
+
+    auto store = daedalus::SettingsStore::for_home(home);
+    auto saved = store.get_model("kimi-k2.5");
+    REQUIRE(saved.has_value());
+    CHECK(saved->provider == "kimi");
+    CHECK(saved->host == "http://kimi.example");
 
     agent.shutdown();
     fs::remove_all(home);

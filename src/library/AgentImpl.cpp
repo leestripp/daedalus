@@ -896,9 +896,32 @@ void AgentImpl::clear_memory()
 
 bool AgentImpl::switch_model(const std::string& model_name)
 {
-    if (!body_->store) return false;
+    if (!body_->store || model_name.empty()) return false;
+
     auto opt = body_->store->get_model(model_name);
-    if (!opt.has_value()) return false;
+    if (!opt.has_value()) {
+        // model_name may be a provider model id (e.g. discovered via /v1/models).
+        // If a current provider is set, create a new ModelConfig using the
+        // provider's host/api_key so the user can switch to discovered models.
+        const auto provider = body_->store->get_current_provider();
+        if (provider.empty()) return false;
+
+        std::optional<ModelConfig> provider_model;
+        for (const auto& m : body_->store->list_models()) {
+            if (m.provider == provider) {
+                provider_model = m;
+                break;
+            }
+        }
+        if (!provider_model.has_value()) return false;
+
+        ModelConfig discovered = *provider_model;
+        discovered.name = model_name;
+        discovered.model_id = model_name;
+        body_->store->upsert_model(discovered);
+        opt = discovered;
+    }
+
     body_->store->set_default_model_name(model_name);
     cfg_.model_name = model_name;
 
@@ -916,6 +939,77 @@ bool AgentImpl::switch_model(const std::string& model_name)
                       "[MODEL] Switched to " + model_name);
     }
     return true;
+}
+
+std::vector<std::string> AgentImpl::list_providers() const
+{
+    if (!body_->store) return {};
+    return body_->store->list_providers();
+}
+
+bool AgentImpl::switch_provider(const std::string& provider)
+{
+    if (!body_->store || provider.empty()) return false;
+
+    // Verify at least one model exists for this provider.
+    std::optional<ModelConfig> provider_model;
+    for (const auto& m : body_->store->list_models()) {
+        if (m.provider == provider) {
+            provider_model = m;
+            break;
+        }
+    }
+    if (!provider_model.has_value()) return false;
+
+    body_->store->set_current_provider(provider);
+
+    // If the current model is not part of this provider, switch to the first
+    // model of the new provider so subsequent turns actually use it.
+    bool current_belongs = false;
+    if (!cfg_.model_name.empty()) {
+        if (auto m = body_->store->get_model(cfg_.model_name);
+            m.has_value() && m->provider == provider) {
+            current_belongs = true;
+        }
+    }
+    if (!current_belongs) {
+        switch_model(provider_model->name);
+    }
+
+    if (sink_) {
+        sink_->on_log(daedalus::LogLevel::Info,
+                      "[PROVIDER] Switched to " + provider);
+    }
+    return true;
+}
+
+ModelDiscoveryResult AgentImpl::discover_provider_models() const
+{
+    ModelDiscoveryResult result;
+    if (!body_->store) {
+        result.error_message = "No settings store available";
+        return result;
+    }
+
+    const auto provider = body_->store->get_current_provider();
+    if (provider.empty()) {
+        result.error_message = "No current provider set; use /provider <name> first";
+        return result;
+    }
+
+    std::optional<ModelConfig> provider_model;
+    for (const auto& m : body_->store->list_models()) {
+        if (m.provider == provider) {
+            provider_model = m;
+            break;
+        }
+    }
+    if (!provider_model.has_value()) {
+        result.error_message = "No configured model found for provider: " + provider;
+        return result;
+    }
+
+    return daedalus::discover_models(*provider_model);
 }
 
 std::string AgentImpl::last_assistant_text() const
