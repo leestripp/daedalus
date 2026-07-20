@@ -49,7 +49,7 @@ cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure
 ```
 
-Expected: **66/66 pass**, 2 live-LLM skipped, 0 failures.
+Expected: **all configured tests pass**, 2 live-LLM skipped, 0 failures. (The exact count depends on CMake options; with all demos and the webui enabled there are 85+ tests.)
 
 ### Conventions
 
@@ -81,6 +81,16 @@ Expected: **66/66 pass**, 2 live-LLM skipped, 0 failures.
 2. Add an `add_executable` + `add_test` block in `tests/CMakeLists.txt`.
 3. Reconfigure CMake: `cmake -S . -B build`.
 4. Build & run: `cmake --build build -j$(nproc) --target <your_test>`.
+
+---
+
+## Demo Tests
+
+Demos under `demos/` are verified by compilation and a small number of
+unit tests (e.g. `test_demos_hello_world.cpp`). The browser-based
+`daedalus-webui` demo has no headless unit tests; validate it by building
+with `-DDAEDALUS_DEMO_WEBUI=ON` and smoke-testing the running server.
+Firefox BiDi end-to-end coverage is described in [`webui_testing.md`](webui_testing.md).
 
 ---
 

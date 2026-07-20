@@ -3,7 +3,7 @@
 > Complete reference for the `daedalus::SettingsStore` API (v0.4.0+) and
 > the migration path from the legacy JSON-based `SettingsManager`.
 
-*Last updated 2026-07-15.*
+*Last updated 2026-07-20.*
 
 ---
 
@@ -52,37 +52,110 @@ Both return a reference to a singleton-per-path. The underlying SQLite
 handle is managed by a connection pool (`DbPool`) — multiple
 `SettingsStore` wrappers can share the same handle without extra overhead.
 
-### 2.3 Model Configuration
+### 2.3 Provider and Model Configuration
+
+As of v0.6.0/v0.7.0, endpoint and credential information lives in a
+`ProviderConfig`, and each `ModelConfig` references a provider by name.
+This lets multiple models share one provider's host, API key, and
+endpoints.
 
 ```cpp
-// ModelConfig mirrors config.json::models entries
+// Shared endpoint/credential configuration for one provider
+struct ProviderConfig {
+    std::string name;               // provider label, e.g. "minimax"
+    std::string host;               // https://api.example.com
+    std::string api_key;            // provider-level API key
+    std::string chat_endpoint;      // default "/v1/chat/completions"
+    std::string discovery_endpoint; // default "/v1/models"
+    int         timeout_seconds = 30;
+};
+
+// One configured model; references a ProviderConfig for host/key/endpoints
 struct ModelConfig {
     std::string name;              // settings key, e.g. "minimax-m3"
-    std::string host;              // https://api.example.com
-    std::string api_key;           // plaintext API key
+    std::string provider;          // ProviderConfig::name
     std::string model_id;          // actual model id, e.g. "MiniMax-M3"
-    std::string chat_endpoint;     // default "/v1/chat/completions"
     int    max_context_size = 0;   // 0 = use built-in default (1M fallback)
     double temperature     = 0.0;
 };
+```
+
+#### Provider CRUD
+
+```cpp
+// Create or update a provider
+store.upsert_provider(ProviderConfig{
+    .name               = "minimax",
+    .host               = "https://api.minimax.chat",
+    .api_key            = "YOUR_API_KEY",
+    .chat_endpoint      = "/v1/chat/completions",
+    .discovery_endpoint = "/v1/models",
+    .timeout_seconds    = 30,
+});
+
+// Read
+std::optional<ProviderConfig> p = store.get_provider("minimax");
+std::vector<ProviderConfig> providers = store.list_providers_detailed();
+
+// Delete
+store.delete_provider("minimax");
+```
+
+#### Model CRUD
+
+```cpp
+// Create or update a model that uses the provider above
+store.upsert_model(ModelConfig{
+    .name      = "minimax-m3",
+    .provider  = "minimax",
+    .model_id  = "MiniMax-M3",
+    .temperature = 0.7
+});
 
 // Read
 std::optional<ModelConfig> m = store.get_model("minimax-m3");
 std::vector<ModelConfig>   all = store.list_models();
 
-// Write
-store.upsert_model(ModelConfig{
-    .name      = "minimax-m3",
-    .host      = "https://api.minimax.chat",
-    .api_key   = "YOUR_API_KEY",
-    .model_id  = "MiniMax-M3",
-    .temperature = 0.7
-});
-store.delete_model("old-model");
-
 // Default model
 std::string default_name = store.get_default_model_name();
 store.set_default_model_name("minimax-m3");
+
+// Delete
+store.delete_model("old-model");
+```
+
+#### Model Discovery
+
+Query a provider's OpenAI-compatible `/v1/models` endpoint to discover
+available models. The model-based overload looks up the configured model,
+resolves its provider, and uses the provider's host/key/discovery endpoint:
+
+```cpp
+#include <daedalus/Agent.h>
+
+auto result = daedalus::Agent::discover_models("minimax-m3");
+if (result.success) {
+    for (const auto& m : result.models) {
+        std::cout << m.id
+                  << " owned_by=" << m.owned_by
+                  << " ctx=" << m.context_length
+                  << " vision=" << m.supports_vision
+                  << " reasoning=" << m.supports_reasoning
+                  << "\n";
+    }
+} else {
+    std::cerr << result.error_message << "\n";
+}
+```
+
+For ad-hoc discovery without a stored model, use the lower-level overload
+from `daedalus/model_discovery.h`:
+
+```cpp
+#include <daedalus/model_discovery.h>
+
+auto result = daedalus::discover_models(
+    "https://api.minimax.chat", "YOUR_API_KEY", "/v1/models");
 ```
 
 ### 2.4 Switching Models at Runtime
@@ -116,7 +189,7 @@ agent.run_one_turn();
 |---|---|
 | Validation | Returns `false` immediately if the requested model is not in `SettingsStore`. |
 | Default update | `SettingsStore::set_default_model_name()` is updated so future sessions start with the new model. |
-| Config refresh | The `LLMClient` picks up the new `host`, `api_key`, `model_id`, `chat_endpoint`, `temperature`, and `max_context_size`. |
+| Config refresh | The `LLMClient` resolves the model's `provider`, then picks up the provider's `host`, `api_key`, `chat_endpoint`, the model's `model_id`, `temperature`, and `max_context_size`. |
 | History cleared | `Messages::clear()` + `save()` removes the on-disk transcript so the new model starts fresh. |
 
 **Rationale:** different models have different context windows and may

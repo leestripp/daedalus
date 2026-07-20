@@ -735,8 +735,8 @@ for the full field list. The most-used fields:
 |-------|---------|
 | `project_root` | Working directory. The agent reads and writes under this. |
 | `daedalus_home` | Base directory for the SQLite settings store (and any per-Agent data). |
-| `model_name` | Looked up in `SettingsStore` → host / key / endpoint / model id. |
-| `api_key`, `api_host`, `chat_endpoint` | Optional overrides (skip settings lookup). |
+| `model_name` | Looked up in `SettingsStore` → model references provider → host / key / endpoint / model id. |
+| `api_key`, `api_host`, `chat_endpoint` | Optional overrides (skip settings lookup entirely). |
 | `auto_approve` | If true, `request_command_approval` is never called. OR'd with `SettingsStore::get_auto_approve()`. |
 | `max_agent_iterations` | Hard cap. The agent stops when this is reached. |
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
@@ -755,6 +755,30 @@ If `model_name` is empty *and* there are no explicit `api_key` + `api_host`,
 "smoke-test" mode: the agent constructs, accepts messages, and reports
 `Error` when asked to act. Useful for hosts that just want to verify
 their wiring without burning API quota.
+
+### Provider / Model Configuration
+
+Endpoint and credential information is stored in `ProviderConfig`;
+`ModelConfig` only references the provider by name. This lets several
+models share one set of provider credentials.
+
+```cpp
+auto& store = daedalus::SettingsStore::instance();
+
+store.upsert_provider(daedalus::ProviderConfig{
+    .name               = "minimax",
+    .host               = "https://api.minimax.chat",
+    .api_key            = "YOUR_API_KEY",
+    .chat_endpoint      = "/v1/chat/completions",
+    .discovery_endpoint = "/v1/models",
+});
+
+store.upsert_model(daedalus::ModelConfig{
+    .name      = "minimax-m3",
+    .provider  = "minimax",
+    .model_id  = "MiniMax-M3",
+});
+```
 
 ### Streaming vs buffered responses (§Phase 9.8)
 
@@ -894,11 +918,13 @@ The sampling temperature sent on every LLM request is resolved from a
    ```cpp
    store.upsert_model(daedalus::ModelConfig{
        .name        = "minimax-m3",
+       .provider    = "minimax",
        .model_id    = "MiniMax-M3",
        .temperature = 0.7,
    });
    store.upsert_model(daedalus::ModelConfig{
        .name        = "minimax-m2.7",
+       .provider    = "minimax",
        .model_id    = "MiniMax-M2.7",
        .temperature = 0.0,   // deterministic for code agents
    });
