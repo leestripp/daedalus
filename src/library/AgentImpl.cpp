@@ -68,7 +68,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
                             : cfg.project_root;
     out.agent_name = cfg.agent_name;        // §Phase 8.8
     if (!cfg.model_name.empty()) {
-        auto m = store.get_model(cfg.model_name);
+        auto m = store.resolve_model(cfg.model_name);
         if (m.has_value()) {
             out.base_url      = m->host;
             out.api_key       = m->api_key;
@@ -699,13 +699,14 @@ std::vector<SkillInfo> AgentImpl::list_skills() const
     return out;
 }
 
-// §B18 refactor: shared helper to convert ModelConfig → ModelInfo.
-// Both list_models() and active_model() build ModelInfo from the same
-// ModelConfig fields; keeping the conversion in one place prevents divergence.
-static ModelInfo to_model_info(const daedalus::ModelConfig& cfg,
+// §B18 refactor: shared helper to build ModelInfo from resolved settings.
+// Both list_models() and active_model() use the same merge of provider +
+// model fields; keeping the conversion in one place prevents divergence.
+static ModelInfo to_model_info(const daedalus::ResolvedModelConfig& cfg,
                                const daedalus::SettingsStore& store) {
     ModelInfo mi;
     mi.name            = cfg.name;
+    mi.provider        = cfg.provider;
     mi.model_id        = cfg.model_id;
     mi.host            = cfg.host;
     mi.chat_endpoint   = cfg.chat_endpoint;
@@ -713,6 +714,21 @@ static ModelInfo to_model_info(const daedalus::ModelConfig& cfg,
                               ? store.get_max_context_size_for_model(cfg.name)
                               : cfg.max_context_size;
     mi.temperature = cfg.temperature;  // §Phase 8.7
+    return mi;
+}
+
+static ModelInfo to_model_info(const daedalus::ModelConfig& cfg,
+                               const daedalus::SettingsStore& store) {
+    if (auto resolved = store.resolve_model(cfg.name)) {
+        return to_model_info(*resolved, store);
+    }
+    // Fallback for models with missing provider — should not happen after v4.
+    ModelInfo mi;
+    mi.name     = cfg.name;
+    mi.provider = cfg.provider;
+    mi.model_id = cfg.model_id;
+    mi.max_context_size = store.get_max_context_size_for_model(cfg.name);
+    mi.temperature = cfg.temperature;
     return mi;
 }
 
@@ -778,11 +794,11 @@ ModelDiscoveryResult AgentImpl::discover_models(
     const std::string& model_name,
     const std::filesystem::path& daedalus_home)
 {
-    std::optional<ModelConfig> cfg;
+    std::optional<ResolvedModelConfig> cfg;
     if (daedalus_home.empty()) {
-        cfg = SettingsStore::instance().get_model(model_name);
+        cfg = SettingsStore::instance().resolve_model(model_name);
     } else {
-        cfg = SettingsStore::for_home(daedalus_home).get_model(model_name);
+        cfg = SettingsStore::for_home(daedalus_home).resolve_model(model_name);
     }
 
     if (!cfg) {
@@ -903,21 +919,16 @@ bool AgentImpl::switch_model(const std::string& model_name)
         // model_name may be a provider model id (e.g. discovered via /v1/models).
         // If a current provider is set, create a new ModelConfig using the
         // provider's host/api_key so the user can switch to discovered models.
-        const auto provider = body_->store->get_current_provider();
-        if (provider.empty()) return false;
+        const auto provider_name = body_->store->get_current_provider();
+        if (provider_name.empty()) return false;
 
-        std::optional<ModelConfig> provider_model;
-        for (const auto& m : body_->store->list_models()) {
-            if (m.provider == provider) {
-                provider_model = m;
-                break;
-            }
-        }
-        if (!provider_model.has_value()) return false;
+        auto provider = body_->store->get_provider(provider_name);
+        if (!provider.has_value()) return false;
 
-        ModelConfig discovered = *provider_model;
-        discovered.name = model_name;
-        discovered.model_id = model_name;
+        ModelConfig discovered;
+        discovered.name      = model_name;
+        discovered.provider  = provider_name;
+        discovered.model_id  = model_name;
         body_->store->upsert_model(discovered);
         opt = discovered;
     }
@@ -947,11 +958,42 @@ std::vector<std::string> AgentImpl::list_providers() const
     return body_->store->list_providers();
 }
 
+std::vector<ProviderConfig> AgentImpl::list_providers_detailed() const
+{
+    if (!body_->store) return {};
+    return body_->store->list_providers_detailed();
+}
+
+bool AgentImpl::upsert_provider(const ProviderConfig& provider)
+{
+    if (!body_->store || provider.name.empty() || provider.host.empty()) return false;
+    body_->store->upsert_provider(provider);
+    return true;
+}
+
+bool AgentImpl::delete_provider(const std::string& provider)
+{
+    if (!body_->store || provider.empty()) return false;
+    body_->store->delete_provider(provider);
+    return true;
+}
+
+bool AgentImpl::upsert_model(const ModelConfig& model)
+{
+    if (!body_->store || model.name.empty() || model.provider.empty() || model.model_id.empty()) return false;
+    if (!body_->store->get_provider(model.provider).has_value()) return false;
+    body_->store->upsert_model(model);
+    return true;
+}
+
 bool AgentImpl::switch_provider(const std::string& provider)
 {
     if (!body_->store || provider.empty()) return false;
 
-    // Verify at least one model exists for this provider.
+    // Verify the provider exists and has at least one model.
+    auto provider_cfg = body_->store->get_provider(provider);
+    if (!provider_cfg.has_value()) return false;
+
     std::optional<ModelConfig> provider_model;
     for (const auto& m : body_->store->list_models()) {
         if (m.provider == provider) {
@@ -991,25 +1033,20 @@ ModelDiscoveryResult AgentImpl::discover_provider_models() const
         return result;
     }
 
-    const auto provider = body_->store->get_current_provider();
-    if (provider.empty()) {
+    const auto provider_name = body_->store->get_current_provider();
+    if (provider_name.empty()) {
         result.error_message = "No current provider set; use /provider <name> first";
         return result;
     }
 
-    std::optional<ModelConfig> provider_model;
-    for (const auto& m : body_->store->list_models()) {
-        if (m.provider == provider) {
-            provider_model = m;
-            break;
-        }
-    }
-    if (!provider_model.has_value()) {
-        result.error_message = "No configured model found for provider: " + provider;
+    auto provider = body_->store->get_provider(provider_name);
+    if (!provider.has_value()) {
+        result.error_message = "Provider not configured: " + provider_name;
         return result;
     }
 
-    return daedalus::discover_models(*provider_model);
+    return daedalus::discover_models(
+        provider->host, provider->api_key, provider->discovery_endpoint);
 }
 
 std::string AgentImpl::last_assistant_text() const

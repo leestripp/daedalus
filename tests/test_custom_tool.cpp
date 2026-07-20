@@ -37,12 +37,17 @@ fs::path make_temp_home(const std::string& tag) {
 
 void write_settings(const fs::path& daedalus_home) {
     auto store = daedalus::SettingsStore::for_home(daedalus_home);
+    daedalus::ProviderConfig p;
+    p.name          = "test-provider";
+    p.host          = "http://localhost";
+    p.api_key       = "test-key";
+    p.chat_endpoint = "/v1/chat/completions";
+    store.upsert_provider(p);
+
     daedalus::ModelConfig m;
     m.name             = "test-model";
-    m.host             = "http://localhost";
-    m.api_key          = "test-key";
+    m.provider         = "test-provider";
     m.model_id         = "test-model-id";
-    m.chat_endpoint    = "/v1/chat/completions";
     m.max_context_size = 10000;
     m.temperature      = 0.0;
     store.upsert_model(m);

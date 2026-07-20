@@ -27,6 +27,7 @@
 #include "daedalus/AgentSink.h"
 #include "daedalus/model_discovery.h"
 #include "daedalus/types/AgentConfig.h"
+#include "daedalus/types/ProviderConfig.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
 #include "daedalus/types/BaseTool.h"
@@ -177,17 +178,28 @@ public:
     ///        context window than the previous one).
     bool switch_model(const std::string& model_name);
 
-    /// @brief Unique non-empty provider labels across configured models.
+    /// @brief List configured provider names.
     [[nodiscard]] std::vector<std::string> list_providers() const;
+
+    /// @brief List full provider configurations.
+    [[nodiscard]] std::vector<ProviderConfig> list_providers_detailed() const;
+
+    /// @brief Add or update a provider configuration.
+    bool upsert_provider(const ProviderConfig& provider);
+
+    /// @brief Delete a provider and all models that reference it.
+    bool delete_provider(const std::string& provider);
+
+    /// @brief Add or update a model configuration.
+    bool upsert_model(const ModelConfig& model);
 
     /// @brief Switch the current provider. Persisted in SettingsStore.
     ///        If the current model does not belong to the new provider,
     ///        switches to the first configured model of that provider.
     bool switch_provider(const std::string& provider);
 
-    /// @brief Discover models from the current provider's /v1/models endpoint.
-    ///        Uses the first configured model of the current provider for
-    ///        host/api_key credentials. Returns an error if no provider is set.
+    /// @brief Discover models from the current provider's discovery endpoint.
+    ///        Returns an error if no provider is set.
     [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
 
     /// @brief Return the body of the most recent assistant message,

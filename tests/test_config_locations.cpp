@@ -65,13 +65,22 @@ private:
 daedalus::ModelConfig make_test_model(const std::string& name) {
     daedalus::ModelConfig m;
     m.name             = name;
-    m.host             = "http://test.invalid";
-    m.api_key          = "sk-test-not-placeholder";
+    m.provider         = "test-provider";
     m.model_id         = "model-" + name;
-    m.chat_endpoint    = "/v1/chat/completions";
     m.max_context_size = 100000;
     m.temperature      = 0.0;
     return m;
+}
+
+void ensure_test_provider(daedalus::SettingsStore& store) {
+    if (!store.get_provider("test-provider").has_value()) {
+        daedalus::ProviderConfig p;
+        p.name          = "test-provider";
+        p.host          = "http://test.invalid";
+        p.api_key       = "sk-test-not-placeholder";
+        p.chat_endpoint = "/v1/chat/completions";
+        store.upsert_provider(p);
+    }
 }
 
 struct NullSink : daedalus::AgentSink {
@@ -107,6 +116,7 @@ bool test_agent_uses_daedalus_home_db() {
 
     {
         auto store = daedalus::SettingsStore::for_home(home);
+        ensure_test_provider(store);
         store.upsert_model(make_test_model("l2-model"));
         store.set_default_model_name("l2-model");
     }
@@ -148,6 +158,7 @@ bool test_agent_uses_global_db_when_no_home() {
 
     {
         auto& store = daedalus::SettingsStore::instance();
+        ensure_test_provider(store);
         store.upsert_model(make_test_model("l3-model"));
         store.set_default_model_name("l3-model");
     }
@@ -185,6 +196,7 @@ bool test_settings_store_direct_population() {
 
     {
         auto store = daedalus::SettingsStore::for_home(home);
+        ensure_test_provider(store);
         store.upsert_model(make_test_model("l4-good"));
         store.set_default_model_name("l4-good");
     }

@@ -18,8 +18,9 @@ using json = nlohmann::json;
 
 namespace daedalus {
 
-ModelDiscoveryResult discover_models(const ModelConfig& endpoint) {
-    return discover_models(endpoint.host, endpoint.api_key, "/v1/models");
+ModelDiscoveryResult discover_models(const ResolvedModelConfig& endpoint) {
+    return discover_models(endpoint.host, endpoint.api_key,
+                           endpoint.discovery_endpoint);
 }
 
 ModelDiscoveryResult discover_models(std::string_view host,

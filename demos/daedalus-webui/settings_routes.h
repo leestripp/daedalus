@@ -68,14 +68,34 @@ inline std::string mask_secret(std::string_view s) {
     return std::string(s.substr(0, 4)) + std::string(s.size() - 8, '*') + std::string(s.substr(s.size() - 4));
 }
 
+inline json provider_to_json(const daedalus::ProviderConfig& p) {
+    return json{
+        {"name",               p.name},
+        {"host",               p.host},
+        {"api_key",            mask_secret(p.api_key)},
+        {"chat_endpoint",      p.chat_endpoint},
+        {"discovery_endpoint", p.discovery_endpoint},
+        {"timeout_seconds",    p.timeout_seconds},
+    };
+}
+
+inline std::optional<daedalus::ProviderConfig> json_to_provider(const json& j) {
+    if (!j.contains("name") || !j["name"].is_string()) return std::nullopt;
+    daedalus::ProviderConfig p;
+    p.name               = j.value("name", "");
+    p.host               = j.value("host", "");
+    p.api_key            = j.value("api_key", "");
+    p.chat_endpoint      = j.value("chat_endpoint", "/v1/chat/completions");
+    p.discovery_endpoint = j.value("discovery_endpoint", "/v1/models");
+    p.timeout_seconds    = j.value("timeout_seconds", 30);
+    return p;
+}
+
 inline json model_to_json(const daedalus::ModelConfig& m) {
     return json{
         {"name",            m.name},
         {"provider",        m.provider},
-        {"host",            m.host},
-        {"api_key",         mask_secret(m.api_key)},
         {"model_id",        m.model_id},
-        {"chat_endpoint",   m.chat_endpoint},
         {"max_context_size",m.max_context_size},
         {"temperature",     m.temperature},
     };
@@ -86,10 +106,7 @@ inline std::optional<daedalus::ModelConfig> json_to_model(const json& j) {
     daedalus::ModelConfig m;
     m.name             = j.value("name", "");
     m.provider         = j.value("provider", "");
-    m.host             = j.value("host", "");
-    m.api_key          = j.value("api_key", "");
     m.model_id         = j.value("model_id", "");
-    m.chat_endpoint    = j.value("chat_endpoint", "/v1/chat/completions");
     m.max_context_size = j.value("max_context_size", 0);
     m.temperature      = j.value("temperature", 0.0);
     return m;
@@ -144,6 +161,66 @@ inline void register_settings_routes(HTTP::Server& server) {
     using namespace detail;
 
     // ------------------------------------------------------------------------
+    // Providers
+    // ------------------------------------------------------------------------
+
+    // GET /settings/providers — list all configured providers.
+    server.router().get("/settings/providers", [](const Req&, Resp& resp) {
+        auto& store = daedalus::SettingsStore::instance();
+        json arr = json::array();
+        for (const auto& p : store.list_providers_detailed()) {
+            arr.push_back(provider_to_json(p));
+        }
+        resp.setStatus(HTTP::StatusCode::OK);
+        resp.setContentType("application/json");
+        resp.setBody(json_ok({{"providers", arr}}));
+    });
+
+    // POST /settings/providers — upsert a provider.
+    server.router().post("/settings/providers", [](const Req& req, Resp& resp) {
+        try {
+            auto j = json::parse(req.bodyAsString());
+            auto p = json_to_provider(j);
+            if (!p) {
+                resp.setStatus(HTTP::StatusCode::BAD_REQUEST);
+                resp.setContentType("application/json");
+                resp.setBody(json_error("provider requires a 'name'"));
+                return;
+            }
+            auto& store = daedalus::SettingsStore::instance();
+            if (p->api_key.empty()) {
+                if (auto existing = store.get_provider(p->name)) {
+                    p->api_key = existing->api_key;
+                }
+            }
+            store.upsert_provider(*p);
+            resp.setStatus(HTTP::StatusCode::OK);
+            resp.setContentType("application/json");
+            resp.setBody(json_ok());
+        } catch (const std::exception& e) {
+            resp.setStatus(HTTP::StatusCode::BAD_REQUEST);
+            resp.setContentType("application/json");
+            resp.setBody(json_error(e.what()));
+        }
+    });
+
+    // DELETE /settings/providers/<name> — delete a provider.
+    server.router().delete_(R"(/settings/providers/(.+))",
+        [](const Req& req, Resp& resp) {
+            std::string name = extract_last_segment(req.path());
+            if (name.empty()) {
+                resp.setStatus(HTTP::StatusCode::BAD_REQUEST);
+                resp.setContentType("application/json");
+                resp.setBody(json_error("missing provider name"));
+                return;
+            }
+            daedalus::SettingsStore::instance().delete_provider(name);
+            resp.setStatus(HTTP::StatusCode::OK);
+            resp.setContentType("application/json");
+            resp.setBody(json_ok());
+        });
+
+    // ------------------------------------------------------------------------
     // Models
     // ------------------------------------------------------------------------
 
@@ -196,8 +273,6 @@ inline void register_settings_routes(HTTP::Server& server) {
     });
 
     // POST /settings/models — upsert a model.
-    // §webui-settings: if api_key is empty, preserve the existing key so
-    // the masked GET response can be edited without re-entering secrets.
     server.router().post("/settings/models", [](const Req& req, Resp& resp) {
         try {
             auto j = json::parse(req.bodyAsString());
@@ -209,11 +284,6 @@ inline void register_settings_routes(HTTP::Server& server) {
                 return;
             }
             auto& store = daedalus::SettingsStore::instance();
-            if (m->api_key.empty()) {
-                if (auto existing = store.get_model(m->name)) {
-                    m->api_key = existing->api_key;
-                }
-            }
             store.upsert_model(*m);
             resp.setStatus(HTTP::StatusCode::OK);
             resp.setContentType("application/json");

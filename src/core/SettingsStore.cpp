@@ -93,20 +93,26 @@ int builtin_max_context_size(std::string_view model_name)
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER PRIMARY KEY
 );
 
+CREATE TABLE IF NOT EXISTS providers (
+    name               TEXT PRIMARY KEY,
+    host               TEXT NOT NULL,
+    api_key            TEXT NOT NULL,
+    chat_endpoint      TEXT NOT NULL DEFAULT '/v1/chat/completions',
+    discovery_endpoint TEXT NOT NULL DEFAULT '/v1/models',
+    timeout_seconds    INTEGER NOT NULL DEFAULT 30
+);
+
 CREATE TABLE IF NOT EXISTS models (
     name             TEXT PRIMARY KEY,
-    provider         TEXT NOT NULL DEFAULT '',
-    host             TEXT NOT NULL,
-    api_key          TEXT NOT NULL,
+    provider         TEXT NOT NULL REFERENCES providers(name),
     model_id         TEXT NOT NULL,
-    chat_endpoint    TEXT NOT NULL DEFAULT '/v1/chat/completions',
     max_context_size INTEGER NOT NULL DEFAULT 0,
     temperature      REAL    NOT NULL DEFAULT 0.0
 );
@@ -167,6 +173,110 @@ void migrate_to_v3(OmniNet::DB::Database& db)
     }
 }
 
+void migrate_to_v4(OmniNet::DB::Database& db)
+{
+    // v4: split provider-level settings into a separate providers table.
+    // Models keep only model-specific settings and reference providers by name.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS providers ("
+        "name TEXT PRIMARY KEY, "
+        "host TEXT NOT NULL, "
+        "api_key TEXT NOT NULL, "
+        "chat_endpoint TEXT NOT NULL DEFAULT '/v1/chat/completions', "
+        "discovery_endpoint TEXT NOT NULL DEFAULT '/v1/models', "
+        "timeout_seconds INTEGER NOT NULL DEFAULT 30)");
+
+    // Migrate existing models that still have provider-level columns.
+    // We detect the old schema by checking whether the 'host' column exists.
+    bool has_old_columns = false;
+    try {
+        db.query("PRAGMA table_info(models)", [&](const std::vector<std::string>& row) {
+            if (row.size() >= 2 && row[1] == "host") {
+                has_old_columns = true;
+                return false; // stop iterating
+            }
+            return true;
+        });
+    } catch (...) {
+    }
+
+    if (has_old_columns) {
+        // Create a provider for each distinct provider label.
+        db.query(
+            "SELECT DISTINCT provider, host, api_key, chat_endpoint "
+            "FROM models WHERE host <> '' AND provider <> ''",
+            [&](const std::vector<std::string>& row) {
+                if (row.size() < 4) return true;
+                std::string provider_name = row[0].empty() ? "legacy" : row[0];
+                std::string host = row[1];
+                std::string api_key = row[2];
+                std::string chat_endpoint = row[3].empty() ? "/v1/chat/completions" : row[3];
+
+                auto stmt = db.prepare(
+                    "INSERT OR IGNORE INTO providers(name, host, api_key, chat_endpoint) "
+                    "VALUES(?, ?, ?, ?)");
+                stmt.bind(1, provider_name);
+                stmt.bind(2, host);
+                stmt.bind(3, api_key);
+                stmt.bind(4, chat_endpoint);
+                stmt.step();
+                return true;
+            });
+
+        // For models whose provider label has no row, synthesize one per model.
+        db.query(
+            "SELECT name, host, api_key, chat_endpoint FROM models "
+            "WHERE provider = '' OR provider NOT IN (SELECT name FROM providers)",
+            [&](const std::vector<std::string>& row) {
+                if (row.size() < 4) return true;
+                std::string provider_name = "legacy-" + row[0];
+                std::string host = row[1];
+                std::string api_key = row[2];
+                std::string chat_endpoint = row[3].empty() ? "/v1/chat/completions" : row[3];
+
+                {
+                    auto stmt = db.prepare(
+                        "INSERT OR IGNORE INTO providers(name, host, api_key, chat_endpoint) "
+                        "VALUES(?, ?, ?, ?)");
+                    stmt.bind(1, provider_name);
+                    stmt.bind(2, host);
+                    stmt.bind(3, api_key);
+                    stmt.bind(4, chat_endpoint);
+                    stmt.step();
+                }
+
+                {
+                    auto stmt = db.prepare("UPDATE models SET provider = ? WHERE name = ?");
+                    stmt.bind(1, provider_name);
+                    stmt.bind(2, row[0]);
+                    stmt.step();
+                }
+                return true;
+            });
+
+        // Re-create models table without provider-level columns.
+        db.execute(
+            "CREATE TABLE models_new ("
+            "name TEXT PRIMARY KEY, "
+            "provider TEXT NOT NULL REFERENCES providers(name), "
+            "model_id TEXT NOT NULL, "
+            "max_context_size INTEGER NOT NULL DEFAULT 0, "
+            "temperature REAL NOT NULL DEFAULT 0.0)");
+
+        db.execute(
+            "INSERT INTO models_new(name, provider, model_id, max_context_size, temperature) "
+            "SELECT m.name, "
+            "COALESCE((SELECT p.name FROM providers p "
+            "          WHERE p.name = m.provider AND m.provider <> ''), "
+            "         'legacy-' || m.name), "
+            "m.model_id, m.max_context_size, m.temperature "
+            "FROM models m");
+
+        db.execute("DROP TABLE models");
+        db.execute("ALTER TABLE models_new RENAME TO models");
+    }
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -190,6 +300,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     // Run any pending per-version migrations.
     if (current_version < 2) migrate_to_v2(db);
     if (current_version < 3) migrate_to_v3(db);
+    if (current_version < 4) migrate_to_v4(db);
 
     // Update the stored version if it advanced.
     if (current_version != kSchemaVersion) {
@@ -200,21 +311,36 @@ void ensure_schema(OmniNet::DB::Database& db)
     }
 }
 
+ProviderConfig row_to_provider(const std::vector<std::string>& r)
+{
+    // SELECT order: name, host, api_key, chat_endpoint, discovery_endpoint,
+    // timeout_seconds
+    ProviderConfig p;
+    if (r.size() < 6) return p;
+    p.name               = r[0];
+    p.host               = r[1];
+    p.api_key            = r[2];
+    p.chat_endpoint      = r[3];
+    p.discovery_endpoint = r[4];
+    try {
+        p.timeout_seconds = std::stoi(r[5]);
+    } catch (...) {
+        p.timeout_seconds = 30;
+    }
+    return p;
+}
+
 ModelConfig row_to_model(const std::vector<std::string>& r)
 {
-    // SELECT order: name, provider, host, api_key, model_id, chat_endpoint,
-    // max_context_size, temperature
+    // SELECT order: name, provider, model_id, max_context_size, temperature
     ModelConfig m;
-    if (r.size() < 8) return m;
+    if (r.size() < 5) return m;
     m.name             = r[0];
     m.provider         = r[1];
-    m.host             = r[2];
-    m.api_key          = r[3];
-    m.model_id         = r[4];
-    m.chat_endpoint    = r[5];
+    m.model_id         = r[2];
     try {
-        m.max_context_size = std::stoi(r[6]);
-        m.temperature      = std::stod(r[7]);
+        m.max_context_size = std::stoi(r[3]);
+        m.temperature      = std::stod(r[4]);
     } catch (...) {
         m.max_context_size = 0;
         m.temperature      = 0.0;
@@ -386,12 +512,37 @@ SettingsStore SettingsStore::for_home(fs::path home)
 // ============================================================================
 // Read
 // ============================================================================
+std::optional<ProviderConfig> SettingsStore::get_provider(std::string_view name) const
+{
+    auto row = query_one_prepared(
+        *db_,
+        "SELECT name, host, api_key, chat_endpoint, discovery_endpoint, "
+        "timeout_seconds FROM providers WHERE name = ?",
+        std::string(name));
+    if (!row.has_value()) return std::nullopt;
+    return row_to_provider(*row);
+}
+
+std::vector<ProviderConfig> SettingsStore::list_providers_detailed() const
+{
+    std::vector<ProviderConfig> out;
+    auto rows = query_all_prepared(
+        *db_,
+        "SELECT name, host, api_key, chat_endpoint, discovery_endpoint, "
+        "timeout_seconds FROM providers ORDER BY name");
+    out.reserve(rows.size());
+    for (const auto& row : rows) {
+        out.push_back(row_to_provider(row));
+    }
+    return out;
+}
+
 std::optional<ModelConfig> SettingsStore::get_model(std::string_view name) const
 {
     auto row = query_one_prepared(
         *db_,
-        "SELECT name, provider, host, api_key, model_id, chat_endpoint, "
-        "max_context_size, temperature FROM models WHERE name = ?",
+        "SELECT name, provider, model_id, max_context_size, temperature "
+        "FROM models WHERE name = ?",
         std::string(name));
     if (!row.has_value()) return std::nullopt;
     return row_to_model(*row);
@@ -402,12 +553,33 @@ std::vector<ModelConfig> SettingsStore::list_models() const
     std::vector<ModelConfig> out;
     auto rows = query_all_prepared(
         *db_,
-        "SELECT name, provider, host, api_key, model_id, chat_endpoint, "
-        "max_context_size, temperature FROM models");
+        "SELECT name, provider, model_id, max_context_size, temperature FROM models");
     out.reserve(rows.size());
     for (const auto& row : rows) {
         out.push_back(row_to_model(row));
     }
+    return out;
+}
+
+std::optional<ResolvedModelConfig> SettingsStore::resolve_model(std::string_view name) const
+{
+    auto m = get_model(name);
+    if (!m.has_value()) return std::nullopt;
+
+    auto p = get_provider(m->provider);
+    if (!p.has_value()) return std::nullopt;
+
+    ResolvedModelConfig out;
+    out.name               = m->name;
+    out.provider           = m->provider;
+    out.model_id           = m->model_id;
+    out.host               = p->host;
+    out.api_key            = p->api_key;
+    out.chat_endpoint      = p->chat_endpoint;
+    out.discovery_endpoint = p->discovery_endpoint;
+    out.timeout_seconds    = p->timeout_seconds;
+    out.max_context_size   = m->max_context_size;
+    out.temperature        = m->temperature;
     return out;
 }
 
@@ -438,18 +610,40 @@ int SettingsStore::get_int(std::string_view key, int def) const
 // ============================================================================
 // Write
 // ============================================================================
+void SettingsStore::upsert_provider(const ProviderConfig& p)
+{
+    exec_prepared(
+        *db_,
+        "INSERT INTO providers(name, host, api_key, chat_endpoint, discovery_endpoint, "
+        "timeout_seconds) VALUES(?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET "
+        "host=excluded.host, api_key=excluded.api_key, "
+        "chat_endpoint=excluded.chat_endpoint, "
+        "discovery_endpoint=excluded.discovery_endpoint, "
+        "timeout_seconds=excluded.timeout_seconds",
+        p.name, p.host, p.api_key, p.chat_endpoint, p.discovery_endpoint,
+        static_cast<int64_t>(p.timeout_seconds));
+}
+
+void SettingsStore::delete_provider(std::string_view name)
+{
+    exec_prepared(
+        *db_,
+        "DELETE FROM providers WHERE name = ?",
+        std::string(name));
+}
+
 void SettingsStore::upsert_model(const ModelConfig& m)
 {
     exec_prepared(
         *db_,
-        "INSERT INTO models(name, provider, host, api_key, model_id, chat_endpoint, "
-        "max_context_size, temperature) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+        "INSERT INTO models(name, provider, model_id, max_context_size, temperature) "
+        "VALUES(?, ?, ?, ?, ?) "
         "ON CONFLICT(name) DO UPDATE SET "
-        "provider=excluded.provider, host=excluded.host, api_key=excluded.api_key, "
-        "model_id=excluded.model_id, chat_endpoint=excluded.chat_endpoint, "
+        "provider=excluded.provider, model_id=excluded.model_id, "
         "max_context_size=excluded.max_context_size, "
         "temperature=excluded.temperature",
-        m.name, m.provider, m.host, m.api_key, m.model_id, m.chat_endpoint,
+        m.name, m.provider, m.model_id,
         static_cast<int64_t>(m.max_context_size),
         m.temperature);
 }
@@ -584,7 +778,7 @@ std::vector<std::string> SettingsStore::list_providers() const
     std::vector<std::string> out;
     auto rows = query_all_prepared(
         *db_,
-        "SELECT DISTINCT provider FROM models WHERE provider <> '' ORDER BY provider");
+        "SELECT name FROM providers ORDER BY name");
     out.reserve(rows.size());
     for (const auto& row : rows) {
         if (!row.empty() && !row[0].empty()) {

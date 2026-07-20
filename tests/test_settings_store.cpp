@@ -53,16 +53,31 @@ int failures = 0;
     }                                                              \
 } while (0)
 
-daedalus::ModelConfig make_model(const std::string& name) {
+daedalus::ProviderConfig make_provider(const std::string& name) {
+    daedalus::ProviderConfig p;
+    p.name          = name;
+    p.host          = "http://test.invalid/" + name;
+    p.api_key       = "sk-test-" + name;
+    p.chat_endpoint = "/v1/chat/completions";
+    return p;
+}
+
+daedalus::ModelConfig make_model(const std::string& name,
+                                 const std::string& provider = "test-provider") {
     daedalus::ModelConfig m;
     m.name             = name;
-    m.host             = "http://test.invalid";
-    m.api_key          = "sk-test-" + name;
+    m.provider         = provider;
     m.model_id         = "model-id-" + name;
-    m.chat_endpoint    = "/v1/chat/completions";
     m.max_context_size = 123456;
     m.temperature      = 0.42;
     return m;
+}
+
+void ensure_test_provider(daedalus::SettingsStore& s,
+                          const std::string& name = "test-provider") {
+    if (!s.get_provider(name).has_value()) {
+        s.upsert_provider(make_provider(name));
+    }
 }
 
 // ===========================================================================
@@ -102,9 +117,9 @@ void test_s2_for_home_isolates() {
 void test_s3_model_roundtrip() {
     TmpHome h("s3");
     auto s = daedalus::SettingsStore::for_home(h.path);
+    ensure_test_provider(s);
 
     auto m = make_model("alpha");
-    m.provider = "test-provider";
     s.upsert_model(m);
 
     auto got = s.get_model("alpha");
@@ -112,12 +127,17 @@ void test_s3_model_roundtrip() {
     if (got) {
         EXPECT(got->name             == m.name);
         EXPECT(got->provider         == m.provider);
-        EXPECT(got->host             == m.host);
-        EXPECT(got->api_key          == m.api_key);
         EXPECT(got->model_id         == m.model_id);
-        EXPECT(got->chat_endpoint    == m.chat_endpoint);
         EXPECT(got->max_context_size == m.max_context_size);
         EXPECT(got->temperature      == m.temperature);
+    }
+
+    auto resolved = s.resolve_model("alpha");
+    EXPECT(resolved.has_value());
+    if (resolved) {
+        EXPECT(resolved->name    == m.name);
+        EXPECT(resolved->host    == "http://test.invalid/test-provider");
+        EXPECT(resolved->api_key == "sk-test-test-provider");
     }
     std::cout << "[ok] S3: upsert_model + get_model round-trip\n";
 }
@@ -128,6 +148,7 @@ void test_s3_model_roundtrip() {
 void test_s4_list_and_upsert_replaces() {
     TmpHome h("s4");
     auto s = daedalus::SettingsStore::for_home(h.path);
+    ensure_test_provider(s);
 
     s.upsert_model(make_model("a"));
     s.upsert_model(make_model("b"));
@@ -136,15 +157,15 @@ void test_s4_list_and_upsert_replaces() {
     auto all = s.list_models();
     EXPECT(all.size() == 3);
 
-    // upsert with same name but different api_key must update, not duplicate
+    // upsert with same name but different model_id must update, not duplicate
     auto m = make_model("a");
-    m.api_key = "sk-updated";
+    m.model_id = "updated-id";
     s.upsert_model(m);
 
     all = s.list_models();
     EXPECT(all.size() == 3);
     auto a = s.get_model("a");
-    EXPECT(a.has_value() && a->api_key == "sk-updated");
+    EXPECT(a.has_value() && a->model_id == "updated-id");
     std::cout << "[ok] S4: list_models + upsert replaces\n";
 }
 
@@ -154,6 +175,7 @@ void test_s4_list_and_upsert_replaces() {
 void test_s5_delete_model() {
     TmpHome h("s5");
     auto s = daedalus::SettingsStore::for_home(h.path);
+    ensure_test_provider(s);
 
     s.upsert_model(make_model("gone"));
     EXPECT(s.get_model("gone").has_value());
@@ -190,6 +212,7 @@ void test_s6_kv_roundtrip() {
 void test_s7_transaction_atomicity() {
     TmpHome h("s7");
     auto s = daedalus::SettingsStore::for_home(h.path);
+    ensure_test_provider(s);
 
     // Happy path: commit
     s.transaction([&](daedalus::SettingsStore& txn) {
@@ -241,6 +264,7 @@ void test_s9_schema_idempotent() {
     {
         // First open creates the schema and inserts data.
         auto s = daedalus::SettingsStore::for_home(h1.path);
+        ensure_test_provider(s);
         s.upsert_model(make_model("pinned"));
         EXPECT(s.get_model("pinned").has_value());
     }
@@ -248,6 +272,7 @@ void test_s9_schema_idempotent() {
         // Fresh path → brand-new DB → schema is created → empty
         // models table → upsert works.
         auto s = daedalus::SettingsStore::for_home(h2.path);
+        ensure_test_provider(s);
         EXPECT(s.list_models().empty());
         s.upsert_model(make_model("pinned"));
         EXPECT(s.get_model("pinned").has_value());
@@ -266,6 +291,7 @@ void test_s9_schema_idempotent() {
 void test_s10_sql_injection_resistance() {
     TmpHome h("s10");
     auto s = daedalus::SettingsStore::for_home(h.path);
+    ensure_test_provider(s);
 
     // Try to break things via the model name (primary key).
     std::vector<std::string> malicious = {
@@ -284,8 +310,12 @@ void test_s10_sql_injection_resistance() {
         EXPECT(got.has_value());
         if (got.has_value()) {
             EXPECT(got->name == name);
-            EXPECT(got->host == m.host);
-            EXPECT(got->api_key == m.api_key);
+            auto resolved = s.resolve_model(name);
+            EXPECT(resolved.has_value());
+            if (resolved) {
+                EXPECT(resolved->host == "http://test.invalid/test-provider");
+                EXPECT(resolved->api_key == "sk-test-test-provider");
+            }
         }
         // The table must still exist (DROP TABLE didn't run).
         EXPECT(s.list_models().size() >= 1);
@@ -318,6 +348,70 @@ void test_s10_sql_injection_resistance() {
     std::cout << "[ok] S10: SQL injection resistance (B1 regression)\n";
 }
 
+// ===========================================================================
+// S11: v3 → v4 migration splits provider-level settings into providers table
+// ===========================================================================
+void test_s11_provider_migration() {
+    TmpHome h("s11");
+    fs::path db_path = h.path / "daedalus.db";
+
+    // Create a v3 schema DB manually.
+    {
+        OmniNet::DB::Database db;
+        db.open(db_path.string());
+        db.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
+        db.execute("INSERT INTO schema_version(version) VALUES (3)");
+        db.execute(
+            "CREATE TABLE models ("
+            "name TEXT PRIMARY KEY, provider TEXT NOT NULL DEFAULT '', "
+            "host TEXT NOT NULL, api_key TEXT NOT NULL, model_id TEXT NOT NULL, "
+            "chat_endpoint TEXT NOT NULL DEFAULT '/v1/chat/completions', "
+            "max_context_size INTEGER NOT NULL DEFAULT 0, "
+            "temperature REAL NOT NULL DEFAULT 0.0)");
+        db.execute(
+            "INSERT INTO models(name, provider, host, api_key, model_id, "
+            "max_context_size, temperature) VALUES "
+            "('minimax-m3', 'minimax', 'https://api.minimax.io', 'sk-mm', "
+            "'MiniMax-M3', 200000, 0.7)");
+        db.execute(
+            "INSERT INTO models(name, provider, host, api_key, model_id, "
+            "max_context_size, temperature) VALUES "
+            "('legacy-model', '', 'https://legacy.example', 'sk-lg', "
+            "'legacy-id', 10000, 0.0)");
+    }
+
+    // Opening with SettingsStore should migrate to v4.
+    auto s = daedalus::SettingsStore::for_home(h.path);
+
+    auto providers = s.list_providers_detailed();
+    EXPECT(providers.size() == 2);
+
+    auto minimax = s.get_provider("minimax");
+    EXPECT(minimax.has_value());
+    if (minimax) {
+        EXPECT(minimax->host == "https://api.minimax.io");
+        EXPECT(minimax->api_key == "sk-mm");
+    }
+
+    auto resolved = s.resolve_model("minimax-m3");
+    EXPECT(resolved.has_value());
+    if (resolved) {
+        EXPECT(resolved->provider == "minimax");
+        EXPECT(resolved->host == "https://api.minimax.io");
+        EXPECT(resolved->model_id == "MiniMax-M3");
+        EXPECT(resolved->max_context_size == 200000);
+    }
+
+    auto legacy = s.resolve_model("legacy-model");
+    EXPECT(legacy.has_value());
+    if (legacy) {
+        EXPECT(legacy->provider == "legacy-legacy-model");
+        EXPECT(legacy->host == "https://legacy.example");
+    }
+
+    std::cout << "[ok] S11: v3 → v4 provider migration\n";
+}
+
 }  // namespace
 
 int main() {
@@ -331,12 +425,13 @@ int main() {
     test_s8_db_path();
     test_s9_schema_idempotent();
     test_s10_sql_injection_resistance();
+    test_s11_provider_migration();
 
     if (failures) {
         std::cerr << "\ntest_settings_store: " << failures
-                  << " FAILED (of 10 tests)\n";
+                  << " FAILED (of 11 tests)\n";
         return 1;
     }
-    std::cout << "\ntest_settings_store: 10 tests passed\n";
+    std::cout << "\ntest_settings_store: 11 tests passed\n";
     return 0;
 }

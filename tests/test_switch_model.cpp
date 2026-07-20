@@ -37,6 +37,16 @@ fs::path make_temp_home(const std::string& tag) {
     return p;
 }
 
+daedalus::ProviderConfig make_provider(const std::string& name,
+                                        const std::string& host) {
+    daedalus::ProviderConfig p;
+    p.name          = name;
+    p.host          = host;
+    p.api_key       = name + "-key";
+    p.chat_endpoint = "/v1/chat/completions";
+    return p;
+}
+
 daedalus::ModelConfig make_model(const std::string& name,
                                  const std::string& host,
                                  int max_context_size,
@@ -44,10 +54,7 @@ daedalus::ModelConfig make_model(const std::string& name,
     daedalus::ModelConfig m;
     m.name             = name;
     m.provider         = provider;
-    m.host             = host;
-    m.api_key          = name + "-key";
     m.model_id         = name + "-model";
-    m.chat_endpoint    = "/v1/chat/completions";
     m.max_context_size = max_context_size;
     m.temperature      = 0.0;
     return m;
@@ -55,6 +62,8 @@ daedalus::ModelConfig make_model(const std::string& name,
 
 void write_settings(const fs::path& daedalus_home) {
     auto store = daedalus::SettingsStore::for_home(daedalus_home);
+    store.upsert_provider(make_provider("p1", "http://p1.example"));
+    store.upsert_provider(make_provider("p2", "http://p2.example"));
     store.upsert_model(make_model("small", "http://small.example", 10000, "p1"));
     store.upsert_model(make_model("large", "http://large.example", 100000, "p1"));
     store.set_default_model_name("small");
@@ -176,6 +185,8 @@ TEST_CASE("switch_provider persists provider and switches to a model of that pro
     fs::path home = make_temp_home("provider");
     {
         auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_provider(make_provider("p1", "http://p1.example"));
+        store.upsert_provider(make_provider("p2", "http://p2.example"));
         store.upsert_model(make_model("p1-a", "http://p1.example", 10000, "p1"));
         store.upsert_model(make_model("p1-b", "http://p1.example", 20000, "p1"));
         store.upsert_model(make_model("p2-a", "http://p2.example", 30000, "p2"));
@@ -213,6 +224,7 @@ TEST_CASE("switch_model creates config for discovered provider model id") {
     fs::path home = make_temp_home("discovered");
     {
         auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_provider(make_provider("kimi", "http://kimi.example"));
         store.upsert_model(make_model("kimi-ref", "http://kimi.example", 256000, "kimi"));
         store.set_current_provider("kimi");
         store.set_default_model_name("kimi-ref");
@@ -243,7 +255,10 @@ TEST_CASE("switch_model creates config for discovered provider model id") {
     auto saved = store.get_model("kimi-k2.5");
     REQUIRE(saved.has_value());
     CHECK(saved->provider == "kimi");
-    CHECK(saved->host == "http://kimi.example");
+
+    auto resolved = store.resolve_model("kimi-k2.5");
+    REQUIRE(resolved.has_value());
+    CHECK(resolved->host == "http://kimi.example");
 
     agent.shutdown();
     fs::remove_all(home);

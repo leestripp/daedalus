@@ -18,12 +18,17 @@ int main() {
         // §B2 fix (v0.5.1): instance() returns by reference (true singleton).
         // Writes here propagate to the singleton directly.
         auto& store = daedalus::SettingsStore::instance();
+        daedalus::ProviderConfig p;
+        p.name          = "e2e-provider";
+        p.host          = "http://test.invalid";
+        p.api_key       = "sk-store-e2e-not-placeholder";
+        p.chat_endpoint = "/v1/chat/completions";
+        store.upsert_provider(p);
+
         daedalus::ModelConfig m;
         m.name             = "store-e2e";
-        m.host             = "http://test.invalid";
-        m.api_key          = "sk-store-e2e-not-placeholder";
+        m.provider         = "e2e-provider";
         m.model_id         = "model-store-e2e";
-        m.chat_endpoint    = "/v1/chat/completions";
         m.max_context_size = 50000;
         m.temperature      = 0.5;
         store.upsert_model(m);

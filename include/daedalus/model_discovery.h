@@ -15,7 +15,7 @@
 
 namespace daedalus {
 
-struct ModelConfig;  // Defined in daedalus/settings.h
+struct ResolvedModelConfig;  // Defined in daedalus/settings.h
 
 /// @brief Result of a model-discovery request.
 struct ModelDiscoveryResult {
@@ -27,13 +27,12 @@ struct ModelDiscoveryResult {
 /**
  * @brief Discover models at the endpoint described by `endpoint`.
  *
- * The discovery URL is `endpoint.host + "/v1/models"`. The configured
- * `chat_endpoint` is ignored for discovery.
+ * The discovery URL is `endpoint.host + endpoint.discovery_endpoint`.
  *
- * @param endpoint  A ModelConfig with at least `host` and `api_key` populated.
+ * @param endpoint  A ResolvedModelConfig with at least `host` and `api_key` populated.
  * @return          ModelDiscoveryResult containing the models or an error.
  */
-ModelDiscoveryResult discover_models(const ModelConfig& endpoint);
+ModelDiscoveryResult discover_models(const ResolvedModelConfig& endpoint);
 
 /**
  * @brief Discover models at an arbitrary OpenAI-compatible endpoint.

@@ -34,6 +34,8 @@
 // the class body (no pimpl), so the full type must be visible here.
 #include <db/Database.h>
 
+#include "daedalus/types/ProviderConfig.h"
+
 
 namespace daedalus {
 
@@ -46,20 +48,6 @@ struct ServerErrorSettings
     int max_wait_seconds = 300;
     double backoff_multiplier = 2.0;
     int max_retries_per_call = 10;
-};
-
-/// One configured LLM endpoint. Mirrors the JSON shape of `config.json::models`
-/// but is a proper C++ struct — no JSON knowledge leaks into hosts.
-struct ModelConfig
-{
-    std::string name;              // key in config.json::models ("minimax-m3", ...)
-    std::string provider;          // provider label, e.g. "kimi", "minimax", "openai"
-    std::string host;              // https://api.example.com
-    std::string api_key;           // plaintext — same as the old config.json
-    std::string model_id;          // actual model id ("MiniMax-M3", ...)
-    std::string chat_endpoint;     // "/v1/chat/completions" — has a default
-    int    max_context_size = 0;   // 0 = fall back to model's default
-    double temperature     = 0.0;
 };
 
 /// Opaque handle to the settings database.
@@ -96,14 +84,25 @@ public:
     static SettingsStore for_home(std::filesystem::path home);
 
     // -- Read --
+    std::optional<ProviderConfig> get_provider(std::string_view name) const;
+    std::vector<std::string>      list_providers() const;
+    std::vector<ProviderConfig>   list_providers_detailed() const;
+
     std::optional<ModelConfig> get_model(std::string_view name) const;
     std::vector<ModelConfig>   list_models() const;
+
+    /// Effective settings for a model: model-specific values merged with
+    /// the referenced provider's host/api_key/endpoints.
+    std::optional<ResolvedModelConfig> resolve_model(std::string_view name) const;
 
     std::string get_string(std::string_view key, std::string_view def = "") const;
     bool        get_bool  (std::string_view key, bool              def = false) const;
     int         get_int   (std::string_view key, int               def = 0)     const;
 
     // -- Write --
+    void upsert_provider(const ProviderConfig& p);
+    void delete_provider(std::string_view name);
+
     void upsert_model (const ModelConfig& m);
     void delete_model (std::string_view name);
 
@@ -139,9 +138,6 @@ public:
 
     /// Set the current provider label in kv_settings.
     void set_current_provider(std::string_view provider);
-
-    /// Unique non-empty provider labels across configured models.
-    std::vector<std::string> list_providers() const;
 
     /// Get auto_approve from kv_settings. Default false.
     bool get_auto_approve() const;

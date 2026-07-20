@@ -99,6 +99,26 @@ std::vector<std::string> Agent::list_providers() const
     return impl_->list_providers();
 }
 
+std::vector<ProviderConfig> Agent::list_providers_detailed() const
+{
+    return impl_->list_providers_detailed();
+}
+
+bool Agent::upsert_provider(const ProviderConfig& provider)
+{
+    return impl_->upsert_provider(provider);
+}
+
+bool Agent::delete_provider(const std::string& provider)
+{
+    return impl_->delete_provider(provider);
+}
+
+bool Agent::upsert_model(const ModelConfig& model)
+{
+    return impl_->upsert_model(model);
+}
+
 bool Agent::switch_provider(const std::string& provider)
 {
     return impl_->switch_provider(provider);

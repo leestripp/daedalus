@@ -39,10 +39,8 @@ daedalus::ModelConfig make_model(const std::string& name,
                                  const std::string& api_key) {
     daedalus::ModelConfig m;
     m.name             = name;
-    m.host             = host;
-    m.api_key          = api_key;
+    m.provider         = name + "-provider";
     m.model_id         = name + "-model";
-    m.chat_endpoint    = "/v1/chat/completions";
     m.max_context_size = 100000;
     m.temperature      = 0.0;
     return m;
@@ -52,6 +50,20 @@ daedalus::ModelConfig make_model(const std::string& name,
 void write_settings(const fs::path& daedalus_home,
                     const std::string& default_model) {
     auto store = daedalus::SettingsStore::for_home(daedalus_home);
+
+    auto make_provider = [](const std::string& name,
+                            const std::string& host,
+                            const std::string& api_key) {
+        daedalus::ProviderConfig p;
+        p.name          = name;
+        p.host          = host;
+        p.api_key       = api_key;
+        p.chat_endpoint = "/v1/chat/completions";
+        return p;
+    };
+
+    store.upsert_provider(make_provider("alpha-provider", "http://alpha.example", "alpha-key"));
+    store.upsert_provider(make_provider("beta-provider",  "http://beta.example",  "beta-key"));
     store.upsert_model(make_model("alpha", "http://alpha.example", "alpha-key"));
     store.upsert_model(make_model("beta",  "http://beta.example",  "beta-key"));
     store.set_default_model_name(default_model);

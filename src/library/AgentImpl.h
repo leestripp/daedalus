@@ -95,6 +95,10 @@ public:
     void clear_memory();
     bool switch_model(const std::string& model_name);
     [[nodiscard]] std::vector<std::string> list_providers() const;
+    [[nodiscard]] std::vector<ProviderConfig> list_providers_detailed() const;
+    bool upsert_provider(const ProviderConfig& provider);
+    bool delete_provider(const std::string& provider);
+    bool upsert_model(const ModelConfig& model);
     bool switch_provider(const std::string& provider);
     [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
     [[nodiscard]] std::string last_assistant_text() const;

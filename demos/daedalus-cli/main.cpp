@@ -19,6 +19,7 @@
 
 #include <iostream>
 #include <string>
+#include <sstream>
 #include <filesystem>
 #include <memory>
 #include <atomic>
@@ -286,6 +287,25 @@ int main(int argc, char* argv[]) {
                     std::cout << "  " << p << "\n";
                 continue;
             }
+            if (line.rfind("/provider-add ", 0) == 0) {
+                std::istringstream iss(line.substr(14));
+                std::string name, host, api_key;
+                iss >> name >> host >> api_key;
+                if (name.empty() || host.empty() || api_key.empty()) {
+                    std::cout << "Usage: /provider-add <name> <host> <api_key>\n";
+                } else {
+                    daedalus::ProviderConfig p;
+                    p.name = name;
+                    p.host = host;
+                    p.api_key = api_key;
+                    if (agent.upsert_provider(p)) {
+                        std::cout << "[PROVIDER] Added/updated " << name << "\n";
+                    } else {
+                        std::cout << "[PROVIDER] Failed to add " << name << "\n";
+                    }
+                }
+                continue;
+            }
             if (line.rfind("/provider ", 0) == 0) {
                 std::string provider = line.substr(10);
                 if (provider.empty()) {
@@ -313,6 +333,26 @@ int main(int argc, char* argv[]) {
                         if (m.supports_vision) std::cout << " [vision]";
                         if (m.supports_reasoning) std::cout << " [reasoning]";
                         std::cout << "\n";
+                    }
+                }
+                continue;
+            }
+            if (line.rfind("/model-add ", 0) == 0) {
+                std::istringstream iss(line.substr(11));
+                std::string name, provider, model_id;
+                iss >> name >> provider >> model_id;
+                if (name.empty() || provider.empty() || model_id.empty()) {
+                    std::cout << "Usage: /model-add <name> <provider> <model_id>\n";
+                } else {
+                    daedalus::ModelConfig m;
+                    m.name = name;
+                    m.provider = provider;
+                    m.model_id = model_id;
+                    if (agent.upsert_model(m)) {
+                        std::cout << "[MODEL] Added/updated " << name << "\n";
+                    } else {
+                        std::cout << "[MODEL] Failed to add " << name
+                                  << " (provider must exist)\n";
                     }
                 }
                 continue;
