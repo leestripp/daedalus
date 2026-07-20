@@ -188,8 +188,8 @@ private:
 public:
     /**
      * @brief Construct SessionMemory with a per-agent data directory
-     *        (§Phase 8.8). SessionMemory stores its memory file at
-     *        `<data_dir>/memory/memory.json` so it shares the
+     *        (§Phase 8.8 / §Phase 16). SessionMemory stores its memory
+     *        file at `<data_dir>/memory/memory.json` so it shares the
      *        namespace with Messages.
      *
      * AgentImpl::initialize() resolves the namespace via

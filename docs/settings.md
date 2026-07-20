@@ -85,7 +85,47 @@ std::string default_name = store.get_default_model_name();
 store.set_default_model_name("minimax-m3");
 ```
 
-### 2.4 Key-Value Settings
+### 2.4 Switching Models at Runtime
+
+Use `Agent::switch_model()` to change the model for subsequent turns.
+On success the new model becomes the default in `SettingsStore`, the
+`AgentConfig::model_name` is updated, the internal `LLMClient` is
+reconfigured for the new endpoint / credentials / context size, and
+**the conversation history is cleared**.
+
+```cpp
+daedalus::Agent agent(cfg, sink);
+agent.initialize();
+
+// Start with a lightweight model for planning...
+agent.switch_model("minimax-m2.7");
+agent.submit_user_message("Plan the refactor");
+agent.run_one_turn();
+
+// ...then switch to a larger model for implementation.
+// History is cleared automatically so the bigger model's context
+// window is not consumed by the earlier planning turn.
+agent.switch_model("minimax-m3");
+agent.submit_user_message("Implement the plan");
+agent.run_one_turn();
+```
+
+**Behaviour:**
+
+| Step | Effect |
+|---|---|
+| Validation | Returns `false` immediately if the requested model is not in `SettingsStore`. |
+| Default update | `SettingsStore::set_default_model_name()` is updated so future sessions start with the new model. |
+| Config refresh | The `LLMClient` picks up the new `host`, `api_key`, `model_id`, `chat_endpoint`, `temperature`, and `max_context_size`. |
+| History cleared | `Messages::clear()` + `save()` removes the on-disk transcript so the new model starts fresh. |
+
+**Rationale:** different models have different context windows and may
+also differ in API endpoint or provider. Clearing history avoids a
+`context_length_exceeded` error when moving from a large-context model
+to a smaller one, and guarantees the new model's first turn is not
+polluted by tool-call pairs generated for a different model's schema.
+
+### 2.5 Key-Value Settings
 
 ```cpp
 // String
@@ -101,7 +141,7 @@ int count = store.get_int("max_retries", 3);
 store.set_int("max_retries", 5);
 ```
 
-### 2.5 Agent Settings
+### 2.6 Agent Settings
 
 ```cpp
 // Max iterations (default 100)
@@ -118,7 +158,7 @@ size_t max_res = store.get_max_response_size();
 bool auto_approve = store.get_auto_approve();
 ```
 
-### 2.6 MCP Tool Schema Soft Cap
+### 2.7 MCP Tool Schema Soft Cap
 
 The MCP tool schema size is monitored against the model's context window:
 
@@ -127,7 +167,7 @@ The MCP tool schema size is monitored against the model's context window:
 int cap_pct = store.get_mcp_tool_schema_soft_cap_percent();
 ```
 
-### 2.7 Server Error Settings
+### 2.8 Server Error Settings
 
 ```cpp
 struct ServerErrorSettings {
@@ -141,7 +181,7 @@ struct ServerErrorSettings {
 ServerErrorSettings ses = store.get_server_error_settings();
 ```
 
-### 2.8 Model Context Size Resolution
+### 2.9 Model Context Size Resolution
 
 ```cpp
 int ctx = store.get_max_context_size_for_model("minimax-m3");
@@ -162,7 +202,7 @@ Built-in defaults:
 | DeepSeek Chat | 128,000 |
 | (unknown) | 1,000,000 |
 
-### 2.9 Atomic Transactions
+### 2.10 Atomic Transactions
 
 ```cpp
 store.transaction([](SettingsStore& s) {
@@ -173,7 +213,7 @@ store.transaction([](SettingsStore& s) {
 });
 ```
 
-### 2.10 Introspection
+### 2.11 Introspection
 
 ```cpp
 std::filesystem::path path = store.db_path();  // e.g. ~/.local/share/daedalus/daedalus.db

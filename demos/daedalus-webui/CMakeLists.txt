@@ -13,12 +13,16 @@ add_executable(daedalus-webui
 
 target_link_libraries(daedalus-webui
     PRIVATE
-        daedalus          # libdaedalus.a (+ OmniNet via PUBLIC dep)
+        daedalus                 # libdaedalus.a (+ OmniNet via PUBLIC dep)
+        daedalus_example_tools   # §TOOL-TRIM: file / git / search / etc.
 )
 
 target_include_directories(daedalus-webui
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/include   # for <daedalus.h>
+        ${CMAKE_SOURCE_DIR}/include              # for <daedalus.h>
+        ${CMAKE_SOURCE_DIR}/src                  # for tools/ToolHandler.h
+        ${CMAKE_SOURCE_DIR}/src/tools            # for ToolFactory.h
+        ${CMAKE_SOURCE_DIR}/demos/example-tools  # for example_tools.h
 )
 
 install(TARGETS daedalus-webui

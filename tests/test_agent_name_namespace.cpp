@@ -100,15 +100,15 @@ static void test_resolve_agent_dir() {
 
     const fs::path root = "/tmp/example";
 
-    // Empty → legacy `<root>/.daedalus/`.
+    // Empty → `<root>/.daedalus/daedalus/`.
     assert(daedalus::resolve_agent_dir(root, "")
-                == fs::path("/tmp/example/.daedalus"));
+                == fs::path("/tmp/example/.daedalus/daedalus"));
 
-    // Named → `<root>/.daedalus-<name>/`.
+    // Named → `<root>/.daedalus/daedalus-<name>/`.
     assert(daedalus::resolve_agent_dir(root, "bob")
-                == fs::path("/tmp/example/.daedalus-bob"));
+                == fs::path("/tmp/example/.daedalus/daedalus-bob"));
     assert(daedalus::resolve_agent_dir(root, "agent_007")
-                == fs::path("/tmp/example/.daedalus-agent_007"));
+                == fs::path("/tmp/example/.daedalus/daedalus-agent_007"));
 
     std::cout << "OK\n";
 }
@@ -166,10 +166,10 @@ static void test_backward_compat_legacy_path() {
 
     const fs::path project = fresh_dir("legacy");
     assert(daedalus::resolve_agent_dir(project, "")
-                == project / ".daedalus");
+                == project / ".daedalus" / "daedalus");
 
-    // Sanity: a "default" (no agent_name) data dir is exactly what
-    // existed before — there's no .daedalus-default/ surprise.
+    // Sanity: a "default" (no agent_name) data dir lives under the
+    // .daedalus base dir — there's no .daedalus-default/ surprise.
     assert(!fs::exists(project / ".daedalus-default"));
 
     fs::remove_all(project);

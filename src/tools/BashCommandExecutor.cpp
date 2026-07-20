@@ -2,11 +2,9 @@
 #include "core/Subprocess.h"
 #include "core/ThreadPool.h"
 
-#include <iostream>
 #include <thread>
 #include <atomic>
 #include <sstream>
-#include <vector>
 #include <algorithm>
 #include <cstdlib>
 #include <limits>
@@ -93,52 +91,6 @@ BashCommandExecutor::Result BashCommandExecutor::execute(const std::string& comm
     std::string full_command = "cd " + escaped_dir + " && { " + sanitized_cmd + "\n} 2>&1";
     
     return execute_internal(full_command, sanitized_cmd, timeout_seconds);
-}
-
-BashCommandExecutor::Result BashCommandExecutor::execute_chained(
-        const std::vector<std::pair<std::string, std::string>>& commands,
-        const std::string& base_dir,
-        int timeout_seconds) {
-    
-    std::ostringstream output_capture;
-    int overall_exit_code = 0;
-    bool has_error = false;
-    std::string last_error;
-    
-    for (size_t i = 0; i < commands.size(); i++) {
-        const auto& [op, cmd] = commands[i];
-        
-        if (cmd.empty()) {
-            continue;
-        }
-        
-        auto result = execute(cmd, base_dir, timeout_seconds);
-        
-        // Capture output
-        output_capture << "\n>> " << cmd << "\n";
-        if (!result.output.empty()) {
-            output_capture << result.output << "\n";
-        }
-        
-        if (!result.success) {
-            output_capture << "   [Exit code: " << result.exit_code << "]\n";
-            overall_exit_code = result.exit_code;
-            has_error = true;
-            last_error = result.error;
-            
-            // Handle && operator - stop on failure
-            if (op == "&&") {
-                output_capture << "   [Breaking chain - && operator]\n";
-                break;
-            }
-        } else if (op == "||") {
-            // || operator - stop on success
-            output_capture << "   [Skipping remaining - || operator, command succeeded]\n";
-            break;
-        }
-    }
-    
-    return Result(!has_error, overall_exit_code, output_capture.str(), last_error);
 }
 
 // ========== Private Implementation ==========

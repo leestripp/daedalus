@@ -15,7 +15,7 @@ using json = nlohmann::json;
 
 // Helper to clean up test directories
 void cleanup_test_dir(const std::filesystem::path& test_dir) {
-    std::filesystem::path memory_dir = test_dir / ".daedalus" / "memory";
+    std::filesystem::path memory_dir = test_dir / ".daedalus" / "daedalus" / "memory";
     if (std::filesystem::exists(memory_dir)) {
         std::filesystem::remove_all(memory_dir);
     }
@@ -28,19 +28,19 @@ TEST_CASE("SessionMemory - Basic Initialization") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_basic_init";
     std::filesystem::create_directories(test_dir);
     
-    std::filesystem::path memory_file = test_dir / ".daedalus" / "memory" / "memory.json";
+    std::filesystem::path memory_file = test_dir / ".daedalus" / "daedalus" / "memory" / "memory.json";
     if (std::filesystem::exists(memory_file)) {
         std::filesystem::remove(memory_file);
     }
     
     SUBCASE("Memory is enabled by default") {
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         CHECK(memory.is_enabled() == true);
     }
     
     SUBCASE("Memory directory is created on init") {
-        SessionMemory memory(test_dir / ".daedalus");
-        std::filesystem::path memory_dir = test_dir / ".daedalus" / "memory";
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
+        std::filesystem::path memory_dir = test_dir / ".daedalus" / "daedalus" / "memory";
         CHECK(std::filesystem::exists(memory_dir));
     }
     
@@ -54,7 +54,7 @@ TEST_CASE("SessionMemory - Build Commands") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_builds";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Adding a build command") {
@@ -102,7 +102,7 @@ TEST_CASE("SessionMemory - Error Tracking") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_errors";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Adding an error") {
@@ -165,7 +165,7 @@ TEST_CASE("SessionMemory - Sensitive Data Filter") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_filter";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("API keys are filtered in build commands") {
@@ -214,17 +214,17 @@ TEST_CASE("SessionMemory - Session Lifecycle") {
     std::filesystem::create_directories(test_dir);
     
     SUBCASE("Session start loads existing memory") {
-        SessionMemory memory1(test_dir / ".daedalus");
+        SessionMemory memory1(test_dir / ".daedalus" / "daedalus");
         memory1.reset_for_testing();
         memory1.on_build_complete("cmake build", true);
         
-        SessionMemory memory2(test_dir / ".daedalus");
+        SessionMemory memory2(test_dir / ".daedalus" / "daedalus");
         auto builds = memory2.get_builds();
         CHECK(builds.size() == 1);
     }
     
     SUBCASE("Clear all memories works") {
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         memory.reset_for_testing();
         memory.on_build_complete("cmake build", true);
         memory.on_error("some error", "");
@@ -236,7 +236,7 @@ TEST_CASE("SessionMemory - Session Lifecycle") {
     }
     
     SUBCASE("Session end stores summary") {
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         memory.reset_for_testing();
         memory.on_session_end("Fixed UTF-8 bug", {"src/core/utils.cpp"}, 5);
         
@@ -256,7 +256,7 @@ TEST_CASE("SessionMemory - Statistics") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_stats";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     memory.on_build_complete("cmake build", true);
     memory.on_build_complete("make test", true);
@@ -279,7 +279,7 @@ TEST_CASE("SessionMemory - System Prompt Generation") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_prompt";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     memory.on_build_complete("cmake --build build -j8", true);
     memory.on_error_resolved("undefined reference", "add missing library");
@@ -300,7 +300,7 @@ TEST_CASE("SessionMemory - Error Deduplication") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_dedup";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Same error pattern increases occurrences") {
@@ -343,7 +343,7 @@ TEST_CASE("SessionMemory - Preferences Tracking") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_prefs";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Remember stores preference") {
@@ -381,7 +381,7 @@ TEST_CASE("SessionMemory - Pattern Entries") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_patterns";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Remember stores pattern") {
@@ -410,7 +410,7 @@ TEST_CASE("SessionMemory - Find Methods") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_find";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     memory.on_build_complete("cmake --build build -j8", true);
     memory.on_build_complete("make test", true);
@@ -458,7 +458,7 @@ TEST_CASE("SessionMemory - Recent Sessions") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_sessions";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Empty when no sessions") {
@@ -504,7 +504,7 @@ TEST_CASE("SessionMemory - JSON Round-Trip") {
     
     SUBCASE("Data persists across instances") {
         {
-            SessionMemory memory(test_dir / ".daedalus");
+            SessionMemory memory(test_dir / ".daedalus" / "daedalus");
             memory.reset_for_testing();
             memory.on_build_complete("cmake -S . -B build", true);
             memory.on_error("compile error", "fix syntax");
@@ -512,7 +512,7 @@ TEST_CASE("SessionMemory - JSON Round-Trip") {
         }
         
         {
-            SessionMemory memory2(test_dir / ".daedalus");
+            SessionMemory memory2(test_dir / ".daedalus" / "daedalus");
             auto builds = memory2.get_builds();
             auto errors = memory2.get_errors();
             auto sessions = memory2.get_recent_sessions(5);
@@ -535,7 +535,7 @@ TEST_CASE("SessionMemory - Corrupted File Recovery") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_corrupt";
     std::filesystem::create_directories(test_dir);
     
-    std::filesystem::path memory_dir = test_dir / ".daedalus" / "memory";
+    std::filesystem::path memory_dir = test_dir / ".daedalus" / "daedalus" / "memory";
     std::filesystem::create_directories(memory_dir);
     std::filesystem::path memory_file = memory_dir / "memory.json";
     
@@ -546,7 +546,7 @@ TEST_CASE("SessionMemory - Corrupted File Recovery") {
         out.close();
         
         // Load should handle corruption gracefully
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         memory.reset_for_testing();
         
         // Should start fresh with empty memory
@@ -565,7 +565,7 @@ TEST_CASE("SessionMemory - Corrupted File Recovery") {
         out << valid_data.dump(2);
         out.close();
         
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         auto builds = memory.get_builds();
         CHECK(builds.size() == 1);
     }
@@ -580,7 +580,7 @@ TEST_CASE("SessionMemory - UTF-8 Handling") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_utf8";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Chinese characters preserved in commands") {
@@ -607,7 +607,7 @@ TEST_CASE("SessionMemory - Forget by ID") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_forget";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     memory.on_build_complete("command A", true);
     memory.on_build_complete("command B", true);
@@ -642,7 +642,7 @@ TEST_CASE("SessionMemory - Configuration") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_config";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Default config is enabled") {
@@ -672,7 +672,7 @@ TEST_CASE("SessionMemory - Consolidation") {
     std::filesystem::create_directories(test_dir);
     
     SUBCASE("Old sessions pruned at limit") {
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         auto config = memory.get_config();
         config.max_session_history = 3;
         memory.set_config(config);
@@ -687,7 +687,7 @@ TEST_CASE("SessionMemory - Consolidation") {
     }
     
     SUBCASE("Builds tracked correctly") {
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         memory.reset_for_testing();
         
         // Add many entries
@@ -710,7 +710,7 @@ TEST_CASE("SessionMemory - Aging") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_aging";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Session start triggers aging check") {
@@ -738,7 +738,7 @@ TEST_CASE("SessionMemory - Full Integration") {
     
     SUBCASE("Complete workflow (basic)") {
         // Simplified test - just verify session lifecycle works
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         memory.reset_for_testing();
         
         memory.on_session_start();
@@ -756,7 +756,7 @@ TEST_CASE("SessionMemory - Full Integration") {
     }
     
     SUBCASE("Remember and retrieve workflow") {
-        SessionMemory memory(test_dir / ".daedalus");
+        SessionMemory memory(test_dir / ".daedalus" / "daedalus");
         memory.reset_for_testing();
         
         // Remember important info
@@ -784,7 +784,7 @@ TEST_CASE("SessionMemory - Edge Cases") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_edge";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     SUBCASE("Empty command handled gracefully") {
@@ -819,7 +819,7 @@ TEST_CASE("SessionMemory - Statistics Extended") {
     std::filesystem::path test_dir = std::filesystem::temp_directory_path() / "daedalus_test_stats_ext";
     std::filesystem::create_directories(test_dir);
     
-    SessionMemory memory(test_dir / ".daedalus");
+    SessionMemory memory(test_dir / ".daedalus" / "daedalus");
     memory.reset_for_testing();
     
     memory.on_build_complete("cmake build", true);

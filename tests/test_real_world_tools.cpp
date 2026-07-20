@@ -17,21 +17,21 @@
 //   3. Initializes a `daedalus::Agent` against the project, with
 //      isolated `DAEDALUS_HOME` (XDG-compliant) and an in-memory sink.
 //   4. Calls `agent.list_tools()` — verifies the registered tools
-//      include `read_file`, `edit_file_patch`, and `execute_bash`.
+//      include `execute_bash` (the core default tool set).
 //   5. Calls `agent.list_skills()` — verifies the skill list resolves
 //      (empty list is acceptable; a non-empty list is better).
 //   6. Calls `agent.list_models()` — verifies the model table is
 //      accessible (empty is acceptable since no API key in CI).
 //   7. Calls `agent.mcp_configured_servers()` — verifies the new
 //      public method works (covered by the §FIX-MCP-STORE-LOAD plan).
-//   8. Verifies the project-tier directory `.daedalus/` was created
-//      at the project root (NOT under `~/.config/daedalus/` — the
-//      cardinal two-tier-rule).
+//   8. Verifies the project-tier directory `.daedalus/daedalus/` was
+//      created at the project root (NOT under `~/.config/daedalus/` —
+//      the cardinal two-tier-rule).
 //   9. Verifies the user-tier SettingsStore DB was created at the
 //      XDG_DATA_HOME/daedalus/ path (or its override).
-//  10. Calls `read_file_head` / `grep_search` against sum.cpp via
-//      the public AgentSink contract — proves the tool wiring is
-//      reachable end-to-end.
+//  10. Calls `execute_bash` (cat / sed / clang++) against sum.cpp via
+//      the public AgentSink contract — proves the core tool wiring is
+//      reachable end-to-end without relying on example tools.
 //
 // Skipped at compile-time if `Testing/test-cli-bare/project/sum.cpp`
 // doesn't exist (the test source is self-contained, doesn't depend
@@ -55,6 +55,8 @@
 #include <daedalus/paths.h>
 #include <daedalus/project_paths.h>
 #include <daedalus/settings.h>
+
+
 
 namespace fs = std::filesystem;
 
@@ -170,19 +172,13 @@ int run_phase_b_agent(const fs::path& project_root, const fs::path& daedalus_hom
     // B.1 — list_tools() returns at least the documented core tools.
     auto tools = agent.list_tools();
     EXPECT(!tools.empty());
-    bool has_read = false, has_edit = false, has_bash = false;
+    bool has_bash = false;
     for (const auto& t : tools) {
-        if (t.name == "read_file") has_read = true;
-        if (t.name == "edit_file_patch") has_edit = true;
         if (t.name == "execute_bash") has_bash = true;
     }
-    EXPECT(has_read);
-    EXPECT(has_edit);
     EXPECT(has_bash);
     std::cout << "[ok-B.1] list_tools reports "
-              << tools.size() << " tools (read_file="
-              << has_read << ", edit_file_patch=" << has_edit
-              << ", execute_bash=" << has_bash << ")\n";
+              << tools.size() << " tools (execute_bash=" << has_bash << ")\n";
 
     // B.2 — list_models() returns a vector (empty OK with no API key).
     auto models = agent.list_models();
@@ -337,16 +333,16 @@ int main() {
 
         const std::string rel_o = "/tmp/sum_test.o";
 
-        // D.1 — execute_tool("read_file") with a relative path resolves
-        // against cfg.project_root (BUG-003).
-        nlohmann::json read_args = {{"path", "sum.cpp"}};
-        auto read_result = agentD.execute_tool("read_file", read_args);
-        EXPECT(read_result.value("status", std::string{}) == "success");
-        std::string read_content = read_result.value("content", std::string{});
-        EXPECT(read_content.find("return a - b") != std::string::npos);
-        EXPECT(read_content.find("should be a + b") != std::string::npos);
-        std::cout << "[ok-D.1] read_file resolved relative path against project_root ("
-                  << read_content.size() << " bytes content)\n";
+        // D.1 — execute_tool("execute_bash") reads sum.cpp with `cat` to
+        // prove relative paths resolve against cfg.project_root (BUG-003).
+        nlohmann::json cat_args = {{"command", "cat sum.cpp"}};
+        auto cat_result = agentD.execute_tool("execute_bash", cat_args);
+        EXPECT(cat_result.value("status", std::string{}) == "success");
+        std::string cat_output = cat_result.value("output", std::string{});
+        EXPECT(cat_output.find("return a - b") != std::string::npos);
+        EXPECT(cat_output.find("should be a + b") != std::string::npos);
+        std::cout << "[ok-D.1] cat sum.cpp resolved relative path against project_root ("
+                  << cat_output.size() << " bytes output)\n";
 
         // D.2 — execute_tool("execute_bash") compiles sum.cpp using a
         // relative path. BashTool runs in file_io.get_project_path(), which
@@ -362,24 +358,19 @@ int main() {
         EXPECT(sinkD->approvals_granted == 0);  // BUG-004: host was not asked
         std::cout << "[ok-D.2] execute_bash ran in project_root with cfg.auto_approve\n";
 
-        // D.3 — execute_tool("edit_file_patch") mutates the file via a
-        // relative path (BUG-003). Argument keys are `old_str`/`new_str`.
-        nlohmann::json patch_args = {
-            {"path", "sum.cpp"},
-            {"old_str", "return a - b;"},
-            {"new_str", "return a + b;"},
-            {"replace_all", false}
-        };
-        auto patch_result = agentD.execute_tool("edit_file_patch", patch_args);
-        EXPECT(patch_result.value("status", std::string{}) == "success");
+        // D.3 — execute_tool("execute_bash") patches sum.cpp via sed using a
+        // relative path (BUG-003).
+        nlohmann::json sed_args = {{"command",
+            "sed -i 's/return a - b;/return a + b;/' sum.cpp"}};
+        auto sed_result = agentD.execute_tool("execute_bash", sed_args);
+        EXPECT(sed_result.value("status", std::string{}) == "success");
 
         // D.4 — re-read sum.cpp to confirm the patch landed on disk.
-        auto read2 = agentD.execute_tool("read_file", read_args);
-        std::string read2_content = read2.value("content", std::string{});
-        EXPECT(read2_content.find("return a + b") != std::string::npos);
-        EXPECT(read2_content.find("return a - b") == std::string::npos);  // fixed!
-        std::cout << "[ok-D.3/4] edit_file_patch mutated sum.cpp; "
-                     "read_file confirms fix is on disk\n";
+        auto cat2 = agentD.execute_tool("execute_bash", cat_args);
+        std::string cat2_output = cat2.value("output", std::string{});
+        EXPECT(cat2_output.find("return a + b") != std::string::npos);
+        EXPECT(cat2_output.find("return a - b") == std::string::npos);  // fixed!
+        std::cout << "[ok-D.3/4] sed patched sum.cpp; cat confirms fix is on disk\n";
 
         agentD.shutdown();
     } catch (const std::exception& e) {

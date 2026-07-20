@@ -31,9 +31,8 @@
 #include "core/FileIO.h"
 #include "daedalus/AgentSink.h"
 #include "tools/BashTool.h"
-#include "tools/FileTool.h"
 #include "tools/McpProxiedTool.h"
-#include "tools/NetworkTool.h"
+#include "NetworkTool.h"
 #include "tools/ToolHandler.h"
 #include "mcp/McpServerManager.h"
 
@@ -190,54 +189,6 @@ TEST_CASE("P5: ToolHandler wires progress through to sink") {
     CHECK(sink->events.size() >= 2);
 
     ToolHandler::set_sink(nullptr);
-}
-
-// -----------------------------------------------------------------------
-// §Phase C2: ReadFileTool emits a single "reading" event before the
-// slurp, and ZERO events when arg validation fails. Same invariants
-// as BashTool — progress only fires when real work is about to happen.
-// -----------------------------------------------------------------------
-TEST_CASE("P6: ReadFileTool emits reading progress event") {
-    AutoMode _am;
-    ScratchDir scratch("readfile-progress");
-    FileIO file_io(scratch.path);
-
-    // Create a small file to read.
-    const auto path = scratch.path / "hello.txt";
-    {
-        std::ofstream f(path);
-        f << "hello world\n";
-    }
-
-    std::mutex mu;
-    std::vector<json> events;
-    ToolProgressFn cb = [&](const json& p) {
-        std::lock_guard<std::mutex> lk(mu);
-        events.push_back(p);
-    };
-
-    ReadFileTool tool;
-    auto result = tool.execute({{"path", path.string()}}, file_io, cb);
-
-    REQUIRE(result.value("status", "") == "success");
-    REQUIRE(events.size() == 1);
-    CHECK(events[0].value("stage", "") == "reading");
-    CHECK(events[0].value("percent", -1) == 0);
-    CHECK(events[0].value("message", "").find("hello.txt") != std::string::npos);
-}
-
-TEST_CASE("P6b: ReadFileTool parse error fires zero progress events") {
-    ScratchDir scratch("readfile-progress-deny");
-    FileIO file_io(scratch.path);
-    ReadFileTool tool;
-
-    std::atomic<int> call_count{0};
-    ToolProgressFn cb = [&](const json&) { ++call_count; };
-
-    // Missing 'path' → returns error before reaching the read.
-    auto result = tool.execute(json::object(), file_io, cb);
-    REQUIRE(result.value("status", "") == "error");
-    CHECK(call_count.load() == 0);
 }
 
 // -----------------------------------------------------------------------

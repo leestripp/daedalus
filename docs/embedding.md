@@ -129,13 +129,11 @@ struct daedalus::AgentSink {
 3. on_state_change(Idle, Understanding)         [sink]
 4. on_log(Info, "[PERSIST] Restored N messages")
 5. (SSE tokens) on_assistant_delta(…)             [sink, many times]
-6. on_tool_call("grep_search", {...})            [sink]
-7. on_tool_result("grep_search", {...})          [sink]
-8. on_tool_call("edit_file_patch", {...})         [sink]
-9. on_tool_result("edit_file_patch", {...})       [sink]
-10. on_tool_call("execute_bash", {...})          [sink]
-11. request_command_approval("cmake --build")     [sink — blocking]
-12. on_tool_result("execute_bash", {...})        [sink]
+6. on_tool_call("execute_bash", {...})           [sink]  # e.g. grep / sed / cat
+7. on_tool_result("execute_bash", {...})         [sink]
+8. on_tool_call("execute_bash", {...})           [sink]  # e.g. cmake --build
+9. request_command_approval("cmake --build")     [sink — blocking]
+10. on_tool_result("execute_bash", {...})        [sink]
 13. on_state_change(Acting, Done)                [sink]
 14. run_one_turn() returns                       [host]
 ```
@@ -201,7 +199,7 @@ void on_tool_call(std::string_view name,
 **Called when:** LLM wants to execute a tool (before execution).
 
 **Data:**
-- `name`: Tool name (e.g., `"grep_search"`, `"execute_bash"`, `"edit_file_patch"`)
+- `name`: Tool name (e.g., `"execute_bash"`, `"tell_user"`, `"mcp__<server>__<tool>"`)
 - `call_id`: OpenAI-style correlation ID (empty string if not provided)
 - `args`: Tool arguments as parsed JSON object
 
@@ -218,36 +216,24 @@ void on_tool_call(std::string_view name,
 }
 ```
 
-#### grep_search
+#### tell_user
 ```json
 {
-  "name": "grep_search",
+  "name": "tell_user",
+  "call_id": "call_def456",
   "args": {
-    "query": "malloc",
-    "include_pattern": "*.cpp"
+    "content": "I've analyzed the code and found the issue."
   }
 }
 ```
 
-#### edit_file_patch
+#### MCP tools
 ```json
 {
-  "name": "edit_file_patch",
+  "name": "mcp__filesystem__read_file",
+  "call_id": "call_ghi789",
   "args": {
-    "path": "src/core/utils.cpp",
-    "old_str": "void foo() {",
-    "new_str": "void foo() noexcept {"
-  }
-}
-```
-
-#### create_file / modify_file
-```json
-{
-  "name": "create_file",
-  "args": {
-    "path": "src/new_file.cpp",
-    "content": "#include <daedalus.h>\n..."
+    "path": "/absolute/path/to/file"
   }
 }
 ```
@@ -329,85 +315,30 @@ void on_tool_result(std::string_view name,
 }
 ```
 
-#### grep_search — Results
+#### execute_bash — Background process started
 ```json
 {
-  "name": "grep_search",
+  "name": "execute_bash",
+  "call_id": "call_server",
+  "result": {
+    "status": "background",
+    "process_id": "bg_1",
+    "pid": 12345,
+    "command": "python3 -m http.server 8000",
+    "message": "Process started in background. Use action=poll with process_id to read output, action=send to write stdin, action=stop to terminate."
+  }
+}
+```
+
+#### tell_user
+```json
+{
+  "name": "tell_user",
   "call_id": "call_def",
   "result": {
     "status": "success",
-    "tool_name": "grep_search",
-    "query": "malloc",
-    "count": 42,
-    "truncated": false,
-    "results": [
-      {"file": "src/core/utils.cpp", "line": 42, "text": "void* malloc(size_t);"},
-      {"file": "src/core/logger.cpp", "line": 15, "text": "malloc(size);"}
-    ]
-  }
-}
-```
-
-#### grep_search — No matches
-```json
-{
-  "name": "grep_search",
-  "result": {
-    "status": "success",
-    "tool_name": "grep_search",
-    "query": "nonexistent",
-    "count": 0,
-    "results": [],
-    "message": "No matches found"
-  }
-}
-```
-
-#### create_file / modify_file
-```json
-{
-  "name": "create_file",
-  "result": {
-    "status": "success",
-    "tool_name": "create_file",
-    "path": "src/new_file.cpp",
-    "content": "... (truncated in display)",
-    "message": "File created: src/new_file.cpp"
-  }
-}
-```
-
-#### read_file / read_file_lines
-```json
-{
-  "name": "read_file",
-  "result": {
-    "status": "success",
-    "tool_name": "read_file",
-    "path": "src/core/utils.cpp",
-    "start_line": 1,
-    "end_line": 50,
-    "content": "... file content ...",
-    "size": 1234,
-    "lines": 50
-  }
-}
-```
-
-#### list_directory
-```json
-{
-  "name": "list_directory",
-  "result": {
-    "status": "success",
-    "tool_name": "list_directory",
-    "path": "src",
-    "entries": [
-      {"name": "api", "type": "directory"},
-      {"name": "core", "type": "directory"},
-      {"name": "CMakeLists.txt", "type": "file", "size": 1234}
-    ],
-    "count": 3
+    "tool_name": "tell_user",
+    "message": "User told"
   }
 }
 ```
@@ -592,9 +523,25 @@ bool request_command_approval(std::string_view command);
 
 **Returns:**
 - `true`: Allow the command to execute
-- `false`: Deny the command (tool returns error to LLM)
+- `false`: Deny the command (`execute_bash` returns an error result to the LLM)
 
 **Throws:** Can throw to abort the current turn.
+
+**Blocking:** This callback runs on the agent's worker thread and blocks the
+agent until the host returns. Interactive hosts should prompt the user;
+headless hosts can implement a policy (allow-list, deny-list, always-deny,
+etc.).
+
+**Security pre-checks:** Before this callback is invoked, `BashTool` already
+rejects privilege escalation (`sudo`, `su -`, ...), dangerous patterns
+(`rm -rf /`, fork bombs, ...), and standalone background operators (`&`).
+The sink is responsible for the final user/policy approval.
+
+**Session/persisted approvals:** If the user approves with a session save
+(e.g. the CLI's `s` option), `BashTool` stores the pattern in
+`<project>/.daedalus/daedalus[-<name>]/approvals.json` and future matching
+commands bypass the sink. The sink only sees commands that are not already
+approved.
 
 **Auto-approve:** If `AgentConfig::auto_approve` is `true` (OR'd with
 `SettingsStore::get_auto_approve()`), this callback is **never called**.
@@ -610,14 +557,12 @@ bool request_command_approval(std::string_view command);
 4. on_log(Info, "[PERSIST] Restored 42 messages")
 5. (SSE tokens) on_assistant_delta("I'm analyzing...")  [sink, many times]
 6. on_state_change(Understanding, Planning)     [sink]
-7. on_tool_call("grep_search", "call_1", {...})  [sink]
-8. on_tool_result("grep_search", "call_1", {...}) [sink]
+7. on_tool_call("execute_bash", "call_1", {...})  [sink]  # e.g. grep / sed
+8. on_tool_result("execute_bash", "call_1", {...}) [sink]
 9. on_state_change(Planning, Acting)            [sink]
-10. on_tool_call("edit_file_patch", "call_2", {...}) [sink]
-11. on_tool_result("edit_file_patch", "call_2", {...}) [sink]
-12. on_tool_call("execute_bash", "call_3", {...}) [sink]
-13. request_command_approval("cmake --build .")  [sink — blocking]
-14. on_tool_result("execute_bash", "call_3", {...}) [sink]
+10. on_tool_call("execute_bash", "call_2", {...}) [sink]  # e.g. cmake --build
+11. request_command_approval("cmake --build .")  [sink — blocking]
+12. on_tool_result("execute_bash", "call_2", {...}) [sink]
 15. on_state_change(Acting, Done)                [sink]
 16. run_one_turn() returns                       [host]
 ```
@@ -718,28 +663,29 @@ without using environment variables.
 If you want two Agents in the **same project** to have isolated
 runtime state — separate `messages.json` and `memory.json` so they
 don't trample each other — set `cfg.agent_name` on each. Empty
-(default) means the legacy single-Agent layout. Non-empty values
-namespace the data folder:
+(default) means the default namespace. Non-empty values namespace the
+data folder under a single `.daedalus/` base:
 
 | `cfg.agent_name` | Data lives at |
 |------------------|---------------|
-| `""` (default)   | `<project_root>/.daedalus/` |
-| `"bob"`          | `<project_root>/.daedalus-bob/` |
-| `"agent_007"`    | `<project_root>/.daedalus-agent_007/` |
+| `""` (default)   | `<project_root>/.daedalus/daedalus/` |
+| `"bob"`          | `<project_root>/.daedalus/daedalus-bob/` |
+| `"agent_007"`    | `<project_root>/.daedalus/daedalus-agent_007/` |
 
 ```cpp
 // Two agents, same project, no collision:
 daedalus::AgentConfig cfg_a;
 cfg_a.project_root = "/work/myproject";
-cfg_a.agent_name   = "alice";   // uses /work/myproject/.daedalus-alice/
+cfg_a.agent_name   = "alice";   // uses /work/myproject/.daedalus/daedalus-alice/
 
 daedalus::AgentConfig cfg_b;
 cfg_b.project_root = "/work/myproject";
-cfg_b.agent_name   = "bob";     // uses /work/myproject/.daedalus-bob/
+cfg_b.agent_name   = "bob";     // uses /work/myproject/.daedalus/daedalus-bob/
 
 // Each Agent's `messages.json` is fully isolated. Two agents can
-// run in parallel threads, fork/clone (cp -r .daedalus-bob .daedalus-clone),
-// or get cleanly deleted (rm -rf .daedalus-bob/) without touching
+// run in parallel threads, fork/clone
+// (cp -r .daedalus/daedalus-bob .daedalus/daedalus-clone), or get
+// cleanly deleted (rm -rf .daedalus/daedalus-bob/) without touching
 // the other.
 daedalus::Agent agent_a(std::move(cfg_a), sink_a);
 daedalus::Agent agent_b(std::move(cfg_b), sink_b);
@@ -903,27 +849,28 @@ all discovered skills are visible.
 
 ### Per-project `system_prompt.txt` override (§Phase 14.7 Q2)
 
-If `<project_root>/.daedalus/system_prompt.txt` exists, `Agent::initialize()`
-reads it and **appends** it to `cfg.system_prompt` (or uses it as-is
-when `cfg.system_prompt` is empty). Demo's text is the base; project
-text is concatenated after with a blank-line separator.
+If `<project_root>/.daedalus/daedalus/system_prompt.txt` exists,
+`Agent::initialize()` reads it and **appends** it to `cfg.system_prompt`
+(or uses it as-is when `cfg.system_prompt` is empty). Demo's text is the
+base; project text is concatenated after with a blank-line separator.
 
 ```
 $XDG_DATA_HOME/daedalus/                          ← user config & settings (v0.4.0+)
 └── daedalus.db                                  ← SettingsStore (SQLite)
 
 <project_root>/                                  ← runtime state
-└── .daedalus[-<agent_name>]/
-    ├── messages.json
-    ├── memory.json
-    └── system_prompt.txt      ← (NEW) merged into cfg.system_prompt
+└── .daedalus/
+    └── daedalus[-<agent_name>]/
+        ├── messages.json
+        ├── memory.json
+        └── system_prompt.txt      ← (NEW) merged into cfg.system_prompt
 ```
 
 Use this to ship **project-local** rules that should apply to every
 Agent in the project, regardless of which demo or host is driving it:
 
 ```text
-# <project_root>/.daedalus/system_prompt.txt
+# <project_root>/.daedalus/daedalus/system_prompt.txt
 This project uses Python 3.12 + uv. Always run `uv run pytest` instead of
 plain `pytest`. Use the `ruff` formatter, never black. Database migrations
 live in `db/migrations/` and must be applied in alphabetical order.
@@ -931,7 +878,8 @@ live in `db/migrations/` and must be applied in alphabetical order.
 
 The library emits a `[SYSTEM_PROMPT]` [INFO] log line when the merge
 happens so hosts can audit what got injected. Missing file, missing
-`.daedalus/` dir, or empty file → silent no-op (no warning, no error).
+`.daedalus/daedalus/` dir, or empty file → silent no-op (no warning, no
+error).
 
 ### Temperature priority chain (§Phase 8.7)
 

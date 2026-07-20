@@ -1,4 +1,4 @@
-#include "tools/GitTool.h"
+#include "GitTool.h"
 #include "core/FileIO.h"
 
 #include <iostream>

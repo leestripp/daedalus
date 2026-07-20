@@ -26,6 +26,9 @@
 #include <daedalus.h>
 #include <daedalus/paths.h>
 
+#include "tools/ToolFactory.h"
+#include "tools/ToolHandler.h"
+#include "example_tools.h"
 #include "web_sse_sink.h"
 
 namespace websse {
@@ -52,6 +55,46 @@ struct Session {
     std::atomic<bool>               busy{false};
     std::atomic<bool>               stop{false};
 };
+
+// §TOOL-TRIM (prompt.txt): webui sessions opt in to individual example tools.
+// The host registers exactly the tools it wants through the internal
+// ToolFactory; there is no bulk "register everything" helper.
+inline void register_webui_tools(daedalus::Agent& agent)
+{
+    (void)agent;  // registration goes through the global ToolFactory singleton
+    auto factory = ToolHandler::get_tool_factory();
+    if (!factory) return;
+
+    // Search tools
+    factory->register_tool(std::make_shared<GrepSearchTool>());
+    factory->register_tool(std::make_shared<WikiSearchTool>());
+    factory->register_tool(std::make_shared<SerperSearchTool>());
+
+    // PDF tool
+    factory->register_tool(std::make_shared<ReadPDFTool>());
+
+    // Git tools
+    factory->register_tool(std::make_shared<GitStatusTool>());
+    factory->register_tool(std::make_shared<GitBranchTool>());
+    factory->register_tool(std::make_shared<GitCommitTool>());
+    factory->register_tool(std::make_shared<GitAddTool>());
+    factory->register_tool(std::make_shared<GitSwitchTool>());
+    factory->register_tool(std::make_shared<GitDiffTool>());
+    factory->register_tool(std::make_shared<GitPushTool>());
+    factory->register_tool(std::make_shared<GitMergeTool>());
+
+    // System / background / network tools
+    factory->register_tool(std::make_shared<SystemInfoTool>());
+    factory->register_tool(std::make_shared<BackgroundTool>());
+    factory->register_tool(std::make_shared<HttpRequestTool>());
+    factory->register_tool(std::make_shared<DnsLookupTool>());
+    factory->register_tool(std::make_shared<TcpCheckTool>());
+    factory->register_tool(std::make_shared<TlsInspectTool>());
+    factory->register_tool(std::make_shared<WebSocketConnectTool>());
+    factory->register_tool(std::make_shared<WebSocketSendTool>());
+    factory->register_tool(std::make_shared<WebSocketRecvTool>());
+    factory->register_tool(std::make_shared<WebSocketCloseTool>());
+}
 
 // ============================================================================
 // SessionManager — owns all live sessions. Thread-safe.
@@ -131,6 +174,10 @@ public:
         const std::string captured_id = sess->id;
         Session* sptr = sess.get();
         sess->worker = std::thread([this, sptr, captured_id]() {
+            // §TOOL-TRIM (prompt.txt): webui sessions opt in to the
+            // individual example tools they want (file, git, search, pdf,
+            // network, …).
+            register_webui_tools(*sptr->agent);
             try {
                 sptr->agent->initialize();
             } catch (const std::exception& e) {

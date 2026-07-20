@@ -15,8 +15,9 @@
 #include <cctype>
 
 // ============================================================================
-// STATIC HELPER FUNCTIONS (duplicated from BashTool.cpp for testing)
-// These are exact copies of the functions from BashTool.cpp
+// STATIC HELPER FUNCTIONS (legacy copies of BashTool helpers)
+// These functions are kept for independent unit testing of the helper logic.
+// BashTool itself now delegates to BashPathChecker and BackgroundProcessManager.
 // ============================================================================
 
 // Check if a command is considered dangerous
@@ -439,10 +440,17 @@ TEST_CASE("Pattern Generation") {
         CHECK(command_to_pattern("ls") == "ls");
         CHECK(command_to_pattern("pwd") == "pwd");
     }
-    
+
     SUBCASE("Pattern with arguments becomes wildcard") {
         auto pattern = command_to_pattern("ls -la /home");
         CHECK(pattern.find("ls") != std::string::npos);
+    }
+
+    SUBCASE("Trailing ampersand is preserved in pattern") {
+        // BashTool strips the '&' before execution, but the approval pattern
+        // is generated from the raw command the LLM sent.
+        auto pattern = command_to_pattern("python3 -m http.server 8000 &");
+        CHECK(pattern.find("python3") != std::string::npos);
     }
 }
 

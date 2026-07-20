@@ -19,19 +19,33 @@ namespace daedalus {
 namespace fs = std::filesystem;
 
 namespace {
-constexpr std::string_view kAgentDirNewPrefix = ".daedalus";
-constexpr std::string_view kAgentDirNewNamedPrefix = ".daedalus-";
+constexpr std::string_view kAgentBaseDir        = ".daedalus";
+constexpr std::string_view kAgentDirNewPrefix   = "daedalus";
+constexpr std::string_view kAgentDirNewNamedPrefix = "daedalus-";
+constexpr std::string_view kAgentDirLegacyPrefix = ".daedalus";
+constexpr std::string_view kAgentDirLegacyNamedPrefix = ".daedalus-";
 
 fs::path resolve_agent_dir_impl(
 	const fs::path& project_root,
 	std::string_view agent_name )
 {
-	fs::path new_path = agent_name.empty()
-	                        ? project_root / std::string( kAgentDirNewPrefix )
-	                        : project_root / ( std::string( kAgentDirNewNamedPrefix ) + std::string( agent_name ) );
+	// New layout: <project>/.daedalus/daedalus/        (default)
+	//             <project>/.daedalus/daedalus-<name>/ (named)
+	fs::path inner = agent_name.empty()
+	                     ? std::string( kAgentDirNewPrefix )
+	                     : ( std::string( kAgentDirNewNamedPrefix ) + std::string( agent_name ) );
+	return project_root / std::string( kAgentBaseDir ) / inner;
+}
 
-	// Caller creates the path on first write; we don't probe here.
-	return new_path;
+fs::path resolve_legacy_agent_dir_impl(
+	const fs::path& project_root,
+	std::string_view agent_name )
+{
+	// Legacy layout: <project>/.daedalus/        (default)
+	//                <project>/.daedalus-<name>/ (named)
+	return agent_name.empty()
+	           ? project_root / std::string( kAgentDirLegacyPrefix )
+	           : project_root / ( std::string( kAgentDirLegacyNamedPrefix ) + std::string( agent_name ) );
 }
 }  // namespace
 
@@ -62,6 +76,25 @@ const fs::path& ProjectPaths::agent_dir() const noexcept
 		m_agent_dir_resolved = true;
 	}
 	return m_agent_dir_cache;
+}
+
+fs::path ProjectPaths::legacy_agent_dir() const
+{
+	return resolve_legacy_agent_dir_impl( m_project_root, m_agent_name );
+}
+
+fs::path ProjectPaths::active_agent_dir() const
+{
+	std::error_code ec;
+	fs::path current = agent_dir();
+	if ( fs::exists( current, ec ) ) {
+		return current;
+	}
+	fs::path legacy = legacy_agent_dir();
+	if ( fs::is_directory( legacy, ec ) ) {
+		return legacy;
+	}
+	return current;
 }
 
 // --- Concrete project-local file paths ---

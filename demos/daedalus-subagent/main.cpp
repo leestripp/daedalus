@@ -35,7 +35,7 @@ namespace fs = std::filesystem;
 // SpawnSubAgentTool — host-registered tool that runs a child Agent
 // =============================================================================
 
-class SpawnSubAgentTool : public daedalus::HostTool {
+class SpawnSubAgentTool : public daedalus::BaseTool {
 public:
     struct Config {
         std::shared_ptr<daedalus::AgentSink> child_sink;

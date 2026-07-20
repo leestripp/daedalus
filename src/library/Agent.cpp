@@ -75,7 +75,7 @@ nlohmann::json Agent::execute_tool(const std::string& name,
     return impl_->execute_tool(name, args);
 }
 
-void Agent::register_tool(std::unique_ptr<HostTool> tool)
+void Agent::register_tool(std::unique_ptr<BaseTool> tool)
 {
     impl_->register_tool(std::move(tool));
 }

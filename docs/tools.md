@@ -6,6 +6,106 @@ This document describes the tools available to the AI assistant in daedalus (an 
 
 ---
 
+# Default Tool Set vs. Example Tools
+
+Starting with the tool-trim refactor, `libdaedalus` intentionally exposes a
+**minimal core tool set** by default. Only the tools required for a
+functional autonomous agent are registered automatically:
+
+| Tool | Purpose |
+|------|---------|
+| `execute_bash` | Run shell commands in the project root |
+| `tell_user` | Send text back to the host / user |
+| `set_status` | Declare the agent's own state mid-turn |
+| `compress_context` | Request conversation compression |
+| `stop` | End the agent loop cleanly |
+| `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
+| `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
+| `mcp__<server>__<tool>` | Dynamically registered MCP proxied tools (when MCP is enabled) |
+
+All other tools — Git, search, PDF, system info, background process, and
+network tools — have been moved to `demos/example-tools/` as **reference
+implementations** that you can copy, adapt, or register one at a time.
+
+File I/O tools were removed entirely: the agent can read, write, and edit
+files through `execute_bash` (e.g. `cat`, `sed`, `grep`) instead.
+
+## Registering a brand-new custom tool
+
+For tools **you write yourself**, use the public API: subclass
+`daedalus::BaseTool` and register one instance with `Agent::register_tool()`.
+
+```cpp
+#include <daedalus.h>
+
+class TimestampTool : public daedalus::BaseTool {
+public:
+    std::string get_name() const override { return "timestamp"; }
+    std::string get_description() const override {
+        return "Return the current UTC timestamp.";
+    }
+    nlohmann::json get_definition() const override {
+        return {
+            {"type", "function"},
+            {"function", {
+                {"name", "timestamp"},
+                {"description", get_description()},
+                {"parameters", {
+                    {"type", "object"},
+                    {"properties", nlohmann::json::object()},
+                    {"required", nlohmann::json::array()}
+                }}
+            }}
+        };
+    }
+    nlohmann::json execute(const nlohmann::json&,
+                           daedalus::HostToolContext&) override {
+        return {{"status", "success"}, {"timestamp", "2026-07-19T23:00:00Z"}};
+    }
+};
+
+int main() {
+    daedalus::Agent agent(cfg, sink);
+    agent.register_tool(std::make_unique<TimestampTool>());
+    agent.initialize();
+    // The LLM can now call the "timestamp" tool.
+}
+```
+
+See `docs/custom-tools.md` for the complete `daedalus::BaseTool` subclassing
+guide.
+
+## Registering an example tool from `demos/example-tools/`
+
+The example tools are the internal FileIO-based tools that were moved out of
+the library. Because they pre-date the public `daedalus::BaseTool` API, they
+are registered directly with the internal `ToolFactory` via `ToolHandler`.
+Hosts should opt in to **exactly** the tools they need:
+
+```cpp
+#include <daedalus.h>
+#include "tools/ToolFactory.h"
+#include "tools/ToolHandler.h"
+#include "NetworkTool.h"   // from demos/example-tools/
+
+daedalus::Agent agent(cfg, sink);
+agent.initialize();
+
+auto factory = ToolHandler::get_tool_factory();
+if (factory) {
+    factory->register_tool(std::make_shared<HttpRequestTool>());
+    factory->register_tool(std::make_shared<DnsLookupTool>());
+}
+```
+
+There is no bulk "register everything" helper — pick the individual tools
+your host actually needs, or write your own with the public `BaseTool` API.
+
+The detailed tool descriptions below cover both the core defaults and the
+example tools so the schema reference stays in one place.
+
+---
+
 # Tool Call Pairs and Message Chain Integrity
 
 This section explains how tool calls work in daedalus, why maintaining message chain integrity is critical, and how we fixed issues that could break the tool call sequence.
@@ -26,8 +126,8 @@ Assistant Message (with tool_calls):
       "id": "call_abc123",
       "type": "function",
       "function": {
-        "name": "read_file",
-        "arguments": "{\"path\": \"src/main.cpp\"}"
+        "name": "execute_bash",
+        "arguments": "{\"command\": \"cat src/main.cpp\"}"
       }
     }
   ]
@@ -314,413 +414,7 @@ If the project uses CMake (has CMakeLists.txt), you MUST use the build folder:
 3. Run `make -j8` (or `make -j4`) to compile
 4. **NEVER run cmake from the project root folder** - it will pollute the source tree
 
----
-
-## 1. `read_file`
-
-### Purpose
-Reads the entire content of a file as a string and returns it.
-
-### Parameters
-
-| Name         | Type    | Required | Description                                 |
-|--------------|---------|----------|---------------------------------------------|
-| path         | string  | Yes      | Full path to the file to read               |
-| line_numbers | boolean | No       | Include line numbers in output (default: false) |
-
-### Example Usage
-
-```json
-{
-  "name": "read_file",
-  "arguments": {
-    "path": "/home/user/project/src/main.cpp"
-  }
-}
-```
-
-### Example Usage (with line numbers)
-
-```json
-{
-  "name": "read_file",
-  "arguments": {
-    "path": "/home/user/project/src/main.cpp",
-    "line_numbers": true
-  }
-}
-```
-
-### Response Format
-
-```json
-{
-  "status": "success",
-  "path": "/home/user/project/src/main.cpp",
-  "content": "#include <iostream>\nint main() {\n    std::cout << \"Hello World\";\n    return 0;\n}"
-}
-```
-
-### Response Format (with line numbers)
-
-```json
-{
-  "status": "success",
-  "path": "/home/user/project/src/main.cpp",
-  "content": "1\t#include <iostream>\n2\tint main() {\n3\t    std::cout << \"Hello World\";\n4\t    return 0;\n5\t}"
-}
-```
-
----
-
-## 2. `read_file_lines`
-
-### Purpose
-Reads a specific range of lines from a file. Prevents context overflow when dealing with large C++ source files.
-
-### Parameters
-
-| Name       | Type   | Required | Description              |
-|------------|--------|----------|--------------------------|
-| path       | string | Yes      | Path to file             |
-| start_line | int    | No       | First line to read (default: 1) |
-| end_line   | int    | No       | Last line to read (default: 100) |
-
-### Example Usage
-
-```json
-{
-  "name": "read_file_lines",
-  "arguments": {
-    "path": "/home/user/project/src/main.cpp",
-    "start_line": 1,
-    "end_line": 50
-  }
-}
-```
-
----
-
-## 3. `read_file_head`
-
-### Purpose
-Reads the first N lines of a file. Useful for quickly checking file headers, imports, includes, or function signatures at the start of a file.
-
-### Parameters
-
-| Name   | Type   | Required | Description                              |
-|--------|--------|----------|------------------------------------------|
-| path   | string | Yes      | Path to file                             |
-| lines  | int    | No       | Number of lines to read (default: 50, max: 500) |
-
-### Example Usage
-
-```json
-{
-  "name": "read_file_head",
-  "arguments": {
-    "path": "/home/user/project/src/main.cpp",
-    "lines": 30
-  }
-}
-```
-
----
-
-## 4. `read_file_tail`
-
-### Purpose
-Reads the last N lines of a file. Useful for quickly checking the end of a file, recent log entries, or the final implementation details.
-
-### Parameters
-
-| Name         | Type    | Required | Description                              |
-|--------------|---------|----------|------------------------------------------|
-| path         | string  | Yes      | Path to file                             |
-| lines        | int     | No       | Number of lines to read (default: 50, max: 500) |
-| line_numbers | boolean | No       | Whether to add line numbers to output (default: false) |
-
-### Example Usage
-
-```json
-{
-  "name": "read_file_tail",
-  "arguments": {
-    "path": "/home/user/project/src/main.cpp",
-    "lines": 20,
-    "line_numbers": true
-  }
-}
-```
-
-### Response Format
-
-```json
-{
-  "status": "success",
-  "path": "/home/user/project/src/main.cpp",
-  "lines": 20,
-  "total_lines": 150,
-  "content": "..."
-}
-```
-
----
-
-## 5. `list_directory`
-
-### Purpose
-Lists all items in a given directory, including subdirectories and files. For each entry, returns: name, type (file/directory), size (bytes for files), modified timestamp, permissions (like -rwxr-xr-x), and line count (for readable source files).
-
-### Parameters
-
-| Name | Type   | Required | Description                         |
-|------|--------|----------|-------------------------------------|
-| path | string | Yes      | Full path to the directory to list  |
-
-### Example Usage
-
-```json
-{
-  "name": "list_directory",
-  "arguments": {
-    "path": "/home/user/project/src"
-  }
-}
-```
-
-### Response Format
-
-```json
-{
-  "status": "success",
-  "path": "/home/user/project/src",
-  "contents": [
-    { "name": "main.cpp", "type": "file", "size": 4523, "modified": "2024-01-15 14:30:22", "permissions": "-rw-r--r--", "lines": 150 },
-    { "name": "utils.h", "type": "file", "size": 1234, "modified": "2024-01-14 09:15:00", "permissions": "-rw-r--r--", "lines": 45 },
-    { "name": "subdir", "type": "directory", "size": 4096, "modified": "2024-01-10 08:00:00", "permissions": "drwxr-xr-x" }
-  ]
-}
-```
-
----
-
-## 6. `grep_search`
-
-### Purpose
-Searches for a string or regex across the entire project. Essential for finding function calls or class definitions in large C++ projects.
-
-### Parameters
-
-| Name            | Type   | Required | Description                           |
-|-----------------|--------|----------|---------------------------------------|
-| query           | string | Yes      | The search string or regex            |
-| include_pattern | string | No       | File pattern such as "*.hpp" or "*.cpp" |
-
-### Example Usage
-
-```json
-{
-  "name": "grep_search",
-  "arguments": {
-    "query": "class.*Handler",
-    "include_pattern": "*.h"
-  }
-}
-```
-
----
-
-## 8. `create_file`
-
-### Purpose
-Creates a new file with specified content at the given path.
-
-### Parameters
-
-| Name   | Type   | Required | Description                            |
-|--------|--------|----------|----------------------------------------|
-| path   | string | Yes      | Full path where the file should be created |
-| content| string | Yes      | The initial content to write           |
-
-### Example Usage
-
-```json
-{
-  "name": "create_file",
-  "arguments": {
-    "path": "/home/user/project/new_feature.cpp",
-    "content": "#include <iostream>\nint main() {\n    std::cout << \"New Feature\";\n    return 0;\n}"
-  }
-}
-```
-
-### Response Format
-
-```json
-{
-  "status": "success",
-  "path": "/home/user/project/new_feature.cpp",
-  "message": "File created successfully."
-}
-```
-
----
-
-## 9. `modify_file`
-
-### Purpose
-Overwrites the entire content of an existing file. Use when you need to replace the whole file.
-
-### Parameters
-
-| Name   | Type   | Required | Description                           |
-|--------|--------|----------|---------------------------------------|
-| path   | string | Yes      | Full path to the file to modify       |
-| content| string | Yes      | New content for the file              |
-
-### Example Usage
-
-```json
-{
-  "name": "modify_file",
-  "arguments": {
-    "path": "/home/user/project/src/main.cpp",
-    "content": "#include <iostream>\nint main() {\n    std::cout << \"Modified Code\";\n    return 0;\n}"
-  }
-}
-```
-
----
-
-## 10. `edit_file_patch`
-
-### Purpose
-Applies a patch to a file by replacing content. Supports three modes:
-1. **String match** (default): Find and replace exact string
-2. **Line-based**: Replace specific line range
-3. **Regex**: Pattern-based replacement
-
-More efficient than `modify_file` for small changes - only requires sending the patch strings.
-
-### Parameters
-
-| Name       | Type    | Required | Description                                      |
-|------------|---------|----------|------------------------------------------------|
-| path       | string  | Yes      | Path to file                                    |
-| old_str    | string  | No*      | The string to find (required if not using line range) |
-| new_str    | string  | Yes      | The new string to replace with                   |
-| line_start | integer | No       | Start line for replacement (1-indexed)          |
-| line_end   | integer | No       | End line for replacement (1-indexed)            |
-| regex      | boolean | No       | Enable regex matching (default: false)          |
-| replace_all| boolean | No       | Replace all occurrences (default: false)        |
-
-*Either `old_str` OR `line_start`/`line_end` must be provided.
-
-### Example Usage
-
-**String replacement (default):**
-```json
-{
-  "name": "edit_file_patch",
-  "arguments": {
-    "path": "src/main.cpp",
-    "old_str": "void old_function() {\n    // old code\n}",
-    "new_str": "void new_function() {\n    // new code\n}"
-  }
-}
-```
-
-**Replace all occurrences:**
-```json
-{
-  "name": "edit_file_patch",
-  "arguments": {
-    "path": "src/main.cpp",
-    "old_str": "TODO",
-    "new_str": "DONE",
-    "replace_all": true
-  }
-}
-```
-
-**Line-based replacement:**
-```json
-{
-  "name": "edit_file_patch",
-  "arguments": {
-    "path": "src/main.cpp",
-    "line_start": 10,
-    "line_end": 15,
-    "new_str": "// Replaced content"
-  }
-}
-```
-
-**Regex pattern:**
-```json
-{
-  "name": "edit_file_patch",
-  "arguments": {
-    "path": "src/main.cpp",
-    "old_str": "TODO:\\s*(.+)",
-    "new_str": "DONE: $1",
-    "regex": true
-  }
-}
-```
-
-### Response Format
-
-```json
-{
-  "status": "success",
-  "path": "src/main.cpp",
-  "message": "Patch applied successfully.",
-  "replacements": 1,
-  "first_match_line": 10
-}
-```
-
-### Error Handling
-
-On failure, the tool returns:
-```json
-{
-  "status": "error",
-  "message": "Could not find 'old_str' in the file.",
-  "hint": "Use read_file with line_numbers=true to see exact content, or try regex=true",
-  "permanent_failure": true
-}
-```
-
----
-
-## 11. `delete_file`
-
-### Purpose
-Deletes a file at the specified path.
-
-### Parameters
-
-| Name | Type   | Required | Description                          |
-|------|--------|----------|--------------------------------------|
-| path | string | Yes      | Full path to the file to delete      |
-
-### Example Usage
-
-```json
-{
-  "name": "delete_file",
-  "arguments": {
-    "path": "/home/user/project/old_code.cpp"
-  }
-}
-```
-
----
-
-## 12. `tell_user`
+## 1. `tell_user`
 
 ### Purpose
 Sends a message to the user. Use this to communicate results, status updates, or ask the user to review something.
@@ -744,39 +438,141 @@ Sends a message to the user. Use this to communicate results, status updates, or
 
 ---
 
-## 13. `execute_bash`
+## 2. `execute_bash`
 
 ### Purpose
-Executes a shell command. Used for building (cmake, make), testing, or running git commands. Requires user confirmation before execution unless auto mode is enabled.
+Executes a shell command. Supports both synchronous execution and detached
+background execution for servers or long-running tools.
+
+Use synchronous mode for builds (`cmake`, `make`), tests, file operations
+(`cat`, `sed`, `grep`), git commands, etc. Use background mode when the agent
+needs to start a server or daemon and continue its reasoning loop.
 
 ### Parameters
 
-| Name    | Type   | Required | Description                  |
-|---------|--------|----------|------------------------------|
-| command | string | Yes      | The shell command to run     |
+| Name         | Type    | Required | Description                                                              |
+|--------------|---------|----------|--------------------------------------------------------------------------|
+| command      | string  | *        | The shell command to run. Required for `run` / `start`.                  |
+| action       | string  | No       | `run` (default), `start`, `poll`, `send`, `stop`.                        |
+| background   | bool    | No       | Shorthand for `action=start`.                                            |
+| timeout      | integer | No       | Sync timeout in seconds (1–3600, default 60).                            |
+| process_id   | string  | *        | Required for `poll`, `send`, `stop`. Returned by `start`.                |
+| input        | string  | *        | Data to send to a background process's stdin. Required for `send`.       |
+| clear_output | bool    | No       | If true, clear the output buffer after reading (action=poll only).       |
+
+A trailing unquoted `&` in `command` is auto-detected as background intent
+(`action=start`) and the `&` is stripped before execution.
+
+### Approval
+
+`execute_bash` is the only core tool that asks the host for approval. Before a
+`run` or `start` command executes, the library calls
+`AgentSink::request_command_approval(command)`.
+
+- Return `true` to allow the command.
+- Return `false` to deny it (`execute_bash` returns an error result to the LLM).
+- Throw an exception to abort the current turn.
+
+`poll`, `send`, and `stop` do not require approval.
+
+See `docs/embedding.md` § `request_command_approval(command)` for the full
+host-side contract.
+
+### Synchronous mode (`action=run`, default)
+
+```json
+{
+  "name": "execute_bash",
+  "arguments": {
+    "command": "cmake --build build -j8",
+    "timeout": 120
+  }
+}
+```
+
+Result:
+
+```json
+{
+  "status": "success",
+  "command": "cmake --build build -j8",
+  "output": "...",
+  "exit_code": 0
+}
+```
+
+### Background mode (`action=start` or `background=true`)
+
+```json
+{
+  "name": "execute_bash",
+  "arguments": {
+    "command": "python3 -m http.server 8000"
+  }
+}
+```
+
+or explicitly:
+
+```json
+{
+  "name": "execute_bash",
+  "arguments": {
+    "command": "python3 -m http.server 8000",
+    "action": "start"
+  }
+}
+```
+
+Result:
+
+```json
+{
+  "status": "background",
+  "process_id": "bg_1",
+  "pid": 12345,
+  "command": "python3 -m http.server 8000",
+  "message": "Process started in background. Use action=poll with process_id to read output, action=send to write stdin, action=stop to terminate."
+}
+```
+
+### Poll / send / stop
+
+```json
+// Read latest output
+{ "name": "execute_bash", "arguments": { "action": "poll", "process_id": "bg_1" } }
+
+// Send stdin data
+{ "name": "execute_bash", "arguments": { "action": "send", "process_id": "bg_1", "input": "hello\n" } }
+
+// Terminate
+{ "name": "execute_bash", "arguments": { "action": "stop", "process_id": "bg_1" } }
+```
 
 ### Security
-- Dangerous commands are blocked: `rm -rf /`, fork bombs, etc.
-- User must confirm execution (y/n/s options)
-- Session approval option (s) saves command to `.daedalus/approvals.json` with wildcard support
-- Commands approved with 's' are automatically approved in future sessions
-- Binary output is detected and truncated to prevent JSON parsing errors
-- **Chained commands supported**: `&&`, `||`, and `;` operators with conditional execution
-- **Process isolation**: Commands run in isolated subprocess for crash protection
-- **Timeout protection**: 60-second default timeout, configurable from 1-3600 seconds
+- Dangerous commands are blocked before approval is requested: `rm -rf /`,
+  fork bombs, privilege escalation (`sudo`, `su -`, ...), etc.
+- Session approval option (e.g. the CLI's `s` reply) saves a wildcard pattern to
+  `.daedalus/daedalus[-<agent_name>]/approvals.json`; matching commands bypass
+  the sink in future sessions.
+- Binary output is detected and truncated to prevent JSON parsing errors.
+- **Chained commands supported**: `&&`, `||`, and `;` operators with conditional
+  execution.
+- **Process isolation**: Sync commands run in isolated subprocess for crash
+  protection. Background processes are fully detached via `setsid()` with
+  stdout/stderr captured to files.
+- **Timeout protection**: 60-second default timeout for sync commands,
+  configurable from 1–3600 seconds. Background processes run until stopped or
+  until they exit on their own.
 
 ### Auto Mode
-- Use `--auto` flag when starting daedalus to automatically approve all commands
-- Security checks still apply, only user confirmation is skipped
-
-### Command Patterns
-- When user approves with 's', the command is saved with wildcards for file arguments
-- Example: `g++ main.cpp` becomes `g++ *.cpp` pattern
-- This allows similar commands (compiling different files) to be auto-approved
+- Set `AgentConfig::auto_approve = true` (or the equivalent setting in the
+  SQLite store) to skip `request_command_approval` entirely.
+- Security checks still apply; only the host callback is skipped.
 
 ---
 
-## 14. `set_status`
+## 3. `set_status`
 
 > **Removed in v0.4.0:** `ask_user` and the sink-blocking
 > `request_user_input`. Replaced by `set_status` (see §14) for
@@ -811,7 +607,7 @@ re-render the status chip.
 
 ---
 
-## 15. `compress_context`
+## 4. `compress_context`
 
 ### Purpose
 Allows the agent to request context compression when it no longer needs older parts of the conversation. The agent knows best when it has gathered all the information it needs.
@@ -835,7 +631,7 @@ Allows the agent to request context compression when it no longer needs older pa
 
 ---
 
-## 16. `stop`
+## 5. `stop`
 
 ### Purpose
 Signals that the task is complete. The agent calls this tool when it has finished the user's request - all research, planning, edits, and verification are done. This ends the autonomous agent loop.
@@ -859,7 +655,7 @@ Signals that the task is complete. The agent calls this tool when it has finishe
 
 ---
 
-## 17. `git_status`
+## 6. `git_status`
 
 ### Purpose
 Shows the working tree status. Displays which files have been modified, staged, or are untracked.
@@ -887,7 +683,7 @@ None required.
 
 ---
 
-## 18. `git_branch`
+## 7. `git_branch`
 
 ### Purpose
 Lists all branches in the repository. Shows both local and remote branches.
@@ -906,7 +702,7 @@ None required.
 
 ---
 
-## 19. `git_commit`
+## 8. `git_commit`
 
 ### Purpose
 Commits staged changes to the repository. Automatically stages all modified files before committing.
@@ -930,7 +726,7 @@ Commits staged changes to the repository. Automatically stages all modified file
 
 ---
 
-## 20. `git_add`
+## 9. `git_add`
 
 ### Purpose
 Stages files for commit. Adds files to the Git staging area.
@@ -954,7 +750,7 @@ Stages files for commit. Adds files to the Git staging area.
 
 ---
 
-## 21. `git_switch`
+## 10. `git_switch`
 
 ### Purpose
 Switches to a different branch. Supports creating new branches with the optional `create` parameter.
@@ -1017,7 +813,7 @@ The tool returns a JSON response with these fields:
 
 ---
 
-## 22. `git_push`
+## 11. `git_push`
 
 ### Purpose
 Pushes commits to the remote repository. Supports force push and upstream tracking options.
@@ -1078,7 +874,7 @@ Pushes commits to the remote repository. Supports force push and upstream tracki
 
 ---
 
-## 22. `git_diff`
+## 12. `git_diff`
 
 ### Purpose
 Shows changes between the working tree and the staging area. Displays differences in files.
@@ -1122,7 +918,7 @@ Shows changes between the working tree and the staging area. Displays difference
 
 ---
 
-## 23. `git_merge`
+## 13. `git_merge`
 
 ### Purpose
 Merge a branch into the current branch. Supports regular merges, --no-ff merges, squash merges, and aborting a merge in progress.
@@ -1215,13 +1011,13 @@ Merge a branch into the current branch. Supports regular merges, --no-ff merges,
 ---
 
 
-## 24. `mcp` - Unified MCP Tool
+## 14. `mcp` - Unified MCP Tool
 
 ### Purpose
-Call a tool from any configured MCP server. Routes to any MCP server's tools dynamically based on the server and tool parameters. MCP servers are configured in `~/.daedalus/mcp/servers.json`.
+Call a tool from any configured MCP server. Routes to any MCP server's tools dynamically based on the server and tool parameters. MCP servers are read from the SQLite `SettingsStore` (`$XDG_DATA_HOME/daedalus/daedalus.db`, overridable with `cfg.daedalus_home`); legacy `~/.daedalus/mcp/servers.json` is honoured as a read fallback.
 
 ### Configuration
-MCP servers are configured via JSON in `~/.daedalus/mcp/servers.json`:
+Legacy MCP servers may still be configured via JSON in `~/.daedalus/mcp/servers.json`:
 
 ```json
 {
@@ -1239,7 +1035,7 @@ MCP servers are configured via JSON in `~/.daedalus/mcp/servers.json`:
 }
 ```
 
-Environment variables are stored in `~/.daedalus/mcp/.env`.
+Environment variables are stored in `$XDG_CONFIG_HOME/daedalus/mcp/.env` (overridable with `$DAEDALUS_HOME` or `cfg.daedalus_home`).
 
 ### Parameters
 
@@ -1332,7 +1128,7 @@ Environment variables are stored in `~/.daedalus/mcp/.env`.
 ```
 
 ### Notes
-- Server names come from `~/.daedalus/mcp/servers.json`
+- Server names come from the SettingsStore MCP registry (legacy `~/.daedalus/mcp/servers.json` merged as a fallback)
 - Use `tool='servers'` to list all configured servers
 - Use `tool='list'` to list tools available on a specific server
 - Environment variables use `${VAR_NAME}` syntax in config
@@ -1340,7 +1136,7 @@ Environment variables are stored in `~/.daedalus/mcp/.env`.
 
 ---
 
-## 25. `read_pdf`
+## 15. `read_pdf`
 
 Extract text content from a PDF file.
 
@@ -1415,7 +1211,7 @@ Extract text content from a PDF file.
 
 ---
 
-## 12. Skill Management Tools
+## 16. Skill Management Tools
 
 daedalus supports the Anthropic Agent Skills open standard for extending agent capabilities. Skills are packages of instructions, scripts, and resources that agents can discover and use to perform tasks more accurately and efficiently.
 
@@ -1628,7 +1424,7 @@ None required.
 
 ---
 
-## 13. `background_process`
+## 17. `background_process`
 
 Manage background processes for server applications. Start processes in background, send input, poll output, and stop processes. Use this when you need to run a server or long-running process and communicate with it while continuing the reasoning loop.
 

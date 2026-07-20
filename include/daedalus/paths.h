@@ -114,6 +114,23 @@ public:
 	/// `user_cache_root() / "responses"`.
 	virtual std::filesystem::path response_cache_dir() const = 0;
 
+	/// `$XDG_CONFIG_HOME/omninet/config.json` (default
+	/// `~/.config/omninet/config.json`). OmniNet tooling expects its
+	/// own config namespace; daedalus exposes this so hosts can set it
+	/// up. The default implementation uses the XDG config root.
+	virtual std::filesystem::path omninet_config_file() const
+	{
+		return user_config_root() / "omninet" / "config.json";
+	}
+
+	/// `$XDG_DATA_HOME/omninet` (default `~/.local/share/omninet`).
+	/// Runtime data directory used by OmniNet tools. The default
+	/// implementation uses the XDG data root.
+	virtual std::filesystem::path omninet_data_dir() const
+	{
+		return user_data_root() / "omninet";
+	}
+
 	/// Create the user-tier root directories on disk if they don't
 	/// exist, applying Plan.md §5.1 permissions:
 	///   - user_config_root()  → 0750  (group-readable)

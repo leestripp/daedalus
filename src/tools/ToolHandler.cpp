@@ -1,11 +1,11 @@
 #include "tools/ToolHandler.h"
 #include "tools/ToolFactory.h"
-#include "tools/GitTool.h"
 #include "tools/MemoryTool.h"
 #include "core/FileIO.h"
 #include "core/SessionMemory.h"
 #include "core/CommonUtils.h"
 #include "core/Logger.h"
+#include "daedalus/default_paths.h"
 
 #include <filesystem>
 #include <fstream>
@@ -58,9 +58,13 @@ namespace ToolHandler {
     // owns the sink's lifetime.
     std::weak_ptr<daedalus::AgentSink> g_sink;
 
-    // Path to the approvals JSON file
-    std::filesystem::path get_approvals_file_path(const std::filesystem::path& project_path) {
-        return project_path / ".daedalus" / "approvals.json";
+    // Path to the approvals JSON file. Lives in the per-agent project
+    // tier (§Phase 16: new layout is .daedalus/daedalus[-<name>]/).
+    std::filesystem::path get_approvals_file_path(
+        const std::filesystem::path& project_path,
+        std::string_view agent_name = {}) {
+        return daedalus::resolve_agent_dir(project_path, agent_name)
+               / "approvals.json";
     }
 
     // Initialize the tool factory
@@ -87,8 +91,9 @@ namespace ToolHandler {
     }
 
     // Load persisted approvals from JSON file
-    void load_persisted_approvals(const std::filesystem::path& project_path) {
-        std::filesystem::path approvals_file = get_approvals_file_path(project_path);
+    void load_persisted_approvals(const std::filesystem::path& project_path,
+                                  std::string_view agent_name) {
+        std::filesystem::path approvals_file = get_approvals_file_path(project_path, agent_name);
         if (std::filesystem::exists(approvals_file)) {
             try {
                 std::ifstream infile(approvals_file);
@@ -107,8 +112,9 @@ namespace ToolHandler {
     }
 
     // Save persisted approvals to JSON file
-    void save_persisted_approvals(const std::filesystem::path& project_path) {
-        std::filesystem::path approvals_file = get_approvals_file_path(project_path);
+    void save_persisted_approvals(const std::filesystem::path& project_path,
+                                  std::string_view agent_name) {
+        std::filesystem::path approvals_file = get_approvals_file_path(project_path, agent_name);
         try {
             std::filesystem::path daedalus_dir = approvals_file.parent_path();
             if (!std::filesystem::exists(daedalus_dir)) {
@@ -204,12 +210,13 @@ namespace ToolHandler {
     }
 
     // Clear persisted approvals file
-    void clear_persisted_approvals(const std::filesystem::path& project_path) {
+    void clear_persisted_approvals(const std::filesystem::path& project_path,
+                                   std::string_view agent_name) {
         {
             std::lock_guard<std::mutex> lock(g_state_mutex);
             persisted_approved_commands.clear();
         }
-        std::filesystem::path approvals_file = get_approvals_file_path(project_path);
+        std::filesystem::path approvals_file = get_approvals_file_path(project_path, agent_name);
         if (std::filesystem::exists(approvals_file)) {
             std::filesystem::remove(approvals_file);
         }
@@ -220,14 +227,16 @@ namespace ToolHandler {
     }
 
     // Add a command to persisted approvals and save to file
-    void add_persisted_approval(const std::filesystem::path& project_path, const std::string& command) {
+    void add_persisted_approval(const std::filesystem::path& project_path,
+                                std::string_view agent_name,
+                                const std::string& command) {
         // Add to persisted set
         {
             std::lock_guard<std::mutex> lock(g_state_mutex);
             persisted_approved_commands.insert(command);
         }
         // Save to file
-        save_persisted_approvals(project_path);
+        save_persisted_approvals(project_path, agent_name);
     }
 
     // Check if a command matches a pattern (supports multiple wildcards for files)

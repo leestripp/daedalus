@@ -64,7 +64,7 @@ TEST_CASE("BashPathChecker - Privilege Escalation Detection") {
 }
 
 TEST_CASE("BashPathChecker - contains_standalone_ampersand (B3)") {
-    SUBCASE("Rejects bare backgrounding `&`") {
+    SUBCASE("Detects bare backgrounding `&`") {
         CHECK(BashPathChecker::contains_standalone_ampersand("sleep 60 &") == true);
         CHECK(BashPathChecker::contains_standalone_ampersand("cmd &") == true);
         CHECK(BashPathChecker::contains_standalone_ampersand("cmd1 & cmd2") == true);

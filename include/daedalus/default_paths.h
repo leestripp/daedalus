@@ -7,8 +7,8 @@
  * Each Agent instance working on a project gets its own per-project
  * namespace, namespaced by `agent_name`:
  *
- *     agent_name == ""    ->  <project_root>/.daedalus/
- *     agent_name == "bob" ->  <project_root>/.daedalus-bob/
+ *     agent_name == ""    ->  <project_root>/.daedalus/daedalus/
+ *     agent_name == "bob" ->  <project_root>/.daedalus/daedalus-bob/
  *
  * The empty string is the backward-compat default. Multiple Agent
  * instances on the same project each get their own subdir so
@@ -17,7 +17,7 @@
  * The legacy directory names `.daedalus/` and `.daedalus-<name>/`
  * are still honoured as a read fallback for one release cycle so
  * existing projects keep working. NEW writes always go to the
- * new `.daedalus*` path.
+ * new `.daedalus/daedalus*` path.
  *
  * === Per-user (global) data ===
  *
@@ -48,8 +48,13 @@ std::filesystem::path default_daedalus_home();
 
 /// @brief Resolve the per-agent runtime-state directory (§Phase 8.8).
 ///
-/// Returns `<project_root>/.daedalus/` (empty agent_name) or
-/// `<project_root>/.daedalus-<name>/` (named agent_name).
+/// Returns `<project_root>/.daedalus/daedalus/` (empty agent_name) or
+/// `<project_root>/.daedalus/daedalus-<name>/` (named agent_name).
+///
+/// Legacy paths (`<project_root>/.daedalus/` and
+/// `<project_root>/.daedalus-<name>/`) are honoured as a read fallback
+/// for one release cycle; use ProjectPaths::active_agent_dir() when
+/// loading existing data.
 ///
 /// The directory is NOT auto-created — callers do that on first write.
 [[nodiscard]] std::filesystem::path resolve_agent_dir(

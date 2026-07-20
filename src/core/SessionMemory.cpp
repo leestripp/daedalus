@@ -305,11 +305,10 @@ ProjectInfo ProjectInfo::from_json(const nlohmann::json& j) {
 SessionMemory::SessionMemory(std::filesystem::path data_dir)
     : data_dir_(std::move(data_dir)) {
 
-    // §Phase 8.8: data_dir is the per-agent namespace dir
-    // (e.g. `<project>/.daedalus/` or `<project>/.daedalus-bob/`).
-    // Memory still lives under the `memory/` subdir so backward
-    // compat is preserved (empty agent_name yields the same
-    // `<project>/.daedalus/memory/memory.json` path as before).
+    // §Phase 8.8 / §Phase 16: data_dir is the per-agent namespace dir
+    // (e.g. `<project>/.daedalus/daedalus/` or
+    // `<project>/.daedalus/daedalus-bob/`). Memory lives under the
+    // `memory/` subdir.
     memory_dir_path_ = data_dir_ / "memory";
     memory_file_path_ = memory_dir_path_ / "memory.json";
 

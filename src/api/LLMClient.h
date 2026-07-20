@@ -181,6 +181,16 @@ public:
         ToolHandler::set_sink(std::move(sink));
     }
 
+    /// @brief Update the running AppConfig (e.g., after a model switch).
+    ///        Also refreshes the Messages compression config so context-size
+    ///        and API settings follow the new model.
+    void set_config(const AppConfig& config);
+
+    /// @brief Clear the conversation history and persist the empty state.
+    ///        Called when switching models so the new model starts with a
+    ///        fresh context.
+    void clear_messages();
+
     // Refresh the MCP tool surface from McpServerManager. Call this at
     // startup and any time the manager's dirty flag flips (the LLMClient
     // tracks the flag in mcp_tools_refresh_pending_ and calls this

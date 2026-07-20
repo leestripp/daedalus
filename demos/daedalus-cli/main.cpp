@@ -27,6 +27,9 @@
 #include <daedalus/default_paths.h>
 #include <daedalus/paths.h>
 
+#include "tools/ToolFactory.h"
+#include "tools/ToolHandler.h"
+#include "example_tools.h"
 #include "ConsoleAgentSink.h"
 #include "util.h"
 #include "RawStdin.h"
@@ -34,6 +37,49 @@
 #include "migrate.h"
 
 namespace fs = std::filesystem;
+
+// §TOOL-TRIM (prompt.txt): the CLI opts in to individual example tools.
+// File / git / search / pdf / system-info / background / network tools are
+// no longer registered by libdaedalus by default; the host registers exactly
+// the ones it wants through the internal ToolFactory. This is the same
+// factory path used by Agent::register_tool() for public custom tools, but
+// the example tools are internal FileIO-based tools so they are registered
+// directly with ToolHandler::get_tool_factory().
+static void register_cli_tools()
+{
+    auto factory = ToolHandler::get_tool_factory();
+    if (!factory) return;
+
+    // Search tools
+    factory->register_tool(std::make_shared<GrepSearchTool>());
+    factory->register_tool(std::make_shared<WikiSearchTool>());
+    factory->register_tool(std::make_shared<SerperSearchTool>());
+
+    // PDF tool
+    factory->register_tool(std::make_shared<ReadPDFTool>());
+
+    // Git tools
+    factory->register_tool(std::make_shared<GitStatusTool>());
+    factory->register_tool(std::make_shared<GitBranchTool>());
+    factory->register_tool(std::make_shared<GitCommitTool>());
+    factory->register_tool(std::make_shared<GitAddTool>());
+    factory->register_tool(std::make_shared<GitSwitchTool>());
+    factory->register_tool(std::make_shared<GitDiffTool>());
+    factory->register_tool(std::make_shared<GitPushTool>());
+    factory->register_tool(std::make_shared<GitMergeTool>());
+
+    // System / background / network tools
+    factory->register_tool(std::make_shared<SystemInfoTool>());
+    factory->register_tool(std::make_shared<BackgroundTool>());
+    factory->register_tool(std::make_shared<HttpRequestTool>());
+    factory->register_tool(std::make_shared<DnsLookupTool>());
+    factory->register_tool(std::make_shared<TcpCheckTool>());
+    factory->register_tool(std::make_shared<TlsInspectTool>());
+    factory->register_tool(std::make_shared<WebSocketConnectTool>());
+    factory->register_tool(std::make_shared<WebSocketSendTool>());
+    factory->register_tool(std::make_shared<WebSocketRecvTool>());
+    factory->register_tool(std::make_shared<WebSocketCloseTool>());
+}
 
 int main(int argc, char* argv[]) {
     install_signal_handlers();
@@ -112,6 +158,11 @@ int main(int argc, char* argv[]) {
 
     auto sink  = std::make_shared<daedalus::ConsoleAgentSink>();
     daedalus::Agent agent(std::move(cfg), sink);
+
+    // §TOOL-TRIM (prompt.txt): register the non-core example tools
+    // (file, git, search, pdf, system-info, background, network) so the
+    // CLI has the full feature set it had before the trim.
+    register_cli_tools();
 
     // §Demo fix 2026-07-14: register the agent with the SIGINT
     // handler so Ctrl+C (and SIGTERM) cancel any in-flight turn.

@@ -9,8 +9,9 @@
 // §6 (the old global-memory API was the bug). New code must use
 // `ProjectPaths::memory_dir()`.
 //
-// `resolve_agent_dir()` semantics unchanged from prior implementation
-// (empty agent_name → `.daedalus`, non-empty → `.daedalus-<name>`).
+// `resolve_agent_dir()` new layout (§Phase 16):
+//   empty agent_name    → `.daedalus/daedalus`
+//   non-empty agent_name → `.daedalus/daedalus-<name>`
 
 #include <cassert>
 #include <filesystem>
@@ -33,7 +34,7 @@ static fs::path fresh_dir( const char* tag )
 }
 
 // =============================================================================
-// 1. Empty agent_name → .daedalus/, non-empty → .daedalus-<name>/
+// 1. Empty agent_name → .daedalus/daedalus/, non-empty → .daedalus/daedalus-<name>/
 // =============================================================================
 static void test_agent_dir_mapping()
 {
@@ -41,13 +42,13 @@ static void test_agent_dir_mapping()
 	auto root = fresh_dir( "mapping" );
 
 	daedalus::ProjectPaths default_agent( root );
-	assert( default_agent.agent_dir() == root / ".daedalus" );
+	assert( default_agent.agent_dir() == root / ".daedalus" / "daedalus" );
 
 	daedalus::ProjectPaths planner( root, "planner" );
-	assert( planner.agent_dir() == root / ".daedalus-planner" );
+	assert( planner.agent_dir() == root / ".daedalus" / "daedalus-planner" );
 
 	daedalus::ProjectPaths actor( root, "actor" );
-	assert( actor.agent_dir() == root / ".daedalus-actor" );
+	assert( actor.agent_dir() == root / ".daedalus" / "daedalus-actor" );
 
 	std::cout << "ok\n";
 }
@@ -72,10 +73,10 @@ static void test_two_agents_isolation()
 	assert( alice.lock_file() != bob.lock_file() );
 
 	// And verify the directory layout is correct:
-	assert( alice.memory_dir() == root / ".daedalus-alice" / "memory" );
-	assert( bob.memory_dir() == root / ".daedalus-bob" / "memory" );
-	assert( alice.memory_file() == root / ".daedalus-alice" / "memory" / "memory.sqlite" );
-	assert( bob.memory_file() == root / ".daedalus-bob" / "memory" / "memory.sqlite" );
+	assert( alice.memory_dir() == root / ".daedalus" / "daedalus-alice" / "memory" );
+	assert( bob.memory_dir() == root / ".daedalus" / "daedalus-bob" / "memory" );
+	assert( alice.memory_file() == root / ".daedalus" / "daedalus-alice" / "memory" / "memory.sqlite" );
+	assert( bob.memory_file() == root / ".daedalus" / "daedalus-bob" / "memory" / "memory.sqlite" );
 
 	std::cout << "ok\n";
 }
@@ -93,8 +94,8 @@ static void test_two_projects_isolation()
 	daedalus::ProjectPaths b( proj_b, "planner" );
 
 	assert( a.agent_dir() != b.agent_dir() );
-	assert( a.agent_dir() == proj_a / ".daedalus-planner" );
-	assert( b.agent_dir() == proj_b / ".daedalus-planner" );
+	assert( a.agent_dir() == proj_a / ".daedalus" / "daedalus-planner" );
+	assert( b.agent_dir() == proj_b / ".daedalus" / "daedalus-planner" );
 	assert( a.memory_file() != b.memory_file() );
 
 	std::cout << "ok\n";
@@ -169,9 +170,9 @@ static void test_skills_search_path()
 	auto sp = pp.skills_search_path( stub );
 
 	assert( sp.size() == 3 );
-	assert( sp[0] == root / ".daedalus-alice" / "skills" / "active" );  // project wins
-	assert( sp[1] == "/user/data/skills/installed" );                   // user-installed
-	assert( sp[2] == "/sys/data/skills/default" );                      // system-shipped
+	assert( sp[0] == root / ".daedalus" / "daedalus-alice" / "skills" / "active" );  // project wins
+	assert( sp[1] == "/user/data/skills/installed" );                                 // user-installed
+	assert( sp[2] == "/sys/data/skills/default" );                                    // system-shipped
 
 	std::cout << "ok\n";
 }
@@ -184,8 +185,8 @@ static void test_session_subdir()
 	std::cout << "[7] session_dir() / scratch_file()... ";
 	auto root = fresh_dir( "sessions" );
 	daedalus::ProjectPaths pp( root );
-	assert( pp.session_dir( "abc123" ) == root / ".daedalus" / "sessions" / "abc123" );
-	assert( pp.scratch_file( "abc123" ) == root / ".daedalus" / "sessions" / "abc123" / "scratch.json" );
+	assert( pp.session_dir( "abc123" ) == root / ".daedalus" / "daedalus" / "sessions" / "abc123" );
+	assert( pp.scratch_file( "abc123" ) == root / ".daedalus" / "daedalus" / "sessions" / "abc123" / "scratch.json" );
 	std::cout << "ok\n";
 }
 

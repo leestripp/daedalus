@@ -217,6 +217,29 @@ public:
 		return user_cache_root() / "responses";
 	}
 
+	// OmniNet paths: prefer XDG, but honour the legacy ~/.omninet
+	// directory if it already exists so existing OmniNet installs keep
+	// working for one release cycle.
+	fs::path omninet_config_file() const override
+	{
+		fs::path legacy = home_or_tmp() / ".omninet" / "config.json";
+		std::error_code ec;
+		if ( fs::is_regular_file( legacy, ec ) ) {
+			return legacy;
+		}
+		return user_config_root() / "omninet" / "config.json";
+	}
+
+	fs::path omninet_data_dir() const override
+	{
+		fs::path legacy = home_or_tmp() / ".omninet";
+		std::error_code ec;
+		if ( fs::is_directory( legacy, ec ) ) {
+			return legacy;
+		}
+		return user_data_root() / "omninet";
+	}
+
 	// Plan.md §5.1 risk mitigation: enforce directory permissions.
 	//   config_root  → 0750  (LLM keys are sensitive; group-readable is
 	//                       the minimum that lets a daemon group share)

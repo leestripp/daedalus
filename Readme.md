@@ -676,33 +676,30 @@ AFTER:  [system, assistant(compress_context), tool(summary), msgN*0.7+1, ..., ms
 
 ## Available Tools
 
-### File Operations
-- `read_file`, `read_file_head`, `read_file_tail`, `read_file_lines`
-- `list_directory`, `list_directory_tree`
-
-### File Manipulation
-- `create_file`, `create_directory`, `modify_file`, `edit_file_patch`, `delete_file`
-
-### Search
-- `grep_search` - Search for strings/regex in project files
-
-### Image & PDF
-- `read_pdf` - Extract text from PDF files
-
-### MCP Tools (via unified mcp tool)
-- `mcp(server, tool, arguments)` - Call any configured MCP server
-
-### Git
-- `git_status`, `git_branch`, `git_add`, `git_commit`, `git_switch`, `git_diff`, `git_push`, `git_merge`
+The core library ships a small, focused tool set. File-system, search, git,
+PDF, network, and background-process tools are available as individually
+registered example tools under `demos/example-tools/`.
 
 ### Shell
-- `execute_bash` - with chained commands (`&&`, `||`, `;`) and process isolation
+- `execute_bash` - run shell commands with chaining (`&&`, `||`, `;`) and
+  process isolation. This is the **only** core tool that calls
+  `AgentSink::request_command_approval()` (unless `auto_approve` is set).
 
 ### User Interaction
-- `tell_user`, `compress_context`, `set_status`, `stop`
+- `tell_user` - informational message from the agent to the user
+- `compress_context` - trigger context compression
+- `set_status` - declare the agent's current state
+- `stop` - finish the current turn with a summary
 
-### Background
-- `background_process` - start, send, poll, stop, list
+### Memory
+- `remember`, `forget`, `memories`, `memory_stats`
+
+### Skills
+- `discover_skills`, `load_skill`, `get_active_skills`, `search_skills`,
+  `deactivate_skill`, `get_skill_context`
+
+### MCP Tools
+- `mcp__<server>__<tool>` - call any tool exposed by a configured MCP server
 
 ### Manager Mode
 

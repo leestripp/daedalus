@@ -98,35 +98,48 @@ pid_t BackgroundProcessManager::spawn_process(const std::string& command,
             // Not fatal but may affect cleanup
         }
         
-        // Open FIFO for stdin - use blocking mode to ensure data is read
-        // O_RDWR allows reading even without another writer
-        int stdin_fd = open(fifo_path.c_str(), O_RDWR);
-        if (stdin_fd < 0) {
-            // §fix (2026-07-18): between fork() and exec() only
-            // async-signal-safe calls are allowed in a MT program —
-            // LOG_CERR allocates and takes the Logger mutex, which can
-            // deadlock the child. Use write(2) instead.
-            static const char msg[] = "[BackgroundProcess] Failed to open stdin FIFO\n";
-            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
-        }
-        if (stdin_fd >= 0) {
-            // Redirect stdin from FIFO
-            dup2(stdin_fd, STDIN_FILENO);
-            close(stdin_fd);
-        }
-        
-        // Open and redirect stdout
+        // Redirect stdout and stderr FIRST so any diagnostic messages from
+        // the stdin FIFO setup (or from the shell) go to the capture files
+        // instead of the host's terminal/TUI.
         int stdout_fd = open(stdout_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (stdout_fd >= 0) {
             dup2(stdout_fd, STDOUT_FILENO);
             close(stdout_fd);
+        } else {
+            // Fallback to /dev/null so we never inherit the parent's stdout
+            int null_fd = open("/dev/null", O_WRONLY);
+            if (null_fd >= 0) {
+                dup2(null_fd, STDOUT_FILENO);
+                close(null_fd);
+            }
         }
         
-        // Open and redirect stderr
         int stderr_fd = open(stderr_path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
         if (stderr_fd >= 0) {
             dup2(stderr_fd, STDERR_FILENO);
             close(stderr_fd);
+        } else {
+            int null_fd = open("/dev/null", O_WRONLY);
+            if (null_fd >= 0) {
+                dup2(null_fd, STDERR_FILENO);
+                close(null_fd);
+            }
+        }
+        
+        // Open FIFO for stdin - use blocking mode to ensure data is read.
+        // O_RDWR allows reading even without another writer.
+        int stdin_fd = open(fifo_path.c_str(), O_RDWR);
+        if (stdin_fd >= 0) {
+            dup2(stdin_fd, STDIN_FILENO);
+            close(stdin_fd);
+        } else {
+            // §fix (2026-07-18): between fork() and exec() only
+            // async-signal-safe calls are allowed in a MT program —
+            // LOG_CERR allocates and takes the Logger mutex, which can
+            // deadlock the child. The diagnostic now goes to the redirected
+            // stderr capture file, not the host's terminal/TUI.
+            static const char msg[] = "[BackgroundProcess] Failed to open stdin FIFO\n";
+            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
         }
         
         // Change working directory

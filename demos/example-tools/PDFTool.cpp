@@ -1,4 +1,4 @@
-#include "tools/PDFTool.h"
+#include "PDFTool.h"
 #include "core/FileIO.h"
 
 #include <poppler-document.h>

@@ -259,7 +259,7 @@ The recovery is logged at WARN level so the user knows what happened.
   corrupt last message / re-saves recovered chain.
 
 **Manual verification:** run `daedalus-cli`, type a prompt, hit Ctrl-C.
-Inspect `<project>/.daedalus/messages.json` — it should contain the
+Inspect `<project>/.daedalus/daedalus/messages.json` — it should contain the
 prompt and any partial assistant response.
 
 **End-to-end crash test (deferred):** an in-process fork test would
@@ -276,7 +276,7 @@ binary should live (`demos/daedalus-cli/crash_recovery_e2e/`).
 ## 7. File layout (this feature)
 
 ```
-<project_root>/.daedalus[-<agent_name>]/
+<project_root>/.daedalus/daedalus[-<agent_name>]/
 ├── messages.json         # main file (atomic-rename target)
 ├── messages.json.tmp     # temp file mid-write (transient)
 ├── messages.json.crash   # crash-mirror (written by signal handler)
@@ -288,6 +288,13 @@ binary should live (`demos/daedalus-cli/crash_recovery_e2e/`).
 - `messages.json.crash` — kept up-to-date on every save. Read only on
   next launch if `messages.json` is missing/corrupt. Safe to delete
   manually if you want to force a clean start.
+
+The per-agent namespace is nested under a single `.daedalus/` base:
+
+| `agent_name` | Directory |
+|---|---|
+| `""` (default) | `<project_root>/.daedalus/daedalus/` |
+| `"alice"` | `<project_root>/.daedalus/daedalus-alice/` |
 
 **Settings store mirror:** `Messages::save()` also writes to
 `<daedalus_home>/daedalus.db` (SQLite, table `messages`) via

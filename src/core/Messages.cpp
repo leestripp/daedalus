@@ -260,11 +260,10 @@ Messages::Messages(std::filesystem::path data_dir,
     , messages_(json::array())
     , config_(config) {
 
-    // §Phase 8.8: data_dir is the fully-resolved namespace
+    // §Phase 8.8 / §Phase 16: data_dir is the fully-resolved namespace
     // directory, passed in by AgentImpl::initialize() via
     // resolve_agent_dir(project_root, agent_name). The default
-    // (empty agent_name) yields `<project>/.daedalus/`, so
-    // existing users' data is in the same place as before.
+    // (empty agent_name) yields `<project>/.daedalus/daedalus/`.
     messages_file_ = data_dir_ / "messages.json";
 
     // Ensure the namespace directory exists.
@@ -706,10 +705,11 @@ void Messages::save_impl() const {
     const std::string contents = to_save.dump(2);
 
     try {
-        // §Phase 8.8: parent_path() is the per-agent namespace dir
-        // (e.g. `.daedalus/` or `.daedalus-bob/`), already created in
-        // the ctor. We only need to ensure it still exists at save time
-        // in case the user moved/deleted it between sessions.
+        // §Phase 8.8 / §Phase 16: parent_path() is the per-agent
+        // namespace dir (e.g. `.daedalus/daedalus/` or
+        // `.daedalus/daedalus-bob/`), already created in the ctor. We
+        // only need to ensure it still exists at save time in case the
+        // user moved/deleted it between sessions.
         std::filesystem::path daedalus_dir = messages_file_.parent_path();
         if (!std::filesystem::exists(daedalus_dir)) {
             std::filesystem::create_directories(daedalus_dir);

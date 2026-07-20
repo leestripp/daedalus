@@ -5,7 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
-#include "tools/SystemInfoTool.h"
+#include "SystemInfoTool.h"
 #include "core/FileIO.h"
 #include <string>
 #include <fstream>

@@ -10,7 +10,7 @@
 // The local-server test uses an OS thread + raw Socket, no OmniNet server API,
 // to keep the test self-contained.
 
-#include "tools/NetworkTool.h"
+#include "NetworkTool.h"
 #include "core/FileIO.h"
 
 #include <arpa/inet.h>

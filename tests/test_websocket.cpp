@@ -16,7 +16,7 @@
 // NOTE: OmniNet 0.7.4's WebSocket client ctor only supports ws:// (no TLS).
 // wss:// URLs are rejected with a clear error in our tool layer.
 
-#include "tools/NetworkTool.h"
+#include "NetworkTool.h"
 #include "core/FileIO.h"
 
 #include "websocket/WebSocket.h"

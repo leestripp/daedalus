@@ -190,15 +190,15 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
     mcp_manager_(mcp_manager)   // §Phase 11: injected; nullptr = MCP disabled
 {
     // Load persisted command approvals
-    ToolHandler::load_persisted_approvals(config.target_directory);
+    ToolHandler::load_persisted_approvals(config.target_directory, config.agent_name);
     // Initialize current working directory tracker with project root
     ToolHandler::init_current_working_directory(config.target_directory);
     
     // Initialize Session Memory (if not disabled)
     if (!config_.memory_disabled) {
-        // §Phase 8.8: SessionMemory takes the resolved per-agent
-        // namespace dir. Empty agent_name yields the legacy
-        // `<project>/.daedalus/memory/` — same as before.
+        // §Phase 8.8 / §Phase 16: SessionMemory takes the resolved
+        // per-agent namespace dir. Empty agent_name yields
+        // `<project>/.daedalus/daedalus/memory/`.
         session_memory_ = std::make_unique<SessionMemory>(
             daedalus::resolve_agent_dir(config.target_directory,
                                        config.agent_name));
@@ -261,9 +261,8 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
                 report_compression_token_usage(pt, ct, tt);
             };
 
-        // §Phase 8.8: resolve the per-agent namespace dir. Empty
-        // agent_name yields the legacy `<project>/.daedalus/` — zero
-        // behaviour change for existing users.
+        // §Phase 8.8 / §Phase 16: resolve the per-agent namespace dir.
+        // Empty agent_name yields `<project>/.daedalus/daedalus/`.
         messages_ = std::make_unique<Messages>(
             daedalus::resolve_agent_dir(config.target_directory, config.agent_name),
             messages_config);
@@ -320,6 +319,34 @@ void LLMClient::refresh_mcp_tools() {
     auto factory = ToolHandler::get_tool_factory();
     if (factory) factory->refresh_mcp_tools();
     mcp_tools_refresh_pending_ = false;
+}
+
+// §MODEL-SWITCH: reconfigure API endpoint/credentials and the Messages
+// compression config when the host switches models.
+void LLMClient::set_config(const AppConfig& config) {
+    config_ = config;
+    if (!messages_) return;
+
+    MessageCompressionConfig mc = messages_->get_config();
+    if (settings_store_) {
+        mc.max_context_size = settings_store_->get_max_context_size_for_model(
+            config_.model_name.empty() ? config_.model : config_.model_name);
+    }
+    mc.model        = config_.model;
+    mc.api_url      = config_.base_url + config_.chat_endpoint;
+    mc.api_key      = config_.api_key;
+    mc.temperature  = config_.temperature;
+    messages_->set_config(mc);
+}
+
+void LLMClient::clear_messages() {
+    if (!messages_) return;
+    messages_->clear();
+    messages_->save();
+    if (sink_) {
+        sink_->on_log(daedalus::LogLevel::Info,
+                      "[MODEL] Message history cleared");
+    }
 }
 
 // §Phase 5.1: ESCKeyDetector removed. The library no longer polls

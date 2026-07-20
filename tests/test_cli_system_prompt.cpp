@@ -24,8 +24,8 @@ namespace {
                         ("daedalus_test_proj_" +
                          std::to_string(std::rand()));
         fs::remove_all(proj);
-        fs::create_directories(proj / ".daedalus");
-        std::ofstream f(proj / ".daedalus" / "system_prompt.txt");
+        fs::create_directories(proj / ".daedalus" / "daedalus");
+        std::ofstream f(proj / ".daedalus" / "daedalus" / "system_prompt.txt");
         f << overlay_content;
         return proj;
     }

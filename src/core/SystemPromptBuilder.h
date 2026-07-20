@@ -113,10 +113,11 @@ public:
 
     /// `# Reserved Agent Directories (.daedalus*)` — ALWAYS appended
     /// last (after the state-machine section).  Explains that the
-    /// `.daedalus/` and `.daedalus-<id>/` folders in the project root
-    /// are owned by the agent runtime and must NEVER be deleted,
-    /// renamed, edited, or moved by the model.  Returns a static,
-    /// non-empty string — there is no host option to disable it.
+    /// `.daedalus/`, `.daedalus/daedalus/`, and
+    /// `.daedalus/daedalus-<id>/` folders in the project root are owned
+    /// by the agent runtime and must NEVER be deleted, renamed, edited,
+    /// or moved by the model.  Returns a static, non-empty string —
+    /// there is no host option to disable it.
     static std::string getReservedAgentDirsSection();
 
     /// `# Context Status\n` + token-usage markdown table.

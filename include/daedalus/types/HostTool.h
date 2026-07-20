@@ -1,29 +1,17 @@
 /**
- * @file daedalus/HostTool.h
- * @brief Base class for tools registered by the host application.
+ * @file daedalus/types/HostTool.h
+ * @brief Deprecated alias for daedalus::BaseTool.
  *
- * Most tools live inside the library. Hosts can extend the agent's toolbox
- * without modifying libdaedalus by subclassing HostTool and registering with
- * Agent::register_tool().
+ * @deprecated Use `daedalus::BaseTool` instead. This header and name are
+ *             kept for backward compatibility and will be removed in a
+ *             future release.
  */
 #pragma once
 
-#include <nlohmann/json.hpp>
-#include <string>
-
-#include "daedalus/types/HostToolContext.h"
+#include "daedalus/types/BaseTool.h"
 
 namespace daedalus {
 
-class HostTool {
-public:
-    virtual ~HostTool() = default;
-
-    [[nodiscard]] virtual std::string get_name() const = 0;
-    [[nodiscard]] virtual std::string get_description() const = 0;
-    [[nodiscard]] virtual nlohmann::json get_definition() const = 0;
-    virtual nlohmann::json execute(const nlohmann::json& args,
-                                   HostToolContext& ctx) = 0;
-};
+using HostTool [[deprecated("Use daedalus::BaseTool instead")]] = BaseTool;
 
 }  // namespace daedalus

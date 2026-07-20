@@ -1,9 +1,10 @@
 // ============================================================================
 // tests/test_phase14_per_project_system_prompt.cpp
 //
-// §Phase 14.7 (Q2, decided YES): if <project_root>/.daedalus/system_prompt.txt
-// exists, its contents are appended to cfg.system_prompt (or used as-is
-// if cfg.system_prompt is empty). The library must:
+// §Phase 14.7 (Q2, decided YES): if
+// <project_root>/.daedalus/daedalus/system_prompt.txt exists, its
+// contents are appended to cfg.system_prompt (or used as-is if
+// cfg.system_prompt is empty). The library must:
 //   - read the file once during initialize()
 //   - merge project text AFTER the demo's text (concat with blank line)
 //   - log a [INFO] line that the merge happened
@@ -45,10 +46,10 @@ void test_project_override_appended() {
     fs::path tmp = fs::temp_directory_path() / "phase147-appended";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
-    fs::create_directories(tmp / ".daedalus");
+    fs::create_directories(tmp / ".daedalus" / "daedalus");
 
     {
-        std::ofstream f(tmp / ".daedalus" / "system_prompt.txt");
+        std::ofstream f(tmp / ".daedalus" / "daedalus" / "system_prompt.txt");
         f << "PROJECT: rules specific to this repo.";
     }
 
@@ -81,10 +82,10 @@ void test_project_override_replaces_empty() {
     fs::path tmp = fs::temp_directory_path() / "phase147-replaces";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
-    fs::create_directories(tmp / ".daedalus");
+    fs::create_directories(tmp / ".daedalus" / "daedalus");
 
     {
-        std::ofstream f(tmp / ".daedalus" / "system_prompt.txt");
+        std::ofstream f(tmp / ".daedalus" / "daedalus" / "system_prompt.txt");
         f << "PROJECT: only the project text, no demo text.";
     }
 
@@ -115,7 +116,7 @@ void test_no_override_silent() {
     fs::path tmp = fs::temp_directory_path() / "phase147-missing";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
-    // No .daedalus/system_prompt.txt
+    // No .daedalus/daedalus/system_prompt.txt
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;
@@ -140,9 +141,9 @@ void test_empty_override_silent() {
     fs::path tmp = fs::temp_directory_path() / "phase147-empty";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
-    fs::create_directories(tmp / ".daedalus");
+    fs::create_directories(tmp / ".daedalus" / "daedalus");
     {
-        std::ofstream f(tmp / ".daedalus" / "system_prompt.txt");
+        std::ofstream f(tmp / ".daedalus" / "daedalus" / "system_prompt.txt");
         // no writes = empty file
     }
 
@@ -164,12 +165,12 @@ void test_empty_override_silent() {
     fs::remove_all(tmp);
 }
 
-// §Phase 14.7: missing .daedalus/ dir entirely = no-op.
+// §Phase 14.7: missing .daedalus/daedalus/ dir entirely = no-op.
 void test_no_daedalus_dir_silent() {
     fs::path tmp = fs::temp_directory_path() / "phase147-no-daedalus-dir";
     fs::remove_all(tmp);
     fs::create_directories(tmp);
-    // No .daedalus/ subdir at all
+    // No .daedalus/daedalus/ subdir at all
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;

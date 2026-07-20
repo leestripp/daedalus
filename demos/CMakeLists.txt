@@ -17,6 +17,11 @@ if(NOT DAEDALUS_BUILD_DEMOS)
     return()
 endif()
 
+# §TOOL-TRIM (prompt.txt): non-core tools live here as examples. Demos
+# that need file / git / search / pdf / network tools link the resulting
+# static library and register the individual tools they want.
+add_subdirectory(example-tools)
+
 # Always-on demo: the historical CLI binary, preserved as the
 # regression test that the full feature set still works through the
 # static-library boundary.

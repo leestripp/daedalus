@@ -14,12 +14,12 @@ daedalus stores data in **exactly two tiers**, and the boundary is non-negotiabl
 
 > **If the data is about the USER, it goes in XDG.**
 > **If the data is about THE PROJECT, it lives under
-> `<project_root>/.daedalus[-<agent_name>]/`.**
+> `<project_root>/.daedalus/daedalus[-<agent_name>]/`.**
 
 | Tier | Location | Examples |
 |---|---|---|
 | **User** (per user, shared across every project) | `$XDG_*_HOME/daedalus/...` | LLM API keys, MCP server registry, global skill packs, logs, cache |
-| **Project** (per project, may have many per `agent_name`) | `<project_root>/.daedalus[-<agent_name>]/...` | Long-term memory, session transcripts, scratch, per-project overrides |
+| **Project** (per project, may have many per `agent_name`) | `<project_root>/.daedalus/daedalus[-<agent_name>]/...` | Long-term memory, session transcripts, scratch, per-project overrides |
 
 **The cardinal sin we're avoiding:** putting memory in the global XDG dir. If
 agent "alice" and agent "bob" both work on the same repo and both store their
@@ -115,13 +115,19 @@ disk because they each get their own subdir.
 
 ### 2.1 agent_name rules
 
-- Empty string: `<project_root>/.daedalus/` (default, backward-compat).
-- Non-empty: `<project_root>/.daedalus-<name>/`.
+All project-tier state lives under a single hidden base directory:
+
+- Empty string: `<project_root>/.daedalus/daedalus/` (default).
+- Non-empty: `<project_root>/.daedalus/daedalus-<name>/`.
 
 Names are validated by `is_valid_agent_name()`:
 - Match `^[A-Za-z0-9_.-]{1,64}$`.
 - Must not start with `.` (hidden) or `-` (CLI flag).
-- Empty string is permitted (means "no namespace").
+- Empty string is permitted (means "default namespace").
+
+> **Why the extra `.daedalus/` base?** It keeps the project root tidy:
+> only one hidden directory is created, and the per-agent namespaces are
+> visible non-hidden sub-folders that are easy to `.gitignore`.
 
 ### 2.2 Project-tier files
 
@@ -176,7 +182,7 @@ XDG_CONFIG_HOME=/custom/cfg XDG_DATA_HOME=/custom/data \
 
 ```bash
 daedalus-cli --agent-name planner /path/to/project
-# → /path/to/project/.daedalus-planner/memory/...
+# → /path/to/project/.daedalus/daedalus-planner/memory/...
 ```
 
 Multiple agents on the same project, each with their own memory:
@@ -282,8 +288,8 @@ full API reference.
 
 **Per-project, always.** Memory is stored in `daedalus.db` under
 `mem.<session_id>` keys. The `SessionMemory` class falls back to the
-JSON file at `<project>/.daedalus[-<agent_name>]/memory/memory.json` if
-the DB key is empty.
+JSON file at `<project>/.daedalus/daedalus[-<agent_name>]/memory/memory.json`
+if the DB key is empty.
 
 **Never** in XDG. See `tests/test_two_tier_rule.cpp` for the test that
 enforces this.
@@ -329,4 +335,4 @@ daedalus::Paths::set_override(nullptr);
 - `tests/test_ensure_directories.cpp` — XDG-permissions test.
 - `demos/daedalus-cli/migrate.cpp` — migration CLI implementation.
 
-*Last updated 2026-07-18 (legacy fallback removed).*
+*Last updated 2026-07-19 (Phase 16: single `.daedalus` base directory).*

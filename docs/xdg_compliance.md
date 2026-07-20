@@ -107,19 +107,21 @@ $XDG_CACHE_HOME/daedalus/            # ~/.cache/daedalus/
 
 ### Project Tier (Per-Project)
 
-```
-<project>/.daedalus/                  # Default agent
-├── messages.json                     # Conversation transcript
-├── messages.json.crash              # Crash recovery
-├── memory/
-│   ├── memory.sqlite                # Long-term facts
-│   └── memory.json                  # Legacy format
-├── sessions/<session_id>/
-│   └── scratch.json
-└── skills/active/                    # Project-local skills
+All project-tier state lives under a single hidden `.daedalus/` base:
 
-<project>/.daedalus-<name>/          # Named agent
-└── (same structure as above)
+```
+<project>/.daedalus/                  # Base directory (hidden)
+├── daedalus/                         # Default agent
+│   ├── messages.json                 # Conversation transcript
+│   ├── messages.json.crash          # Crash recovery
+│   ├── memory/
+│   │   ├── memory.sqlite            # Long-term facts
+│   │   └── memory.json              # Legacy format
+│   ├── sessions/<session_id>/
+│   │   └── scratch.json
+│   └── skills/active/                # Project-local skills
+└── daedalus-<name>/                  # Named agent
+    └── (same structure as above)
 ```
 
 ## 5. Two-Tier Rule

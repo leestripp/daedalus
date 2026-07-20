@@ -28,7 +28,8 @@
 #include "daedalus/types/AgentConfig.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
-#include "daedalus/types/HostTool.h"
+#include "daedalus/types/BaseTool.h"
+#include "daedalus/types/HostTool.h"   // deprecated alias; kept for back-compat
 #include "daedalus/types/ImageAttachment.h"
 #include "daedalus/types/ModelInfo.h"
 #include "daedalus/types/SkillInfo.h"
@@ -152,13 +153,18 @@ public:
 
     /// @brief Register a host-implemented tool. Available on the next
     ///        turn. Tool is owned by the Agent until shutdown().
-    void register_tool(std::unique_ptr<HostTool> tool);
+    /// @note `daedalus::HostTool` is a deprecated alias for
+    ///       `daedalus::BaseTool` and is accepted here via the typedef.
+    void register_tool(std::unique_ptr<BaseTool> tool);
 
     /// @brief Clear all session memory for the project root. Idempotent.
     void clear_memory();
 
     /// @brief Switch the model used for subsequent turns. Returns false
-    ///        if the model isn't in settings.json.
+    ///        if the model isn't in the SettingsStore. On success the
+    ///        conversation history is cleared so the new model starts
+    ///        with a fresh context (the new model may have a smaller
+    ///        context window than the previous one).
     bool switch_model(const std::string& model_name);
 
     /// @brief Return the body of the most recent assistant message,

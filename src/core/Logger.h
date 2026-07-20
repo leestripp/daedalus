@@ -2,7 +2,7 @@
  * @file Logger.h
  * @brief Thread-safe logging system for daedalus
  * 
- * Logs are saved to [Project Root]/.daedalus/logs/ directory.
+ * Logs are saved to [Project Root]/.daedalus/daedalus/logs/ directory.
  * Supports multiple log levels, file rotation, and async logging.
  */
 
@@ -33,7 +33,7 @@ enum class LogLevel {
  */
 struct LoggerConfig {
     bool enabled = true;
-    std::string log_path = ".daedalus/logs/";  // Relative to project root
+    std::string log_path = ".daedalus/daedalus/logs/";  // Relative to project root
     int retention_days = 30;
     size_t max_file_size_bytes = 10 * 1024 * 1024;  // 10MB
     LogLevel level = LogLevel::INFO;

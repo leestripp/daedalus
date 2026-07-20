@@ -5,6 +5,7 @@
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
+#include <algorithm>
 #include <string>
 #include <vector>
 // Include ToolHandler after doctest
@@ -31,7 +32,7 @@ TEST_SUITE("ToolDefinitions") {
     TEST_CASE("get_tool_definitions contains expected tools") {
         std::string defs = ToolHandler::get_tool_definitions();
         json parsed = json::parse(defs);
-        
+
         // Track tool names found
         std::vector<std::string> tool_names;
         for (const auto& item : parsed) {
@@ -39,27 +40,38 @@ TEST_SUITE("ToolDefinitions") {
                 tool_names.push_back(item["function"]["name"]);
             }
         }
-        
-        // Should have multiple tools (the actual count depends on implementation)
-        CHECK(tool_names.size() >= 10);
-        
-        // Check for key tools we expect
-        bool has_read_file = false;
+
+        // §TOOL-TRIM (prompt.txt): the default library surface is minimal.
+        // Only core agent tools are registered by ToolFactory. File / git /
+        // search / pdf / system-info / background / network tools live in
+        // demos/example-tools/ and are registered by hosts that need them.
+        CHECK(tool_names.size() >= 8);
+
+        // Check for core tools we expect
         bool has_execute_bash = false;
-        bool has_create_file = false;
-        bool has_edit_file_patch = false;
-        
+        bool has_tell_user = false;
+        bool has_compress_context = false;
+        bool has_stop = false;
+        bool has_set_status = false;
+
         for (const auto& name : tool_names) {
-            if (name == "read_file") has_read_file = true;
             if (name == "execute_bash") has_execute_bash = true;
-            if (name == "create_file") has_create_file = true;
-            if (name == "edit_file_patch") has_edit_file_patch = true;
+            if (name == "tell_user") has_tell_user = true;
+            if (name == "compress_context") has_compress_context = true;
+            if (name == "stop") has_stop = true;
+            if (name == "set_status") has_set_status = true;
         }
-        
-        CHECK(has_read_file);
+
         CHECK(has_execute_bash);
-        CHECK(has_create_file);
-        CHECK(has_edit_file_patch);
+        CHECK(has_tell_user);
+        CHECK(has_compress_context);
+        CHECK(has_stop);
+        CHECK(has_set_status);
+
+        // Non-core tools are NOT in the default set.
+        CHECK(std::find(tool_names.begin(), tool_names.end(), "read_file") == tool_names.end());
+        CHECK(std::find(tool_names.begin(), tool_names.end(), "create_file") == tool_names.end());
+        CHECK(std::find(tool_names.begin(), tool_names.end(), "edit_file_patch") == tool_names.end());
     }
     
     TEST_CASE("get_tool_definitions has required fields for each tool") {
@@ -108,20 +120,20 @@ TEST_SUITE("ToolDefinitions") {
     
     TEST_CASE("get_tool_definitions_filtered with multiple exclusions") {
         std::string filtered_defs = ToolHandler::get_tool_definitions_filtered({
-            "execute_bash", "create_file", "read_file"
+            "execute_bash", "tell_user", "compress_context"
         });
         json filtered = json::parse(filtered_defs);
-        
+
         std::vector<std::string> names;
         for (const auto& item : filtered) {
             if (item.contains("function") && item["function"].contains("name")) {
                 names.push_back(item["function"]["name"]);
             }
         }
-        
+
         CHECK(std::find(names.begin(), names.end(), "execute_bash") == names.end());
-        CHECK(std::find(names.begin(), names.end(), "create_file") == names.end());
-        CHECK(std::find(names.begin(), names.end(), "read_file") == names.end());
+        CHECK(std::find(names.begin(), names.end(), "tell_user") == names.end());
+        CHECK(std::find(names.begin(), names.end(), "compress_context") == names.end());
     }
 
     TEST_CASE("matches_pattern wildcard semantics (§FIX-leading-wildcard)") {

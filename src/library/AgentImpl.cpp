@@ -151,13 +151,14 @@ void AgentImpl::initialize()
 
     // §Phase 14.7: per-project system_prompt override.
     // Decision (see Agent.md §14.7 Q2): if
-    // <project_root>/.daedalus/system_prompt.txt exists, its contents
+    // <project_root>/.daedalus/daedalus/system_prompt.txt exists, its contents
     // are APPENDED to cfg_.system_prompt after the demo's default.
     // Demo default is the base; project file is concatenated after.
     // If cfg_.system_prompt is empty, only the project file is used.
     {
         std::error_code ec;
-        fs::path override_path = cfg_.project_root / ".daedalus" / "system_prompt.txt";
+        fs::path override_path = resolve_agent_dir(cfg_.project_root, cfg_.agent_name)
+                                 / "system_prompt.txt";
         if (fs::is_regular_file(override_path, ec)) {
             std::ifstream f(override_path);
             if (f) {
@@ -186,7 +187,7 @@ void AgentImpl::initialize()
             "AgentConfig::agent_name is invalid: \"" + cfg_.agent_name +
             "\". Phase 8.8 rule: must match [A-Za-z0-9_.-]{1,64} and "
             "must not start with '.' or '-'. Empty string is allowed "
-            "(means 'no namespace, use <project_root>/.daedalus/').");
+            "(means 'no namespace, use <project_root>/.daedalus/daedalus/').");
     }
 
     // §Plan.md Phase 4 (2026-07-13): deprecation warning for legacy
@@ -237,6 +238,28 @@ void AgentImpl::initialize()
     //     migrated yet.
     Paths::global().ensure_directories();
 
+    // §Phase 16 (prompt.txt): OmniNet setup probe. OmniNet expects its
+    // own config/data directory. If neither the XDG nor the legacy
+    // ~/.omninet layout is present, warn the developer once via the
+    // sink so they know network/WebSocket features need setup. We never
+    // write to stderr here (no-stdio-in-library rule).
+    {
+        std::error_code ec;
+        fs::path omninet_config = Paths::global().omninet_config_file();
+        fs::path omninet_data   = Paths::global().omninet_data_dir();
+        bool omninet_ready = fs::is_regular_file(omninet_config, ec)
+                             || fs::is_directory(omninet_data, ec);
+        if (!omninet_ready && sink_) {
+            sink_->on_log(daedalus::LogLevel::Warn,
+                "[OMNINET] OmniNet runtime config not found at "
+                + omninet_config.string()
+                + ". Some network/WebSocket features may be unavailable. "
+                  "Run 'omninet-init' or create "
+                + omninet_data.string()
+                + " to set it up.");
+        }
+    }
+
     // §BUG-004 fix: honour cfg_.auto_approve even when no LLMClient is
     // constructed (e.g. hosts driving Agent::execute_tool() directly).
     // The LLMClient ctor also sets this from the settings store; doing
@@ -276,10 +299,11 @@ void AgentImpl::initialize()
     //
     // §Phase 8.5+: also wipe when --no-memory is set. The user-facing
     // semantics of "no memory" is "no prior context of any kind", which
-    // includes the conversation history (`<project>/.daedalus/messages.json`),
-    // not just the SessionMemory notes. Without this, a long session
-    // (e.g. 1000+ messages) would exceed cheaper models' context windows
-    // (e.g. MiniMax-M2.7 at 200K tokens) and the API would 400.
+    // includes the conversation history
+    // (`<project>/.daedalus/daedalus/messages.json`), not just the
+    // SessionMemory notes. Without this, a long session (e.g. 1000+
+    // messages) would exceed cheaper models' context windows (e.g.
+    // MiniMax-M2.7 at 200K tokens) and the API would 400.
     if (cfg_.clear_memory || !cfg_.memory_enabled) {
         // Wipe the conversation-history file. SessionMemory::clear_all_memories
         // only covers the auxiliary notes; the message log is a separate file.
@@ -305,8 +329,8 @@ void AgentImpl::initialize()
     }
 
     if (cfg_.clear_memory) {
-        // §Phase 8.8: clear memory lives under the per-agent
-        // namespace so a named agent doesn't wipe its own peers.
+        // §Phase 8.8 / §Phase 16: clear memory lives under the
+        // per-agent namespace so a named agent doesn't wipe its own peers.
         SessionMemory mem(resolve_agent_dir(cfg_.project_root, cfg_.agent_name));
         mem.clear_all_memories();
         if (sink_) {
@@ -808,12 +832,12 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
     return result;
 }
 
-void AgentImpl::register_tool(std::unique_ptr<HostTool> tool)
+void AgentImpl::register_tool(std::unique_ptr<BaseTool> tool)
 {
     if (!tool) return;
 
     // 1. Take ownership in our own vector (so the tool survives).
-    std::shared_ptr<HostTool> shared = std::move(tool);
+    std::shared_ptr<BaseTool> shared = std::move(tool);
     host_tools_.push_back(shared);
 
     // 2. Wrap in HostToolAdapter and register with the ToolFactory so
@@ -825,7 +849,7 @@ void AgentImpl::register_tool(std::unique_ptr<HostTool> tool)
             factory->register_tool(adapter);
             if (sink_) {
                 sink_->on_log(daedalus::LogLevel::Info,
-                              "[TOOL] Registered host tool: " + shared->get_name());
+                              "[TOOL] Registered custom tool: " + shared->get_name());
             }
         }
     } else if (sink_) {
@@ -838,7 +862,8 @@ void AgentImpl::register_tool(std::unique_ptr<HostTool> tool)
 
 void AgentImpl::clear_memory()
 {
-    // §Phase 8.8: per-agent namespace (see initialize()'s same call).
+    // §Phase 8.8 / §Phase 16: per-agent namespace (see initialize()'s
+    // same call).
     SessionMemory mem(resolve_agent_dir(cfg_.project_root, cfg_.agent_name));
     mem.clear_all_memories();
     if (sink_) {
@@ -854,6 +879,16 @@ bool AgentImpl::switch_model(const std::string& model_name)
     if (!opt.has_value()) return false;
     body_->store->set_default_model_name(model_name);
     cfg_.model_name = model_name;
+
+    // §MODEL-SWITCH: the new model may have a smaller context window,
+    // so clear the conversation history and reconfigure the LLMClient
+    // to use the new model's endpoint / credentials / context size.
+    if (body_->client) {
+        AppConfig new_app = make_app_config(cfg_, *body_->store);
+        body_->client->set_config(new_app);
+        body_->client->clear_messages();
+    }
+
     if (sink_) {
         sink_->on_log(daedalus::LogLevel::Info,
                       "[MODEL] Switched to " + model_name);

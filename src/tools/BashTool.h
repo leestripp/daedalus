@@ -1,12 +1,10 @@
 #pragma once
 
 #include <string>
-#include <set>
 #include <vector>
 #include <functional>
 #include <nlohmann/json.hpp>
 #include "BaseTool.h"
-#include "BashChainer.h"
 #include "BashPathChecker.h"
 
 class FileIO;
@@ -14,7 +12,14 @@ class FileIO;
 using json = nlohmann::json;
 
 /**
- * BashTool.h - Contains shell command execution tool
+ * BashTool.h - Shell command execution tool
+ *
+ * Supports two execution models:
+ *   - Synchronous (default): run a command, capture output, return exit code.
+ *   - Background: start a detached process, poll its output, send stdin, stop it.
+ *
+ * Background commands are delegated to BackgroundProcessManager so the agent
+ * worker thread is never blocked waiting on a server or long-running tool.
  */
 
 // Build event callback type
@@ -23,41 +28,41 @@ using BuildEventCallback = std::function<void(const std::string& command, bool s
 // ========== BashTool ==========
 class BashTool : public BaseTool {
 public:
+    enum class Action {
+        Run,     // synchronous execution (default)
+        Start,   // start a background process
+        Poll,    // read background process output
+        Send,    // send stdin to a background process
+        Stop     // stop a background process
+    };
+
     [[nodiscard]] std::string get_name() const override { return "execute_bash"; }
-    [[nodiscard]] std::string get_description() const override { return "Execute shell commands in the project root (build, test, git, package installs, etc.)."; }
+    [[nodiscard]] std::string get_description() const override {
+        return "Execute shell commands in the project root. Supports synchronous execution and background/detached processes for servers or long-running tools.";
+    }
     [[nodiscard]] json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
     json execute(const json& args, FileIO& file_io, ToolProgressFn progress) override;
-    
+
     // Set callback for build events (called from MiniMaxClient)
     static void set_build_callback(BuildEventCallback callback) { build_callback_ = callback; }
-    
+
     // Get callback for use in helper functions
     static BuildEventCallback get_build_callback() { return build_callback_; }
 
     // ====== Public Helper Functions for Testing ======
-    // These delegate to BashChainer or BashPathChecker static methods
-    static bool is_dangerous_command(const std::string& command) { 
-        return BashPathChecker::is_dangerous_command(command); 
+    static bool is_dangerous_command(const std::string& command) {
+        return BashPathChecker::is_dangerous_command(command);
     }
-    static bool contains_privilege_escalation(const std::string& command) { 
-        return BashPathChecker::contains_privilege_escalation(command); 
+    static bool contains_privilege_escalation(const std::string& command) {
+        return BashPathChecker::contains_privilege_escalation(command);
     }
-    static std::string extract_path_from_command(const std::string& command) { 
-        return BashPathChecker::extract_path_from_command(command); 
+    static std::string extract_path_from_command(const std::string& command) {
+        return BashPathChecker::extract_path_from_command(command);
     }
-    static bool contains_command_chaining(const std::string& command) { 
-        return BashChainer::contains_command_chaining(command); 
+    static bool contains_standalone_ampersand(const std::string& command) {
+        return BashPathChecker::contains_standalone_ampersand(command);
     }
-    static std::vector<std::pair<std::string, std::string>> parse_chained_commands(const std::string& command) { 
-        return BashChainer::parse_chained_commands(command); 
-    }
-    static bool contains_background_operator(const std::string& command) { 
-        return BashChainer::contains_background_operator(command); 
-    }
-    
-    // Convert command to approval pattern (for session approval)
-    static std::string command_to_pattern(const std::string& command);
 
     // Get default timeout in seconds (60 seconds)
     static constexpr int get_default_timeout_seconds() { return 60; }
@@ -67,16 +72,26 @@ public:
     static constexpr int get_max_timeout_seconds() { return 3600; }  // 1 hour max
 
 private:
-    // Private helper functions
-    static std::string escape_shell_arg(const std::string& input);
-    static std::string extract_command_prefix(const std::string& command);
-    static json handle_chained_commands(const std::string& command, const std::string& project_path, int timeout_seconds);
-    static json execute_single_command(const std::string& command, const std::string& project_path, int timeout_seconds);
-    static void add_session_approved_command(const std::string& command);
+    static Action parse_action(const std::string& str);
+    static bool is_background_command(const std::string& command);
+    static std::string strip_background_ampersand(const std::string& command);
+
+    static json run_sync(const std::string& command,
+                         const std::string& project_path,
+                         int timeout_seconds,
+                         ToolProgressFn progress);
+
+    static json run_background(const std::string& command,
+                               const std::string& project_path,
+                               const std::string& requested_id);
+
+    static json poll_background(const std::string& process_id, bool clear_output);
+    static json send_background(const std::string& process_id, const std::string& input);
+    static json stop_background(const std::string& process_id);
 
     // Safe diagnostic prefixes that can be auto-approved
     static const std::vector<std::string>& get_safe_diagnostic_prefixes();
-    
+
     // Static callback for build events
     static BuildEventCallback build_callback_;
 };

@@ -124,8 +124,8 @@ public:
     /**
      * @brief Construct Messages with a per-agent data directory (§Phase 8.8).
      * @param data_dir Fully-resolved namespace directory — either
-     *                 `<project_root>/.daedalus/` (empty agent_name) or
-     *                 `<project_root>/.daedalus-<name>/` (named agent).
+     *                 `<project_root>/.daedalus/daedalus/` (empty agent_name) or
+     *                 `<project_root>/.daedalus/daedalus-<name>/` (named agent).
      *                 The directory is auto-created if missing.
      *                 AgentImpl calls resolve_agent_dir(project_root,
      *                 cfg.agent_name) to compute this; Messages
@@ -222,13 +222,13 @@ public:
     // =========================================================================
     
     /**
-     * @brief Load messages from .daedalus/messages.json
+     * @brief Load messages from .daedalus/daedalus[-<name>]/messages.json
      * @return true if loaded successfully
      */
     bool load();
     
     /**
-     * @brief Save messages to .daedalus/messages.json
+     * @brief Save messages to .daedalus/daedalus[-<name>]/messages.json
      */
     void save() const;
 

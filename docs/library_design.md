@@ -42,7 +42,7 @@ restarts it.
    file, an in-memory buffer, whatever fits the host's I/O model.
 2. **`core/Logger.h`** — `LOG_INFO` / `LOG_WARNING` / `LOG_ERROR`
    macros for internal diagnostics. Writes to a per-project log
-   file under `<project>/.daedalus/logs/`. Does NOT touch stdio.
+   file under `<project>/.daedalus/daedalus/logs/`. Does NOT touch stdio.
 
 ### Output channels the library MUST NOT use
 

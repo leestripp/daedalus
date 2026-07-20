@@ -4,6 +4,28 @@ daedalus has first-class network tools backed by [OmniNet](https://gitlab.com/le
 
 All tools are registered automatically — the LLM sees them in the system prompt's `## Tools Available to You` section.
 
+---
+
+## OmniNet setup
+
+OmniNet keeps its runtime config/data in an XDG-compliant location:
+
+- Config: `$XDG_CONFIG_HOME/omninet/config.json` (default `~/.config/omninet/config.json`)
+- Data:   `$XDG_DATA_HOME/omninet` (default `~/.local/share/omninet`)
+
+If you have an existing OmniNet install that still uses `~/.omninet/`, daedalus honours that legacy location for one release cycle, but new installs should use the XDG paths above.
+
+When `Agent::initialize()` runs and neither the XDG nor the legacy OmniNet directory exists, the library emits a single warning through `AgentSink::on_log`:
+
+```
+[OMNINET] OmniNet runtime config not found at <path>. Some network/WebSocket
+features may be unavailable. Run 'omninet-init' or create <dir> to set it up.
+```
+
+This is not a fatal error — basic HTTP/TLS operations still work using the system CA store — but some OmniNet-specific features (e.g. server tooling, certificate management) need the directory to be initialized.
+
+---
+
 | Tool | Replaces | Backed by |
 |---|---|---|
 | `http_request` | Bash `curl` / `python3 urllib` | OmniNet TLS (system CA) + plain TCP |

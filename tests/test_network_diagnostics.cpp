@@ -10,7 +10,7 @@
 // on OMNINET_TLS_INSPECT_TEST_HOST being set, so CI / offline machines
 // skip it cleanly.
 
-#include "tools/NetworkTool.h"
+#include "NetworkTool.h"
 #include "core/FileIO.h"
 
 #include <arpa/inet.h>

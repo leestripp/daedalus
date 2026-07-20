@@ -246,6 +246,7 @@ set(CORE_SOURCES
 	src/core/SystemPromptBuilder.cpp
 	src/core/ThreadPool.cpp
 	src/core/Metrics.cpp
+	src/core/SerperConfig.cpp
 )
 
 set(API_SOURCES
@@ -263,23 +264,15 @@ set(MCP_SOURCES
 set(TOOLS_SOURCES
 	src/tools/ToolHandler.cpp
 	src/tools/ToolFactory.cpp
-	src/tools/FileTool.cpp
 	src/tools/McpProxiedTool.cpp
-    src/core/SerperConfig.cpp
-    src/tools/SearchTool.cpp
 	src/tools/UserTool.cpp
 	src/tools/SetStatusTool.cpp
-	src/tools/GitTool.cpp
 	src/tools/BashTool.cpp
 	src/tools/BashChainer.cpp
 	src/tools/BashCommandExecutor.cpp
 	src/tools/BashPathChecker.cpp
-	src/tools/PDFTool.cpp
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
-	src/tools/SystemInfoTool.cpp
-	src/tools/BackgroundTool.cpp
-	src/tools/NetworkTool.cpp
 )
 
 # Public library API sources (Phase 1: headers + thin stubs).
@@ -319,7 +312,6 @@ target_include_directories(daedalus
 	PUBLIC
 		$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
 		$<INSTALL_INTERFACE:include>
-		${POPPLER_INCLUDE_DIRS}
 	PRIVATE
 		${CMAKE_SOURCE_DIR}/src
 		${PNG_INCLUDE_DIRS}
@@ -340,14 +332,11 @@ target_link_libraries(daedalus
 		# will need to also link OmniNet.
 		"$<BUILD_INTERFACE:OmniNet>"
 	PRIVATE
-		# libpng + poppler-cpp are only used by ImageProcessor and
-		# PDFTool. Keeping them PRIVATE means they're baked into
-		# libdaedalus.a but not declared as link deps to consumers.
-		# Hosts that don't use those tools don't need to link them.
-		# Hosts that do (and care about not linking the whole world)
-		# can rebuild daedalus without those tools.
+		# libpng is used by ImageProcessor in core. Keeping it PRIVATE
+		# means it's baked into libdaedalus.a but not declared as a
+		# link dep to consumers. PDF tools moved to demos/example-tools/
+		# and link poppler-cpp there instead.
 		${PNG_LIBRARIES}
-		${POPPLER_LIBRARIES}
 )
 
 # Visibility hint: when later turned into a shared library, only the
@@ -463,15 +452,17 @@ else()
     message(STATUS "User settings already exist at ${USER_SETTINGS_DIR}, skipping installation")
 endif()
 
+# Include demos if the option is on (default: ON).
+# Demos are standalone executables that link against libdaedalus.a and
+# exercise the library from outside its own sources.
+# Placed BEFORE tests so example tool libraries (e.g. daedalus_example_tools)
+# are defined when test targets that need them are configured.
+add_subdirectory(demos)
+
 # Include unit tests if tests directory exists
 if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     add_subdirectory(tests)
 endif()
-
-# Include demos if the option is on (default: ON).
-# Demos are standalone executables that link against libdaedalus.a and
-# exercise the library from outside its own sources.
-add_subdirectory(demos)
 
 # Static analysis is provided by clang-tidy via the daedalus_clang_tidy_*
 # targets further down in this file. cppcheck used to live here; it was

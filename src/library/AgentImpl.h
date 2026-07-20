@@ -29,7 +29,8 @@
 #include "daedalus/types/AgentConfig.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
-#include "daedalus/types/HostTool.h"
+#include "daedalus/types/BaseTool.h"
+#include "daedalus/types/HostTool.h"   // deprecated alias
 #include "daedalus/types/ImageAttachment.h"
 #include "daedalus/types/ModelInfo.h"
 #include "daedalus/types/SkillInfo.h"
@@ -86,7 +87,7 @@ public:
                                 const nlohmann::json& args);
 
     // Extension
-    void register_tool(std::unique_ptr<HostTool> tool);
+    void register_tool(std::unique_ptr<BaseTool> tool);
     void clear_memory();
     bool switch_model(const std::string& model_name);
     [[nodiscard]] std::string last_assistant_text() const;
@@ -121,7 +122,7 @@ private:
 
     // Host-registered tools (Phase 6: registered with ToolFactory).
     // Stored as shared_ptr so the HostToolAdapter can hold the same pointer.
-    std::vector<std::shared_ptr<HostTool>> host_tools_;
+    std::vector<std::shared_ptr<BaseTool>> host_tools_;
     std::shared_ptr<HostToolContext>       host_ctx_;
 
     bool initialized_ = false;

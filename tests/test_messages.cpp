@@ -31,11 +31,11 @@ namespace fs = std::filesystem;
 // ============================================================================
 
 /**
- * @brief Create a temporary project directory with .daedalus subdir
+ * @brief Create a temporary project directory with .daedalus/daedalus subdir
  */
 fs::path create_test_project() {
     fs::path proj = fs::temp_directory_path() / ("daedalus_messages_test_" + std::to_string(getpid()));
-    fs::create_directories(proj / ".daedalus");
+    fs::create_directories(proj / ".daedalus" / "daedalus");
     return proj;
 }
 
@@ -65,11 +65,12 @@ Messages create_test_messages(const fs::path& proj_root, int keep_head = 2, int 
     // a config with auto_flush_enabled = true via the second
     // overload create_test_messages_cfg() below.
     config.auto_flush_enabled = false;
-    // §Phase 8.8: Messages takes the per-agent data dir, not the
-    // project root. Tests that want the legacy default namespace
-    // pass `<proj_root>/.daedalus`. Use create_test_messages_with_name()
-    // below to test the named-agent code path.
-    return Messages(proj_root / ".daedalus", config);
+    // §Phase 8.8 / §Phase 16: Messages takes the per-agent data dir,
+    // not the project root. Tests that want the default namespace pass
+    // `<proj_root>/.daedalus/daedalus`. Use
+    // create_test_messages_with_name() below to test the named-agent
+    // code path.
+    return Messages(proj_root / ".daedalus" / "daedalus", config);
 }
 
 /**
@@ -777,7 +778,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         
         // Create empty messages file
-        fs::path daedalus_dir = proj / ".daedalus";
+        fs::path daedalus_dir = proj / ".daedalus" / "daedalus";
         fs::create_directories(daedalus_dir);
         std::ofstream f(daedalus_dir / "messages.json");
         f << "";  // Empty file
@@ -793,7 +794,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         
         // Create invalid JSON file
-        fs::path daedalus_dir = proj / ".daedalus";
+        fs::path daedalus_dir = proj / ".daedalus" / "daedalus";
         fs::create_directories(daedalus_dir);
         std::ofstream f(daedalus_dir / "messages.json");
         f << "this is not json";  // Invalid JSON
@@ -809,7 +810,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         
         // Create JSON object instead of array
-        fs::path daedalus_dir = proj / ".daedalus";
+        fs::path daedalus_dir = proj / ".daedalus" / "daedalus";
         fs::create_directories(daedalus_dir);
         std::ofstream f(daedalus_dir / "messages.json");
         f << "{\"invalid\": true}";  // Not an array
@@ -884,17 +885,17 @@ TEST_SUITE("Save and Load") {
         CHECK(msgs.has_saved_messages());
         // No .tmp left behind.
         CHECK_FALSE(std::filesystem::exists(
-                        proj / ".daedalus" / "messages.json.tmp"));
+                        proj / ".daedalus" / "daedalus" / "messages.json.tmp"));
         // .crash mirror was also written.
         CHECK(std::filesystem::exists(
-                  proj / ".daedalus" / "messages.json.crash"));
+                  proj / ".daedalus" / "daedalus" / "messages.json.crash"));
 
         cleanup_test_project(proj);
     }
 
     TEST_CASE("CRASH-1 save recovers from a stale .tmp file") {
         auto proj = create_test_project();
-        auto msgs_dir = proj / ".daedalus";
+        auto msgs_dir = proj / ".daedalus" / "daedalus";
         auto msgs = create_test_messages(proj);
 
         // Pre-create a stale .tmp file from a "previous incomplete save".
@@ -921,7 +922,7 @@ TEST_SUITE("Save and Load") {
 
     TEST_CASE("CRASH-1 save produces valid file even after a previous truncation") {
         auto proj = create_test_project();
-        auto msgs_file = proj / ".daedalus" / "messages.json";
+        auto msgs_file = proj / ".daedalus" / "daedalus" / "messages.json";
 
         // First save: write valid content.
         {
@@ -963,7 +964,7 @@ TEST_SUITE("Save and Load") {
 
     TEST_CASE("CRASH-1 empty-session save also cleans up .crash file") {
         auto proj = create_test_project();
-        auto crash = proj / ".daedalus" / "messages.json.crash";
+        auto crash = proj / ".daedalus" / "daedalus" / "messages.json.crash";
 
         // Pre-plant a stale .crash from a previous session.
         std::ofstream cf(crash, std::ios::binary);
@@ -990,7 +991,7 @@ TEST_SUITE("Save and Load") {
         MessageCompressionConfig cfg;
         cfg.auto_flush_enabled = true;
         cfg.auto_flush_interval_ms = 50;
-        Messages msgs(proj / ".daedalus", cfg);
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
 
         msgs.add_system("Background flush test");
         msgs.add_user("Hello");
@@ -1010,7 +1011,7 @@ TEST_SUITE("Save and Load") {
 
         // Verify contents survived the round-trip via the background
         // thread (not via explicit save()).
-        Messages reload(proj / ".daedalus", cfg);
+        Messages reload(proj / ".daedalus" / "daedalus", cfg);
         CHECK(reload.load());
         CHECK(reload.size() == 2);
         CHECK(reload.get_messages()[1]["content"] == "Hello");
@@ -1023,7 +1024,7 @@ TEST_SUITE("Save and Load") {
         MessageCompressionConfig cfg;
         cfg.auto_flush_enabled = true;
         cfg.auto_flush_interval_ms = 10000;  // effectively never auto-flush
-        Messages msgs(proj / ".daedalus", cfg);
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
 
         msgs.add_user("Synchronous flush please");
         // The background worker won't fire for 10s; only an
@@ -1034,7 +1035,7 @@ TEST_SUITE("Save and Load") {
 
         // Reload to confirm contents.
         MessageCompressionConfig cfg2 = cfg;
-        Messages reload(proj / ".daedalus", cfg2);
+        Messages reload(proj / ".daedalus" / "daedalus", cfg2);
         CHECK(reload.load());
         CHECK(reload.get_messages()[0]["content"] == "Synchronous flush please");
 
@@ -1048,14 +1049,14 @@ TEST_SUITE("Save and Load") {
         cfg.auto_flush_interval_ms = 50;
         // Add a message, then destroy immediately.
         {
-            Messages msgs(proj / ".daedalus", cfg);
+            Messages msgs(proj / ".daedalus" / "daedalus", cfg);
             msgs.add_system("Destroy me");
             msgs.add_user("Last gasp");
             // No explicit flush_now() — relies on destructor's
             // worker-stop-and-final-flush path.
         }
         // File MUST exist on disk after Messages goes out of scope.
-        CHECK(std::filesystem::exists(proj / ".daedalus" / "messages.json"));
+        CHECK(std::filesystem::exists(proj / ".daedalus" / "daedalus" / "messages.json"));
 
         cleanup_test_project(proj);
     }
@@ -1081,7 +1082,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         MessageCompressionConfig cfg;
         cfg.auto_flush_enabled = false;
-        Messages msgs(proj / ".daedalus", cfg);
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
 
         msgs.add_system("Crash test");
         msgs.save();   // populates crash_payload_
@@ -1089,7 +1090,7 @@ TEST_SUITE("Save and Load") {
         msgs.install_crash_handlers();
 
         const std::string crash_path =
-            (proj / ".daedalus" / "messages.json.crash").string();
+            (proj / ".daedalus" / "daedalus" / "messages.json.crash").string();
         CHECK(std::filesystem::exists(crash_path));
         // The .crash file should be non-empty (we saved above).
         CHECK(std::filesystem::file_size(crash_path) > 0);
@@ -1102,7 +1103,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         MessageCompressionConfig cfg;
         cfg.auto_flush_enabled = false;
-        Messages msgs(proj / ".daedalus", cfg);
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
 
         msgs.add_system("Idempotent test");
         msgs.save();
@@ -1120,7 +1121,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         MessageCompressionConfig cfg;
         cfg.auto_flush_enabled = false;
-        Messages msgs(proj / ".daedalus", cfg);
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
 
         // Never installed. Uninstall must be a no-op, not crash.
         CHECK_NOTHROW(msgs.uninstall_crash_handlers());
@@ -1132,7 +1133,7 @@ TEST_SUITE("Save and Load") {
         auto proj = create_test_project();
         MessageCompressionConfig cfg;
         cfg.auto_flush_enabled = false;
-        Messages msgs(proj / ".daedalus", cfg);
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
 
         msgs.add_system("First save");
         msgs.add_user("Hello");
@@ -1183,7 +1184,7 @@ TEST_CASE("CRASH-4 fork: SIGABRT writes messages.json.crash"
 
 TEST_CASE("CRASH-5 load falls back to .crash when messages.json missing") {
     auto proj = create_test_project();
-    auto crash_path = proj / ".daedalus" / "messages.json.crash";
+    auto crash_path = proj / ".daedalus" / "daedalus" / "messages.json.crash";
 
     // Plant a valid .crash file; no messages.json.
     {
@@ -1193,7 +1194,7 @@ TEST_CASE("CRASH-5 load falls back to .crash when messages.json missing") {
 
     MessageCompressionConfig cfg;
     cfg.auto_flush_enabled = false;
-    Messages msgs(proj / ".daedalus", cfg);
+    Messages msgs(proj / ".daedalus" / "daedalus", cfg);
     CHECK(msgs.load());
     CHECK(msgs.size() == 2);
     CHECK(msgs.get_messages()[1]["content"] == "Hello");
@@ -1206,18 +1207,18 @@ TEST_CASE("CRASH-5 load falls back to .crash when messages.json corrupt") {
 
     // Plant a corrupt messages.json.
     {
-        std::ofstream f(proj / ".daedalus" / "messages.json", std::ios::binary);
+        std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json", std::ios::binary);
         f << "{ this is not valid JSON at all";
     }
     // Plant a valid .crash.
     {
-        std::ofstream f(proj / ".daedalus" / "messages.json.crash", std::ios::binary);
+        std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json.crash", std::ios::binary);
         f << R"([{"role":"system","content":"Recovered"}])";
     }
 
     MessageCompressionConfig cfg;
     cfg.auto_flush_enabled = false;
-    Messages msgs(proj / ".daedalus", cfg);
+    Messages msgs(proj / ".daedalus" / "daedalus", cfg);
     CHECK(msgs.load());
     CHECK(msgs.size() == 1);
 
@@ -1230,7 +1231,7 @@ TEST_CASE("CRASH-5 load drops corrupt last message and re-saves") {
     // Two valid messages + one corrupt last message (malformed tool
     // result — missing tool_call_id, classic cause of parser crash).
     {
-        std::ofstream f(proj / ".daedalus" / "messages.json.crash", std::ios::binary);
+        std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json.crash", std::ios::binary);
         f << R"([
             {"role":"system","content":"System"},
             {"role":"user","content":"Hello"},
@@ -1240,7 +1241,7 @@ TEST_CASE("CRASH-5 load drops corrupt last message and re-saves") {
 
     MessageCompressionConfig cfg;
     cfg.auto_flush_enabled = false;
-    Messages msgs(proj / ".daedalus", cfg);
+    Messages msgs(proj / ".daedalus" / "daedalus", cfg);
     CHECK(msgs.load());
     // Last message should have been dropped.
     CHECK(msgs.size() == 2);
@@ -1248,7 +1249,7 @@ TEST_CASE("CRASH-5 load drops corrupt last message and re-saves") {
 
     // messages.json should now contain the recovered chain so the
     // next launch goes through the normal load path.
-    CHECK(std::filesystem::exists(proj / ".daedalus" / "messages.json"));
+    CHECK(std::filesystem::exists(proj / ".daedalus" / "daedalus" / "messages.json"));
 
     cleanup_test_project(proj);
 }
@@ -1256,7 +1257,7 @@ TEST_CASE("CRASH-5 load drops corrupt last message and re-saves") {
 TEST_CASE("CRASH-5 load keeps messages when last is well-formed") {
     auto proj = create_test_project();
     {
-        std::ofstream f(proj / ".daedalus" / "messages.json.crash", std::ios::binary);
+        std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json.crash", std::ios::binary);
         f << R"([
             {"role":"system","content":"System"},
             {"role":"user","content":"Hello"}
@@ -1264,7 +1265,7 @@ TEST_CASE("CRASH-5 load keeps messages when last is well-formed") {
     }
     MessageCompressionConfig cfg;
     cfg.auto_flush_enabled = false;
-    Messages msgs(proj / ".daedalus", cfg);
+    Messages msgs(proj / ".daedalus" / "daedalus", cfg);
     CHECK(msgs.load());
     // Both messages kept (last is well-formed).
     CHECK(msgs.size() == 2);
@@ -1276,7 +1277,7 @@ TEST_CASE("CRASH-5 load returns false when no messages.json AND no .crash") {
     auto proj = create_test_project();
     MessageCompressionConfig cfg;
     cfg.auto_flush_enabled = false;
-    Messages msgs(proj / ".daedalus", cfg);
+    Messages msgs(proj / ".daedalus" / "daedalus", cfg);
     CHECK_FALSE(msgs.load());
     CHECK(msgs.size() == 0);
 

@@ -53,9 +53,13 @@ namespace ToolHandler {
     
     // Approval management
     void clear_session_approved_commands();
-    void load_persisted_approvals(const std::filesystem::path& project_path);
-    void clear_persisted_approvals(const std::filesystem::path& project_path);
-    void add_persisted_approval(const std::filesystem::path& project_path, const std::string& command);
+    void load_persisted_approvals(const std::filesystem::path& project_path,
+                                  std::string_view agent_name = {});
+    void clear_persisted_approvals(const std::filesystem::path& project_path,
+                                   std::string_view agent_name = {});
+    void add_persisted_approval(const std::filesystem::path& project_path,
+                                std::string_view agent_name,
+                                const std::string& command);
     bool matches_pattern(const std::string& command, const std::string& pattern);
     
     // Current working directory management

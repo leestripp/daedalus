@@ -330,53 +330,49 @@ table itself is non-negotiable — the library emits it as-is.
 
 ### 2.8 Reserved Agent Directories — **ALWAYS APPENDED** ✋
 
-This section is also **mandatory**. It tells the agent that the
-`.daedalus/` and `.daedalus-<id>/` folders in the project root are
-owned by the agent runtime (memory + session state) and must never
-be touched:
+This section is also **mandatory**. It tells the agent that all
+project-tier state lives under a single `.daedalus/` base directory,
+with non-hidden `daedalus/` (default) and `daedalus-<id>/` (namespaced)
+sub-folders:
 
 ```
 # Reserved Agent Directories (.daedalus*)
 
 The following directories in the project root are owned by the agent
 runtime. They are HIDDEN system folders — treat them with the same
-care as .git/.
+care as `.git/`.
 
 | Directory | Purpose |
 |-----------|---------|
-| .daedalus/       | Default agent's persistent state. Memory (everything you've
-                    learned about the project), session scratch, per-project
-                    config, skills cache. |
-| .daedalus-<id>/  | Per-agent / per-session state when the host namespaces
-                    agents (AgentConfig::agent_name). The contents are the
-                    same as .daedalus/. |
+| `.daedalus/` | Base directory for all agent runtime state. Do not touch. |
+| `.daedalus/daedalus/` | Default agent's persistent state. Memory, session scratch, per-project config, skills cache. |
+| `.daedalus/daedalus-<id>/` | Per-agent / per-session state when the host namespaces agents (`AgentConfig::agent_name`). The contents are the same as `.daedalus/daedalus/`. |
 
 NEVER:
-1. Delete any .daedalus* directory. Doing so wipes the agent's memory
-   and all session scratch — unrecoverable.
-2. Rename or move them.
-3. Edit files inside them directly with modify_file / edit_file_patch
-   / create_file unless the user has EXPLICITLY asked you to (and
-   even then, ask first).
+1. **Delete** any `.daedalus*` directory. Doing so wipes the agent's
+   memory and all session scratch — unrecoverable.
+2. **Rename** or **move** them.
+3. **Edit files inside them directly** with `modify_file` /
+   `edit_file_patch` / `create_file` unless the user has EXPLICITLY
+   asked you to (and even then, ask first).
 4. Include them in any "clean up junk directories" or "remove cruft"
    task. They are not junk.
 5. Suggest that the user delete them to "fix" a problem. They are not
    the cause of any problem you can observe.
 
 ALWAYS:
-1. Treat them as out-of-bounds during normal work — like a .git/
-   folder: read what's relevant via the agent's own tools
-   (memory_*, get_skill_context, etc.) and never touch the directory
-   tree directly.
+1. Treat them as **out-of-bounds** during normal work — like a
+   `.git/` folder: read what's relevant via the agent's own tools
+   (`memory_*`, `get_skill_context`, etc.) and never touch the
+   directory tree directly.
 2. If the user asks you to do something that would affect a
-   .daedalus* directory, stop and ask before doing it.
+   `.daedalus*` directory, **stop and ask** before doing it.
 ```
 
 **Why the library owns this.** Without the contract, a well-meaning
 "clean up junk directories" task will silently nuke the agent's
-memory and the user's session scratch state. The same reasoning
-applies to `~/.daedalus/` in the user's home (the legacy single-agent
-layout — see `docs/storage.md` for the path-resolution rules).
+memory and the user's session scratch state. See `docs/storage.md`
+for the path-resolution rules.
 
 **If you want to teach more.** You may add complementary *prose* in
 your `system_prompt` (e.g. "before deleting any directory, verify
@@ -432,18 +428,19 @@ single turn — that's a contract, not an accident.
 
 ## 4. MCP Server Discovery
 
-When `cfg.mcp_enabled = true`, daedalus reads the MCP server
-definition file (default: `~/.daedalus/mcp/servers.json`) and launches
-each server process. The tool names and schemas advertised in slots 3
-(MCP Servers) and 4 (Tool Definitions) come from the servers'
-`initialize` response — they are server-controlled. daedalus does not
-interpret or filter them; it just passes them through.
+When `cfg.mcp_enabled = true`, daedalus reads the MCP server registry
+from the SQLite `SettingsStore` (`$XDG_DATA_HOME/daedalus/daedalus.db`,
+overridable with `cfg.daedalus_home` or `$DAEDALUS_HOME`). Legacy
+`~/.daedalus/mcp/servers.json` is merged as a read fallback for one
+release cycle. The tool names and schemas advertised in slots 3 (MCP
+Servers) and 4 (Tool Definitions) come from the servers' `initialize`
+response — they are server-controlled. daedalus does not interpret or
+filter them; it just passes them through.
 
 To disable MCP entirely for a given Agent:
 
 ```cpp
 cfg.mcp_enabled = false;          // no MCP servers started
-cfg.mcp_servers_path.clear();    // also suppress the path
 ```
 
 ---

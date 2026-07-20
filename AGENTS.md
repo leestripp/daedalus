@@ -71,7 +71,7 @@ downloaded automatically by CMake into `build/_deps/` on first build.
 │   ├── library/                # Public API implementation (Agent, AgentImpl, paths)
 │   ├── core/                   # Core engine (FileIO, Logger, Messages, SettingsStore, ...)
 │   ├── api/                    # LLM HTTP client, SSE parser, HttpSession
-│   ├── tools/                  ~40 built-in tools (FileTool, BashTool, GitTool, ...)
+│   ├── tools/                  Core tools (BashTool, SkillTool, MemoryTool, UserTool, ...) and ToolFactory
 │   └── mcp/                    # MCP client/server manager and transports
 ├── demos/
 │   ├── daedalus-cli/           # Reference console REPL
@@ -90,7 +90,8 @@ downloaded automatically by CMake into `build/_deps/` on first build.
 | `src/library` | `Agent*.cpp`, `paths.cpp`, `project_paths.cpp`, ... | Public facade and PIMPL internals |
 | `src/core` | `SettingsStore.cpp`, `Messages.cpp`, `Logger.cpp`, `SystemPromptBuilder.cpp`, ... | Settings, persistence, logging, compression, thread pool, metrics |
 | `src/api` | `LLMClient.cpp`, `HttpSession.cpp` | Provider-agnostic HTTP/SSE chat client |
-| `src/tools` | `ToolFactory.cpp`, `FileTool.cpp`, `BashTool.cpp`, `NetworkTool.cpp`, ... | Built-in tool implementations |
+| `src/tools` | `ToolFactory.cpp`, `BashTool.cpp`, `SkillTool.cpp`, `MemoryTool.cpp`, ... | Core tool implementations registered by default |
+| `demos/example-tools` | `GitTool.cpp`, `NetworkTool.cpp`, `SearchTool.cpp`, `PDFTool.cpp`, `SystemInfoTool.cpp`, `BackgroundTool.cpp`, ... | Optional example / reference tool implementations |
 | `src/mcp` | `McpClient.cpp`, `McpServerManager.cpp`, `StdioMcpTransport.cpp`, `HttpMcpTransport.cpp` | MCP server integration |
 
 ## Build and test commands
@@ -246,17 +247,20 @@ daedalus uses a strict **two-tier** layout:
 
 - **User-tier data** → XDG-compliant paths under
   `$XDG_DATA_HOME/daedalus/`, `$XDG_CONFIG_HOME/daedalus/`, etc.
-- **Project-tier data** → `<project_root>/.daedalus[-<agent_name>]/`
+- **Project-tier data** → `<project_root>/.daedalus/daedalus[-<agent_name>]/`
 
-Never place project-specific memory or transcripts in the XDG user tier.
-`tests/test_two_tier_rule.cpp` enforces this.
+All project-specific state lives under a single hidden `.daedalus/`
+base, with non-hidden `daedalus/` (default) and `daedalus-<name>/`
+(namespaced) sub-folders. Never place project-specific memory or
+transcripts in the XDG user tier. `tests/test_two_tier_rule.cpp`
+enforces this.
 
 Key files:
 
 | File | Location | Purpose |
 |------|----------|---------|
 | `daedalus.db` | `$XDG_DATA_HOME/daedalus/daedalus.db` | SQLite settings (models, MCP servers, Serper key) |
-| `messages.json` | `<project>/.daedalus[-<name>]/messages.json` | Conversation transcript |
+| `messages.json` | `<project>/.daedalus/daedalus[-<name>]/messages.json` | Conversation transcript |
 | `messages.json.crash` | Same dir | Crash mirror written by signal handlers |
 | `memory/memory.sqlite` | Same dir | Long-term memory |
 

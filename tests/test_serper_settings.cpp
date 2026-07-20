@@ -46,7 +46,7 @@ std::string slurp(const std::filesystem::path& p) {
 // Find the project root by walking up from CWD.
 std::filesystem::path find_project_root() {
     constexpr int kMaxLevels = 8;
-    constexpr const char* kSentinel = "src/tools/SearchTool.cpp";
+    constexpr const char* kSentinel = "demos/example-tools/SearchTool.cpp";
     std::filesystem::path candidate = std::filesystem::current_path();
     for (int i = 0; i < kMaxLevels; ++i) {
         if (std::filesystem::exists(candidate / kSentinel)) {
@@ -73,7 +73,7 @@ TEST(searchtool_accepts_canonical_and_legacy_keys) {
         std::cerr << "SKIP: could not locate project root\n";
         return 0;
     }
-    auto path = root / "src" / "tools" / "SearchTool.cpp";
+    auto path = root / "demos" / "example-tools" / "SearchTool.cpp";
     if (!std::filesystem::exists(path)) {
         std::cerr << "SKIP: " << path << " not found\n";
         return 0;
@@ -91,7 +91,7 @@ TEST(searchtool_accepts_canonical_and_legacy_keys) {
 TEST(searchtool_error_message_mentions_serper_search) {
     auto root = find_project_root();
     if (root.empty()) return 0;
-    auto path = root / "src" / "tools" / "SearchTool.cpp";
+    auto path = root / "demos" / "example-tools" / "SearchTool.cpp";
     if (!std::filesystem::exists(path)) {
         std::cerr << "SKIP: " << path << " not found\n";
         return 0;

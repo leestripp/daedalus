@@ -1,4 +1,4 @@
-#include "tools/SystemInfoTool.h"
+#include "SystemInfoTool.h"
 #include "core/FileIO.h"
 
 #include <fstream>

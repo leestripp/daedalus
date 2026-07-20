@@ -134,7 +134,7 @@ static void test_memory_not_under_user_data()
 		fs::path user_data = fs::path{ "/tmp/xdg_two_tier_test/daedalus" }.lexically_normal();
 
 		// The memory dir's project-side ancestor must NOT equal user_data.
-		// i.e. `<project>/.daedalus[-<name>]/memory` is NOT under
+		// i.e. `<project>/.daedalus/daedalus[-<name>]/memory` is NOT under
 		// `/tmp/xdg_two_tier_test/daedalus/`.
 		assert( memdir != user_data );
 		// And: the canonicalised memory_dir() must NOT start with user_data.

@@ -304,7 +304,8 @@ inline CliArgs parse_cli_args(int argc, char* argv[]) {
 // Resolution order (highest priority first):
 //   1. <CLI flag override>      --system-prompt FILE  (if provided)
 //   2. <demo sidecar>           <exe-dir>/system_prompt.txt
-//   3. <per-project overlay>    <project_root>/.daedalus/system_prompt.txt
+//   3. <per-project overlay>
+//      <project_root>/.daedalus/daedalus/system_prompt.txt
 //      (concatenated AFTER the demo default — overrides win on conflict)
 //
 // Returns the merged text. Empty std::string if no source is found.
@@ -366,7 +367,7 @@ inline std::string resolve_system_prompt(
 
     // 3. Per-project overlay (appended; can override any demo setting).
     if (!project_root.empty()) {
-        fs::path overlay = project_root / ".daedalus" / "system_prompt.txt";
+        fs::path overlay = project_root / ".daedalus" / "daedalus" / "system_prompt.txt";
         if (fs::exists(overlay)) {
             std::ifstream f(overlay);
             if (f) {

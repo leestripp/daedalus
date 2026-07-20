@@ -1,17 +1,10 @@
 #include "tools/ToolFactory.h"
-#include "tools/FileTool.h"
 #include "tools/McpProxiedTool.h"
-#include "tools/SearchTool.h"
 #include "tools/UserTool.h"
 #include "tools/SetStatusTool.h"
-#include "tools/GitTool.h"
 #include "tools/BashTool.h"
-#include "tools/PDFTool.h"
 #include "tools/SkillTool.h"
 #include "tools/MemoryTool.h"
-#include "tools/SystemInfoTool.h"
-#include "tools/BackgroundTool.h"
-#include "tools/NetworkTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
 #include "core/ThreadPool.h"
@@ -36,46 +29,23 @@ void ToolFactory::register_tool(std::shared_ptr<BaseTool> tool) {
     }
 }
 void ToolFactory::initialize_tools() {
-    // File operation tools
-    register_tool(std::make_shared<ReadFileTool>());
-    register_tool(std::make_shared<ListDirectoryTool>());
-    register_tool(std::make_shared<CreateFileTool>());
-    register_tool(std::make_shared<CreateDirectoryTool>());
-    register_tool(std::make_shared<ModifyFileTool>());
-    register_tool(std::make_shared<EditFilePatchTool>());
-    register_tool(std::make_shared<DeleteFileTool>());
-    register_tool(std::make_shared<DeleteDirectoryTool>());
-    // PDF tools
-    register_tool(std::make_shared<ReadPDFTool>());
-    // MCP tools are NOT registered statically. They are populated dynamically
-    // by `refresh_mcp_tools()` (called from LLMClient) so each server's
-    // `tools/list` becomes one `McpProxiedTool` named `mcp__<server>__<tool>`.
-    // See Agent.md §18.
-    // Search tools
-    register_tool(std::make_shared<GrepSearchTool>());
-    register_tool(std::make_shared<ReadFileLinesTool>());
-    register_tool(std::make_shared<ReadFileHeadTool>());
-    register_tool(std::make_shared<ReadFileTailTool>());
-    register_tool(std::make_shared<ListDirectoryTreeTool>());
-    register_tool(std::make_shared<WikiSearchTool>());
-    register_tool(std::make_shared<SerperSearchTool>());
+    // §TOOL-TRIM (prompt.txt): the default tool surface is intentionally
+    // minimal. Only the tools required for a functional agent are
+    // registered here. File / git / search / pdf / system-info /
+    // background-process / network tools live in demos/example-tools/
+    // and are registered by hosts that need them.
+
     // User interaction tools
     register_tool(std::make_shared<TellUserTool>());
     register_tool(std::make_shared<CompressContextTool>());
     register_tool(std::make_shared<StopTool>());
+
     // §State Machine: agent-driven state transitions.
     register_tool(std::make_shared<SetStatusTool>());
-    // Git tools
-    register_tool(std::make_shared<GitStatusTool>());
-    register_tool(std::make_shared<GitBranchTool>());
-    register_tool(std::make_shared<GitCommitTool>());
-    register_tool(std::make_shared<GitAddTool>());
-    register_tool(std::make_shared<GitSwitchTool>());
-    register_tool(std::make_shared<GitDiffTool>());
-    register_tool(std::make_shared<GitPushTool>());
-    register_tool(std::make_shared<GitMergeTool>());
+
     // Bash tool
     register_tool(std::make_shared<BashTool>());
+
     // Skill tools
     register_tool(std::make_shared<DiscoverSkillsTool>());
     register_tool(std::make_shared<LoadSkillTool>());
@@ -83,28 +53,17 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<SearchSkillsTool>());
     register_tool(std::make_shared<DeactivateSkillTool>());
     register_tool(std::make_shared<GetSkillContextTool>());
+
     // Memory tools
     register_tool(std::make_shared<RememberTool>());
     register_tool(std::make_shared<ForgetTool>());
     register_tool(std::make_shared<MemoriesTool>());
     register_tool(std::make_shared<MemoryStatsTool>());
-    // System tools
-    register_tool(std::make_shared<SystemInfoTool>());
-    // Background process tool
-    register_tool(std::make_shared<BackgroundTool>());
-    // Network tool - HTTP/HTTPS via OmniNet (replaces Bash curl)
-    register_tool(std::make_shared<HttpRequestTool>());
-    // Network diagnostic tools - DNS / TCP / TLS
-    register_tool(std::make_shared<DnsLookupTool>());
-    register_tool(std::make_shared<TcpCheckTool>());
-    register_tool(std::make_shared<TlsInspectTool>());
-    // WebSocket tools - long-lived connections, shared registry
-    register_tool(std::make_shared<WebSocketConnectTool>());
-    register_tool(std::make_shared<WebSocketSendTool>());
-    register_tool(std::make_shared<WebSocketRecvTool>());
-    register_tool(std::make_shared<WebSocketCloseTool>());
-    // Navigation tool
-    // (removed NaviTool - no longer needed)
+
+    // MCP tools are NOT registered statically. They are populated dynamically
+    // by `refresh_mcp_tools()` (called from LLMClient) so each server's
+    // `tools/list` becomes one `McpProxiedTool` named `mcp__<server>__<tool>`.
+    // See Agent.md §18.
 }
 json ToolFactory::get_all_definitions() const {
     json definitions = json::array();

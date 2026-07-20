@@ -127,9 +127,9 @@ add_test(NAME phase15_typo_warning_tests
 
 # ============================================================================
 # §Phase 14.7 (Q2, decided YES): per-project system_prompt override.
-# Verifies that <project_root>/.daedalus/system_prompt.txt is read
-# during initialize() and appended to cfg.system_prompt (or used as-is
-# if cfg.system_prompt is empty). Missing/empty file = silent no-op.
+# Verifies that <project_root>/.daedalus/daedalus/system_prompt.txt is
+# read during initialize() and appended to cfg.system_prompt (or used
+# as-is if cfg.system_prompt is empty). Missing/empty file = silent no-op.
 # ============================================================================
 add_executable(daedalus_phase14_per_project_system_prompt_tests
     test_phase14_per_project_system_prompt.cpp
@@ -282,63 +282,6 @@ target_link_libraries(daedalus_http_session_tests PRIVATE
     pthread
 )
 add_test(NAME http_session_tests COMMAND daedalus_http_session_tests)
-
-# ============================================================================
-# EditFilePatchTool tests (C++23)
-# ============================================================================
-
-add_executable(daedalus_edit_file_patch_tests
-    test_edit_file_patch.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/ToolHandler.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/ToolFactory.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/FileTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/GitTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SystemInfoTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SkillTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SearchTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/MemoryTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/NetworkTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BackgroundTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/UserTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/PDFTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SessionMemory.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashChainer.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashPathChecker.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Subprocess.cpp
-)
-target_include_directories(daedalus_edit_file_patch_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/tools
-    ${CMAKE_SOURCE_DIR}/src/mcp
-    ${nlohmann_json_INCLUDE_DIR}
-    ${POPPLER_INCLUDE_DIRS}
-)
-target_link_libraries(daedalus_edit_file_patch_tests PRIVATE
-    daedalus
-    nlohmann_json::nlohmann_json
-
-    ${POPPLER_LIBRARIES}
-    pthread
-    OmniNet
-)
-add_test(NAME edit_file_patch_tests COMMAND daedalus_edit_file_patch_tests)
 
 # ============================================================================
 # CurlHandle tests were removed 2026-07-16 as part of §NOMORE-CURL.
@@ -561,13 +504,28 @@ target_include_directories(daedalus_bash_path_checker_tests PRIVATE
 )
 add_test(NAME bash_path_checker_tests COMMAND daedalus_bash_path_checker_tests)
 
+# BashTool background-mode integration test
+add_executable(daedalus_bash_background_tests
+    test_bash_background.cpp
+)
+target_include_directories(daedalus_bash_background_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/tools
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_bash_background_tests PRIVATE
+    daedalus
+    pthread
+    nlohmann_json::nlohmann_json
+)
+add_test(NAME bash_background_tests COMMAND daedalus_bash_background_tests)
+
 # Create SystemInfoTool test
 add_executable(daedalus_system_info_tests
     test_system_info.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SystemInfoTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/SystemInfoTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_system_info_tests PRIVATE
@@ -575,6 +533,7 @@ target_include_directories(daedalus_system_info_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/tools
     ${CMAKE_SOURCE_DIR}/src/api
+    ${CMAKE_SOURCE_DIR}/demos/example-tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_system_info_tests PRIVATE
@@ -680,15 +639,24 @@ add_test(NAME sink_events_tests COMMAND daedalus_sink_events_tests)
 # plus the ToolHandler → AgentSink routing. See test_tool_progress.cpp.
 add_executable(daedalus_tool_progress_tests
     test_tool_progress.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_tool_progress_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR}/src
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/tools
+    ${CMAKE_SOURCE_DIR}/demos/example-tools
+    ${CMAKE_SOURCE_DIR}/src/api
+    ${nlohmann_json_INCLUDE_DIR}
+    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src
 )
 target_link_libraries(daedalus_tool_progress_tests PRIVATE
     daedalus
+    nlohmann_json::nlohmann_json
+    OmniNet
     pthread
 )
 add_test(NAME tool_progress_tests COMMAND daedalus_tool_progress_tests)
@@ -735,6 +703,36 @@ target_link_libraries(daedalus_per_agent_home_tests PRIVATE
     pthread
 )
 add_test(NAME per_agent_home_tests COMMAND daedalus_per_agent_home_tests)
+
+# §MODEL-SWITCH: Agent::switch_model() clears conversation history and
+# reconfigures the LLMClient for the new model's endpoint/context size.
+add_executable(daedalus_switch_model_tests
+    test_switch_model.cpp
+)
+target_include_directories(daedalus_switch_model_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_switch_model_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME switch_model_tests COMMAND daedalus_switch_model_tests)
+
+# §CUSTOM-TOOLS: daedalus::BaseTool subclassing + Agent::register_tool().
+# Hermetic — no network; exercises the public API end-to-end.
+add_executable(daedalus_custom_tool_tests
+    test_custom_tool.cpp
+)
+target_include_directories(daedalus_custom_tool_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_custom_tool_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME custom_tool_tests COMMAND daedalus_custom_tool_tests)
 
 # Config / settings file location resolution (regression guard for the
 # recurring "settings.json vs config.json vs settings/settings.json"
@@ -944,22 +942,19 @@ add_executable(daedalus_tool_definitions_tests
     ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/ToolHandler.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/ToolFactory.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/FileTool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/BashTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/GitTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SystemInfoTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/GitTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/SystemInfoTool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/SkillTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SearchTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/SearchTool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/MemoryTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BackgroundTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/BackgroundTool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/UserTool.cpp
     ${CMAKE_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/PDFTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/NetworkTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/PDFTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/SessionMemory.cpp
@@ -978,6 +973,7 @@ target_include_directories(daedalus_tool_definitions_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src/api
     ${CMAKE_SOURCE_DIR}/src/tools
     ${CMAKE_SOURCE_DIR}/src/mcp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools
     ${nlohmann_json_INCLUDE_DIR}
     ${POPPLER_INCLUDE_DIRS}
 )
@@ -1011,12 +1007,13 @@ add_test(NAME omninet_smoke_tests COMMAND daedalus_omninet_smoke_tests)
 
 add_executable(daedalus_http_request_tests
     test_http_request.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/NetworkTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_http_request_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/demos/example-tools
 )
 target_link_libraries(daedalus_http_request_tests PRIVATE
     OmniNet
@@ -1031,12 +1028,13 @@ add_test(NAME http_request_tests COMMAND daedalus_http_request_tests)
 
 add_executable(daedalus_network_diagnostics_tests
     test_network_diagnostics.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/NetworkTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_network_diagnostics_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/demos/example-tools
 )
 target_link_libraries(daedalus_network_diagnostics_tests PRIVATE
     OmniNet
@@ -1051,12 +1049,13 @@ add_test(NAME network_diagnostics_tests COMMAND daedalus_network_diagnostics_tes
 
 add_executable(daedalus_websocket_tests
     test_websocket.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/NetworkTool.cpp
+    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
     ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_websocket_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src
+    ${CMAKE_SOURCE_DIR}/demos/example-tools
 )
 target_link_libraries(daedalus_websocket_tests PRIVATE
     OmniNet
@@ -1088,7 +1087,7 @@ add_test(NAME daedalus_api_tests COMMAND daedalus_api_tests)
 #   - is_valid_agent_name() rejects empty escape attempts
 #   - resolve_agent_dir() maps empty vs named correctly
 #   - Two Agents / same project / different names don't collide
-#   - Backward compat: empty agent_name → legacy .daedalus/ (no surprise)
+#   - empty agent_name → .daedalus/daedalus/ (no surprise)
 #   - Agent::initialize() throws std::invalid_argument on a bad name
 # ============================================================================
 
@@ -1264,9 +1263,6 @@ add_executable(daedalus_real_world_tools_tests
 )
 target_include_directories(daedalus_real_world_tools_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
 )
 target_link_libraries(daedalus_real_world_tools_tests PRIVATE
     daedalus

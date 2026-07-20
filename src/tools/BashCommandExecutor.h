@@ -1,7 +1,6 @@
 #pragma once
 
 #include <string>
-#include <functional>
 
 class FileIO;
 
@@ -43,19 +42,6 @@ public:
     static Result execute(const std::string& command, 
                           const std::string& base_dir,
                           int timeout_seconds = 60);
-    
-    /**
-     * Execute multiple chained commands
-     * 
-     * @param commands Vector of (operator, command) pairs
-     * @param base_dir Working directory
-     * @param timeout_seconds Max time per command
-     * @return Result with combined output from all commands
-     */
-    static Result execute_chained(
-        const std::vector<std::pair<std::string, std::string>>& commands,
-        const std::string& base_dir,
-        int timeout_seconds = 60);
     
     // Utility functions
     static std::string escape_shell_arg(const std::string& input);
