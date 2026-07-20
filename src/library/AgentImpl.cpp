@@ -19,6 +19,7 @@
 #include <stop_token>
 #include <utility>
 
+#include "daedalus/model_discovery.h"
 #include "daedalus/paths.h"
 #include "daedalus/settings.h"
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
@@ -771,6 +772,27 @@ std::string AgentImpl::library_version() noexcept
 #else
     return "v0.0.0";
 #endif
+}
+
+ModelDiscoveryResult AgentImpl::discover_models(
+    const std::string& model_name,
+    const std::filesystem::path& daedalus_home)
+{
+    std::optional<ModelConfig> cfg;
+    if (daedalus_home.empty()) {
+        cfg = SettingsStore::instance().get_model(model_name);
+    } else {
+        cfg = SettingsStore::for_home(daedalus_home).get_model(model_name);
+    }
+
+    if (!cfg) {
+        ModelDiscoveryResult result;
+        result.error_message =
+            "Model discovery failed: model '" + model_name + "' not found";
+        return result;
+    }
+
+    return daedalus::discover_models(*cfg);
 }
 
 bool AgentImpl::auto_approve() const noexcept

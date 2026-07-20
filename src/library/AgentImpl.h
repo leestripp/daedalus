@@ -26,6 +26,7 @@
 #include <nlohmann/json.hpp>
 
 #include "daedalus/AgentSink.h"
+#include "daedalus/model_discovery.h"
 #include "daedalus/types/AgentConfig.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
@@ -83,6 +84,9 @@ public:
     [[nodiscard]] ModelInfo              active_model() const noexcept;
     [[nodiscard]] bool                   auto_approve() const noexcept;
     static std::string     library_version() noexcept;
+    static ModelDiscoveryResult discover_models(
+        const std::string& model_name,
+        const std::filesystem::path& daedalus_home = {});
     nlohmann::json execute_tool(const std::string& name,
                                 const nlohmann::json& args);
 

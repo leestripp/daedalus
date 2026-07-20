@@ -169,6 +169,9 @@ inline void print_help(const char* program_name) {
     std::cout << "  --home DIR          Use DIR as the daedalus home\n";
     std::cout << "  --model NAME        Use model NAME from the SQLite settings store\n";
     std::cout << "  --model-list        List available models and exit\n";
+    std::cout << "  --discover-models NAME\n";
+    std::cout << "                      Query the provider's /v1/models endpoint for\n";
+    std::cout << "                      the configured model NAME and exit\n";
     std::cout << "  --agent-name NAME   Per-agent namespace for runtime state\n";
     std::cout << "  --threads N         Number of worker threads\n";
     std::cout << "  --stream            Enable SSE streaming (default)\n";
@@ -241,8 +244,10 @@ struct CliArgs {
     bool        no_memory           = false;
     bool        clear_memory_flag   = false;
     bool        model_list_only     = false;
+    bool        discover_models_only = false;
     bool        stream_enabled      = true;
     std::string model_override;
+    std::string discover_model_name;
     int         thread_count_override = 0;
     fs::path    target_path;
     fs::path    daedalus_home;
@@ -261,6 +266,13 @@ inline CliArgs parse_cli_args(int argc, char* argv[]) {
         else if (arg == "--no-memory")       args.no_memory = true;
         else if (arg == "--clear-memory")    args.clear_memory_flag = true;
         else if (arg == "--model-list")     args.model_list_only = true;
+        else if (arg == "--discover-models") {
+            if (i + 1 < argc) {
+                args.discover_models_only = true;
+                args.discover_model_name = argv[++i];
+            }
+            else { std::cerr << "Error: --discover-models requires a model name\n"; std::exit(1); }
+        }
         else if (arg == "--stream")          args.stream_enabled = true;
         else if (arg == "--no-stream")      args.stream_enabled = false;
         else if (arg == "--home") {

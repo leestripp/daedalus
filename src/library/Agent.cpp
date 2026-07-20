@@ -69,6 +69,13 @@ ModelInfo Agent::active_model() const noexcept { return impl_->active_model(); }
 bool        Agent::auto_approve() const noexcept { return impl_->auto_approve(); }
 std::string Agent::library_version() noexcept   { return detail::AgentImpl::library_version(); }
 
+ModelDiscoveryResult Agent::discover_models(
+    const std::string& model_name,
+    const std::filesystem::path& daedalus_home)
+{
+    return detail::AgentImpl::discover_models(model_name, daedalus_home);
+}
+
 nlohmann::json Agent::execute_tool(const std::string& name,
                                    const nlohmann::json& args)
 {

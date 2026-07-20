@@ -80,8 +80,10 @@ int main(int argc, char* argv[]) {
                       << "  model          Model name to use (must be configured)\n"
                       << "\n"
                       << "Options:\n"
-                      << "  --help, -h     Show this message and exit\n"
-                      << "  --version, -v  Show version\n"
+                      << "  --help, -h           Show this message and exit\n"
+                      << "  --version, -v        Show version\n"
+                      << "  --discover-models <name>  Query the provider's /v1/models endpoint\n"
+                      << "                            for the named configured model and exit\n"
                       << "\n"
                       << "Exit codes:\n"
                       << "  0   Validator approved within max_iters\n"
@@ -90,6 +92,23 @@ int main(int argc, char* argv[]) {
         }
         if (a == "--version" || a == "-v") {
             std::cout << "daedalus-manager (libdaedalus)\n";
+            return 0;
+        }
+        if (a == "--discover-models") {
+            if (i + 1 >= argc) {
+                std::cerr << "Error: --discover-models requires a model name\n";
+                return 1;
+            }
+            const std::string name = argv[++i];
+            auto result = daedalus::Agent::discover_models(
+                name, daedalus::Paths::global().user_data_root());
+            if (!result.success) {
+                std::cerr << "Error: " << result.error_message << "\n";
+                return 1;
+            }
+            for (const auto& m : result.models) {
+                std::cout << m.id << "\n";
+            }
             return 0;
         }
     }

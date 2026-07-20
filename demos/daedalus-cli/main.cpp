@@ -106,6 +106,24 @@ int main(int argc, char* argv[]) {
     }
 
     CliArgs args = parse_cli_args(argc, argv);
+
+    // §MODEL-DISCOVERY: short-circuit before constructing an Agent.
+    if (args.discover_models_only) {
+        fs::path home = args.daedalus_home;
+        if (home.empty()) {
+            home = daedalus::Paths::global().user_data_root();
+        }
+        auto result = daedalus::Agent::discover_models(args.discover_model_name, home);
+        if (!result.success) {
+            std::cerr << "Error: " << result.error_message << "\n";
+            return 1;
+        }
+        for (const auto& m : result.models) {
+            std::cout << m.id << "\n";
+        }
+        return 0;
+    }
+
     fs::path target_path = resolve_target_path(args.target_path);
 
     daedalus::AgentConfig cfg;

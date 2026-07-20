@@ -25,6 +25,7 @@
 #include <nlohmann/json.hpp>
 
 #include "daedalus/AgentSink.h"
+#include "daedalus/model_discovery.h"
 #include "daedalus/types/AgentConfig.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
@@ -142,6 +143,15 @@ public:
     /// @brief Library version (git hash or fallback "v0.0.0").
     ///        Useful for hosts that want to display the lib they link.
     static std::string library_version() noexcept;
+
+    /// @brief Discover models exposed by the provider for `model_name`.
+    ///
+    /// Looks up the model in the SettingsStore (using `daedalus_home` if
+    /// non-empty, otherwise the default store) and queries its
+    /// OpenAI-compatible `GET /v1/models` endpoint.
+    static ModelDiscoveryResult discover_models(
+        const std::string& model_name,
+        const std::filesystem::path& daedalus_home = {});
 
     /// @brief Execute a registered tool directly (without LLM involvement).
     nlohmann::json execute_tool(const std::string& name,

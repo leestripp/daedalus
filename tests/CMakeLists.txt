@@ -284,6 +284,21 @@ target_link_libraries(daedalus_http_session_tests PRIVATE
 add_test(NAME http_session_tests COMMAND daedalus_http_session_tests)
 
 # ============================================================================
+# Model discovery tests (provider-agnostic /v1/models discovery)
+# ============================================================================
+add_executable(daedalus_model_discovery_tests
+    test_model_discovery.cpp
+)
+target_include_directories(daedalus_model_discovery_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_model_discovery_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME model_discovery_tests COMMAND daedalus_model_discovery_tests)
+
+# ============================================================================
 # CurlHandle tests were removed 2026-07-16 as part of §NOMORE-CURL.
 # CurlHandle.h is gone; the libcurl easy-handle RAII wrapper is no
 # longer used. The OmniNet-backed HttpSession is the sole

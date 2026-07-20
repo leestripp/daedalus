@@ -20,6 +20,7 @@
 #include "http/HttpResponse.h"
 
 #include <daedalus/settings.h>
+#include <daedalus/Agent.h>
 
 namespace websse {
 using namespace OmniNet;
@@ -153,6 +154,40 @@ inline void register_settings_routes(HTTP::Server& server) {
         resp.setContentType("application/json");
         resp.setBody(json_ok({{"models", arr},
                               {"default", store.get_default_model_name()}}));
+    });
+
+    // GET /settings/models/discover?name=<model> — query the provider's
+    // /v1/models endpoint for the named configured model.
+    server.router().get("/settings/models/discover", [](const Req& req, Resp& resp) {
+        std::string name;
+        if (auto q = req.queryParameter("name"); q.has_value()) {
+            name = *q;
+        }
+        if (name.empty()) {
+            resp.setStatus(HTTP::StatusCode::BAD_REQUEST);
+            resp.setContentType("application/json");
+            resp.setBody(json_error("missing 'name' query parameter"));
+            return;
+        }
+        auto result = daedalus::Agent::discover_models(
+            name, daedalus::Paths::global().user_root());
+        if (!result.success) {
+            resp.setStatus(HTTP::StatusCode::BAD_GATEWAY);
+            resp.setContentType("application/json");
+            resp.setBody(json_error(result.error_message));
+            return;
+        }
+        json arr = json::array();
+        for (const auto& m : result.models) {
+            arr.push_back(json{
+                {"id", m.id},
+                {"owned_by", m.owned_by},
+                {"created", m.created}
+            });
+        }
+        resp.setStatus(HTTP::StatusCode::OK);
+        resp.setContentType("application/json");
+        resp.setBody(json_ok({{"models", arr}}));
     });
 
     // POST /settings/models — upsert a model.

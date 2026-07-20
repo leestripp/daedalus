@@ -286,6 +286,7 @@ set(LIBRARY_PUBLIC_SOURCES
 	src/library/default_paths.cpp
 	src/library/paths.cpp           # Plan.md Phase 1: XDG paths singleton
 	src/library/project_paths.cpp   # Plan.md Phase 1: per-project path resolver
+	src/library/model_discovery.cpp # Provider-agnostic /v1/models discovery
 )
 
 set(ALL_SOURCES

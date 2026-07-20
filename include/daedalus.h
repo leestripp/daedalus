@@ -11,3 +11,4 @@
 #pragma once
 
 #include "daedalus/Agent.h"
+#include "daedalus/model_discovery.h"
