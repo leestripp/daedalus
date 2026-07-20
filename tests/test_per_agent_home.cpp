@@ -35,8 +35,8 @@ fs::path make_temp_home(const std::string& tag) {
 
 // Build a minimal ModelConfig for testing.
 daedalus::ModelConfig make_model(const std::string& name,
-                                 const std::string& host,
-                                 const std::string& api_key) {
+                                 [[maybe_unused]] const std::string& host,
+                                 [[maybe_unused]] const std::string& api_key) {
     daedalus::ModelConfig m;
     m.name             = name;
     m.provider         = name + "-provider";

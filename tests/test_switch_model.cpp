@@ -48,7 +48,7 @@ daedalus::ProviderConfig make_provider(const std::string& name,
 }
 
 daedalus::ModelConfig make_model(const std::string& name,
-                                 const std::string& host,
+                                 [[maybe_unused]] const std::string& host,
                                  int max_context_size,
                                  const std::string& provider = "") {
     daedalus::ModelConfig m;
