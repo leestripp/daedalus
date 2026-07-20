@@ -182,7 +182,10 @@ inline void register_settings_routes(HTTP::Server& server) {
             arr.push_back(json{
                 {"id", m.id},
                 {"owned_by", m.owned_by},
-                {"created", m.created}
+                {"created", m.created},
+                {"context_length", m.context_length},
+                {"supports_vision", m.supports_vision},
+                {"supports_reasoning", m.supports_reasoning}
             });
         }
         resp.setStatus(HTTP::StatusCode::OK);

@@ -233,3 +233,38 @@ TEST_CASE("discover_models skips malformed entries without id") {
     REQUIRE(result.models.size() == 1);
     CHECK(result.models[0].id == "good-model");
 }
+
+TEST_CASE("discover_models parses extended capability fields") {
+    LocalServer srv(R"({
+        "object": "list",
+        "data": [
+            {
+                "id": "kimi-k2.5",
+                "object": "model",
+                "created": 1780272000,
+                "owned_by": "moonshot",
+                "context_length": 256000,
+                "supports_image_in": true,
+                "supports_video_in": false,
+                "supports_reasoning": true
+            },
+            {
+                "id": "gpt-4o",
+                "object": "model",
+                "created": 1780272001,
+                "owned_by": "openai"
+            }
+        ]
+    })");
+
+    auto result = daedalus::discover_models(srv.url(), "test-key");
+
+    REQUIRE(result.success);
+    REQUIRE(result.models.size() == 2);
+    CHECK(result.models[0].context_length == 256000);
+    CHECK(result.models[0].supports_vision == true);
+    CHECK(result.models[0].supports_reasoning == true);
+    CHECK(result.models[1].context_length == 0);
+    CHECK(result.models[1].supports_vision == false);
+    CHECK(result.models[1].supports_reasoning == false);
+}

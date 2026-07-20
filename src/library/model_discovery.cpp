@@ -98,6 +98,24 @@ ModelDiscoveryResult discover_models(std::string_view host,
             if (item.contains("created") && item["created"].is_number()) {
                 model.created = item["created"].get<std::int64_t>();
             }
+            if (item.contains("context_length") && item["context_length"].is_number()) {
+                model.context_length = item["context_length"].get<std::int64_t>();
+            }
+
+            // Kimi returns separate image/video flags; treat either as vision.
+            if (item.contains("supports_image_in") && item["supports_image_in"].is_boolean()) {
+                model.supports_vision = model.supports_vision || item["supports_image_in"].get<bool>();
+            }
+            if (item.contains("supports_video_in") && item["supports_video_in"].is_boolean()) {
+                model.supports_vision = model.supports_vision || item["supports_video_in"].get<bool>();
+            }
+            // Some providers use a generic vision flag.
+            if (item.contains("supports_vision") && item["supports_vision"].is_boolean()) {
+                model.supports_vision = model.supports_vision || item["supports_vision"].get<bool>();
+            }
+            if (item.contains("supports_reasoning") && item["supports_reasoning"].is_boolean()) {
+                model.supports_reasoning = item["supports_reasoning"].get<bool>();
+            }
 
             if (!model.id.empty()) {
                 result.models.push_back(std::move(model));
