@@ -382,6 +382,26 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     to   { opacity: 1; transform: translateY(0);   }
   }
 
+  /* §webui-tool-display: inline tool log in the transcript.
+     Human-readable header/result/separator emitted by on_tool_display.
+     Distinct from chat cards but still part of the conversation flow. */
+  .tool-log {
+    margin: 8px 0;
+    padding: 8px 10px;
+    background: #0d1117;
+    border: 1px solid #2a2f36;
+    border-left: 3px solid #58a6ff;
+    border-radius: 0 6px 6px 0;
+    animation: msg-card-in 200ms ease-out;
+  }
+  .tool-log pre {
+    margin: 0;
+    font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace;
+    color: #8b949e;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
   /* §webui-approval: modal dialog for bash command approval */
   #approval-modal {
     position: fixed; inset: 0; z-index: 100;
@@ -860,6 +880,24 @@ function finalizeAgentCard() {
   currentAgentCard = null;
 }
 
+function appendToolLog(text) {
+  // §webui-tool-display: suppress internal set_status churn and bare
+  // separator lines in the transcript. The structured side panel still
+  // shows every tool call; the inline stream is meant for the user,
+  // not the framework's state machine bookkeeping.
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  if (trimmed.includes("set_status")) return;
+  if (/^[\u2500]+$/.test(trimmed)) return;
+  const wrap = document.createElement("div");
+  wrap.className = "tool-log";
+  const pre = document.createElement("pre");
+  pre.textContent = text;
+  wrap.appendChild(pre);
+  transcriptEl.appendChild(wrap);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
 function appendLog(level, msg) {
   if (logEl.querySelector(".empty")) logEl.innerHTML = "";
   const cls = level === "Warn"  ? "warn"
@@ -1171,6 +1209,12 @@ function openEventStream() {
   es.addEventListener("assistant_end", () => {
     finalizeAgentCard();
     currentDelta = null;
+  });
+  // §webui-tool-display: render human-readable tool header/result/separator
+  // inline in the transcript so tool-only turns are not blank.
+  es.addEventListener("tool_display", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.text) appendToolLog(d.text);
   });
   // §webui-approval: the backend is blocked waiting for the user to
   // approve or deny this bash command. Show the modal and let the user
