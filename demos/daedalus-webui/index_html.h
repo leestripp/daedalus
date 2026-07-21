@@ -1917,7 +1917,9 @@ $("provider-form").addEventListener("submit", async (ev) => {
 });
 
 async function deleteProvider(name) {
-  if (!confirm("Delete provider '" + name + "'? Models referencing it will no longer resolve.")) return;
+  // §webui-provider-delete: deleting a provider now cascades to any
+  // models that reference it, so warn the user before proceeding.
+  if (!confirm("Delete provider '" + name + "'?\n\nAny models that use this provider will also be removed.")) return;
   try {
     const r = await fetch("/settings/providers/" + encodeURIComponent(name), { method: "DELETE" });
     const j = await r.json();

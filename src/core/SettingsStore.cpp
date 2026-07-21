@@ -627,10 +627,27 @@ void SettingsStore::upsert_provider(const ProviderConfig& p)
 
 void SettingsStore::delete_provider(std::string_view name)
 {
-    exec_prepared(
-        *db_,
-        "DELETE FROM providers WHERE name = ?",
-        std::string(name));
+    if (!db_) return;
+
+    // §webui-provider-delete: providers are referenced by models via a
+    // foreign key. SQLite in this build enforces that key, so deleting a
+    // provider that still has models silently fails. Cascade the delete by
+    // removing the dependent models first, then the provider.
+    db_->transaction([this, name]() {
+        auto stmt = db_->prepare("SELECT name FROM models WHERE provider = ?");
+        stmt.bind(1, std::string(name));
+        std::vector<std::string> dependent_models;
+        while (stmt.step()) {
+            dependent_models.push_back(stmt.columnText(0));
+        }
+        for (const auto& model_name : dependent_models) {
+            delete_model(model_name);
+        }
+        exec_prepared(
+            *db_,
+            "DELETE FROM providers WHERE name = ?",
+            std::string(name));
+    });
 }
 
 void SettingsStore::upsert_model(const ModelConfig& m)
