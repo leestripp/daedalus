@@ -307,6 +307,81 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   }
   .tool-card-collapse:hover { background: #1f6feb22; }
 
+  /* === Chat message cards ========================================= */
+  .msg-card {
+    max-width: 88%;
+    margin: 10px 0;
+    padding: 10px 12px;
+    border-radius: 14px;
+    animation: msg-card-in 220ms ease-out;
+  }
+  .msg-card.user {
+    margin-left: auto;
+    background: #1f6feb22;
+    border: 1px solid #1f6feb;
+  }
+  .msg-card.agent {
+    margin-right: auto;
+    background: #161b22;
+    border: 1px solid #2a2f36;
+  }
+  .msg-card .meta {
+    font-size: 11px; font-weight: 600;
+    color: #8b949e;
+    margin-bottom: 4px;
+  }
+  .msg-card.user .meta { color: #58a6ff; }
+  .msg-card.agent .meta { color: #56d364; }
+  .msg-card .content {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #d6d9dc;
+  }
+  @keyframes msg-card-in {
+    from { opacity: 0; transform: translateY(6px) scale(0.98); }
+    to   { opacity: 1; transform: translateY(0)   scale(1);   }
+  }
+
+  /* Collapsible thinking block inside agent cards */
+  .thinking-block {
+    margin: 0 0 10px;
+    border: 1px dashed #2a2f36;
+    border-radius: 8px;
+    background: #0d1117;
+    overflow: hidden;
+  }
+  .thinking-block summary {
+    padding: 5px 9px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #8b949e;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+  .thinking-block summary::-webkit-details-marker { display: none; }
+  .thinking-block summary::before {
+    content: "▸ ";
+    display: inline-block;
+    transition: transform 160ms ease;
+  }
+  .thinking-block[open] > summary::before {
+    transform: rotate(90deg);
+  }
+  .thinking-block .thinking-body {
+    padding: 0 9px 8px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: #8b949e;
+    white-space: pre-wrap;
+    word-break: break-word;
+    animation: thinking-reveal 220ms ease-out;
+  }
+  @keyframes thinking-reveal {
+    from { opacity: 0; transform: translateY(-4px); }
+    to   { opacity: 1; transform: translateY(0);   }
+  }
+
   /* §webui-approval: modal dialog for bash command approval */
   #approval-modal {
     position: fixed; inset: 0; z-index: 100;
@@ -661,6 +736,7 @@ const approvalDenyBtn    = $("approval-deny");
 let sessionId = null;
 let es = null;
 let currentDelta = null;
+let currentAgentCard = null;
 let statsInterval = null;
 // §webui-init: message typed before the session is ready is buffered
 // and submitted as soon as POST /sessions resolves.
@@ -690,6 +766,100 @@ function append(el, html, cls) {
 function escapeHtml(s) {
   return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
+
+// Build a user message card and add it to the transcript.
+function appendUserCard(text) {
+  const card = document.createElement("div");
+  card.className = "msg-card user";
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = "You";
+  const content = document.createElement("div");
+  content.className = "content";
+  content.textContent = text;
+  card.appendChild(meta);
+  card.appendChild(content);
+  transcriptEl.appendChild(card);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+// Create a fresh agent card for the current assistant response.
+// Streaming text is accumulated into the card's raw buffer and rendered
+// when the turn ends so <think>...</think> blocks can be extracted.
+function ensureAgentCard() {
+  if (currentAgentCard) return currentAgentCard;
+  const card = document.createElement("div");
+  card.className = "msg-card agent";
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = "Agent";
+  const body = document.createElement("div");
+  body.className = "agent-body";
+  const content = document.createElement("div");
+  content.className = "content";
+  body.appendChild(content);
+  card.appendChild(meta);
+  card.appendChild(body);
+  transcriptEl.appendChild(card);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  currentAgentCard = { card, body, content, raw: "" };
+  return currentAgentCard;
+}
+
+// Parse <think>...</think> out of the agent's raw text and render the
+// card with the thinking collapsed at the top and the answer below.
+function finalizeAgentCard() {
+  if (!currentAgentCard) return;
+  const raw = currentAgentCard.raw;
+  const card = currentAgentCard.card;
+  const body = currentAgentCard.body;
+  body.innerHTML = "";
+
+  let thinking = "";
+  let answer = raw;
+  const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
+  const thoughts = [];
+  let m;
+  while ((m = thinkRegex.exec(raw)) !== null) {
+    thoughts.push(m[1].trim());
+  }
+  if (thoughts.length) {
+    thinking = thoughts.join("\n\n");
+    answer = raw.replace(thinkRegex, "").trim();
+  }
+
+  // Strip any stray think tags that leaked out of the structured block
+  // (e.g. a lone "</think>" left behind by reasoning splitting).
+  answer = answer.replace(/<\/?think\s*\/?>/gi, "").trim();
+
+  // If there's nothing meaningful to show, drop the empty card.
+  if (!thinking && !answer) {
+    card.remove();
+    currentAgentCard = null;
+    return;
+  }
+
+  if (thinking) {
+    const details = document.createElement("details");
+    details.className = "thinking-block";
+    const summary = document.createElement("summary");
+    summary.textContent = "Thinking (" + thoughts.length + ")";
+    const tb = document.createElement("div");
+    tb.className = "thinking-body";
+    tb.textContent = thinking;
+    details.appendChild(summary);
+    details.appendChild(tb);
+    body.appendChild(details);
+  }
+
+  const content = document.createElement("div");
+  content.className = "content";
+  content.textContent = answer;
+  body.appendChild(content);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+  currentAgentCard = null;
+}
+
 function appendLog(level, msg) {
   if (logEl.querySelector(".empty")) logEl.innerHTML = "";
   const cls = level === "Warn"  ? "warn"
@@ -874,6 +1044,8 @@ function newSession() {
   if (es) { es.close(); es = null; }
   stopStatsPolling();
   transcriptEl.innerHTML = "";
+  currentDelta = null;
+  currentAgentCard = null;
   toolsEl.innerHTML      = '<span class="empty">No tool calls yet.</span>';
   logEl.innerHTML        = '<span class="empty">No events yet.</span>';
   inputEl.value = "";
@@ -991,11 +1163,15 @@ function openEventStream() {
     // the scroll moves).
     hideThinkingBubble();
     const d = JSON.parse(e.data);
-    if (!currentDelta) currentDelta = append(transcriptEl, "", "delta");
-    currentDelta.textContent = (currentDelta.textContent || "") + d.text;
+    const agent = ensureAgentCard();
+    agent.raw += d.text || "";
+    agent.content.textContent = agent.raw;
     transcriptEl.scrollTop = transcriptEl.scrollHeight;
   });
-  es.addEventListener("assistant_end", () => { currentDelta = null; });
+  es.addEventListener("assistant_end", () => {
+    finalizeAgentCard();
+    currentDelta = null;
+  });
   // §webui-approval: the backend is blocked waiting for the user to
   // approve or deny this bash command. Show the modal and let the user
   // POST a decision back to /sessions/<id>/approve.
@@ -1265,7 +1441,7 @@ document.getElementById("composer").addEventListener("submit", (ev) => {
   if (!text) return;
   inputEl.value = "";
   inputEl.style.height = "auto";
-  append(transcriptEl, "› " + escapeHtml(text), "log");
+  appendUserCard(text);
 
   // §webui-init: if the session is still being created, buffer this
   // message and submit it as soon as POST /sessions resolves. The UI
