@@ -253,6 +253,30 @@ Then talk to it from another shell:
 /a2a-stream "hello"
 ```
 
+## SDK smoke test
+
+A Python SDK-based smoke test lives under `scripts/` and exercises the server against the official Google A2A Python SDK:
+
+- `scripts/run_a2a_smoke_test.sh` — starts a temporary `daedalus-cli --a2a-server`, discovers its ephemeral port, and runs `scripts/test_a2a_sdk.py`.
+- `scripts/test_a2a_sdk.py` — creates an SDK client, calls `send_message`, `send_streaming_message`, and `subscribe_to_task`.
+
+Set up the venv once:
+
+```bash
+uv venv scripts/.venv
+uv pip install --python scripts/.venv/bin/python a2a-sdk
+```
+
+Then run it through CMake:
+
+```bash
+cmake --build build --target a2a_smoke_test
+```
+
+The target builds `daedalus-cli`, starts the server on a random free port, and asserts that the SDK can resolve the card, send messages, stream events, and subscribe to a task.
+
+> **Note:** The tester builds the AgentCard in memory rather than resolving `/.well-known/agent-card.json`, because daedalus currently emits the field names from an earlier A2A draft (`preferredTransport`/`additionalInterfaces`) while the current SDK expects `supported_interfaces`/`protocol_binding`.
+
 ## Service parameters
 
 The client sends the `A2A-Version` header on every request. Servers interpret an empty/missing value as version `0.3` and a present value (e.g. `1.0`) as the requested protocol version, returning `VersionNotSupportedError` if they cannot honour it.
