@@ -56,13 +56,18 @@ int main() {
     ScratchDir dir_b("multi_b");
 
     // ---- Two Agents, both without LLM credentials (no network) ----
+    // §MCP-RACE: keep this test hermetic — do not load MCP servers from
+    // the user's real daedalus.db. That avoids forking uvx/uv subprocesses
+    // and a known setpgid/killpg race on rapid shutdown.
     daedalus::AgentConfig cfg_a;
     cfg_a.project_root = dir_a.path;
     cfg_a.session_id   = "agent-A";
+    cfg_a.mcp_enabled  = false;
 
     daedalus::AgentConfig cfg_b;
     cfg_b.project_root = dir_b.path;
     cfg_b.session_id   = "agent-B";
+    cfg_b.mcp_enabled  = false;
 
     daedalus::Agent agent_a(std::move(cfg_a), nullptr);
     daedalus::Agent agent_b(std::move(cfg_b), nullptr);

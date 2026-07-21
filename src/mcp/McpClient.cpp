@@ -16,6 +16,7 @@
 #include <string>
 #include <map>
 #include <functional>
+#include <thread>
 #include <nlohmann/json.hpp>
 
 #include "core/Logger.h"
@@ -229,6 +230,21 @@ bool McpClient::connect(const std::string& command,
     // puts itself in its own process group (setpgid(0, 0) above), so
     // killpg() in disconnect() can only ever hit the server's tree,
     // never the agent's own process group.
+    //
+    // §MCP-RACE: the child may not have completed setpgid() by the time
+    // we return. Wait briefly until the child's process group differs
+    // from ours before declaring the connection ready. This prevents a
+    // very early disconnect() from calling killpg() on the host's group.
+    {
+        pid_t my_pgrp = getpgid(0);
+        for (int i = 0; i < 50; ++i) {
+            pid_t child_pgrp = getpgid(pid);
+            if (child_pgrp > 0 && child_pgrp != my_pgrp) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
 
     connected_ = true;
 
@@ -241,8 +257,12 @@ void McpClient::disconnect() {
             // §9.7.A — killpg first (covers all descendants), then
             // SIGKILL after a 2 s cap. The waitpid is non-blocking so
             // we don't hang on a zombie we can't reap.
+            pid_t my_pgrp = getpgid(0);
             pid_t pgrp = getpgid(pipes_->child_pid);
-            if (pgrp > 0) {
+            // §MCP-RACE: if the child has not yet moved to its own process
+            // group, do NOT call killpg() — that would signal the host's
+            // group. Fall back to killing the single child PID instead.
+            if (pgrp > 0 && pgrp != my_pgrp) {
                 killpg(pgrp, SIGTERM);
             } else {
                 kill(pipes_->child_pid, SIGTERM);
@@ -254,9 +274,9 @@ void McpClient::disconnect() {
                 if (r == pipes_->child_pid || r == -1) break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
-            // If still alive, SIGKILL.
+            // If still alive, SIGKILL (again guarding the group path).
             if (kill(pipes_->child_pid, 0) == 0) {
-                if (pgrp > 0) killpg(pgrp, SIGKILL);
+                if (pgrp > 0 && pgrp != my_pgrp) killpg(pgrp, SIGKILL);
                 else kill(pipes_->child_pid, SIGKILL);
                 waitpid(pipes_->child_pid, &status, 0);
             }
