@@ -142,13 +142,14 @@ struct TaskArtifactUpdateEvent {
 struct AgentInterface {
     std::string url;
     std::string transport;
+    std::string protocol_version;
     std::optional<std::string> tenant;
 };
 
 struct AgentCapabilities {
     std::optional<bool> streaming;
     std::optional<bool> push_notifications;
-    std::optional<bool> state_transition_history;
+    std::optional<bool> extended_agent_card;
     std::vector<nlohmann::json> extensions;  ///< AgentExtension objects
 };
 
@@ -163,12 +164,9 @@ struct AgentSkill {
 };
 
 struct AgentCard {
-    std::string protocol_version;
     std::string name;
     std::string description;
-    std::string url;
-    std::string preferred_transport;
-    std::vector<AgentInterface> additional_interfaces;
+    std::vector<AgentInterface> supported_interfaces;
     nlohmann::json provider = nullptr;  ///< AgentProvider object
     std::string version;
     std::optional<std::string> documentation_url;
@@ -178,7 +176,6 @@ struct AgentCard {
     std::vector<std::string> default_input_modes;
     std::vector<std::string> default_output_modes;
     std::vector<AgentSkill> skills;
-    bool supports_authenticated_extended_card = false;
     nlohmann::json signatures = nullptr;
     std::optional<std::string> icon_url;
 };

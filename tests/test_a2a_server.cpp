@@ -23,12 +23,14 @@ class CannedBackend : public a2a::IA2aTaskBackend {
 public:
     [[nodiscard]] a2a::AgentCard get_agent_card() const override {
         a2a::AgentCard c;
-        c.protocol_version = "1.0";
         c.name = "Canned Agent";
         c.description = "Test backend";
-        c.url = "http://127.0.0.1:1/v1";
-        c.preferred_transport = "HTTP+JSON";
         c.version = "1.0.0";
+        a2a::AgentInterface iface;
+        iface.url = "http://127.0.0.1:1/v1";
+        iface.transport = "HTTP+JSON";
+        iface.protocol_version = "1.0";
+        c.supported_interfaces.push_back(std::move(iface));
         c.capabilities.streaming = true;
         c.default_input_modes = {"text/plain"};
         c.default_output_modes = {"text/plain"};

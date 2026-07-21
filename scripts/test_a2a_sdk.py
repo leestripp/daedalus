@@ -23,6 +23,7 @@ import sys
 
 import a2a.types.a2a_pb2 as a2a_pb2
 import httpx
+from a2a.client.card_resolver import A2ACardResolver
 from a2a.client.client import ClientConfig
 from a2a.client.client_factory import create_client
 
@@ -41,28 +42,11 @@ def text_part(text: str) -> a2a_pb2.Part:
 
 
 async def build_client(base_url: str):
-    """Create an SDK client pointing at the daedalus A2A HTTP+JSON endpoint.
-
-    We build the AgentCard in memory rather than resolving the server's
-    /.well-known/agent-card.json, because the daedalus card uses the field
-    names from an earlier A2A draft (preferredTransport/additionalInterfaces)
-    while the current SDK expects supported_interfaces/protocol_binding.
-    """
-    card = a2a_pb2.AgentCard()
-    card.name = "daedalus A2A test target"
-    card.description = "Target server under test"
-    card.version = "1.0.0"
-    card.default_input_modes.append("text/plain")
-    card.default_output_modes.append("text/plain")
-    card.capabilities.streaming = True
-
-    iface = card.supported_interfaces.add()
-    iface.url = base_url + "/v1"
-    iface.protocol_binding = "HTTP+JSON"
-    iface.protocol_version = "1.0"
-
+    """Resolve the server's AgentCard and create an A2A SDK client."""
     timeout = httpx.Timeout(300.0, connect=10.0)
     http_client = httpx.AsyncClient(timeout=timeout)
+    resolver = A2ACardResolver(http_client, base_url)
+    card = await resolver.get_agent_card()
     config = ClientConfig(
         streaming=True,
         supported_protocol_bindings=["HTTP+JSON"],
@@ -72,7 +56,7 @@ async def build_client(base_url: str):
     return client, card
 
 
-async def test_send_message(client: Client, base_url: str) -> None:
+async def test_send_message(client: Client) -> str | None:
     print("\n--- send_message (non-streaming) ---")
     req = a2a_pb2.SendMessageRequest()
     req.message.CopyFrom(make_text_message("Hello from the A2A Python SDK"))
@@ -98,8 +82,9 @@ async def test_send_message(client: Client, base_url: str) -> None:
                 for part in art.parts:
                     if part.text:
                         print(f"artifact text: {part.text!r}")
-    else:
-        print("no final task event received")
+        return final_task.id
+    print("no final task event received")
+    return None
 
 
 async def test_streaming_message(client: Client) -> None:
@@ -142,7 +127,6 @@ async def test_subscribe(client: Client, task_id: str) -> None:
 async def main() -> int:
     parser = argparse.ArgumentParser(description="Smoke-test a daedalus A2A server")
     parser.add_argument("url", help="Base URL of the A2A server (e.g. http://127.0.0.1:8000)")
-    parser.add_argument("--task-id", default="task-123", help="Task ID for subscribe test")
     args = parser.parse_args()
 
     base_url = args.url.rstrip("/")
@@ -159,9 +143,12 @@ async def main() -> int:
     print(f"Version: {card.version}")
     print(f"Streaming: {card.capabilities.streaming}")
 
-    await test_send_message(client, base_url)
+    task_id = await test_send_message(client)
     await test_streaming_message(client)
-    await test_subscribe(client, args.task_id)
+    if task_id:
+        await test_subscribe(client, task_id)
+    else:
+        print("\n--- subscribe_to_task skipped (no task id) ---")
 
     await client.close()
     return 0

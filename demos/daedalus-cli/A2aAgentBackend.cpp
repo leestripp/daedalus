@@ -118,16 +118,14 @@ void A2aAgentBackend::set_base_url(std::string url) {
 
 a2a::AgentCard A2aAgentBackend::get_agent_card() const {
     a2a::AgentCard c;
-    c.protocol_version = "1.0";
     c.name = name_;
     c.description = description_;
-    c.url = base_url_;
-    c.preferred_transport = "HTTP+JSON";
     c.version = "1.0.0";
     a2a::AgentInterface iface;
-    iface.url = base_url_;
+    iface.url = base_url_ + "/v1";
     iface.transport = "HTTP+JSON";
-    c.additional_interfaces.push_back(std::move(iface));
+    iface.protocol_version = "1.0";
+    c.supported_interfaces.push_back(std::move(iface));
     c.capabilities.streaming = true;
     c.default_input_modes = {"text/plain"};
     c.default_output_modes = {"text/plain"};

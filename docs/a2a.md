@@ -42,19 +42,20 @@ Example:
 
 ```json
 {
-  "protocolVersion": "1.0",
   "name": "daedalus-coder",
   "description": "A daedalus-powered coding agent",
-  "url": "https://coder.example.com/v1",
-  "preferredTransport": "HTTP+JSON",
-  "additionalInterfaces": [
-    {"url": "https://coder.example.com/v1", "transport": "HTTP+JSON"}
+  "supportedInterfaces": [
+    {
+      "url": "https://coder.example.com/v1",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+    }
   ],
   "version": "1.0.0",
   "capabilities": {
     "streaming": true,
     "pushNotifications": false,
-    "stateTransitionHistory": false
+    "extendedAgentCard": false
   },
   "defaultInputModes": ["text/plain"],
   "defaultOutputModes": ["text/plain"],
@@ -275,7 +276,7 @@ cmake --build build --target a2a_smoke_test
 
 The target builds `daedalus-cli`, starts the server on a random free port, and asserts that the SDK can resolve the card, send messages, stream events, and subscribe to a task.
 
-> **Note:** The tester builds the AgentCard in memory rather than resolving `/.well-known/agent-card.json`, because daedalus currently emits the field names from an earlier A2A draft (`preferredTransport`/`additionalInterfaces`) while the current SDK expects `supported_interfaces`/`protocol_binding`.
+> **Note:** The tester resolves the AgentCard from `/.well-known/agent-card.json` using the SDK's card resolver. The daedalus card now uses the A2A 1.0 field names (`supportedInterfaces`, `protocolBinding`, `protocolVersion`).
 
 ## Service parameters
 

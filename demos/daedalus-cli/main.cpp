@@ -540,8 +540,7 @@ int main(int argc, char* argv[]) {
                 std::cout << "[A2A] Agent Card: " << result->name << "\n"
                           << "  version: " << result->version << "\n"
                           << "  description: " << result->description << "\n"
-                          << "  url: " << result->url << "\n"
-                          << "  interfaces: " << result->additional_interfaces.size() << "\n";
+                          << "  interfaces: " << result->supported_interfaces.size() << "\n";
                 continue;
             }
             if (line.rfind("/a2a-send ", 0) == 0) {

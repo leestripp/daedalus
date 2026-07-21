@@ -167,6 +167,7 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
     json j;
     j["url"] = i.url;
     j["protocolBinding"] = i.transport;  // Protobuf/ProtoJSON field name
+    if (!i.protocol_version.empty()) j["protocolVersion"] = i.protocol_version;
     if (i.tenant) j["tenant"] = *i.tenant;
     return j;
 }
@@ -175,7 +176,7 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
     json j;
     if (c.streaming.has_value()) j["streaming"] = *c.streaming;
     if (c.push_notifications.has_value()) j["pushNotifications"] = *c.push_notifications;
-    if (c.state_transition_history.has_value()) j["stateTransitionHistory"] = *c.state_transition_history;
+    if (c.extended_agent_card.has_value()) j["extendedAgentCard"] = *c.extended_agent_card;
     if (!c.extensions.empty()) j["extensions"] = c.extensions;
     return j;
 }
@@ -194,14 +195,11 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 
 [[nodiscard]] inline json to_json(const AgentCard& c) {
     json j;
-    j["protocolVersion"] = c.protocol_version;
     j["name"] = c.name;
     j["description"] = c.description;
-    j["url"] = c.url;
-    j["preferredTransport"] = c.preferred_transport;
-    if (!c.additional_interfaces.empty()) {
+    if (!c.supported_interfaces.empty()) {
         j["supportedInterfaces"] = json::array();
-        for (const auto& i : c.additional_interfaces) j["supportedInterfaces"].push_back(to_json(i));
+        for (const auto& i : c.supported_interfaces) j["supportedInterfaces"].push_back(to_json(i));
     }
     if (!c.provider.is_null()) j["provider"] = c.provider;
     j["version"] = c.version;
@@ -215,7 +213,6 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
         j["skills"] = json::array();
         for (const auto& s : c.skills) j["skills"].push_back(to_json(s));
     }
-    if (c.supports_authenticated_extended_card) j["supportsAuthenticatedExtendedCard"] = true;
     if (!c.signatures.is_null()) j["signatures"] = c.signatures;
     if (c.icon_url) j["iconUrl"] = *c.icon_url;
     return j;
@@ -348,11 +345,12 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 [[nodiscard]] inline AgentInterface parse_agent_interface(const json& j) {
     AgentInterface i;
     i.url = opt_str(j, "url").value_or("");
-    i.transport = opt_str(j, "transport").value_or("");
-    i.tenant = opt_str(j, "tenant");
+    i.transport = opt_str(j, "protocolBinding").value_or("");
     if (i.transport.empty()) {
-        i.transport = opt_str(j, "protocolBinding").value_or("");
+        i.transport = opt_str(j, "transport").value_or("");
     }
+    i.protocol_version = opt_str(j, "protocolVersion").value_or("");
+    i.tenant = opt_str(j, "tenant");
     return i;
 }
 
@@ -360,9 +358,9 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
     AgentCapabilities c;
     c.streaming = opt_val<bool>(j, "streaming");
     c.push_notifications = opt_val<bool>(j, "pushNotifications");
-    c.state_transition_history = opt_val<bool>(j, "stateTransitionHistory");
-    if (!c.state_transition_history.has_value()) {
-        c.state_transition_history = opt_val<bool>(j, "extendedAgentCard");
+    c.extended_agent_card = opt_val<bool>(j, "extendedAgentCard");
+    if (!c.extended_agent_card.has_value()) {
+        c.extended_agent_card = opt_val<bool>(j, "stateTransitionHistory");
     }
     auto it = j.find("extensions");
     if (it != j.end() && it->is_array()) {
@@ -385,11 +383,8 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 
 [[nodiscard]] inline AgentCard parse_agent_card(const json& j) {
     AgentCard c;
-    c.protocol_version = opt_str(j, "protocolVersion").value_or("");
     c.name = opt_str(j, "name").value_or("");
     c.description = opt_str(j, "description").value_or("");
-    c.url = opt_str(j, "url").value_or("");
-    c.preferred_transport = opt_str(j, "preferredTransport").value_or("");
     c.version = opt_str(j, "version").value_or("");
     c.documentation_url = opt_str(j, "documentationUrl");
     c.icon_url = opt_str(j, "iconUrl");
@@ -400,17 +395,29 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
         c.security_requirements = opt_metadata(j, "securityRequirements");
     }
     c.signatures = opt_metadata(j, "signatures");
-    c.supports_authenticated_extended_card = opt_val<bool>(j, "supportsAuthenticatedExtendedCard").value_or(false);
     c.capabilities = parse_agent_capabilities(opt_metadata(j, "capabilities"));
     fill_vec(j, "defaultInputModes", c.default_input_modes);
     fill_vec(j, "defaultOutputModes", c.default_output_modes);
-    auto ait = j.find("additionalInterfaces");
-    if (ait != j.end() && ait->is_array()) {
-        for (const auto& e : *ait) c.additional_interfaces.push_back(parse_agent_interface(e));
-    }
     auto sit = j.find("supportedInterfaces");
     if (sit != j.end() && sit->is_array()) {
-        for (const auto& e : *sit) c.additional_interfaces.push_back(parse_agent_interface(e));
+        for (const auto& e : *sit) c.supported_interfaces.push_back(parse_agent_interface(e));
+    }
+    auto ait = j.find("additionalInterfaces");
+    if (ait != j.end() && ait->is_array()) {
+        for (const auto& e : *ait) c.supported_interfaces.push_back(parse_agent_interface(e));
+    }
+    // Backward compatibility with the pre-1.0 card shape that had a single
+    // top-level URL/transport pair instead of supportedInterfaces.
+    if (c.supported_interfaces.empty()) {
+        auto legacy_url = opt_str(j, "url");
+        auto legacy_transport = opt_str(j, "preferredTransport");
+        if (legacy_url && legacy_transport) {
+            AgentInterface i;
+            i.url = *legacy_url;
+            i.transport = *legacy_transport;
+            i.protocol_version = opt_str(j, "protocolVersion").value_or("");
+            c.supported_interfaces.push_back(std::move(i));
+        }
     }
     auto skit = j.find("skills");
     if (skit != j.end() && skit->is_array()) {

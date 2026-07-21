@@ -138,14 +138,12 @@ private:
 
     [[nodiscard]] json make_agent_card() const {
         json card;
-        card["protocolVersion"] = "1.0";
         card["name"] = "Test Agent";
         card["description"] = "A2A test server";
-        card["url"] = base_url() + "/v1";
-        card["preferredTransport"] = "HTTP+JSON";
         json iface;
         iface["url"] = base_url() + "/v1";
         iface["protocolBinding"] = "HTTP+JSON";
+        iface["protocolVersion"] = "1.0";
         card["supportedInterfaces"] = json::array({iface});
         card["capabilities"] = json::object();
         card["defaultInputModes"] = json::array({"text/plain"});
@@ -202,8 +200,9 @@ TEST_CASE("a2a get_agent_card") {
     auto result = client.get_agent_card();
     REQUIRE(result.has_value());
     CHECK(result->name == "Test Agent");
-    REQUIRE(!result->additional_interfaces.empty());
-    CHECK(result->additional_interfaces.front().transport == "HTTP+JSON");
+    REQUIRE(!result->supported_interfaces.empty());
+    CHECK(result->supported_interfaces.front().transport == "HTTP+JSON");
+    CHECK(result->supported_interfaces.front().protocol_version == "1.0");
 }
 
 TEST_CASE("a2a send_message returns task") {
