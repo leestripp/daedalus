@@ -86,6 +86,8 @@ lcov.info
 # ---------------------------------------------------------------------------
 __pycache__/
 *.pyc
+.venv/
+scripts/.venv/
 node_modules/
 .mypy_cache/
 .pytest_cache/

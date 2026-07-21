@@ -75,16 +75,19 @@ struct EnumName {
     std::string_view name;
     TaskState state;
 };
+// Wire format uses ProtoJSON enum names so we interoperate with the
+// official A2A SDKs. task_state_from_string() still accepts the old
+// lowercase / hyphenated forms for backward compatibility.
 constexpr EnumName kTaskStateNames[] = {
-    {"unknown", TaskState::unspecified},
-    {"submitted", TaskState::submitted},
-    {"working", TaskState::working},
-    {"completed", TaskState::completed},
-    {"failed", TaskState::failed},
-    {"canceled", TaskState::canceled},
-    {"input-required", TaskState::input_required},
-    {"auth-required", TaskState::auth_required},
-    {"rejected", TaskState::rejected},
+    {"TASK_STATE_UNSPECIFIED", TaskState::unspecified},
+    {"TASK_STATE_SUBMITTED", TaskState::submitted},
+    {"TASK_STATE_WORKING", TaskState::working},
+    {"TASK_STATE_COMPLETED", TaskState::completed},
+    {"TASK_STATE_FAILED", TaskState::failed},
+    {"TASK_STATE_CANCELED", TaskState::canceled},
+    {"TASK_STATE_INPUT_REQUIRED", TaskState::input_required},
+    {"TASK_STATE_AUTH_REQUIRED", TaskState::auth_required},
+    {"TASK_STATE_REJECTED", TaskState::rejected},
 };
 
 } // anonymous namespace
@@ -93,41 +96,39 @@ std::string to_string(TaskState s) {
     for (const auto& e : kTaskStateNames) {
         if (e.state == s) return std::string(e.name);
     }
-    return "unknown";
+    return "TASK_STATE_UNSPECIFIED";
 }
 
 TaskState task_state_from_string(std::string_view s) {
     for (const auto& e : kTaskStateNames) {
         if (e.name == s) return e.state;
     }
-    // Backward compatibility with ProtoJSON-style names.
-    if (s == "TASK_STATE_UNSPECIFIED") return TaskState::unspecified;
-    if (s == "TASK_STATE_SUBMITTED")   return TaskState::submitted;
-    if (s == "TASK_STATE_WORKING")     return TaskState::working;
-    if (s == "TASK_STATE_COMPLETED")   return TaskState::completed;
-    if (s == "TASK_STATE_FAILED")      return TaskState::failed;
-    if (s == "TASK_STATE_CANCELED")    return TaskState::canceled;
-    if (s == "TASK_STATE_CANCELLED")   return TaskState::canceled;
-    if (s == "TASK_STATE_INPUT_REQUIRED") return TaskState::input_required;
-    if (s == "TASK_STATE_AUTH_REQUIRED")  return TaskState::auth_required;
-    if (s == "TASK_STATE_REJECTED")    return TaskState::rejected;
+    // Backward compatibility with the older lowercase / hyphenated wire form.
+    if (s == "submitted")    return TaskState::submitted;
+    if (s == "working")      return TaskState::working;
+    if (s == "completed")    return TaskState::completed;
+    if (s == "failed")       return TaskState::failed;
+    if (s == "canceled")     return TaskState::canceled;
+    if (s == "input-required")  return TaskState::input_required;
+    if (s == "auth-required")   return TaskState::auth_required;
+    if (s == "rejected")     return TaskState::rejected;
     return TaskState::unspecified;
 }
 
 std::string to_string(Role r) {
     switch (r) {
-        case Role::user:   return "user";
-        case Role::agent:  return "agent";
-        default:           return "user";
+        case Role::user:   return "ROLE_USER";
+        case Role::agent:  return "ROLE_AGENT";
+        default:           return "ROLE_UNSPECIFIED";
     }
 }
 
 Role role_from_string(std::string_view s) {
-    if (s == "user")  return Role::user;
-    if (s == "agent") return Role::agent;
-    // Backward compatibility with ProtoJSON-style names.
     if (s == "ROLE_USER")  return Role::user;
     if (s == "ROLE_AGENT") return Role::agent;
+    // Backward compatibility with the older lowercase wire form.
+    if (s == "user")  return Role::user;
+    if (s == "agent") return Role::agent;
     return Role::unspecified;
 }
 

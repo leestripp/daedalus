@@ -56,23 +56,23 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 
 [[nodiscard]] inline json to_json(const Part& p) {
     json j;
-    j["kind"] = to_string(p.kind);
     if (!p.metadata.is_null()) j["metadata"] = p.metadata;
+    // Protobuf-style Part: no `kind` discriminator, exactly one of
+    // text / url / data is set based on the part kind.
     switch (p.kind) {
         case PartKind::text:
             if (p.text) j["text"] = *p.text;
+            if (p.media_type) j["mediaType"] = *p.media_type;
             break;
         case PartKind::file: {
-            json file;
-            if (p.filename) file["name"] = *p.filename;
-            if (p.media_type) file["mimeType"] = *p.media_type;
-            if (p.raw) file["bytes"] = *p.raw;
-            if (p.url) file["uri"] = *p.url;
-            j["file"] = std::move(file);
+            if (p.url) j["url"] = *p.url;
+            if (p.filename) j["filename"] = *p.filename;
+            if (p.media_type) j["mediaType"] = *p.media_type;
             break;
         }
         case PartKind::data:
             if (!p.data.is_null()) j["data"] = p.data;
+            if (p.media_type) j["mediaType"] = *p.media_type;
             break;
     }
     return j;
@@ -80,7 +80,6 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 
 [[nodiscard]] inline json to_json(const Message& m) {
     json j;
-    j["kind"] = "message";
     j["messageId"] = m.message_id;
     j["role"] = to_string(m.role);
     j["parts"] = json::array();
@@ -139,7 +138,6 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 
 [[nodiscard]] inline json to_json(const Task& t) {
     json j;
-    j["kind"] = "task";
     j["id"] = t.id;
     if (t.context_id) j["contextId"] = *t.context_id;
     j["status"] = to_json(t.status);
@@ -168,7 +166,7 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 [[nodiscard]] inline json to_json(const AgentInterface& i) {
     json j;
     j["url"] = i.url;
-    j["transport"] = i.transport;
+    j["protocolBinding"] = i.transport;  // Protobuf/ProtoJSON field name
     if (i.tenant) j["tenant"] = *i.tenant;
     return j;
 }
@@ -202,8 +200,8 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
     j["url"] = c.url;
     j["preferredTransport"] = c.preferred_transport;
     if (!c.additional_interfaces.empty()) {
-        j["additionalInterfaces"] = json::array();
-        for (const auto& i : c.additional_interfaces) j["additionalInterfaces"].push_back(to_json(i));
+        j["supportedInterfaces"] = json::array();
+        for (const auto& i : c.additional_interfaces) j["supportedInterfaces"].push_back(to_json(i));
     }
     if (!c.provider.is_null()) j["provider"] = c.provider;
     j["version"] = c.version;
@@ -249,43 +247,43 @@ inline void fill_vec(const json& j, std::string_view key, std::vector<T>& out) {
 
 [[nodiscard]] inline Part parse_part(const json& j) {
     Part p;
-    p.kind = part_kind_from_string(opt_str(j, "kind").value_or(""));
     p.metadata = opt_metadata(j, "metadata");
 
-    switch (p.kind) {
-        case PartKind::text:
-            p.text = opt_str(j, "text");
-            break;
-        case PartKind::file: {
-            auto fit = j.find("file");
-            if (fit != j.end() && fit->is_object()) {
-                p.filename = opt_str(*fit, "name");
-                p.media_type = opt_str(*fit, "mimeType");
-                p.raw = opt_str(*fit, "bytes");
-                p.url = opt_str(*fit, "uri");
-            }
-            break;
-        }
-        case PartKind::data:
-            p.data = opt_metadata(j, "data");
-            break;
-    }
-
-    // Backward compatibility with legacy flat parts that omitted "kind".
-    if (!j.contains("kind")) {
-        if (j.contains("text")) {
-            p.kind = PartKind::text;
-            p.text = opt_str(j, "text");
-        } else if (j.contains("data")) {
-            p.kind = PartKind::data;
-            p.data = opt_metadata(j, "data");
-        } else if (j.contains("url") || j.contains("raw")) {
-            p.kind = PartKind::file;
-            p.url = opt_str(j, "url");
-            p.raw = opt_str(j, "raw");
-        }
+    // Protobuf-style flat parts: kind is inferred from the present field.
+    if (j.contains("text")) {
+        p.kind = PartKind::text;
+        p.text = opt_str(j, "text");
+        p.media_type = opt_str(j, "mediaType");
+    } else if (j.contains("url")) {
+        p.kind = PartKind::file;
+        p.url = opt_str(j, "url");
         p.filename = opt_str(j, "filename");
         p.media_type = opt_str(j, "mediaType");
+    } else if (j.contains("data")) {
+        p.kind = PartKind::data;
+        p.data = opt_metadata(j, "data");
+        p.media_type = opt_str(j, "mediaType");
+    } else {
+        // Legacy nested / kind-based format.
+        p.kind = part_kind_from_string(opt_str(j, "kind").value_or(""));
+        switch (p.kind) {
+            case PartKind::text:
+                p.text = opt_str(j, "text");
+                break;
+            case PartKind::file: {
+                auto fit = j.find("file");
+                if (fit != j.end() && fit->is_object()) {
+                    p.filename = opt_str(*fit, "name");
+                    p.media_type = opt_str(*fit, "mimeType");
+                    p.raw = opt_str(*fit, "bytes");
+                    p.url = opt_str(*fit, "uri");
+                }
+                break;
+            }
+            case PartKind::data:
+                p.data = opt_metadata(j, "data");
+                break;
+        }
     }
     return p;
 }

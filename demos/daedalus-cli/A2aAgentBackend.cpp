@@ -223,7 +223,7 @@ a2a::Task A2aAgentBackend::run_task(const a2a::Message& message,
 
 a2a::A2aResult<a2a::SendMessageResult> A2aAgentBackend::send_message(
     const a2a::SendMessageRequest& request) {
-    a2a::A2aError err{500, "INTERNAL_ERROR", "", nullptr};
+    a2a::A2aError err{0, "", "", nullptr};
     auto task = run_task(request.message, nullptr, err);
     if (err.http_status != 0) return std::unexpected(err);
 
@@ -275,7 +275,7 @@ a2a::A2aResult<a2a::Task> A2aAgentBackend::cancel_task(
 a2a::A2aResult<void> A2aAgentBackend::send_streaming_message(
     const a2a::SendMessageRequest& request,
     a2a::IA2aEventHandler& handler) {
-    a2a::A2aError err{500, "INTERNAL_ERROR", "", nullptr};
+    a2a::A2aError err{0, "", "", nullptr};
     auto task = run_task(request.message, &handler, err);
     if (err.http_status != 0) return std::unexpected(err);
     (void)task;

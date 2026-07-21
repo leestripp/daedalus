@@ -63,6 +63,8 @@ using OmniMethod = OmniNet::HTTP::Method;
 struct StreamingHandler : IA2aEventHandler {
     std::shared_ptr<OmniNet::HTTP::StreamingResponse> writer;
     std::atomic<bool> closed{false};
+    std::string task_id;
+    std::string context_id;
 
     explicit StreamingHandler(std::shared_ptr<OmniNet::HTTP::StreamingResponse> w)
         : writer(std::move(w)) {}
@@ -78,19 +80,35 @@ struct StreamingHandler : IA2aEventHandler {
         writer->write(sse_line(name, payload));
     }
 
-    void on_task(const Task& t) override { write_event("task", to_json(t)); }
+    void on_task(const Task& t) override {
+        task_id = t.id;
+        if (t.context_id) context_id = *t.context_id;
+        write_event("task", to_json(t));
+    }
     void on_message(const Message& m) override { write_event("message", to_json(m)); }
     void on_status_update(const TaskStatusUpdateEvent& e) override {
+        task_id = e.task_id;
+        context_id = e.context_id;
         write_event("statusUpdate", to_json(e));
     }
     void on_artifact_update(const TaskArtifactUpdateEvent& e) override {
+        task_id = e.task_id;
+        context_id = e.context_id;
         write_event("artifactUpdate", to_json(e));
     }
     void on_error(const A2aError& err) override {
-        json j{{"code", err.code.empty() ? "INTERNAL_ERROR" : err.code},
-               {"message", err.message}};
-        if (!err.details.is_null()) j["details"] = err.details;
-        write_event("error", j);
+        LOG_ERROR(std::string("A2A streaming handler error: ") + err.what());
+        // StreamResponse has no error field; surface the failure as a task
+        // status update with state=failed and the reason in the message.
+        TaskStatusUpdateEvent ev;
+        ev.task_id = task_id;
+        ev.context_id = context_id;
+        ev.status.state = TaskState::failed;
+        Message msg;
+        msg.role = Role::agent;
+        msg.parts.push_back(Part::from_text(err.code.empty() ? err.message : err.code + ": " + err.message));
+        ev.status.message = std::move(msg);
+        write_event("statusUpdate", to_json(ev));
     }
     void on_complete() override { close_writer(); }
 };

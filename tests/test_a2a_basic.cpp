@@ -145,8 +145,8 @@ private:
         card["preferredTransport"] = "HTTP+JSON";
         json iface;
         iface["url"] = base_url() + "/v1";
-        iface["transport"] = "HTTP+JSON";
-        card["additionalInterfaces"] = json::array({iface});
+        iface["protocolBinding"] = "HTTP+JSON";
+        card["supportedInterfaces"] = json::array({iface});
         card["capabilities"] = json::object();
         card["defaultInputModes"] = json::array({"text/plain"});
         card["defaultOutputModes"] = json::array({"text/plain"});
@@ -156,17 +156,16 @@ private:
 
     [[nodiscard]] json make_task() const {
         json status;
-        status["state"] = "completed";
+        status["state"] = "TASK_STATE_COMPLETED";
         status["timestamp"] = "2025-01-01T00:00:00Z";
         json task;
-        task["kind"] = "task";
         task["id"] = "task-123";
         task["contextId"] = "ctx-456";
         task["status"] = status;
         json art;
         art["artifactId"] = "art-1";
         art["name"] = "answer";
-        art["parts"] = json::array({json{{"kind", "text"}, {"text", "hello from a2a"}}});
+        art["parts"] = json::array({json{{"text", "hello from a2a"}}});
         task["artifacts"] = json::array({art});
         return task;
     }
@@ -176,7 +175,7 @@ private:
         upd["taskId"] = "task-123";
         upd["contextId"] = "ctx-456";
         json status;
-        status["state"] = "working";
+        status["state"] = "TASK_STATE_WORKING";
         upd["status"] = status;
         return upd;
     }
@@ -187,7 +186,7 @@ private:
         upd["contextId"] = "ctx-456";
         json art;
         art["artifactId"] = "art-2";
-        art["parts"] = json::array({json{{"kind", "text"}, {"text", "chunk"}}});
+        art["parts"] = json::array({json{{"text", "chunk"}}});
         upd["artifact"] = art;
         upd["lastChunk"] = true;
         return upd;
@@ -298,10 +297,10 @@ TEST_CASE("a2a subscribe_to_task") {
 }
 
 TEST_CASE("a2a enums round-trip") {
-    CHECK(a2a::to_string(a2a::TaskState::completed) == "completed");
+    CHECK(a2a::to_string(a2a::TaskState::completed) == "TASK_STATE_COMPLETED");
     CHECK(a2a::task_state_from_string("working") == a2a::TaskState::working);
     CHECK(a2a::task_state_from_string("TASK_STATE_WORKING") == a2a::TaskState::working);
-    CHECK(a2a::to_string(a2a::Role::user) == "user");
+    CHECK(a2a::to_string(a2a::Role::user) == "ROLE_USER");
     CHECK(a2a::role_from_string("agent") == a2a::Role::agent);
     CHECK(a2a::role_from_string("ROLE_AGENT") == a2a::Role::agent);
 }
