@@ -467,12 +467,15 @@ add_test(NAME a2a_server_tests COMMAND daedalus_a2a_server_tests)
 # ============================================================================
 # A2A Python SDK smoke test — runs daedalus-cli --a2a-server and probes it
 # with the official Google A2A Python SDK. Requires scripts/.venv installed.
+#
+# The wrapper script skips gracefully when no models are configured, so a
+# clean checkout without a provider/model setup will not fail the build.
 # ============================================================================
 add_custom_target(a2a_smoke_test
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_a2a_smoke_test.sh $<TARGET_FILE:daedalus-cli>
     DEPENDS daedalus-cli
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running A2A Python SDK smoke test..."
+    COMMENT "Running A2A Python SDK smoke test (skips if no models configured)..."
     VERBATIM
 )
 

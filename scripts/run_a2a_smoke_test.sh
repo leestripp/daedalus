@@ -26,6 +26,29 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     exit 1
 fi
 
+# Skip gracefully when no models are configured. A fresh checkout or CI node
+# may not have a provider/model set up, and requiring one would make this
+# target fail on every new build.
+DEFAULT_DB="${HOME}/.local/share/daedalus/daedalus.db"
+MODEL_COUNT=0
+if [[ -f "$DEFAULT_DB" ]]; then
+    MODEL_COUNT=$(python3 - <<PY
+import sqlite3, sys
+try:
+    conn = sqlite3.connect('${DEFAULT_DB}')
+    c = conn.cursor()
+    c.execute("SELECT count(*) FROM models")
+    print(c.fetchone()[0])
+except Exception as e:
+    print(0)
+PY
+    )
+fi
+if [[ "${MODEL_COUNT:-0}" -eq 0 ]]; then
+    echo "A2A smoke test SKIPPED: no models configured in ${DEFAULT_DB}"
+    exit 0
+fi
+
 PROJECT_DIR="$(mktemp -d)"
 SERVER_LOG="$(mktemp)"
 trap 'rm -rf "$PROJECT_DIR" "$SERVER_LOG"; kill "$SERVER_PID" 2>/dev/null || true' EXIT
