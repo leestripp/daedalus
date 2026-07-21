@@ -198,6 +198,15 @@ if(NOT DEFINED OMNINET_LOCAL OR NOT EXISTS "${OMNINET_LOCAL}/CMakeLists.txt")
     file(WRITE "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/table.cpp" "${_table_src}")
 endif()
 
+# §TASK-007 (2026-07-18): OmniNet's own test_http_client and test_sync_http_server
+# use overlapping hardcoded port ranges (18080-18088). When ctest runs them in
+# parallel they collide. Serialize them with a resource lock so the full suite
+# passes reliably.
+if(TEST test_http_client AND TEST test_sync_http_server)
+    set_tests_properties(test_http_client test_sync_http_server
+                         PROPERTIES RESOURCE_LOCK "omninet_http_18080_range")
+endif()
+
 # Sanity check: OmniNet header must exist, otherwise the FetchContent_MakeAvailable
 # above did not actually provide the target/headers (e.g. repo renamed target).
 get_target_property(_omninet_inc OmniNet INCLUDE_DIRECTORIES)
