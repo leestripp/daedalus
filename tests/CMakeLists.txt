@@ -464,6 +464,18 @@ target_link_libraries(daedalus_a2a_server_tests PRIVATE
 )
 add_test(NAME a2a_server_tests COMMAND daedalus_a2a_server_tests)
 
+# ============================================================================
+# A2A Python SDK smoke test — runs daedalus-cli --a2a-server and probes it
+# with the official Google A2A Python SDK. Requires scripts/.venv installed.
+# ============================================================================
+add_custom_target(a2a_smoke_test
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_a2a_smoke_test.sh $<TARGET_FILE:daedalus-cli>
+    DEPENDS daedalus-cli
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running A2A Python SDK smoke test..."
+    VERBATIM
+)
+
 
 # §BUG-001 (2026-07-17): MiniMaxSseParser unit tests. Verifies the
 # is_usage_only_chunk() gate logic that fixes the streaming-trailer
