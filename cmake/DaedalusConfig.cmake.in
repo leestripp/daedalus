@@ -13,36 +13,23 @@
 
 include(CMakeFindDependencyMacro)
 
-# Declare runtime dependencies so they're find_package-able for the consumer.
-# The static lib's internal symbols need curl, openssl, etc. to be linkable,
-# AND the daedalusTargets.cmake (exported via install(EXPORT)) references the
-# IMPORTED targets nlohmann_json::nlohmann_json, CURL::libcurl, etc.
-# So we must find_package() each one before loading the targets file.
-find_dependency(CURL)
-find_dependency(OpenSSL)
+# Declare the dependencies that are part of the exported link interface of
+# daedalus::daedalus. The static library was built against these; they must
+# be find_package-able before the exported targets file is loaded.
 find_dependency(nlohmann_json 3.10 REQUIRED)
-find_dependency(PkgConfig)
-pkg_check_modules(PNG REQUIRED libpng)
-pkg_check_modules(POPPLER REQUIRED poppler-cpp)
+find_dependency(OpenSSL)
 find_dependency(Threads)
 
-# No external runtime dependencies are required at *use* time. The
-# static lib was already linked against curl/openssl/sqlite/json/png
-# at *build* time, so consumers don't need find_package() calls for
-# those. We document them here so embedders know what the library
-# pulls in:
-#   - CURL
-#   - OpenSSL
-#   - SQLite3 (with sqlite-vec)
-#   - nlohmann_json
-#   - libpng + poppler-cpp (PDFTool support)
-#   - OmniNet (HTTP/WS/SSE transport)
+# NOTE: OmniNet is linked into daedalus as a build-interface-only dependency
+# and is therefore not re-exported by find_package(daedalus). Consumers that
+# use functionality requiring OmniNet (e.g. NetworkTool, McpServerManager) or
+# that build daedalus via FetchContent should make the OmniNet target
+# available themselves.
 
 # ---- imported targets ----
 
 # Load the export set (daedalusTargets.cmake) so the imported
-# daedalus::daedalus target gets its full INTERFACE_LINK_LIBRARIES
-# (CURL, OpenSSL, nlohmann_json, PNG, poppler, ...) propagated to
+# daedalus::daedalus target gets its INTERFACE_LINK_LIBRARIES propagated to
 # consumers via find_package(daedalus).
 include("${CMAKE_CURRENT_LIST_DIR}/daedalusTargets.cmake")
 

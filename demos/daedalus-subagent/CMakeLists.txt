@@ -22,8 +22,8 @@ target_link_libraries(daedalus-subagent
 
 target_include_directories(daedalus-subagent
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/include
-        ${CMAKE_SOURCE_DIR}/demos/common   # §Phase 9.10: ThinkingSpinner.h
+        ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/demos/common   # §Phase 9.10: ThinkingSpinner.h
 )
 
 install(TARGETS daedalus-subagent

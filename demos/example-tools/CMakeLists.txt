@@ -18,10 +18,10 @@ add_library(daedalus_example_tools STATIC ${EXAMPLE_TOOLS_SOURCES})
 
 target_include_directories(daedalus_example_tools
     PUBLIC
-        ${CMAKE_SOURCE_DIR}/demos/example-tools
+        ${PROJECT_SOURCE_DIR}/demos/example-tools
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/src
+        ${PROJECT_SOURCE_DIR}/include
         ${nlohmann_json_INCLUDE_DIR}
         ${POPPLER_INCLUDE_DIRS}
 )

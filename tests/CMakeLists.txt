@@ -8,7 +8,7 @@ cmake_minimum_required(VERSION 3.28)
 # linking the whole library). Those source files now reference
 # `daedalus/paths.h` (the public Paths API). Without this include path
 # the test compilation fails with "file not found".
-include_directories(${CMAKE_SOURCE_DIR}/include)
+include_directories(${PROJECT_SOURCE_DIR}/include)
 
 # ============================================================================
 # doctest — fetched via CMake (matches the OmniNet pattern in the parent
@@ -37,15 +37,15 @@ link_libraries(doctest::doctest)
 
 add_executable(daedalus_skill_auto_discovery_tests
     test_skill_auto_discovery.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SkillManager.cpp
     
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SerperConfig.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
 )
 target_include_directories(daedalus_skill_auto_discovery_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_skill_auto_discovery_tests PRIVATE
@@ -68,15 +68,15 @@ add_test(NAME skill_auto_discovery_tests COMMAND daedalus_skill_auto_discovery_t
 
 add_executable(daedalus_skill_frontmatter_tests
     test_skill_frontmatter.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SkillManager.cpp
     
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SerperConfig.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
 )
 target_include_directories(daedalus_skill_frontmatter_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_skill_frontmatter_tests PRIVATE
@@ -96,8 +96,8 @@ add_executable(daedalus_phase15_disabled_switches_tests
     test_phase15_disabled_switches.cpp
 )
 target_include_directories(daedalus_phase15_disabled_switches_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(daedalus_phase15_disabled_switches_tests PRIVATE
     daedalus
@@ -115,8 +115,8 @@ add_executable(daedalus_phase15_typo_warning_tests
     test_phase15_typo_warning.cpp
 )
 target_include_directories(daedalus_phase15_typo_warning_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(daedalus_phase15_typo_warning_tests PRIVATE
     daedalus
@@ -135,8 +135,8 @@ add_executable(daedalus_phase14_per_project_system_prompt_tests
     test_phase14_per_project_system_prompt.cpp
 )
 target_include_directories(daedalus_phase14_per_project_system_prompt_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(daedalus_phase14_per_project_system_prompt_tests PRIVATE
     daedalus
@@ -153,8 +153,8 @@ add_executable(daedalus_serper_settings_tests
     test_serper_settings.cpp
 )
 target_include_directories(daedalus_serper_settings_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_serper_settings_tests PRIVATE
@@ -174,24 +174,24 @@ add_test(NAME serper_settings_tests COMMAND daedalus_serper_settings_tests)
 # ============================================================================
 add_executable(daedalus_mcp_proxied_tool_tests
     test_mcp_proxied_tool.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashChainer.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashPathChecker.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Subprocess.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashChainer.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashPathChecker.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Subprocess.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_proxied_tool_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/mcp
-    ${CMAKE_SOURCE_DIR}/src/tools
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/mcp
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_proxied_tool_tests PRIVATE
@@ -208,24 +208,24 @@ add_test(NAME mcp_proxied_tool_tests COMMAND daedalus_mcp_proxied_tool_tests)
 # ============================================================================
 add_executable(daedalus_mcp_hub_hardening_tests
     test_mcp_hub_hardening.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashChainer.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashPathChecker.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Subprocess.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashChainer.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashPathChecker.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Subprocess.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_hub_hardening_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/mcp
-    ${CMAKE_SOURCE_DIR}/src/tools
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/mcp
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_hub_hardening_tests PRIVATE
@@ -246,13 +246,13 @@ add_test(NAME mcp_hub_hardening_tests COMMAND daedalus_mcp_hub_hardening_tests)
 
 add_executable(daedalus_serper_startup_tests
     test_serper_startup.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SerperConfig.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SerperConfig.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_serper_startup_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_serper_startup_tests PRIVATE
@@ -267,14 +267,14 @@ add_test(NAME serper_startup_tests COMMAND daedalus_serper_startup_tests)
 
 add_executable(daedalus_http_session_tests
     test_http_session.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_http_session_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: HttpSession.cpp #includes <OmniNet.h>
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${OmniNet_SOURCE_DIR}/src   # §NC-11: HttpSession.cpp #includes <OmniNet.h>
 )
 target_link_libraries(daedalus_http_session_tests PRIVATE
     OmniNet
@@ -290,7 +290,7 @@ add_executable(daedalus_model_discovery_tests
     test_model_discovery.cpp
 )
 target_include_directories(daedalus_model_discovery_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_model_discovery_tests PRIVATE
     daedalus
@@ -311,18 +311,18 @@ add_test(NAME model_discovery_tests COMMAND daedalus_model_discovery_tests)
 
 add_executable(daedalus_mcp_transport_tests
     test_mcp_transport.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/StdioMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/StdioMcpTransport.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_transport_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/mcp
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/mcp
     ${nlohmann_json_INCLUDE_DIR}
-    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §NC-11: HttpSession.cpp includes <OmniNet.h>
+    ${OmniNet_SOURCE_DIR}/src   # §NC-11: HttpSession.cpp includes <OmniNet.h>
 )
 target_link_libraries(daedalus_mcp_transport_tests PRIVATE
     nlohmann_json::nlohmann_json
@@ -337,12 +337,12 @@ add_test(NAME mcp_transport_tests COMMAND daedalus_mcp_transport_tests)
 
 add_executable(daedalus_metrics_tests
     test_metrics.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Metrics.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Metrics.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_metrics_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
 )
 target_link_libraries(daedalus_metrics_tests PRIVATE
     pthread
@@ -356,12 +356,12 @@ add_test(NAME metrics_tests COMMAND daedalus_metrics_tests)
 # Create standalone ThreadPool test
 add_executable(daedalus_thread_pool_tests
     test_thread_pool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_thread_pool_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
 )
 add_test(NAME thread_pool_tests COMMAND daedalus_thread_pool_tests)
 
@@ -374,8 +374,8 @@ add_executable(daedalus_string_tests
     test_string_utils.cpp
 )
 target_include_directories(daedalus_string_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
 )
 add_test(NAME string_tests COMMAND daedalus_string_tests)
 
@@ -387,8 +387,8 @@ add_executable(daedalus_utf8_tests
     test_utf8.cpp
 )
 target_include_directories(daedalus_utf8_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
 )
 add_test(NAME utf8_tests COMMAND daedalus_utf8_tests)
 
@@ -406,8 +406,8 @@ add_executable(daedalus_json_utf8_tests
     test_json_utf8.cpp
 )
 target_include_directories(daedalus_json_utf8_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_json_utf8_tests PRIVATE
@@ -421,7 +421,7 @@ add_executable(daedalus_sse_parser_tests
     test_sse_parser.cpp
 )
 target_include_directories(daedalus_sse_parser_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_sse_parser_tests PRIVATE
     doctest::doctest
@@ -435,8 +435,8 @@ add_executable(daedalus_a2a_basic_tests
     test_a2a_basic.cpp
 )
 target_include_directories(daedalus_a2a_basic_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §A2A: OmniNet HTTP server headers
+    ${PROJECT_SOURCE_DIR}/include
+    ${OmniNet_SOURCE_DIR}/src   # §A2A: OmniNet HTTP server headers
 )
 target_link_libraries(daedalus_a2a_basic_tests PRIVATE
     doctest::doctest
@@ -454,7 +454,7 @@ add_executable(daedalus_a2a_server_tests
     test_a2a_server.cpp
 )
 target_include_directories(daedalus_a2a_server_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_a2a_server_tests PRIVATE
     doctest::doctest
@@ -472,9 +472,9 @@ add_test(NAME a2a_server_tests COMMAND daedalus_a2a_server_tests)
 # clean checkout without a provider/model setup will not fail the build.
 # ============================================================================
 add_custom_target(a2a_smoke_test
-    COMMAND ${CMAKE_SOURCE_DIR}/scripts/run_a2a_smoke_test.sh $<TARGET_FILE:daedalus-cli>
+    COMMAND ${PROJECT_SOURCE_DIR}/scripts/run_a2a_smoke_test.sh $<TARGET_FILE:daedalus-cli>
     DEPENDS daedalus-cli
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     COMMENT "Running A2A Python SDK smoke test (skips if no models configured)..."
     VERBATIM
 )
@@ -494,8 +494,8 @@ add_executable(daedalus_minimax_sse_parser_tests
     test_minimax_sse_parser.cpp
 )
 target_include_directories(daedalus_minimax_sse_parser_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(daedalus_minimax_sse_parser_tests PRIVATE
     doctest::doctest
@@ -513,7 +513,7 @@ add_executable(daedalus_token_usage_graceful_tests
     test_token_usage_graceful.cpp
 )
 target_include_directories(daedalus_token_usage_graceful_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src
 )
 target_link_libraries(daedalus_token_usage_graceful_tests PRIVATE
     doctest::doctest
@@ -524,14 +524,14 @@ add_test(NAME token_usage_graceful_tests COMMAND daedalus_token_usage_graceful_t
 # Create Session Memory test
 add_executable(daedalus_session_memory_tests
     test_session_memory.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SessionMemory.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SessionMemory.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_session_memory_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_session_memory_tests PRIVATE
@@ -546,10 +546,10 @@ add_executable(daedalus_bash_tool_tests
     test_bash_tool_helpers.cpp
 )
 target_include_directories(daedalus_bash_tool_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_bash_tool_tests PRIVATE
@@ -561,13 +561,13 @@ add_test(NAME bash_tool_tests COMMAND daedalus_bash_tool_tests)
 # Create BashPathChecker test
 add_executable(daedalus_bash_path_checker_tests
     test_bash_path_checker.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashPathChecker.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashPathChecker.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_bash_path_checker_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
 )
 add_test(NAME bash_path_checker_tests COMMAND daedalus_bash_path_checker_tests)
 
@@ -576,9 +576,9 @@ add_executable(daedalus_bash_background_tests
     test_bash_background.cpp
 )
 target_include_directories(daedalus_bash_background_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_bash_background_tests PRIVATE
@@ -591,16 +591,16 @@ add_test(NAME bash_background_tests COMMAND daedalus_bash_background_tests)
 # Create SystemInfoTool test
 add_executable(daedalus_system_info_tests
     test_system_info.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/SystemInfoTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/SystemInfoTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_system_info_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/demos/example-tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/demos/example-tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_system_info_tests PRIVATE
@@ -612,12 +612,12 @@ add_test(NAME system_info_tests COMMAND daedalus_system_info_tests)
 # Create BackgroundProcessManager test
 add_executable(daedalus_background_process_tests
     test_background_process.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_background_process_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
 )
 add_test(NAME background_process_tests COMMAND daedalus_background_process_tests)
 
@@ -626,9 +626,9 @@ add_executable(daedalus_mcp_client_tests
     test_mcp_client.cpp
 )
 target_include_directories(daedalus_mcp_client_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/mcp
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/mcp
 )
 add_test(NAME mcp_client_tests COMMAND daedalus_mcp_client_tests)
 
@@ -637,10 +637,10 @@ add_executable(daedalus_agent_state_transition_tests
     test_agent_state_transitions.cpp
 )
 target_include_directories(daedalus_agent_state_transition_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_agent_state_transition_tests PRIVATE
@@ -654,15 +654,15 @@ add_test(NAME agent_state_transition_tests COMMAND daedalus_agent_state_transiti
 
 add_executable(daedalus_set_status_tool_tests
     test_set_status_tool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SetStatusTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/library/AgentState.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/SetStatusTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/library/AgentState.cpp
 )
 target_include_directories(daedalus_set_status_tool_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_set_status_tool_tests PRIVATE
@@ -680,7 +680,7 @@ add_executable(daedalus_multi_instance_tests
     test_multi_instance.cpp
 )
 target_include_directories(daedalus_multi_instance_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_multi_instance_tests PRIVATE
     daedalus
@@ -693,7 +693,7 @@ add_executable(daedalus_sink_events_tests
     test_sink_events.cpp
 )
 target_include_directories(daedalus_sink_events_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_sink_events_tests PRIVATE
     daedalus
@@ -706,19 +706,19 @@ add_test(NAME sink_events_tests COMMAND daedalus_sink_events_tests)
 # plus the ToolHandler → AgentSink routing. See test_tool_progress.cpp.
 add_executable(daedalus_tool_progress_tests
     test_tool_progress.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_tool_progress_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/tools
-    ${CMAKE_SOURCE_DIR}/demos/example-tools
-    ${CMAKE_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/demos/example-tools
+    ${PROJECT_SOURCE_DIR}/src/api
     ${nlohmann_json_INCLUDE_DIR}
-    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src
+    ${OmniNet_SOURCE_DIR}/src
 )
 target_link_libraries(daedalus_tool_progress_tests PRIVATE
     daedalus
@@ -734,7 +734,7 @@ add_executable(daedalus_sink_call_id_tests
     test_sink_call_id.cpp
 )
 target_include_directories(daedalus_sink_call_id_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_sink_call_id_tests PRIVATE
     daedalus
@@ -748,7 +748,7 @@ add_executable(daedalus_no_repl_tests
     test_no_repl_in_library.cpp
 )
 target_include_directories(daedalus_no_repl_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_no_repl_tests PRIVATE
     daedalus
@@ -762,7 +762,7 @@ add_executable(daedalus_per_agent_home_tests
     test_per_agent_home.cpp
 )
 target_include_directories(daedalus_per_agent_home_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_per_agent_home_tests PRIVATE
@@ -777,7 +777,7 @@ add_executable(daedalus_switch_model_tests
     test_switch_model.cpp
 )
 target_include_directories(daedalus_switch_model_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_switch_model_tests PRIVATE
@@ -792,7 +792,7 @@ add_executable(daedalus_custom_tool_tests
     test_custom_tool.cpp
 )
 target_include_directories(daedalus_custom_tool_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_custom_tool_tests PRIVATE
@@ -808,7 +808,7 @@ add_executable(daedalus_config_locations_tests
     test_config_locations.cpp
 )
 target_include_directories(daedalus_config_locations_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_config_locations_tests PRIVATE
@@ -823,7 +823,7 @@ add_executable(daedalus_settings_store_tests
     test_settings_store.cpp
 )
 target_include_directories(daedalus_settings_store_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_settings_store_tests PRIVATE
@@ -839,7 +839,7 @@ add_executable(daedalus_settings_store_e2e_tests
     test_settings_store_e2e.cpp
 )
 target_include_directories(daedalus_settings_store_e2e_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_settings_store_e2e_tests PRIVATE
@@ -856,7 +856,7 @@ add_executable(daedalus_settings_active_model_tests
     test_settings_active_model.cpp
 )
 target_include_directories(daedalus_settings_active_model_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_settings_active_model_tests PRIVATE
@@ -871,7 +871,7 @@ add_executable(daedalus_settings_for_home_vs_instance_tests
     test_settings_for_home_vs_instance.cpp
 )
 target_include_directories(daedalus_settings_for_home_vs_instance_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_settings_for_home_vs_instance_tests PRIVATE
@@ -885,8 +885,8 @@ add_executable(daedalus_mcp_servers_store_tests
     test_mcp_servers_store.cpp
 )
 target_include_directories(daedalus_mcp_servers_store_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_servers_store_tests PRIVATE
@@ -896,18 +896,18 @@ target_link_libraries(daedalus_mcp_servers_store_tests PRIVATE
 add_test(NAME mcp_servers_store_tests COMMAND daedalus_mcp_servers_store_tests)
 add_executable(daedalus_mcp_load_from_store_tests
     test_mcp_load_from_store.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_mcp_load_from_store_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/mcp
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/mcp
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/core
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_mcp_load_from_store_tests PRIVATE
@@ -930,7 +930,7 @@ add_executable(daedalus_mcp_load_from_agent_tests
     test_mcp_load_from_agent.cpp
 )
 target_include_directories(daedalus_mcp_load_from_agent_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_mcp_load_from_agent_tests PRIVATE
     daedalus
@@ -941,15 +941,15 @@ add_test(NAME mcp_load_from_agent_tests COMMAND daedalus_mcp_load_from_agent_tes
 # Messages class tests
 add_executable(daedalus_messages_tests
     test_messages.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Messages.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Messages.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
 )
 target_include_directories(daedalus_messages_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_messages_tests PRIVATE
@@ -965,13 +965,13 @@ add_test(NAME messages_tests COMMAND daedalus_messages_tests)
 # rules / workflow prose build path).
 add_executable(daedalus_system_prompt_builder_tests
     test_system_prompt_compose.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SystemPromptBuilder.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SystemPromptBuilder.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_system_prompt_builder_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
     ${nlohmann_json_INCLUDE_DIR}
 )
 target_link_libraries(daedalus_system_prompt_builder_tests PRIVATE
@@ -982,7 +982,7 @@ target_link_libraries(daedalus_system_prompt_builder_tests PRIVATE
 # confirm the library never re-introduces banned identity / workflow /
 # tool-guidelines prose (see CodeMax.md §Phase 14 acceptance criteria).
 target_compile_definitions(daedalus_system_prompt_builder_tests PRIVATE
-    SYSTEM_PROMPT_BUILDER_CPP_PATH="${CMAKE_SOURCE_DIR}/src/core/SystemPromptBuilder.cpp"
+    SYSTEM_PROMPT_BUILDER_CPP_PATH="${PROJECT_SOURCE_DIR}/src/core/SystemPromptBuilder.cpp"
 )
 add_test(NAME system_prompt_builder_tests COMMAND daedalus_system_prompt_builder_tests)
 
@@ -993,7 +993,7 @@ add_executable(daedalus_cli_system_prompt_tests
     test_cli_system_prompt.cpp
 )
 target_include_directories(daedalus_cli_system_prompt_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/demos/daedalus-cli
+    ${PROJECT_SOURCE_DIR}/demos/daedalus-cli
 )
 target_link_libraries(daedalus_cli_system_prompt_tests PRIVATE
     daedalus
@@ -1006,42 +1006,42 @@ add_test(NAME cli_system_prompt_tests COMMAND daedalus_cli_system_prompt_tests)
 # Note: Includes PDFTool but with POPPLER include dirs for linking
 add_executable(daedalus_tool_definitions_tests
     test_tool_definitions.cpp
-    ${CMAKE_SOURCE_DIR}/src/api/HttpSession.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/ThreadPool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/ToolHandler.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/ToolFactory.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashTool.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/GitTool.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/SystemInfoTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/SkillTool.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/SearchTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/MemoryTool.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/BackgroundTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/UserTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/PDFTool.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SkillManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/SessionMemory.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpClient.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/McpServerManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashChainer.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashPathChecker.cpp
-    ${CMAKE_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Subprocess.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/ToolHandler.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/ToolFactory.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashTool.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/GitTool.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/SystemInfoTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/SkillTool.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/SearchTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/MemoryTool.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/BackgroundTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/UserTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/PDFTool.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SkillManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/SessionMemory.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpClient.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/mcp/HttpMcpTransport.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashChainer.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashPathChecker.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/BashCommandExecutor.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Subprocess.cpp
 )
 target_include_directories(daedalus_tool_definitions_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/api
-    ${CMAKE_SOURCE_DIR}/src/tools
-    ${CMAKE_SOURCE_DIR}/src/mcp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/src/mcp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools
     ${nlohmann_json_INCLUDE_DIR}
     ${POPPLER_INCLUDE_DIRS}
 )
@@ -1075,13 +1075,13 @@ add_test(NAME omninet_smoke_tests COMMAND daedalus_omninet_smoke_tests)
 
 add_executable(daedalus_http_request_tests
     test_http_request.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_http_request_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/demos/example-tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/demos/example-tools
 )
 target_link_libraries(daedalus_http_request_tests PRIVATE
     OmniNet
@@ -1096,13 +1096,13 @@ add_test(NAME http_request_tests COMMAND daedalus_http_request_tests)
 
 add_executable(daedalus_network_diagnostics_tests
     test_network_diagnostics.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_network_diagnostics_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/demos/example-tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/demos/example-tools
 )
 target_link_libraries(daedalus_network_diagnostics_tests PRIVATE
     OmniNet
@@ -1117,13 +1117,13 @@ add_test(NAME network_diagnostics_tests COMMAND daedalus_network_diagnostics_tes
 
 add_executable(daedalus_websocket_tests
     test_websocket.cpp
-    ${CMAKE_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/FileIO.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
 )
 target_include_directories(daedalus_websocket_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    ${CMAKE_SOURCE_DIR}/demos/example-tools
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/demos/example-tools
 )
 target_link_libraries(daedalus_websocket_tests PRIVATE
     OmniNet
@@ -1141,7 +1141,7 @@ add_executable(daedalus_api_tests
     test_daedalus_api.cpp
 )
 target_include_directories(daedalus_api_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_api_tests PRIVATE
     daedalus
@@ -1163,7 +1163,7 @@ add_executable(daedalus_agent_name_namespace_tests
     test_agent_name_namespace.cpp
 )
 target_include_directories(daedalus_agent_name_namespace_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_agent_name_namespace_tests PRIVATE
     daedalus
@@ -1184,7 +1184,7 @@ add_executable(daedalus_token_counts_sse_tests
     test_token_counts_sse.cpp
 )
 target_include_directories(daedalus_token_counts_sse_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_token_counts_sse_tests PRIVATE
     daedalus
@@ -1213,7 +1213,7 @@ add_executable(daedalus_no_content_duplicate_tests
     test_no_content_duplicate.cpp
 )
 target_include_directories(daedalus_no_content_duplicate_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_no_content_duplicate_tests PRIVATE
     daedalus
@@ -1236,7 +1236,7 @@ add_executable(daedalus_xdg_paths_tests
     test_xdg_paths.cpp
 )
 target_include_directories(daedalus_xdg_paths_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_xdg_paths_tests PRIVATE
     daedalus
@@ -1254,7 +1254,7 @@ add_executable(daedalus_project_paths_tests
     test_project_paths.cpp
 )
 target_include_directories(daedalus_project_paths_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_project_paths_tests PRIVATE
     daedalus
@@ -1272,7 +1272,7 @@ add_executable(daedalus_two_tier_rule_tests
     test_two_tier_rule.cpp
 )
 target_include_directories(daedalus_two_tier_rule_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_two_tier_rule_tests PRIVATE
     daedalus
@@ -1290,11 +1290,11 @@ add_test(NAME two_tier_rule_tests COMMAND daedalus_two_tier_rule_tests)
 # ============================================================================
 add_executable(daedalus_migrate_data_tests
     test_migrate_data.cpp
-    ${CMAKE_SOURCE_DIR}/demos/daedalus-cli/migrate.cpp
+    ${PROJECT_SOURCE_DIR}/demos/daedalus-cli/migrate.cpp
 )
 target_include_directories(daedalus_migrate_data_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/demos/daedalus-cli
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/demos/daedalus-cli
 )
 target_link_libraries(daedalus_migrate_data_tests PRIVATE
     daedalus
@@ -1312,7 +1312,7 @@ add_executable(daedalus_ensure_directories_tests
     test_ensure_directories.cpp
 )
 target_include_directories(daedalus_ensure_directories_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_ensure_directories_tests PRIVATE
     daedalus
@@ -1330,7 +1330,7 @@ add_executable(daedalus_real_world_tools_tests
     test_real_world_tools.cpp
 )
 target_include_directories(daedalus_real_world_tools_tests PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/include
 )
 target_link_libraries(daedalus_real_world_tools_tests PRIVATE
     daedalus

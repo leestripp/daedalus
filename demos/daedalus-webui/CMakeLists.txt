@@ -19,10 +19,10 @@ target_link_libraries(daedalus-webui
 
 target_include_directories(daedalus-webui
     PRIVATE
-        ${CMAKE_SOURCE_DIR}/include              # for <daedalus.h>
-        ${CMAKE_SOURCE_DIR}/src                  # for tools/ToolHandler.h
-        ${CMAKE_SOURCE_DIR}/src/tools            # for ToolFactory.h
-        ${CMAKE_SOURCE_DIR}/demos/example-tools  # for example_tools.h
+        ${PROJECT_SOURCE_DIR}/include              # for <daedalus.h>
+        ${PROJECT_SOURCE_DIR}/src                  # for tools/ToolHandler.h
+        ${PROJECT_SOURCE_DIR}/src/tools            # for ToolFactory.h
+        ${PROJECT_SOURCE_DIR}/demos/example-tools  # for example_tools.h
 )
 
 install(TARGETS daedalus-webui

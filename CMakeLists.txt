@@ -10,6 +10,15 @@ cmake_minimum_required(VERSION 3.28)
 
 project(daedalus LANGUAGES CXX C)
 
+# Detect whether daedalus is being built stand-alone or consumed as a
+# dependency via add_subdirectory() / FetchContent. Several defaults below
+# change depending on this.
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+    set(DAEDALUS_IS_TOP_LEVEL ON)
+else()
+    set(DAEDALUS_IS_TOP_LEVEL OFF)
+endif()
+
 # Emit compile_commands.json so any IDE / static-analysis tool (clangd,
 # cppcheck, …) can map source files to their exact compiler invocation.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -17,7 +26,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Automatic version from git tags
 execute_process(
     COMMAND git describe --tags --always --dirty
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET
@@ -65,10 +74,11 @@ endif()
 message(STATUS "Parsed version: ${VERSION_MAJOR}.${VERSION_MINOR}.${VERSION_PATCH}")
 message(STATUS "Version string: ${VERSION_STRING}")
 
-# Configure version header from template
+# Configure version header from template into the build tree so the
+# source tree stays clean and out-of-source builds work.
 configure_file(
-    ${CMAKE_SOURCE_DIR}/src/core/version.h.in
-    ${CMAKE_SOURCE_DIR}/src/core/version.h
+    ${PROJECT_SOURCE_DIR}/src/core/version.h.in
+    ${PROJECT_BINARY_DIR}/src/core/version.h
     @ONLY
 )
 
@@ -87,8 +97,13 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # C++23 features we rely on: std::expected, std::flat_map, std::span, std::jthread,
 # std::stop_token, std::print, deducing this. Requires GCC 13+ / Clang 16+.
-# Install to users home dir.
-set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local")
+#
+# When daedalus is the top-level project and no explicit install prefix was
+# given, default to a user-local install. Do not override the prefix when we
+# are embedded as a dependency (FetchContent / add_subdirectory).
+if(DAEDALUS_IS_TOP_LEVEL AND CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.local" CACHE PATH "Install prefix" FORCE)
+endif()
 
 # Find pkg-config
 find_package(PkgConfig REQUIRED)
@@ -183,19 +198,21 @@ endif()
 # Tracked as https://gitlab.com/leestripp/omninet/-/issues/1 (placeholder)
 # — when that issue closes, remove this block.
 if(NOT DEFINED OMNINET_LOCAL OR NOT EXISTS "${OMNINET_LOCAL}/CMakeLists.txt")
-    file(READ "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/colors.cpp" _colors_src)
+    # Use the actual populated OmniNet source directory. With FetchContent this
+    # may live in the consumer's build tree rather than under PROJECT_BINARY_DIR.
+    file(READ "${OmniNet_SOURCE_DIR}/tools/tools_common/colors.cpp" _colors_src)
     string(REPLACE
         "return kv(key, value ? \"true\" : \"false\");"
         "return kv(key, std::string(value ? \"true\" : \"false\"));"
         _colors_src "${_colors_src}")
-    file(WRITE "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/colors.cpp" "${_colors_src}")
+    file(WRITE "${OmniNet_SOURCE_DIR}/tools/tools_common/colors.cpp" "${_colors_src}")
 
-    file(READ "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/table.cpp" _table_src)
+    file(READ "${OmniNet_SOURCE_DIR}/tools/tools_common/table.cpp" _table_src)
     string(REPLACE
         "return add(key, value ? \"true\" : \"false\");"
         "return add(key, std::string(value ? \"true\" : \"false\"));"
         _table_src "${_table_src}")
-    file(WRITE "${CMAKE_BINARY_DIR}/_deps/omninet-src/tools/tools_common/table.cpp" "${_table_src}")
+    file(WRITE "${OmniNet_SOURCE_DIR}/tools/tools_common/table.cpp" "${_table_src}")
 endif()
 
 # §TASK-007 (2026-07-18): OmniNet's own test_http_client and test_sync_http_server
@@ -305,12 +322,18 @@ target_compile_definitions(daedalus PUBLIC
     DAEDALUS_GIT_VERSION="${GIT_VERSION}"
 )
 
+# Propagate the C++23 requirement to anyone linking against daedalus.
+# This is needed because the public headers use std::expected, std::stop_token,
+# and other C++23 features.
+target_compile_features(daedalus PUBLIC cxx_std_23)
+
 target_include_directories(daedalus
 	PUBLIC
-		$<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/include>
+		$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 		$<INSTALL_INTERFACE:include>
 	PRIVATE
-		${CMAKE_SOURCE_DIR}/src
+		${PROJECT_BINARY_DIR}/src
+		${PROJECT_SOURCE_DIR}/src
 		${PNG_INCLUDE_DIRS}
 )
 
@@ -370,12 +393,11 @@ install(TARGETS daedalus
 # ----------------------------------------------------------------------------
 include(CMakePackageConfigHelpers)
 
-# NOTE: libdaedalus.a is a STATIC library — all symbols (including
-# OmniNet, CURL, nlohmann_json, etc.) are baked in at build time.
-# Consumers that link against `daedalus::daedalus` therefore do NOT
-# need to link any of these themselves. We deliberately leave
-# INTERFACE_LINK_LIBRARIES empty to avoid spurious link-time
-# complaints about "target X not in any export set".
+# NOTE: libdaedalus.a is a STATIC library. Only targets that are in the
+# install export set are propagated to consumers via
+# INTERFACE_LINK_LIBRARIES. OmniNet is kept BUILD_INTERFACE-only, so
+# consumers using find_package(daedalus) need to provide OmniNet
+# themselves if they use features that require it.
 set(DAEDALUS_LINK_LIBS "")
 
 # Generate the version file. The project extracts VERSION_MAJOR/MINOR/PATCH
@@ -410,7 +432,7 @@ set(PACKAGE_VERSION_TWEAK  "0")
 set(PACKAGE_VERSION_COUNT  "3")
 
 configure_file(
-    "${CMAKE_SOURCE_DIR}/cmake/DaedalusConfig.cmake.in"
+    "${PROJECT_SOURCE_DIR}/cmake/DaedalusConfig.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/daedalusConfig.cmake"
     @ONLY
 )
@@ -425,39 +447,50 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/daedalusConfig.cmake"
         DESTINATION "lib/cmake/daedalus")
 
 # Install the public headers so downstream `find_package(daedalus)` works.
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/include/daedalus"
+install(DIRECTORY "${PROJECT_SOURCE_DIR}/include/daedalus"
         DESTINATION "include"
         FILES_MATCHING PATTERN "*.h")
-install(FILES "${CMAKE_SOURCE_DIR}/include/daedalus.h"
+install(FILES "${PROJECT_SOURCE_DIR}/include/daedalus.h"
         DESTINATION "include")
 
 # Install the example settings template to ~/.daedalus/settings/ (only if no
 # settings.json already exists). This preserves any user modifications.
 # The install is from the canonical example at examples/settings.json.example;
 # the canonical JSON key for the Serper.dev search tool is "serper-search".
-set(USER_SETTINGS_DIR "$ENV{HOME}/.daedalus/settings")
-set(EXAMPLE_SETTINGS_FILE "${CMAKE_SOURCE_DIR}/examples/settings.json.example")
-if(NOT EXISTS "${USER_SETTINGS_DIR}/settings.json")
-    if(EXISTS "${EXAMPLE_SETTINGS_FILE}")
-        install(FILES "${EXAMPLE_SETTINGS_FILE}"
-                DESTINATION "${USER_SETTINGS_DIR}"
-                RENAME "settings.json")
+# Only do this for a stand-alone daedalus install; embedding the library via
+# FetchContent / add_subdirectory() should not touch the user's home directory.
+if(DAEDALUS_IS_TOP_LEVEL)
+    set(USER_SETTINGS_DIR "$ENV{HOME}/.daedalus/settings")
+    set(EXAMPLE_SETTINGS_FILE "${PROJECT_SOURCE_DIR}/examples/settings.json.example")
+    if(NOT EXISTS "${USER_SETTINGS_DIR}/settings.json")
+        if(EXISTS "${EXAMPLE_SETTINGS_FILE}")
+            install(FILES "${EXAMPLE_SETTINGS_FILE}"
+                    DESTINATION "${USER_SETTINGS_DIR}"
+                    RENAME "settings.json")
+        else()
+            message(WARNING "Example settings file not found at ${EXAMPLE_SETTINGS_FILE}; skipping settings install.")
+        endif()
     else()
-        message(WARNING "Example settings file not found at ${EXAMPLE_SETTINGS_FILE}; skipping settings install.")
+        message(STATUS "User settings already exist at ${USER_SETTINGS_DIR}, skipping installation")
     endif()
-else()
-    message(STATUS "User settings already exist at ${USER_SETTINGS_DIR}, skipping installation")
 endif()
+
+# Demos and tests default to ON for a stand-alone build, OFF when daedalus
+# is embedded as a dependency (FetchContent / add_subdirectory).
+option(DAEDALUS_BUILD_DEMOS "Build daedalus demo executables" ${DAEDALUS_IS_TOP_LEVEL})
+option(DAEDALUS_BUILD_TESTS "Build daedalus unit tests" ${DAEDALUS_IS_TOP_LEVEL})
 
 # Include demos if the option is on (default: ON).
 # Demos are standalone executables that link against libdaedalus.a and
 # exercise the library from outside its own sources.
 # Placed BEFORE tests so example tool libraries (e.g. daedalus_example_tools)
 # are defined when test targets that need them are configured.
-add_subdirectory(demos)
+if(DAEDALUS_BUILD_DEMOS)
+    add_subdirectory(demos)
+endif()
 
 # Include unit tests if tests directory exists
-if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
+if(DAEDALUS_BUILD_TESTS AND EXISTS "${PROJECT_SOURCE_DIR}/tests")
     add_subdirectory(tests)
 endif()
 
@@ -487,7 +520,7 @@ if(CPPCHECK)
         "--inline-suppr"
         "--suppress=missingIncludeSystem"
         "--template=message"
-        "-i${CMAKE_BINARY_DIR}/_deps"
+        "-i${PROJECT_BINARY_DIR}/_deps"
     )
 
     # Sources that belong to libdaedalus.a. Explicit list prevents cppcheck
@@ -502,12 +535,12 @@ if(CPPCHECK)
 
     # Add daedalus-prefixed cppcheck target (OmniNet may have added `cppcheck`)
     add_custom_target(daedalus_cppcheck
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/cppcheck
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/cppcheck
         COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
-            --output-file=${CMAKE_BINARY_DIR}/cppcheck_results.txt
-            --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
+            --output-file=${PROJECT_BINARY_DIR}/cppcheck_results.txt
+            --cppcheck-build-dir=${PROJECT_BINARY_DIR}/cppcheck
             ${CPPCHECK_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         COMMENT "Running cppcheck static analysis on daedalus library sources..."
         VERBATIM
     )
@@ -516,7 +549,7 @@ if(CPPCHECK)
     add_custom_target(daedalus_cppcheck_quick
         COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
             ${CPPCHECK_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         COMMENT "Running cppcheck on daedalus library sources (quick mode)..."
         VERBATIM
     )
@@ -524,9 +557,9 @@ if(CPPCHECK)
     # Add cppcheck.xml target for CI/CD integration
     add_custom_target(daedalus_cppcheck_xml
         COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
-            --xml --output-file=${CMAKE_BINARY_DIR}/cppcheck.xml
+            --xml --output-file=${PROJECT_BINARY_DIR}/cppcheck.xml
             ${CPPCHECK_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
         COMMENT "Running cppcheck on daedalus library sources with XML output..."
         VERBATIM
     )
