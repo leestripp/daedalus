@@ -54,6 +54,23 @@ static std::string extract_message(const HTTP::Request& req) {
     return {};
 }
 
+static std::string extract_model(const HTTP::Request& req) {
+    try {
+        // §webui-model-select: accept model override either as a query
+        // parameter (?model=foo) or in the JSON body ({"model":"foo"}).
+        const auto& q = req.query();
+        if (q.has("model")) {
+            return q.queryString("model", "");
+        }
+        auto body = req.bodyAsString();
+        if (body.empty()) return {};
+        auto j = json::parse(body);
+        if (j.contains("model") && j["model"].is_string())
+            return j["model"].get<std::string>();
+    } catch (...) {}
+    return {};
+}
+
 static bool extract_approval(const HTTP::Request& req, bool& approved, bool& sticky) {
     try {
         auto body = req.bodyAsString();
@@ -86,8 +103,9 @@ static void register_routes(HTTP::Server& server, SessionManager& mgr) {
     // §Phase 9.6: response now includes "model" (the resolved
     // Agent::active_model()) so the UI can display which model
     // the session is bound to without an extra round-trip.
-    server.router().post("/sessions", [&mgr](const Req&, Resp& resp) {
-        std::string id = mgr.create();
+    // §webui-model-select: optional model override in query/body.
+    server.router().post("/sessions", [&mgr](const Req& req, Resp& resp) {
+        std::string id = mgr.create(extract_model(req));
         json j = { {"session_id", id} };
         // Embed the model JSON inline (already a string).
         std::string model_json = mgr.get_model(id);

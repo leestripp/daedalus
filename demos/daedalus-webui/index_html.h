@@ -76,8 +76,32 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     direction: rtl;           /* show the tail (e.g. path basename) */
     text-align: left;
   }
-  #model::before { content: "model: "; color: #6e7681; }
   #cwd::before   { content: "cwd: ";   color: #6e7681; }
+
+  /* §webui-model-select: model dropdown in the header. */
+  #model-select {
+    background: #161b22;
+    color: #d6d9dc;
+    border: 1px solid #2a2f36;
+    border-radius: 4px;
+    padding: 3px 8px;
+    font: inherit;
+    font-size: 12px;
+    max-width: 32ch;
+    cursor: pointer;
+  }
+  #model-select:focus {
+    outline: none;
+    border-color: #1f6feb;
+  }
+  #model-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  #model-select option {
+    background: #161b22;
+    color: #d6d9dc;
+  }
 
   /* === Phase 9.10: thinking-bubble + stage-chips =================== */
 
@@ -541,7 +565,8 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
   <span id="usage-hud" title="Tokens and iterations"></span>
   <button type="button" id="settings-btn" class="settings-btn">⚙ Settings</button>
   <div id="right-info">
-    <span id="model" title="" class="empty info-pill">…</span>
+    <label for="model-select" style="font-size:12px;color:#6e7681;white-space:nowrap;">model:</label>
+    <select id="model-select" class="info-pill" title="Active model — change to create a new session"></select>
     <span id="cwd"   title="" class="empty info-pill">…</span>
   </div>
 </header>
@@ -748,6 +773,7 @@ const usageHudEl   = $("usage-hud");
 const inputEl      = $("input");
 const sendBtn      = $("send");
 const cancelBtn    = $("cancel");
+const modelSelect  = $("model-select");
 const approvalModal = $("approval-modal");
 const approvalCommandEl = $("approval-command");
 const approvalApproveBtn = $("approval-approve");
@@ -1078,7 +1104,26 @@ function setStage(name) {
   }
 }
 
-function newSession() {
+// §webui-model-select: populate the header dropdown from the same
+// /settings/models list used by the settings page.
+function populateModelDropdown(selectedName) {
+  if (!cachedModels.length) {
+    modelSelect.innerHTML = '<option value="">(no models)</option>';
+    modelSelect.disabled = true;
+    return;
+  }
+  modelSelect.innerHTML = '';
+  modelSelect.disabled = false;
+  for (const m of cachedModels) {
+    const opt = document.createElement("option");
+    opt.value = m.name;
+    opt.textContent = m.name;
+    if (m.name === selectedName) opt.selected = true;
+    modelSelect.appendChild(opt);
+  }
+}
+
+function newSession(selectedModel) {
   if (es) { es.close(); es = null; }
   stopStatsPolling();
   transcriptEl.innerHTML = "";
@@ -1097,25 +1142,24 @@ function newSession() {
   if (tc) { tc.hidden = true; tc.textContent = "";
             tc.classList.remove("has-pending", "has-error"); }
   statsEl.textContent     = "creating session...";
-  fetch("/sessions", { method: "POST" })
+  const createOpts = { method: "POST", headers: {} };
+  if (selectedModel) {
+    createOpts.headers["Content-Type"] = "application/json";
+    createOpts.body = JSON.stringify({ model: selectedModel });
+  }
+  fetch("/sessions", createOpts)
     .then(r => r.json())
     .then(j => {
       sessionId = j.session_id;
       statsEl.textContent = "session " + sessionId.slice(0, 8) + "...";
 
-      // §Phase 9.6: surface the active model in the header. The
-      // server resolves it from cfg.model_name / settings.json
-      // defaults at session creation time, so it's stable for the
-      // session's lifetime unless we add a live model-switch UI.
-      const modelEl = document.getElementById("model");
-      if (j.model && (j.model.name || j.model.id)) {
-        const display = j.model.name || j.model.id;
-        const tip = j.model.id && j.model.name !== j.model.id
-                      ? j.model.name + " (" + j.model.id + ")"
-                      : (j.model.host ? j.model.host + " / " + display : display);
-        modelEl.textContent = display;
-        modelEl.title = tip;
-        modelEl.classList.remove("empty");
+      // §webui-model-select: sync the header dropdown to the model
+      // the new session actually resolved to.
+      if (j.model && j.model.name) {
+        populateModelDropdown(j.model.name);
+        modelSelect.title = j.model.id && j.model.name !== j.model.id
+                              ? j.model.name + " (" + j.model.id + ")"
+                              : (j.model.host ? j.model.host + " / " + j.model.name : j.model.name);
       }
 
       openEventStream();
@@ -2044,19 +2088,38 @@ async function deleteMcpServer(name) {
   }
 }
 
+// §webui-model-select: load the model list first so the header dropdown
+// is populated before (or alongside) the initial session creation.
+function loadModelsList() {
+  return fetch("/settings/models")
+    .then(r => r.json())
+    .then(j => {
+      cachedModels = (j.models || []).sort((a, b) => a.name.localeCompare(b.name));
+    })
+    .catch(() => { cachedModels = []; });
+}
+
+// §webui-model-select: changing the header dropdown creates a fresh
+// session bound to the selected model and clears the transcript.
+modelSelect.addEventListener("change", () => {
+  const name = modelSelect.value;
+  if (!name) return;
+  newSession(name);
+});
+
 // §webui-init: start creating the session BEFORE enabling the input so
 // any transcript-clear in newSession() happens while the user still can't
 // type. setState("Idle") enables the composer once the UI is ready.
-newSession();
-setState("Idle");
+loadModelsList().then(() => {
+  newSession();
+  setState("Idle");
+});
 
-// §Phase 9.6: populate the top-right "model:" and "cwd:" labels.
-//  - cwd  : fetched from GET /info (server-wide, captured at startup).
-//  - model: returned by POST /sessions inside the session JSON (the
-//           Agent.active_model() resolves to whichever entry is the
-//           default at session creation time; if the user later adds
-//           a /sessions/<id>/model PATCH we'll update this live).
-// Both are best-effort — leave the "…" placeholder on any failure.
+// §Phase 9.6 / §webui-model-select: populate cwd label and keep the
+// model dropdown in sync. The model list is loaded above; newSession()
+// selects the active model once the session resolves it. cwd is fetched
+// from GET /info (server-wide, captured at startup). Both are best-effort
+// — leave the "…" placeholder on any failure.
 fetch("/info").then(r => r.json()).then(j => {
     const cwdEl = document.getElementById("cwd");
     if (j && typeof j.cwd === "string" && j.cwd.length > 0) {

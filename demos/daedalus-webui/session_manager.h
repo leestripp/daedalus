@@ -111,7 +111,10 @@ public:
         , project_root_(std::move(project_root))
         , auto_approve_(auto_approve) {}
 
-    std::string create() {
+    // §webui-model-select: create a session bound to a specific model.
+    // If model_name is empty, fall back to the CLI --model default or
+    // (if that is also empty) the settings store's default/first model.
+    std::string create(const std::string& model_name = "") {
         auto sess = std::make_unique<Session>();
         sess->id = new_session_id();
 
@@ -132,7 +135,7 @@ public:
         // positions), those also pass — the validator allows
         // '-' in non-leading positions.
         cfg.agent_name   = sess->id;
-        cfg.model_name  = default_model_name_;
+        cfg.model_name  = model_name.empty() ? default_model_name_ : model_name;
 
         // §Phase 9.7: opt in to the user's global skills. Without
         // this the Agent's system prompt always reports
