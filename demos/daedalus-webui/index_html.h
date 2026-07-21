@@ -706,38 +706,12 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     <!-- MCP panel -->
     <div class="settings-panel" id="tab-mcp">
       <h3>Configured MCP Servers</h3>
+      <div class="panel-toolbar">
+        <button type="button" id="mcp-add-btn">+ Add MCP Server</button>
+      </div>
       <div id="mcp-list" class="settings-card-list">
         <span class="empty">Loading…</span>
       </div>
-      <h3>Add / Edit MCP Server</h3>
-      <form id="mcp-form" class="settings-form">
-        <input type="hidden" id="mcp-original-name" value="">
-        <label for="mcp-name">Name</label>
-        <input type="text" id="mcp-name" placeholder="wikipedia" required>
-        <label for="mcp-transport">Transport</label>
-        <select id="mcp-transport">
-          <option value="stdio">stdio</option>
-          <option value="streamable-http">streamable-http</option>
-        </select>
-        <label for="mcp-command">Command</label>
-        <input type="text" id="mcp-command" placeholder="mcp-server-wikipedia">
-        <label for="mcp-args">Args (one per line)</label>
-        <textarea id="mcp-args" placeholder="--verbose"></textarea>
-        <label for="mcp-env">Env (KEY=VALUE per line)</label>
-        <textarea id="mcp-env" placeholder="API_KEY=abc"></textarea>
-        <label for="mcp-url">URL</label>
-        <input type="text" id="mcp-url" placeholder="http://localhost:3000/sse">
-        <label for="mcp-token">Bearer Token</label>
-        <input type="password" id="mcp-token">
-        <label for="mcp-desc">Description</label>
-        <input type="text" id="mcp-desc">
-        <label for="mcp-enabled">Enabled</label>
-        <input type="checkbox" id="mcp-enabled" checked>
-        <div class="settings-actions">
-          <button type="button" id="mcp-clear" class="cancel">Clear</button>
-          <button type="submit">Save Server</button>
-        </div>
-      </form>
     </div>
   </div>
 </div>
@@ -805,6 +779,41 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
       </div>
     </div>
     <div id="discover-results" class="settings-card-list" style="margin-top:12px;"></div>
+  </div>
+</div>
+
+<div id="mcp-modal" class="settings-modal">
+  <div class="settings-modal-box">
+    <h3><span id="mcp-modal-title">Add MCP Server</span>
+      <button type="button" class="settings-modal-close" data-close="mcp-modal">&times;</button></h3>
+    <form id="mcp-form" class="settings-form">
+      <input type="hidden" id="mcp-original-name" value="">
+      <label for="mcp-name">Name</label>
+      <input type="text" id="mcp-name" placeholder="wikipedia" required>
+      <label for="mcp-transport">Transport</label>
+      <select id="mcp-transport">
+        <option value="stdio">stdio</option>
+        <option value="streamable-http">streamable-http</option>
+      </select>
+      <label for="mcp-command">Command</label>
+      <input type="text" id="mcp-command" placeholder="mcp-server-wikipedia">
+      <label for="mcp-args">Args (one per line)</label>
+      <textarea id="mcp-args" placeholder="--verbose"></textarea>
+      <label for="mcp-env">Env (KEY=VALUE per line)</label>
+      <textarea id="mcp-env" placeholder="API_KEY=abc"></textarea>
+      <label for="mcp-url">URL</label>
+      <input type="text" id="mcp-url" placeholder="http://localhost:3000/sse">
+      <label for="mcp-token">Bearer Token</label>
+      <input type="password" id="mcp-token">
+      <label for="mcp-desc">Description</label>
+      <input type="text" id="mcp-desc">
+      <label for="mcp-enabled">Enabled</label>
+      <input type="checkbox" id="mcp-enabled" checked>
+      <div class="settings-actions">
+        <button type="button" id="mcp-clear" class="cancel">Clear</button>
+        <button type="submit">Save Server</button>
+      </div>
+    </form>
   </div>
 </div>
 
@@ -2151,6 +2160,11 @@ function renderMcpList(servers) {
   });
 }
 
+function openMcpModal(title) {
+  $("mcp-modal-title").textContent = title;
+  openModal("mcp-modal");
+}
+
 function populateMcpForm(s) {
   $("mcp-original-name").value = s.name || "";
   $("mcp-name").value = s.name || "";
@@ -2164,7 +2178,16 @@ function populateMcpForm(s) {
   $("mcp-token").value = "";
   $("mcp-desc").value = s.description || "";
   $("mcp-enabled").checked = s.enabled !== false;
+  openMcpModal("Edit MCP Server");
 }
+
+$("mcp-add-btn").addEventListener("click", () => {
+  $("mcp-form").reset();
+  $("mcp-original-name").value = "";
+  $("mcp-transport").value = "stdio";
+  $("mcp-enabled").checked = true;
+  openMcpModal("Add MCP Server");
+});
 
 $("mcp-clear").addEventListener("click", () => {
   $("mcp-form").reset();
@@ -2206,6 +2229,7 @@ $("mcp-form").addEventListener("submit", async (ev) => {
     $("mcp-original-name").value = "";
     $("mcp-transport").value = "stdio";
     $("mcp-enabled").checked = true;
+    closeModal("mcp-modal");
     await loadSettings();
   } catch (e) {
     appendLog("Error", "save MCP server failed: " + e);
