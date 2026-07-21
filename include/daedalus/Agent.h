@@ -18,6 +18,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -157,6 +158,33 @@ public:
     /// @brief Execute a registered tool directly (without LLM involvement).
     nlohmann::json execute_tool(const std::string& name,
                                 const nlohmann::json& args);
+
+    // ------------------------------------------------------------------
+    // Todo list (per-project, per-agent)
+    // ------------------------------------------------------------------
+
+    /// @brief Add a todo item. Returns the same JSON the `todo_add` tool returns.
+    nlohmann::json add_todo(const std::string& text, bool done = false);
+
+    /// @brief Edit a todo item by id. Optional text and/or done update.
+    nlohmann::json edit_todo(int id,
+                             const std::optional<std::string>& text = std::nullopt,
+                             const std::optional<bool>& done = std::nullopt);
+
+    /// @brief Delete a todo item by id.
+    nlohmann::json delete_todo(int id);
+
+    /// @brief List todos. filter is "all" (default), "pending", or "done".
+    nlohmann::json list_todos(const std::string& filter = "all");
+
+    /// @brief Return total / pending / done counts plus the current max.
+    nlohmann::json count_todos();
+
+    /// @brief Set the maximum number of todos (1-1000).
+    nlohmann::json set_max_todos(int max);
+
+    /// @brief Clear the entire todo list.
+    nlohmann::json clear_todos();
 
     // ------------------------------------------------------------------
     // Extension

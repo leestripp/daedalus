@@ -10,12 +10,14 @@ using json = nlohmann::json;
 class FileIO {
 private:
     std::filesystem::path project_path;
+    std::string agent_name_;
 
 public:
     // Find project root by looking for project markers
     static std::filesystem::path find_project_root(const std::filesystem::path& start_path);
 
-    explicit FileIO(const std::filesystem::path& base_path);
+    explicit FileIO(const std::filesystem::path& base_path,
+                    std::string agent_name = {});
 
     // File operations - simplified model (trust Linux permissions):
     // - Read: any accessible file
@@ -38,4 +40,5 @@ public:
 
     // Getters
     const std::filesystem::path& get_project_path() const;
+    const std::string& get_agent_name() const noexcept { return agent_name_; }
 };

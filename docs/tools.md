@@ -20,6 +20,7 @@ functional autonomous agent are registered automatically:
 | `compress_context` | Request conversation compression |
 | `stop` | End the agent loop cleanly |
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
+| `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
 | `mcp__<server>__<tool>` | Dynamically registered MCP proxied tools (when MCP is enabled) |
 
@@ -1562,6 +1563,61 @@ Manage background processes for server applications. Start processes in backgrou
 - Process IDs are unique identifiers returned by the start action
 - Use the `list` action to see all active background processes
 - Processes are automatically cleaned up when daedalus exits
+
+---
+
+## Todo list tools
+
+The agent has a per-project, per-agent todo list that persists in
+`<project_root>/.daedalus/daedalus[-<agent_name>]/todos.json`.
+Default maximum is 100 items; change it with `set_max_todos`.
+
+### `todo_add`
+
+| Name  | Type    | Required | Description                        |
+|-------|---------|----------|------------------------------------|
+| text  | string  | Yes      | Task description                   |
+| done  | boolean | No       | Initial state (default: `false`)   |
+
+### `todo_edit`
+
+| Name  | Type    | Required | Description                        |
+|-------|---------|----------|------------------------------------|
+| id    | integer | Yes      | Todo id to update                  |
+| text  | string  | No       | New task description               |
+| done  | boolean | No       | New done/pending state             |
+
+At least one of `text` or `done` must be provided.
+
+### `todo_delete`
+
+| Name  | Type    | Required | Description                        |
+|-------|---------|----------|------------------------------------|
+| id    | integer | Yes      | Todo id to remove                  |
+
+### `todo_list`
+
+| Name   | Type   | Required | Description                              |
+|--------|--------|----------|------------------------------------------|
+| filter | string | No       | `all` (default), `pending`, or `done`    |
+
+Returns a grouped view with Pending and Done sections.
+
+### `todo_count`
+
+No parameters. Returns `total`, `pending`, `done`, and `max_todos`.
+
+### `set_max_todos`
+
+| Name  | Type    | Required | Description                        |
+|-------|---------|----------|------------------------------------|
+| max   | integer | Yes      | New maximum (1-1000)               |
+
+Cannot be set lower than the current list size.
+
+### `todo_clear`
+
+No parameters. Removes every todo and resets the list.
 
 ---
 

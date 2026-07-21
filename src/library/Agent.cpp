@@ -82,6 +82,43 @@ nlohmann::json Agent::execute_tool(const std::string& name,
     return impl_->execute_tool(name, args);
 }
 
+nlohmann::json Agent::add_todo(const std::string& text, bool done)
+{
+    return impl_->add_todo(text, done);
+}
+
+nlohmann::json Agent::edit_todo(int id,
+                                const std::optional<std::string>& text,
+                                const std::optional<bool>& done)
+{
+    return impl_->edit_todo(id, text, done);
+}
+
+nlohmann::json Agent::delete_todo(int id)
+{
+    return impl_->delete_todo(id);
+}
+
+nlohmann::json Agent::list_todos(const std::string& filter)
+{
+    return impl_->list_todos(filter);
+}
+
+nlohmann::json Agent::count_todos()
+{
+    return impl_->count_todos();
+}
+
+nlohmann::json Agent::set_max_todos(int max)
+{
+    return impl_->set_max_todos(max);
+}
+
+nlohmann::json Agent::clear_todos()
+{
+    return impl_->clear_todos();
+}
+
 void Agent::register_tool(std::unique_ptr<BaseTool> tool)
 {
     impl_->register_tool(std::move(tool));

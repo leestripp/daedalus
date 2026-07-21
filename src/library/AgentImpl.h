@@ -90,6 +90,17 @@ public:
     nlohmann::json execute_tool(const std::string& name,
                                 const nlohmann::json& args);
 
+    // Todo list
+    nlohmann::json add_todo(const std::string& text, bool done = false);
+    nlohmann::json edit_todo(int id,
+                             const std::optional<std::string>& text = std::nullopt,
+                             const std::optional<bool>& done = std::nullopt);
+    nlohmann::json delete_todo(int id);
+    nlohmann::json list_todos(const std::string& filter = "all");
+    nlohmann::json count_todos();
+    nlohmann::json set_max_todos(int max);
+    nlohmann::json clear_todos();
+
     // Extension
     void register_tool(std::unique_ptr<BaseTool> tool);
     void clear_memory();

@@ -284,6 +284,8 @@ set(TOOLS_SOURCES
 	src/tools/BashPathChecker.cpp
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
+	src/tools/TodoListTool.cpp
+	src/tools/TodoListService.cpp
 )
 
 # Public library API sources (Phase 1: headers + thin stubs).

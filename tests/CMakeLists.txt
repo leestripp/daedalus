@@ -672,6 +672,48 @@ target_link_libraries(daedalus_set_status_tool_tests PRIVATE
 add_test(NAME set_status_tool_tests COMMAND daedalus_set_status_tool_tests)
 
 # ============================================================================
+# Todo list tools tests
+# ============================================================================
+
+add_executable(daedalus_todo_list_tool_tests
+    test_todo_list_tool.cpp
+)
+target_include_directories(daedalus_todo_list_tool_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_todo_list_tool_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME todo_list_tool_tests COMMAND daedalus_todo_list_tool_tests)
+
+# ============================================================================
+# Public Agent todo API tests
+# ============================================================================
+
+add_executable(daedalus_todo_public_api_tests
+    test_todo_public_api.cpp
+)
+target_include_directories(daedalus_todo_public_api_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_todo_public_api_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME todo_public_api_tests COMMAND daedalus_todo_public_api_tests)
+
+# ============================================================================
 # §Phase 8 acceptance tests — public API contract tests
 # ============================================================================
 

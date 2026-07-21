@@ -184,7 +184,7 @@ static LastToolCall find_last_tool_call(const json& messages,
 LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_store,
                        mcp::McpServerManager* mcp_manager) :
     config_(config),
-    file_io_(std::make_unique<FileIO>(config.target_directory)),
+    file_io_(std::make_unique<FileIO>(config.target_directory, config.agent_name)),
     settings_store_(settings_store),
     iteration_count_(0),   // §Phase 11: order follows declaration; sink_ defaulted
     mcp_manager_(mcp_manager)   // §Phase 11: injected; nullptr = MCP disabled

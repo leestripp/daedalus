@@ -5,6 +5,7 @@
 #include "tools/BashTool.h"
 #include "tools/SkillTool.h"
 #include "tools/MemoryTool.h"
+#include "tools/TodoListTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
 #include "core/ThreadPool.h"
@@ -59,6 +60,15 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<ForgetTool>());
     register_tool(std::make_shared<MemoriesTool>());
     register_tool(std::make_shared<MemoryStatsTool>());
+
+    // Todo list tools
+    register_tool(std::make_shared<TodoAddTool>());
+    register_tool(std::make_shared<TodoEditTool>());
+    register_tool(std::make_shared<TodoDeleteTool>());
+    register_tool(std::make_shared<TodoListTool>());
+    register_tool(std::make_shared<TodoSetMaxTool>());
+    register_tool(std::make_shared<TodoCountTool>());
+    register_tool(std::make_shared<TodoClearTool>());
 
     // MCP tools are NOT registered statically. They are populated dynamically
     // by `refresh_mcp_tools()` (called from LLMClient) so each server's

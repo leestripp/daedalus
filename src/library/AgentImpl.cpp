@@ -29,6 +29,7 @@
 #include "tools/ToolHandler.h"       // internal subsystem (src/tools/)
 #include "tools/ToolFactory.h"       // internal subsystem (src/tools/)
 #include "tools/HostToolAdapter.h"   // adapter: HostTool → BaseTool
+#include "tools/TodoListService.h"   // public Agent todo API backing
 #include "LibraryToolContext.h"
 #include "daedalus/default_paths.h"   // default_settings_path()
 
@@ -850,7 +851,8 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
     // a different directory than the project.
     FileIO file_io(cfg_.project_root.empty()
                        ? std::filesystem::current_path()
-                       : cfg_.project_root);
+                       : cfg_.project_root,
+                   cfg_.agent_name);
 
     // §BUG-004 fix: honour cfg_.auto_approve even when no LLMClient
     // was ever constructed (the LLMClient ctor is otherwise the only
@@ -868,6 +870,71 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
     }
 
     return result;
+}
+
+// ============================================================================
+// Todo list public API
+// ============================================================================
+
+static fs::path todo_project_root(const fs::path& cfg_root)
+{
+    fs::path root = cfg_root.empty() ? fs::current_path() : cfg_root;
+    std::error_code ec;
+    if (fs::exists(root, ec)) {
+        return fs::canonical(root, ec);
+    }
+    return fs::absolute(root);
+}
+
+nlohmann::json AgentImpl::add_todo(const std::string& text, bool done)
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .add(text, done);
+}
+
+nlohmann::json AgentImpl::edit_todo(int id,
+                                    const std::optional<std::string>& text,
+                                    const std::optional<bool>& done)
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .edit(id, text, done);
+}
+
+nlohmann::json AgentImpl::delete_todo(int id)
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .remove(id);
+}
+
+nlohmann::json AgentImpl::list_todos(const std::string& filter)
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .list(filter);
+}
+
+nlohmann::json AgentImpl::count_todos()
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .count();
+}
+
+nlohmann::json AgentImpl::set_max_todos(int max)
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .set_max(max);
+}
+
+nlohmann::json AgentImpl::clear_todos()
+{
+    return TodoListService::instance()
+        .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
+        .clear();
 }
 
 void AgentImpl::register_tool(std::unique_ptr<BaseTool> tool)
