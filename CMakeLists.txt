@@ -493,6 +493,7 @@ if(CPPCHECK)
 
     # Add daedalus-prefixed cppcheck target (OmniNet may have added `cppcheck`)
     add_custom_target(daedalus_cppcheck
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/cppcheck
         COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
             --output-file=${CMAKE_BINARY_DIR}/cppcheck_results.txt
             --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
