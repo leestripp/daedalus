@@ -235,8 +235,8 @@ ctest --test-dir build --output-on-failure
 # Install cppcheck
 sudo apt install -y cppcheck
 
-# Run analysis
-cmake --build build --target cppcheck
+# Run analysis (daedalus library sources only; does not scan fetched dependencies)
+cmake --build build --target daedalus_cppcheck
 ```
 
 ---

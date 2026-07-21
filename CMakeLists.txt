@@ -1,32 +1,17 @@
 cmake_minimum_required(VERSION 3.28)
 
 # ============================================================================
-# §Phase 9.9: prefer clang/clang++ when no compiler was forced by the user.
-# The user can still force gcc with `CC=gcc CXX=g++ cmake -S . -B build`.
-# clang gives much better diagnostics and is required for clang-tidy to be
-# happy.  Must run BEFORE project() so CMake doesn't latch onto the
-# system default gcc.
-if(NOT DEFINED CMAKE_CXX_COMPILER)
-    find_program(_DAEDALUS_CLANGXX clang++)
-    if(_DAEDALUS_CLANGXX)
-        set(CMAKE_CXX_COMPILER "${_DAEDALUS_CLANGXX}" CACHE FILEPATH "C++ compiler")
-        message(STATUS "[daedalus] defaulting CXX to ${_DAEDALUS_CLANGXX} (set CXX= to override)")
-    endif()
-    unset(_DAEDALUS_CLANGXX)
-endif()
-if(NOT DEFINED CMAKE_C_COMPILER)
-    find_program(_DAEDALUS_CLANG clang)
-    if(_DAEDALUS_CLANG)
-        set(CMAKE_C_COMPILER "${_DAEDALUS_CLANG}" CACHE FILEPATH "C compiler")
-        message(STATUS "[daedalus] defaulting CC to ${_DAEDALUS_CLANG} (set CC= to override)")
-    endif()
-    unset(_DAEDALUS_CLANG)
-endif()
+# Compiler selection: rely on the system default (gcc/g++ on Debian/Ubuntu).
+# Users can still force a specific toolchain with `CC=… CXX=… cmake -S . -B build`
+# — e.g. `CC=clang CXX=clang++` or `CC=gcc-13 CXX=g++-13`.
+# Nothing is pinned here so the distro's default compiler wins, matching the
+# pre-§Phase 9.9 behaviour.
+# ============================================================================
 
 project(daedalus LANGUAGES CXX C)
 
-# §Phase 9.9: emit compile_commands.json so clang-tidy (and any IDE)
-# can map source files to their exact compiler invocation.
+# Emit compile_commands.json so any IDE / static-analysis tool (clangd,
+# cppcheck, …) can map source files to their exact compiler invocation.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Automatic version from git tags
@@ -287,6 +272,8 @@ set(LIBRARY_PUBLIC_SOURCES
 	src/library/paths.cpp           # Plan.md Phase 1: XDG paths singleton
 	src/library/project_paths.cpp   # Plan.md Phase 1: per-project path resolver
 	src/library/model_discovery.cpp # Provider-agnostic /v1/models discovery
+	src/library/a2a/A2aClient.cpp   # A2A (Agent2Agent Protocol) client
+	src/library/a2a/A2aServer.cpp   # A2A (Agent2Agent Protocol) server
 )
 
 set(ALL_SOURCES
@@ -465,85 +452,81 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/tests")
     add_subdirectory(tests)
 endif()
 
-# Static analysis is provided by clang-tidy via the daedalus_clang_tidy_*
-# targets further down in this file. cppcheck used to live here; it was
-# removed in 2026-07 because the project standardised on clang-tidy
-# (which consumes compile_commands.json and so reuses the exact flags
-# the TUs were built with, unlike cppcheck's heuristic parser).
-
 # ============================================================================
-# §Phase 9.9: clang-tidy static analysis.
+# cppcheck static analysis
+#
+# OmniNet (fetched above) already adds its own `cppcheck` target when cppcheck
+# is on PATH. To avoid a target-name collision, we prefix ours with `daedalus_`
+# so users get both targets side-by-side.
+#
+# Note: clang-tidy used to live here. It was removed because gcc/g++ is the
+# default compiler again (see the "Compiler selection" block at the top of
+# this file) and clang-tidy is clang-only. cppcheck's heuristic parser works
+# against gcc-compiled TUs without needing compile_commands.json, so it's
+# the right choice for this toolchain.
 # ============================================================================
-# Reads compile_commands.json (enabled above via CMAKE_EXPORT_COMPILE_COMMANDS=ON)
-# so each .cpp / .h is analyzed with its exact compile flags.
-# If clang-tidy is missing, the targets silently no-op and a message is printed.
+find_program(CPPCHECK cppcheck)
+if(CPPCHECK)
+    message(STATUS "cppcheck found: ${CPPCHECK}")
 
-find_program(CLANG_TIDY_EXECUTABLE clang-tidy)
-if(CLANG_TIDY_EXECUTABLE)
-    message(STATUS "clang-tidy found: ${CLANG_TIDY_EXECUTABLE}")
-
-    # Restrict analysis to first-party sources — skip curl, poppler,
-    # OmniNet, sqlite, openssl etc. that come in via build/_deps/ or
-    # system headers.  Matches the .clang-tidy HeaderFilterRegex.
-    set(HEADER_FILTER_REGEX "(^|/)(src|include|tests|demos|tools)/.*\\.h(pp)?$")
-
-    # Helper macro: adds a clang-tidy target that runs over a directory.
-    # clang-tidy reads compile_commands.json which CMake auto-generates
-    # when CMAKE_EXPORT_COMPILE_COMMANDS=ON.  We use file(GLOB_RECURSE)
-    # at configure time so the actual file list is passed — passing the
-    # raw "${DIR}/*.cpp" glob would not work because CMake does not
-    # invoke a shell to expand globs in custom_target commands.
-    #
-    # VERBATIM is required: without it the generated Makefile recipe
-    # passes arguments unescaped to /bin/sh, and the trailing `$` in
-    # HEADER_FILTER_REGEX combined with shell quoting (the previous
-    # implementation wrapped it in single quotes) produced `$'` —
-    # which dash interprets as the start of an ANSI-C quoted string
-    # and fails with "Unterminated quoted string". VERBATIM lets
-    # CMake shell-escape each argument correctly, so we can pass
-    # the regex as a plain bare argument instead of quoting it.
-    macro(add_clang_tidy_target TARGET_NAME DIR)
-        file(GLOB_RECURSE _CT_SOURCES CONFIGURE_DEPENDS
-            "${CMAKE_SOURCE_DIR}/${DIR}/*.cpp"
-            "${CMAKE_SOURCE_DIR}/${DIR}/*.h")
-        add_custom_target(${TARGET_NAME}
-            COMMAND ${CLANG_TIDY_EXECUTABLE}
-                -p ${CMAKE_BINARY_DIR}
-                --quiet
-                -header-filter=${HEADER_FILTER_REGEX}
-                ${_CT_SOURCES}
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            COMMENT "Running clang-tidy for ${TARGET_NAME}"
-            VERBATIM
-        )
-    endmacro()
-
-    # Per-tree targets.  Prefixed `daedalus_` because OmniNet already
-    # registers its own `clang_tidy*` / `static_analysis` targets.
-    add_clang_tidy_target(daedalus_clang_tidy_lib   src)
-    add_clang_tidy_target(daedalus_clang_tidy_tests tests)
-    add_clang_tidy_target(daedalus_clang_tidy_demos demos)
-    add_clang_tidy_target(daedalus_clang_tidy_tools tools)
-
-    # Master target: run all four.
-    add_custom_target(daedalus_clang_tidy
-        COMMAND ${CMAKE_COMMAND} -E echo "Running all daedalus clang-tidy analyses..."
-        COMMAND ${CMAKE_COMMAND} --build . --target daedalus_clang_tidy_lib
-        COMMAND ${CMAKE_COMMAND} --build . --target daedalus_clang_tidy_tests
-        COMMAND ${CMAKE_COMMAND} --build . --target daedalus_clang_tidy_demos
-        COMMAND ${CMAKE_COMMAND} --build . --target daedalus_clang_tidy_tools
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "Running all daedalus clang-tidy analyses"
+    # cppcheck settings
+    set(CPPCHECK_FLAGS
+        "--enable=all"
+        "--std=c++23"
+        "--platform=unix64"
+        "--quiet"
+        "--inline-suppr"
+        "--suppress=missingIncludeSystem"
+        "--template=message"
+        "-i${CMAKE_BINARY_DIR}/_deps"
     )
 
-    # Alias for `make daedalus_static_analysis`.
-    add_custom_target(daedalus_static_analysis
-        COMMAND ${CMAKE_COMMAND} --build . --target daedalus_clang_tidy
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "Running daedalus_static_analysis (alias for daedalus_clang_tidy)"
+    # Sources that belong to libdaedalus.a. Explicit list prevents cppcheck
+    # from wandering into fetched dependencies (build/_deps/) or demo/test code.
+    set(CPPCHECK_SOURCES
+        ${CORE_SOURCES}
+        ${API_SOURCES}
+        ${MCP_SOURCES}
+        ${TOOLS_SOURCES}
+        ${LIBRARY_PUBLIC_SOURCES}
     )
 
-    message(STATUS "daedalus clang-tidy targets created: daedalus_clang_tidy, daedalus_clang_tidy_{lib,tests,demos,tools}")
+    # Add daedalus-prefixed cppcheck target (OmniNet may have added `cppcheck`)
+    add_custom_target(daedalus_cppcheck
+        COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
+            --output-file=${CMAKE_BINARY_DIR}/cppcheck_results.txt
+            --cppcheck-build-dir=${CMAKE_BINARY_DIR}/cppcheck
+            ${CPPCHECK_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running cppcheck static analysis on daedalus library sources..."
+        VERBATIM
+    )
+
+    # Also add a quick cppcheck target that only checks src/ (no tests, no demos)
+    add_custom_target(daedalus_cppcheck_quick
+        COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
+            ${CPPCHECK_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running cppcheck on daedalus library sources (quick mode)..."
+        VERBATIM
+    )
+
+    # Add cppcheck.xml target for CI/CD integration
+    add_custom_target(daedalus_cppcheck_xml
+        COMMAND ${CPPCHECK} ${CPPCHECK_FLAGS}
+            --xml --output-file=${CMAKE_BINARY_DIR}/cppcheck.xml
+            ${CPPCHECK_SOURCES}
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        COMMENT "Running cppcheck on daedalus library sources with XML output..."
+        VERBATIM
+    )
+
+    message(STATUS "cppcheck targets available:")
+    message(STATUS "  make daedalus_cppcheck        - Full analysis (daedalus library sources)")
+    message(STATUS "  make daedalus_cppcheck_quick  - Quick check (daedalus library sources)")
+    message(STATUS "  make daedalus_cppcheck_xml    - XML output for CI/CD")
 else()
-    message(STATUS "clang-tidy not found - static analysis disabled (install clang-tidy to enable)")
+    message(STATUS "cppcheck not found - static analysis skipped")
+    message(STATUS "Install with: apt install cppcheck (Debian/Ubuntu)")
+    message(STATUS "                brew install cppcheck (macOS)")
 endif()
