@@ -25,6 +25,8 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -282,8 +284,14 @@ private:
     // db_ is non-owning — the actual sqlite3 handle is owned by DbPool
     // (singleton-per-path). Multiple SettingsStore instances can share the
     // same db_ pointer safely because SQLite runs in serialized mode.
+    //
+    // §webui-model-edit: a shared recursive mutex is used to serialise all
+    // prepared-statement access. Prepared statements do not acquire OmniNet's
+    // internal database mutex, so without this two threads could step on the
+    // same sqlite3 handle concurrently and silently lose writes.
     std::filesystem::path path_;
     OmniNet::DB::Database* db_ = nullptr;
+    mutable std::shared_ptr<std::recursive_mutex> mutex_;
 
     /// Internal ctor. `auto_migrate` is accepted for source compatibility
     /// but has no effect — auto-migration was removed in v0.5.2.

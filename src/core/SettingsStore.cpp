@@ -26,6 +26,7 @@
 #include "daedalus/settings.h"
 
 #include <cassert>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -35,11 +36,52 @@
 
 #include <nlohmann/json.hpp>
 #include <db/Database.h>      // OmniNet::DB::Database — sqlite3 wrapper
+#include <sqlite3.h>          // sqlite3_errcode / sqlite3_errmsg for step checks
 
 #include "daedalus/paths.h"   // Paths::global() for the default DB path
 #include "core/Logger.h"
 
 namespace fs = std::filesystem;
+
+namespace {
+
+// Per-DB-path mutex pool. SettingsStore copies for the same DB path share the
+// same mutex so that prepared-statement access is serialised across all
+// handles that point at the same SQLite file.
+std::shared_ptr<std::recursive_mutex> mutex_for_path(const fs::path& p)
+{
+    static std::mutex mu;
+    static std::unordered_map<std::string, std::weak_ptr<std::recursive_mutex>> map;
+
+    std::lock_guard<std::mutex> lk(mu);
+    const std::string key = p.lexically_normal().string();
+    auto it = map.find(key);
+    if (it != map.end()) {
+        if (auto sp = it->second.lock()) {
+            return sp;
+        }
+    }
+    auto sp = std::make_shared<std::recursive_mutex>();
+    map[key] = sp;
+    return sp;
+}
+
+// Throw if the last SQLite result on this handle is an actual error (not
+// SQLITE_DONE or SQLITE_OK). OmniNet's Statement::step() returns false for
+// both "no more rows" and any error, so callers must check the handle error
+// state explicitly to avoid silently ignoring failed writes.
+void throw_on_step_error(OmniNet::DB::Database* db, int allowed = SQLITE_DONE)
+{
+    if (!db || !db->handle()) return;
+    const int rc = sqlite3_errcode(db->handle());
+    if (rc != SQLITE_OK && rc != allowed) {
+        const char* msg = sqlite3_errmsg(db->handle());
+        throw OmniNet::DB::DatabaseException(
+            std::string("SQLite step failed: ") + (msg ? msg : "unknown"), rc);
+    }
+}
+
+}  // anonymous namespace
 
 namespace daedalus {
 
@@ -371,27 +413,36 @@ void bind_args(OmniNet::DB::Database::Statement& stmt, Args&&... args)
 }
 
 /// Execute a prepared statement (no result rows). Used for INSERT /
-/// UPDATE / DELETE.
+/// UPDATE / DELETE. Locks the per-path mutex and verifies that step()
+/// finished with SQLITE_DONE rather than an error code.
 template <typename... Args>
-void exec_prepared(OmniNet::DB::Database& db,
+void exec_prepared(std::recursive_mutex& mu,
+                   OmniNet::DB::Database& db,
                    const std::string& sql,
                    Args&&... args)
 {
+    std::lock_guard<std::recursive_mutex> lk(mu);
     auto stmt = db.prepare(sql);
     bind_args(stmt, std::forward<Args>(args)...);
     stmt.step();  // INSERT/UPDATE/DELETE — discard the "no row" return.
+    throw_on_step_error(&db, SQLITE_DONE);
 }
 
 /// Query first row via a prepared statement.
 template <typename... Args>
 std::optional<std::vector<std::string>>
-query_one_prepared(OmniNet::DB::Database& db,
+query_one_prepared(std::recursive_mutex& mu,
+                   OmniNet::DB::Database& db,
                    const std::string& sql,
                    Args&&... args)
 {
+    std::lock_guard<std::recursive_mutex> lk(mu);
     auto stmt = db.prepare(sql);
     bind_args(stmt, std::forward<Args>(args)...);
-    if (!stmt.step()) return std::nullopt;
+    if (!stmt.step()) {
+        throw_on_step_error(&db, SQLITE_DONE);
+        return std::nullopt;
+    }
     std::vector<std::string> row;
     for (int i = 0; i < stmt.columnCount(); ++i) {
         row.push_back(stmt.columnText(i));
@@ -401,8 +452,10 @@ query_one_prepared(OmniNet::DB::Database& db,
 
 /// Query all rows via a prepared statement.
 std::vector<std::vector<std::string>>
-query_all_prepared(OmniNet::DB::Database& db, const std::string& sql)
+query_all_prepared(std::recursive_mutex& mu,
+                   OmniNet::DB::Database& db, const std::string& sql)
 {
+    std::lock_guard<std::recursive_mutex> lk(mu);
     std::vector<std::vector<std::string>> rows;
     auto stmt = db.prepare(sql);
     while (stmt.step()) {
@@ -412,6 +465,7 @@ query_all_prepared(OmniNet::DB::Database& db, const std::string& sql)
         }
         rows.push_back(std::move(row));
     }
+    throw_on_step_error(&db, SQLITE_DONE);
     return rows;
 }
 
@@ -447,6 +501,7 @@ public:
             fs::create_directories(path.parent_path());
             auto db = std::make_unique<OmniNet::DB::Database>();
             db->open(path.string());
+            db->setBusyTimeout(std::chrono::milliseconds(5000));
             ensure_schema(*db);
             it = dbs_.emplace(path, std::move(db)).first;
         }
@@ -469,8 +524,9 @@ private:
 // Note: the second constructor argument is kept for source compatibility
 // but has no effect — auto-migration was removed in v0.5.2.
 SettingsStore::SettingsStore(fs::path db_path, bool /*auto_migrate*/) {
-    path_ = std::move(db_path);
-    db_   = &DbPool::instance().get(path_);
+    path_  = std::move(db_path);
+    mutex_ = mutex_for_path(path_);
+    db_    = &DbPool::instance().get(path_);
 }
 // ============================================================================
 // instance() / for_home()
@@ -515,6 +571,7 @@ SettingsStore SettingsStore::for_home(fs::path home)
 std::optional<ProviderConfig> SettingsStore::get_provider(std::string_view name) const
 {
     auto row = query_one_prepared(
+        *mutex_,
         *db_,
         "SELECT name, host, api_key, chat_endpoint, discovery_endpoint, "
         "timeout_seconds FROM providers WHERE name = ?",
@@ -527,6 +584,7 @@ std::vector<ProviderConfig> SettingsStore::list_providers_detailed() const
 {
     std::vector<ProviderConfig> out;
     auto rows = query_all_prepared(
+        *mutex_,
         *db_,
         "SELECT name, host, api_key, chat_endpoint, discovery_endpoint, "
         "timeout_seconds FROM providers ORDER BY name");
@@ -540,6 +598,7 @@ std::vector<ProviderConfig> SettingsStore::list_providers_detailed() const
 std::optional<ModelConfig> SettingsStore::get_model(std::string_view name) const
 {
     auto row = query_one_prepared(
+        *mutex_,
         *db_,
         "SELECT name, provider, model_id, max_context_size, temperature "
         "FROM models WHERE name = ?",
@@ -552,6 +611,7 @@ std::vector<ModelConfig> SettingsStore::list_models() const
 {
     std::vector<ModelConfig> out;
     auto rows = query_all_prepared(
+        *mutex_,
         *db_,
         "SELECT name, provider, model_id, max_context_size, temperature FROM models");
     out.reserve(rows.size());
@@ -586,6 +646,7 @@ std::optional<ResolvedModelConfig> SettingsStore::resolve_model(std::string_view
 std::string SettingsStore::get_string(std::string_view key, std::string_view def) const
 {
     auto row = query_one_prepared(
+        *mutex_,
         *db_,
         "SELECT value FROM kv_settings WHERE key = ?",
         std::string(key));
@@ -613,6 +674,7 @@ int SettingsStore::get_int(std::string_view key, int def) const
 void SettingsStore::upsert_provider(const ProviderConfig& p)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "INSERT INTO providers(name, host, api_key, chat_endpoint, discovery_endpoint, "
         "timeout_seconds) VALUES(?, ?, ?, ?, ?, ?) "
@@ -633,6 +695,7 @@ void SettingsStore::delete_provider(std::string_view name)
     // foreign key. SQLite in this build enforces that key, so deleting a
     // provider that still has models silently fails. Cascade the delete by
     // removing the dependent models first, then the provider.
+    std::lock_guard<std::recursive_mutex> lk(*mutex_);
     db_->transaction([this, name]() {
         auto stmt = db_->prepare("SELECT name FROM models WHERE provider = ?");
         stmt.bind(1, std::string(name));
@@ -644,6 +707,7 @@ void SettingsStore::delete_provider(std::string_view name)
             delete_model(model_name);
         }
         exec_prepared(
+            *mutex_,
             *db_,
             "DELETE FROM providers WHERE name = ?",
             std::string(name));
@@ -653,6 +717,7 @@ void SettingsStore::delete_provider(std::string_view name)
 void SettingsStore::upsert_model(const ModelConfig& m)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "INSERT INTO models(name, provider, model_id, max_context_size, temperature) "
         "VALUES(?, ?, ?, ?, ?) "
@@ -668,6 +733,7 @@ void SettingsStore::upsert_model(const ModelConfig& m)
 void SettingsStore::delete_model(std::string_view name)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "DELETE FROM models WHERE name = ?",
         std::string(name));
@@ -676,6 +742,7 @@ void SettingsStore::delete_model(std::string_view name)
 void SettingsStore::set_string(std::string_view key, std::string_view value)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "INSERT INTO kv_settings(key, value) VALUES(?, ?) "
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -699,6 +766,7 @@ void SettingsStore::transaction(std::function<void(SettingsStore&)> fn)
 {
     // OmniNet::DB::Database::transaction takes a no-arg lambda but our
     // API needs to pass `*this` so the callback can chain. Trampoline.
+    std::lock_guard<std::recursive_mutex> lk(*mutex_);
     SettingsStore& self = *this;
     db_->transaction([&self, &fn]() { fn(self); });
 }
@@ -713,6 +781,7 @@ bool SettingsStore::has_data() const noexcept
     // §fix (2026-07-18): SQLite prepare/step can throw; this function is
     // noexcept, so an escaping exception would call std::terminate.
     try {
+        std::lock_guard<std::recursive_mutex> lk(*mutex_);
         if (!list_models().empty()) return true;
         // Cheap kv_settings probe — one row, one column, no bindings.
         auto stmt = db_->prepare("SELECT 1 FROM kv_settings LIMIT 1");
@@ -743,6 +812,7 @@ void SettingsStore::set_session_memory(std::string_view session_id, std::string_
 void SettingsStore::delete_session_memory(std::string_view session_id)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "DELETE FROM kv_settings WHERE key = ?",
         "mem." + std::string(session_id));
@@ -761,6 +831,7 @@ void SettingsStore::set_messages_json(std::string_view session_id, std::string_v
 void SettingsStore::delete_messages_json(std::string_view session_id)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "DELETE FROM kv_settings WHERE key = ?",
         "msg." + std::string(session_id));
@@ -794,6 +865,7 @@ std::vector<std::string> SettingsStore::list_providers() const
 {
     std::vector<std::string> out;
     auto rows = query_all_prepared(
+        *mutex_,
         *db_,
         "SELECT name FROM providers ORDER BY name");
     out.reserve(rows.size());
@@ -888,7 +960,7 @@ std::string SettingsStore::get_serper_api_key() const {
     if (!db_) return {};
     try {
         // Singleton row (id=1); if missing, return empty.
-        auto result = query_one_prepared(*db_,
+        auto result = query_one_prepared(*mutex_, *db_,
             "SELECT api_key FROM serper_config WHERE id = 1");
         if (!result || result->empty()) return {};
         return (*result)[0];
@@ -902,7 +974,7 @@ std::string SettingsStore::get_serper_api_key() const {
 void SettingsStore::set_serper_api_key(std::string_view api_key) {
     if (!db_) return;
     try {
-        exec_prepared(*db_,
+        exec_prepared(*mutex_, *db_,
             "INSERT INTO serper_config(id, api_key) VALUES (1, ?) "
             "ON CONFLICT(id) DO UPDATE SET api_key = excluded.api_key",
             std::string(api_key));
@@ -961,6 +1033,7 @@ SettingsStore::McpServer row_to_mcp(const std::vector<std::string>& r)
 std::optional<SettingsStore::McpServer> SettingsStore::get_mcp_server(std::string_view name) const
 {
     auto row = query_one_prepared(
+        *mutex_,
         *db_,
         "SELECT name, transport, command, args_json, env_json, url, "
         "bearer_token, description, enabled FROM mcp_servers WHERE name = ?",
@@ -973,6 +1046,7 @@ std::vector<SettingsStore::McpServer> SettingsStore::list_mcp_servers() const
 {
     std::vector<McpServer> out;
     auto rows = query_all_prepared(
+        *mutex_,
         *db_,
         "SELECT name, transport, command, args_json, env_json, url, "
         "bearer_token, description, enabled FROM mcp_servers ORDER BY name");
@@ -988,6 +1062,7 @@ void SettingsStore::upsert_mcp_server(const McpServer& s)
     nlohmann::json args_j = s.args;
     nlohmann::json env_j  = s.env;
     exec_prepared(
+        *mutex_,
         *db_,
         "INSERT INTO mcp_servers(name, transport, command, args_json, env_json, "
         "url, bearer_token, description, enabled) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?) "
@@ -1005,6 +1080,7 @@ void SettingsStore::upsert_mcp_server(const McpServer& s)
 void SettingsStore::delete_mcp_server(std::string_view name)
 {
     exec_prepared(
+        *mutex_,
         *db_,
         "DELETE FROM mcp_servers WHERE name = ?",
         std::string(name));
@@ -1015,6 +1091,7 @@ bool SettingsStore::has_mcp_servers() const noexcept
     // §fix (2026-07-18): SQLite prepare/step can throw; this function is
     // noexcept, so an escaping exception would call std::terminate.
     try {
+        std::lock_guard<std::recursive_mutex> lk(*mutex_);
         auto stmt = db_->prepare("SELECT 1 FROM mcp_servers LIMIT 1");
         return stmt.step();
     } catch (...) {
