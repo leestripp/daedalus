@@ -60,24 +60,53 @@ using OmniMethod = OmniNet::HTTP::Method;
     return std::string("data: ") + wrapper.dump() + "\n\n";
 }
 
-struct CollectingHandler : IA2aEventHandler {
-    std::string body;
+struct StreamingHandler : IA2aEventHandler {
+    std::shared_ptr<OmniNet::HTTP::StreamingResponse> writer;
+    std::atomic<bool> closed{false};
 
-    void on_task(const Task& t) override { body += sse_line("task", to_json(t)); }
-    void on_message(const Message& m) override { body += sse_line("message", to_json(m)); }
+    explicit StreamingHandler(std::shared_ptr<OmniNet::HTTP::StreamingResponse> w)
+        : writer(std::move(w)) {}
+
+    void close_writer() {
+        if (!closed.exchange(true)) {
+            writer->close();
+        }
+    }
+
+    void write_event(std::string_view name, const json& payload) {
+        if (!writer->client_connected()) return;
+        writer->write(sse_line(name, payload));
+    }
+
+    void on_task(const Task& t) override { write_event("task", to_json(t)); }
+    void on_message(const Message& m) override { write_event("message", to_json(m)); }
     void on_status_update(const TaskStatusUpdateEvent& e) override {
-        body += sse_line("statusUpdate", to_json(e));
+        write_event("statusUpdate", to_json(e));
     }
     void on_artifact_update(const TaskArtifactUpdateEvent& e) override {
-        body += sse_line("artifactUpdate", to_json(e));
+        write_event("artifactUpdate", to_json(e));
     }
     void on_error(const A2aError& err) override {
         json j{{"code", err.code.empty() ? "INTERNAL_ERROR" : err.code},
                {"message", err.message}};
         if (!err.details.is_null()) j["details"] = err.details;
-        body += sse_line("error", j);
+        write_event("error", j);
     }
+    void on_complete() override { close_writer(); }
 };
+
+// Wait for OmniNet to attach the socket to a streaming response before the
+// backend starts emitting events. StreamingResponse::write() drops chunks
+// while client_connected() is false (attach happens after the HTTP handler
+// returns), so we poll briefly rather than losing the first events.
+void wait_for_stream_attach(const std::shared_ptr<OmniNet::HTTP::StreamingResponse>& writer,
+                            StreamingHandler& handler) {
+    for (int i = 0; i < 200; ++i) {
+        if (writer->client_connected()) return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    throw std::runtime_error("streaming socket was not attached in time");
+}
 
 // ============================================================================
 // Error response
@@ -99,14 +128,6 @@ void send_json(OmniResp& resp, const json& j, int status = 200) {
     resp.setStatus(status);
     resp.setContentType("application/a2a+json");
     resp.setBody(j.dump());
-}
-
-void send_sse(OmniResp& resp, const std::string& body) {
-    resp.setStatus(OmniNet::HTTP::StatusCode::OK);
-    resp.setContentType("text/event-stream");
-    resp.setHeader("Cache-Control", "no-cache");
-    resp.setConnectionClose();
-    resp.setBody(body);
 }
 
 // ============================================================================
@@ -312,10 +333,23 @@ private:
         auto request = parse_send_message_request(req, err);
         if (!request) return send_error(resp, err);
 
-        CollectingHandler handler;
-        auto result = cfg_.backend->send_streaming_message(*request, handler);
-        if (!result) return send_error(resp, result.error());
-        send_sse(resp, handler.body);
+        auto writer = resp.startStreaming("text/event-stream");
+        // OmniNet attaches the socket only after the HTTP handler returns,
+        // so the backend must run asynchronously. Writes before attach() are
+        // silently dropped by StreamingResponse.
+        std::thread([cfg = cfg_, request = *request, writer]() mutable {
+            StreamingHandler handler(writer);
+            try {
+                wait_for_stream_attach(writer, handler);
+                auto result = cfg.backend->send_streaming_message(request, handler);
+                if (!result) {
+                    handler.on_error(result.error());
+                }
+            } catch (const std::exception& e) {
+                handler.on_error(A2aError{500, "INTERNAL_ERROR", e.what(), nullptr});
+            }
+            handler.close_writer();
+        }).detach();
     }
 
     void handle_get_task(const OmniReq& req, OmniResp& resp, const std::string& path) {
@@ -350,10 +384,21 @@ private:
         if (request.id.empty()) {
             return send_error(resp, A2aError{400, "INVALID_PARAMETER", "missing task id", nullptr});
         }
-        CollectingHandler handler;
-        auto result = cfg_.backend->subscribe_to_task(request, handler);
-        if (!result) return send_error(resp, result.error());
-        send_sse(resp, handler.body);
+
+        auto writer = resp.startStreaming("text/event-stream");
+        std::thread([cfg = cfg_, request = std::move(request), writer]() mutable {
+            StreamingHandler handler(writer);
+            try {
+                wait_for_stream_attach(writer, handler);
+                auto result = cfg.backend->subscribe_to_task(request, handler);
+                if (!result) {
+                    handler.on_error(result.error());
+                }
+            } catch (const std::exception& e) {
+                handler.on_error(A2aError{500, "INTERNAL_ERROR", e.what(), nullptr});
+            }
+            handler.close_writer();
+        }).detach();
     }
 
     A2aServerConfig cfg_;

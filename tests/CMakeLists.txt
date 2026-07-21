@@ -981,6 +981,7 @@ target_include_directories(daedalus_cli_system_prompt_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/demos/daedalus-cli
 )
 target_link_libraries(daedalus_cli_system_prompt_tests PRIVATE
+    daedalus
     nlohmann_json::nlohmann_json
     pthread
 )
