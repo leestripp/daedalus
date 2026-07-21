@@ -428,6 +428,43 @@ target_link_libraries(daedalus_sse_parser_tests PRIVATE
 )
 add_test(NAME sse_parser_tests COMMAND daedalus_sse_parser_tests)
 
+# ============================================================================
+# A2A client tests — hermetic; spins up an in-process OmniNet HTTP server.
+# ============================================================================
+add_executable(daedalus_a2a_basic_tests
+    test_a2a_basic.cpp
+)
+target_include_directories(daedalus_a2a_basic_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_BINARY_DIR}/_deps/omninet-src/src   # §A2A: OmniNet HTTP server headers
+)
+target_link_libraries(daedalus_a2a_basic_tests PRIVATE
+    doctest::doctest
+    daedalus
+    OmniNet
+    pthread
+)
+add_test(NAME a2a_basic_tests COMMAND daedalus_a2a_basic_tests)
+
+# ============================================================================
+# A2A server tests — hermetic; spins up an in-process A2aServer and drives
+# it through A2aClient.
+# ============================================================================
+add_executable(daedalus_a2a_server_tests
+    test_a2a_server.cpp
+)
+target_include_directories(daedalus_a2a_server_tests PRIVATE
+    ${CMAKE_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_a2a_server_tests PRIVATE
+    doctest::doctest
+    daedalus
+    OmniNet
+    pthread
+)
+add_test(NAME a2a_server_tests COMMAND daedalus_a2a_server_tests)
+
+
 # §BUG-001 (2026-07-17): MiniMaxSseParser unit tests. Verifies the
 # is_usage_only_chunk() gate logic that fixes the streaming-trailer
 # bug (MiniMax sends `"usage": null` on the final chunk; old gate

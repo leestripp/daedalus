@@ -49,17 +49,11 @@ embedding `libdaedalus.a` and for core contributors.
 
 | File | Audience | Description |
 |------|----------|-------------|
+| [`a2a.md`](a2a.md) | **Host developers** | A2A (Agent2Agent Protocol) client and server: discovery, REST endpoints, canonical data model, compliance notes. |
 | [`mcp_server.md`](mcp_server.md) | **Host developers** | MCP server integration via `SettingsStore` (legacy path support). Stdio + HTTP transports, JSON-RPC, MiniMax MCP tools (`understand_image`, `web_search`). |
 | [`network-tools.md`](network-tools.md) | **Host developers** | OmniNet-backed HTTP/DNS/TCP/TLS/WebSocket tools available to the agent. |
 | [`sse_streaming.md`](sse_streaming.md) | **Core contributors** | OpenAI-compatible SSE consumption from `LLMClient` to LLM providers: chunked-encoding gotchas, `usage`-trailer recovery, `reasoning_split` quirk. Must-read before touching `HttpSession::submit_cancellable` or `MiniMaxSseParser`. |
 | [`token_counts.md`](token_counts.md) | **Core contributors** | Token-count tracking, graceful degradation when providers omit usage metadata, and the SSE canary tests. |
-
-## ACP Protocol
-
-| File | Audience | Description |
-|------|----------|-------------|
-| [`acp-protocol.md`](acp-protocol.md) | **Core contributors** | Agent Control Protocol (ACP) overview and conventions. |
-| [`acp-openapi.yaml`](acp-openapi.yaml) | **Core contributors** | OpenAPI specification for ACP endpoints. |
 
 ## Demo / Testing
 

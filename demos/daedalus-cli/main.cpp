@@ -23,6 +23,9 @@
 #include <filesystem>
 #include <memory>
 #include <atomic>
+#include <chrono>
+#include <random>
+#include <thread>
 
 #include <daedalus.h>
 #include <daedalus/default_paths.h>
@@ -36,8 +39,78 @@
 #include "RawStdin.h"
 #include "banner.h"
 #include "migrate.h"
+#include "A2aAgentBackend.h"
 
 namespace fs = std::filesystem;
+namespace a2a = daedalus::a2a;
+
+// ============================================================================
+// §A2A public API helpers — the CLI demo consumes daedalus::a2a::A2aClient
+// through the same umbrella header as the rest of the public API.
+// ============================================================================
+
+static std::string make_a2a_message_id() {
+    static std::atomic<uint64_t> counter{0};
+    auto ns = std::chrono::steady_clock::now().time_since_epoch().count();
+    return "msg-" + std::to_string(ns) + "-" + std::to_string(counter.fetch_add(1));
+}
+
+static void ltrim(std::string& s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+}
+
+static a2a::Message make_a2a_user_message(const std::string& text) {
+    a2a::Message m;
+    m.message_id = make_a2a_message_id();
+    m.role = a2a::Role::user;
+    m.parts.push_back(a2a::Part::from_text(text, "text/plain"));
+    return m;
+}
+
+static void print_a2a_parts(const std::vector<a2a::Part>& parts) {
+    for (const auto& part : parts) {
+        if (part.text) std::cout << *part.text;
+    }
+}
+
+static void print_a2a_task(const a2a::Task& task) {
+    std::cout << "[A2A] task " << task.id
+              << " state=" << a2a::to_string(task.status.state) << "\n";
+    for (const auto& art : task.artifacts) {
+        std::cout << "[A2A] artifact " << (art.name ? *art.name : art.artifact_id) << ":\n";
+        print_a2a_parts(art.parts);
+        std::cout << "\n";
+    }
+    if (task.status.message) {
+        std::cout << "[A2A] status message:\n";
+        print_a2a_parts(task.status.message->parts);
+        std::cout << "\n";
+    }
+}
+
+struct A2aStreamPrinter : a2a::IA2aEventHandler {
+    void on_task(const a2a::Task& task) override {
+        print_a2a_task(task);
+    }
+    void on_message(const a2a::Message& msg) override {
+        print_a2a_parts(msg.parts);
+        std::cout << "\n";
+    }
+    void on_status_update(const a2a::TaskStatusUpdateEvent& ev) override {
+        std::cout << "[A2A] status " << a2a::to_string(ev.status.state) << "\n";
+    }
+    void on_artifact_update(const a2a::TaskArtifactUpdateEvent& ev) override {
+        std::cout << "[A2A] artifact update " << ev.artifact.artifact_id << ":\n";
+        print_a2a_parts(ev.artifact.parts);
+        std::cout << "\n";
+    }
+    void on_error(const a2a::A2aError& err) override {
+        std::cout << "[A2A] stream error: " << err.what() << "\n";
+    }
+    void on_complete() override {
+        std::cout << "[A2A] stream complete\n";
+    }
+};
 
 // §TOOL-TRIM (prompt.txt): the CLI opts in to individual example tools.
 // File / git / search / pdf / system-info / background / network tools are
@@ -209,6 +282,43 @@ int main(int argc, char* argv[]) {
         }
 
         if (args.clear_memory_flag) {
+            agent.shutdown();
+            return 0;
+        }
+
+        // -------- A2A server mode --------
+        if (args.a2a_server) {
+            auto backend = std::make_shared<daedalus_cli::A2aAgentBackend>(
+                agent.config(),
+                std::make_shared<daedalus::AgentSink>(),
+                daedalus_cli::A2aAgentBackend::ToolRegistrar(
+                    [](daedalus::Agent&) { register_cli_tools(); }),
+                "http://" + args.a2a_address + ":" + std::to_string(args.a2a_port));
+
+            a2a::A2aServerConfig srv_cfg;
+            srv_cfg.address = args.a2a_address;
+            srv_cfg.port = args.a2a_port;
+            srv_cfg.backend = backend;
+
+            a2a::A2aServer server(std::move(srv_cfg));
+            std::jthread server_thread([&server] { server.start(); });
+
+            for (int i = 0; i < 100 && server.port() == 0; ++i) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            backend->set_base_url(server.base_url());
+
+            std::cout << "[A2A] server listening on " << server.base_url() << "\n"
+                      << "[A2A] Agent Card: " << server.base_url()
+                      << "/.well-known/agent-card.json\n"
+                      << "[A2A] Press Ctrl+C to stop.\n"
+                      << std::flush;
+
+            while (!g_shutting_down.load()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            server.stop();
+            server_thread.join();
             agent.shutdown();
             return 0;
         }
@@ -401,6 +511,169 @@ int main(int argc, char* argv[]) {
             }
             if (line == "/state") {
                 std::cout << "State: " << daedalus::to_string(agent.state()) << "\n";
+                continue;
+            }
+
+            // -------- A2A (Agent2Agent Protocol) commands --------
+            if (line.rfind("/a2a-url ", 0) == 0) {
+                std::string url = line.substr(9);
+                ltrim(url);
+                if (url.empty()) {
+                    std::cout << "Usage: /a2a-url URL\n";
+                } else {
+                    args.a2a_url = url;
+                    std::cout << "[A2A] URL set to " << url << "\n";
+                }
+                continue;
+            }
+            if (line == "/a2a-card") {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                auto result = client->get_agent_card();
+                if (!result) {
+                    std::cout << "[A2A] get_agent_card failed: " << result.error().what() << "\n";
+                    continue;
+                }
+                std::cout << "[A2A] Agent Card: " << result->name << "\n"
+                          << "  version: " << result->version << "\n"
+                          << "  description: " << result->description << "\n"
+                          << "  url: " << result->url << "\n"
+                          << "  interfaces: " << result->additional_interfaces.size() << "\n";
+                continue;
+            }
+            if (line.rfind("/a2a-send ", 0) == 0) {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                std::string msg = line.substr(10);
+                ltrim(msg);
+                if (msg.empty()) {
+                    std::cout << "Usage: /a2a-send MESSAGE\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                a2a::SendMessageRequest req;
+                req.message = make_a2a_user_message(msg);
+                auto result = client->send_message(req);
+                if (!result) {
+                    std::cout << "[A2A] send_message failed: " << result.error().what() << "\n";
+                    continue;
+                }
+                if (result->task) {
+                    print_a2a_task(*result->task);
+                } else if (result->message) {
+                    std::cout << "[A2A] message:\n";
+                    print_a2a_parts(result->message->parts);
+                    std::cout << "\n";
+                }
+                continue;
+            }
+            if (line.rfind("/a2a-stream ", 0) == 0) {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                std::string msg = line.substr(12);
+                ltrim(msg);
+                if (msg.empty()) {
+                    std::cout << "Usage: /a2a-stream MESSAGE\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                a2a::SendMessageRequest req;
+                req.message = make_a2a_user_message(msg);
+                A2aStreamPrinter printer;
+                auto result = client->send_streaming_message(req, printer);
+                if (!result) {
+                    std::cout << "[A2A] send_streaming_message failed: " << result.error().what() << "\n";
+                }
+                continue;
+            }
+            if (line.rfind("/a2a-task ", 0) == 0) {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                std::string id = line.substr(10);
+                ltrim(id);
+                if (id.empty()) {
+                    std::cout << "Usage: /a2a-task ID\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                a2a::GetTaskRequest req;
+                req.id = id;
+                auto result = client->get_task(req);
+                if (!result) {
+                    std::cout << "[A2A] get_task failed: " << result.error().what() << "\n";
+                    continue;
+                }
+                print_a2a_task(*result);
+                continue;
+            }
+            if (line == "/a2a-tasks") {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                a2a::ListTasksRequest req;
+                auto result = client->list_tasks(req);
+                if (!result) {
+                    std::cout << "[A2A] list_tasks failed: " << result.error().what() << "\n";
+                    continue;
+                }
+                std::cout << "[A2A] tasks (" << result->tasks.size() << "/" << result->total_size << "):\n";
+                for (const auto& t : result->tasks) {
+                    std::cout << "  - " << t.id << " " << a2a::to_string(t.status.state) << "\n";
+                }
+                continue;
+            }
+            if (line.rfind("/a2a-cancel ", 0) == 0) {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                std::string id = line.substr(12);
+                ltrim(id);
+                if (id.empty()) {
+                    std::cout << "Usage: /a2a-cancel ID\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                a2a::CancelTaskRequest req;
+                req.id = id;
+                auto result = client->cancel_task(req);
+                if (!result) {
+                    std::cout << "[A2A] cancel_task failed: " << result.error().what() << "\n";
+                    continue;
+                }
+                std::cout << "[A2A] task " << result->id << " " << a2a::to_string(result->status.state) << "\n";
+                continue;
+            }
+            if (line.rfind("/a2a-subscribe ", 0) == 0) {
+                if (args.a2a_url.empty()) {
+                    std::cout << "[A2A] Set URL first with /a2a-url URL\n";
+                    continue;
+                }
+                std::string id = line.substr(15);
+                ltrim(id);
+                if (id.empty()) {
+                    std::cout << "Usage: /a2a-subscribe ID\n";
+                    continue;
+                }
+                auto client = a2a::create_a2a_client(args.a2a_url);
+                a2a::SubscribeToTaskRequest req;
+                req.id = id;
+                A2aStreamPrinter printer;
+                auto result = client->subscribe_to_task(req, printer);
+                if (!result) {
+                    std::cout << "[A2A] subscribe_to_task failed: " << result.error().what() << "\n";
+                }
                 continue;
             }
 

@@ -66,7 +66,8 @@ downloaded automatically by CMake into `build/_deps/` on first build.
 │   ├── AgentSink.h             # Host callback interface
 │   ├── settings.h              # SettingsStore API
 │   ├── paths.h                 # XDG path abstraction
-│   └── types/                  # AgentConfig, AgentState, ModelInfo, ...
+│   ├── types/                  # AgentConfig, AgentState, ModelInfo, ...
+│   └── a2a/                    # A2A (Agent2Agent Protocol) client + server
 ├── src/
 │   ├── library/                # Public API implementation (Agent, AgentImpl, paths)
 │   ├── core/                   # Core engine (FileIO, Logger, Messages, SettingsStore, ...)
@@ -88,6 +89,7 @@ downloaded automatically by CMake into `build/_deps/` on first build.
 | Module | Files | Responsibility |
 |--------|-------|----------------|
 | `src/library` | `Agent*.cpp`, `paths.cpp`, `project_paths.cpp`, ... | Public facade and PIMPL internals |
+| `src/library/a2a` | `A2aClient.cpp`, `A2aServer.cpp` | A2A (Agent2Agent Protocol) HTTP+JSON client + server |
 | `src/core` | `SettingsStore.cpp`, `Messages.cpp`, `Logger.cpp`, `SystemPromptBuilder.cpp`, ... | Settings, persistence, logging, compression, thread pool, metrics |
 | `src/api` | `LLMClient.cpp`, `HttpSession.cpp` | Provider-agnostic HTTP/SSE chat client |
 | `src/tools` | `ToolFactory.cpp`, `BashTool.cpp`, `SkillTool.cpp`, `MemoryTool.cpp`, ... | Core tool implementations registered by default |
@@ -154,7 +156,6 @@ if missing the targets are omitted with a status message.
 | `DAEDALUS_DEMO_SUBAGENT` | ON | `demos/daedalus-subagent/` |
 | `DAEDALUS_DEMO_MANAGER` | ON | `demos/daedalus-manager/` |
 | `DAEDALUS_DEMO_WEBUI` | OFF | `demos/daedalus-webui/` |
-| `DAEDALUS_CLI_ACP` | OFF | ACP sub-library inside CLI |
 
 ```bash
 cmake -S . -B build -DCODEMAX_DEMO_WEBUI=ON
@@ -331,6 +332,7 @@ See `Readme.md` §Security for the full access-by-operation matrix.
 | Skills | `docs/skills.md` |
 | Testing strategy | `docs/testing.md` |
 | State machine | `docs/agent_state_machine.md` (redirects to `Agent.md`) |
+| A2A protocol | `docs/a2a.md` |
 
 ## Quick checklist before submitting changes
 

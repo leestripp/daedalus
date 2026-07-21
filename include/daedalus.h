@@ -12,3 +12,4 @@
 
 #include "daedalus/Agent.h"
 #include "daedalus/model_discovery.h"
+#include "daedalus/a2a/A2aClient.h"

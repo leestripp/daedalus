@@ -71,7 +71,6 @@ Expected: **all configured tests pass**, 2 live-LLM skipped, 0 failures. (The ex
 | `test_token_counts_sse.cpp` | Live LLM smoke test for SSE token-count path (skipped by default) |
 | `test_no_content_duplicate.cpp` | Regression: streamed text must not duplicate in `content` (skipped by default) |
 | `test_http_session.cpp` | HTTP session lifecycle, retries, cancellation |
-| `test_acp_basic.cpp`, `test_acp_end_to_end.cpp` | ACP sub-library protocol tests |
 | `test_crash_resilience.cpp` | Atomic save, SIGSEGV handler, drop-last-message recovery |
 | `test_metrics.cpp` | Token/iteration metrics accounting |
 

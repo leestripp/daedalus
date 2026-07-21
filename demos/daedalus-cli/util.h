@@ -178,6 +178,10 @@ inline void print_help(const char* program_name) {
     std::cout << "  --no-stream         Disable SSE streaming\n";
     std::cout << "  --skills DIR        Load skills from DIR\n";
     std::cout << "  --system-prompt F   Override the demo's system_prompt.txt with F\n";
+    std::cout << "  --a2a-url URL       Base URL of an A2A server (e.g. http://localhost:8000)\n";
+    std::cout << "  --a2a-server        Run as an A2A HTTP server instead of the REPL\n";
+    std::cout << "  --a2a-address ADDR  Bind address for --a2a-server (default: 127.0.0.1)\n";
+    std::cout << "  --a2a-port PORT     Bind port for --a2a-server (default: 0 = ephemeral)\n";
     std::cout << "\nArguments:\n";
     std::cout << "  directory       Target project directory (default: .)\n";
     std::cout << "\nIn-session commands:\n";
@@ -194,6 +198,14 @@ inline void print_help(const char* program_name) {
     std::cout << "  /usage          Show token/context usage summary\n";
     std::cout << "  /stats          Show raw token + iteration stats\n";
     std::cout << "  /state          Show current Agent state\n";
+    std::cout << "  /a2a-url URL    Set A2A server base URL\n";
+    std::cout << "  /a2a-card       Fetch the A2A Agent Card\n";
+    std::cout << "  /a2a-send MSG   Send a sync A2A message\n";
+    std::cout << "  /a2a-stream MSG Send a streaming A2A message\n";
+    std::cout << "  /a2a-task ID    Get A2A task status\n";
+    std::cout << "  /a2a-tasks      List A2A tasks\n";
+    std::cout << "  /a2a-cancel ID  Cancel an A2A task\n";
+    std::cout << "  /a2a-subscribe ID  Subscribe to A2A task updates\n";
     std::cout << "  /help           Show this help\n";
 }
 
@@ -261,6 +273,12 @@ struct CliArgs {
     // §Phase 14: optional override of the system prompt source.
     // Empty = use the demo's bundled system_prompt.txt + per-project overlay.
     fs::path    system_prompt_file;
+    // A2A server base URL. Empty disables the A2A command surface.
+    std::string a2a_url;
+    // A2A server mode: run an HTTP+JSON/REST A2A server instead of the REPL.
+    bool a2a_server = false;
+    std::string a2a_address = "127.0.0.1";
+    uint16_t a2a_port = 0;
 };
 
 inline CliArgs parse_cli_args(int argc, char* argv[]) {
@@ -308,6 +326,23 @@ inline CliArgs parse_cli_args(int argc, char* argv[]) {
             // experiments without recompiling or editing files.
             if (i + 1 < argc) args.system_prompt_file = argv[++i];
             else { std::cerr << "Error: --system-prompt requires a FILE\n"; std::exit(1); }
+        }
+        else if (arg == "--a2a-url") {
+            if (i + 1 < argc) args.a2a_url = argv[++i];
+            else { std::cerr << "Error: --a2a-url requires a URL\n"; std::exit(1); }
+        }
+        else if (arg == "--a2a-server") {
+            args.a2a_server = true;
+        }
+        else if (arg == "--a2a-address") {
+            if (i + 1 < argc) args.a2a_address = argv[++i];
+            else { std::cerr << "Error: --a2a-address requires an address\n"; std::exit(1); }
+        }
+        else if (arg == "--a2a-port") {
+            if (i + 1 < argc) {
+                try { args.a2a_port = static_cast<uint16_t>(std::stoi(argv[++i])); }
+                catch (...) { std::cerr << "Error: --a2a-port requires a port number\n"; std::exit(1); }
+            } else { std::cerr << "Error: --a2a-port requires a port number\n"; std::exit(1); }
         }
         else if (arg.substr(0, 1) != "-") {
             args.target_path = arg;
