@@ -389,6 +389,7 @@ inline void register_settings_routes(HTTP::Server& server) {
         resp.setContentType("application/json");
         resp.setBody(json_ok({
             {"default_model", store.get_default_model_name()},
+            {"default_provider", store.get_current_provider()},
             {"auto_approve", store.get_auto_approve()},
             {"max_agent_iterations", store.get_max_agent_iterations()},
             {"max_tool_result_size", store.get_max_tool_result_size()},
@@ -413,6 +414,9 @@ inline void register_settings_routes(HTTP::Server& server) {
             auto& store = daedalus::SettingsStore::instance();
             if (j.contains("default_model")) {
                 store.set_default_model_name(j["default_model"].get<std::string>());
+            }
+            if (j.contains("default_provider")) {
+                store.set_current_provider(j["default_provider"].get<std::string>());
             }
             if (j.contains("auto_approve")) {
                 store.set_auto_approve(j["auto_approve"].get<bool>());

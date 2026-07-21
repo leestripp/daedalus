@@ -449,6 +449,38 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;
   }
 
+  /* §webui-settings-modals: popup forms for providers, models, discovery. */
+  .settings-modal {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,0.7);
+    display: none; align-items: center; justify-content: center;
+  }
+  .settings-modal.visible { display: flex; }
+  .settings-modal-box {
+    background: #161b22; border: 1px solid #2a2f36;
+    border-radius: 8px; padding: 16px;
+    max-width: 520px; width: 90%;
+    max-height: 90vh; overflow-y: auto;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+  }
+  .settings-modal-box h3 {
+    margin: 0 0 14px; font-size: 15px; color: #d6d9dc;
+    display: flex; justify-content: space-between; align-items: center;
+  }
+  .settings-modal-close {
+    background: transparent; border: none; color: #8b949e;
+    font-size: 18px; cursor: pointer; line-height: 1;
+  }
+  .settings-modal-close:hover { color: #f85149; }
+
+  /* §webui-settings: toolbar above each card list (Add / Discover). */
+  .panel-toolbar {
+    display: flex; gap: 8px; margin-bottom: 12px;
+  }
+  .panel-toolbar button {
+    padding: 5px 12px; font-size: 12px;
+  }
+
   /* §webui-usage: compact token/iteration HUD in the header */
   #usage-hud {
     font-size: 11px; color: #8b949e;
@@ -621,64 +653,24 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
     <!-- Models panel -->
     <div class="settings-panel active" id="tab-models">
       <h3>Configured Models</h3>
+      <div class="panel-toolbar">
+        <button type="button" id="model-add-btn">+ Add Model</button>
+      </div>
       <div id="models-list" class="settings-card-list">
         <span class="empty">Loading…</span>
       </div>
-      <h3>Discover Models</h3>
-      <div id="discover-panel" class="settings-form">
-        <label for="discover-source">Source model / provider</label>
-        <select id="discover-source"></select>
-        <div class="settings-actions">
-          <button type="button" id="discover-run">Discover</button>
-        </div>
-        <div id="discover-results" class="settings-card-list" style="margin-top:12px;"></div>
-      </div>
-      <h3>Add / Edit Model</h3>
-      <form id="model-form" class="settings-form">
-        <input type="hidden" id="model-original-name" value="">
-        <label for="model-name">Name</label>
-        <input type="text" id="model-name" placeholder="minimax-m2.7" required>
-        <label for="model-provider">Provider</label>
-        <select id="model-provider"></select>
-        <label for="model-id">Model ID</label>
-        <input type="text" id="model-id" placeholder="MiniMax-M2.7">
-        <label for="model-ctx">Max Context</label>
-        <input type="number" id="model-ctx" placeholder="0 = auto" min="0">
-        <label for="model-temp">Temperature</label>
-        <input type="number" id="model-temp" step="0.1" min="0" max="2" value="0">
-        <div class="settings-actions">
-          <button type="button" id="model-clear" class="cancel">Clear</button>
-          <button type="submit">Save Model</button>
-        </div>
-      </form>
     </div>
 
     <!-- Providers panel -->
     <div class="settings-panel" id="tab-providers">
       <h3>Configured Providers</h3>
+      <div class="panel-toolbar">
+        <button type="button" id="provider-add-btn">+ Add Provider</button>
+        <button type="button" id="provider-discover-btn">Discover Models</button>
+      </div>
       <div id="providers-list" class="settings-card-list">
         <span class="empty">Loading…</span>
       </div>
-      <h3>Add / Edit Provider</h3>
-      <form id="provider-form" class="settings-form">
-        <input type="hidden" id="provider-original-name" value="">
-        <label for="provider-name">Name</label>
-        <input type="text" id="provider-name" placeholder="minimax" required>
-        <label for="provider-host">Host URL</label>
-        <input type="text" id="provider-host" placeholder="https://api.minimax.io">
-        <label for="provider-key">API Key</label>
-        <input type="password" id="provider-key" placeholder="sk-…">
-        <label for="provider-chat-endpoint">Chat Endpoint</label>
-        <input type="text" id="provider-chat-endpoint" value="/v1/chat/completions">
-        <label for="provider-discovery-endpoint">Discovery Endpoint</label>
-        <input type="text" id="provider-discovery-endpoint" value="/v1/models">
-        <label for="provider-timeout">Timeout (seconds)</label>
-        <input type="number" id="provider-timeout" min="1" value="30">
-        <div class="settings-actions">
-          <button type="button" id="provider-clear" class="cancel">Clear</button>
-          <button type="submit">Save Provider</button>
-        </div>
-      </form>
     </div>
 
     <!-- General panel -->
@@ -687,6 +679,8 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
       <form id="general-form" class="settings-form">
         <label for="general-default">Default Model</label>
         <select id="general-default"></select>
+        <label for="general-default-provider">Default Provider</label>
+        <select id="general-default-provider"></select>
         <label for="general-auto">Auto-approve bash</label>
         <input type="checkbox" id="general-auto">
         <label for="general-max-iter">Max Iterations</label>
@@ -745,6 +739,72 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
         </div>
       </form>
     </div>
+  </div>
+</div>
+
+<!-- §webui-settings-modals: popup forms -->
+<div id="provider-modal" class="settings-modal">
+  <div class="settings-modal-box">
+    <h3><span id="provider-modal-title">Add Provider</span>
+      <button type="button" class="settings-modal-close" data-close="provider-modal">&times;</button></h3>
+    <form id="provider-form" class="settings-form">
+      <input type="hidden" id="provider-original-name" value="">
+      <label for="provider-name">Name</label>
+      <input type="text" id="provider-name" placeholder="minimax" required>
+      <label for="provider-host">Host URL</label>
+      <input type="text" id="provider-host" placeholder="https://api.minimax.io">
+      <label for="provider-key">API Key</label>
+      <input type="password" id="provider-key" placeholder="sk-…">
+      <label for="provider-chat-endpoint">Chat Endpoint</label>
+      <input type="text" id="provider-chat-endpoint" value="/v1/chat/completions">
+      <label for="provider-discovery-endpoint">Discovery Endpoint</label>
+      <input type="text" id="provider-discovery-endpoint" value="/v1/models">
+      <label for="provider-timeout">Timeout (seconds)</label>
+      <input type="number" id="provider-timeout" min="1" value="30">
+      <div class="settings-actions">
+        <button type="button" id="provider-clear" class="cancel">Clear</button>
+        <button type="submit">Save Provider</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="model-modal" class="settings-modal">
+  <div class="settings-modal-box">
+    <h3><span id="model-modal-title">Add Model</span>
+      <button type="button" class="settings-modal-close" data-close="model-modal">&times;</button></h3>
+    <form id="model-form" class="settings-form">
+      <input type="hidden" id="model-original-name" value="">
+      <label for="model-name">Name</label>
+      <input type="text" id="model-name" placeholder="minimax-m2.7" required>
+      <label for="model-provider">Provider</label>
+      <select id="model-provider"></select>
+      <label for="model-id">Model ID</label>
+      <input type="text" id="model-id" placeholder="MiniMax-M2.7">
+      <label for="model-ctx">Max Context</label>
+      <input type="number" id="model-ctx" placeholder="0 = auto" min="0">
+      <label for="model-temp">Temperature</label>
+      <input type="number" id="model-temp" step="0.1" min="0" max="2" value="0">
+      <div class="settings-actions">
+        <button type="button" id="model-clear" class="cancel">Clear</button>
+        <button type="submit">Save Model</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="discover-modal" class="settings-modal">
+  <div class="settings-modal-box">
+    <h3><span>Discover Models via Provider</span>
+      <button type="button" class="settings-modal-close" data-close="discover-modal">&times;</button></h3>
+    <div class="settings-form">
+      <label for="discover-source">Provider</label>
+      <select id="discover-source"></select>
+      <div class="settings-actions">
+        <button type="button" id="discover-run">Discover</button>
+      </div>
+    </div>
+    <div id="discover-results" class="settings-card-list" style="margin-top:12px;"></div>
   </div>
 </div>
 
@@ -1590,6 +1650,22 @@ function showToast(msg) {
   appendLog("Info", msg);
 }
 
+// §webui-settings-modals: open/close helpers for provider/model/discovery popups.
+function openModal(id) {
+  document.getElementById(id).classList.add("visible");
+}
+function closeModal(id) {
+  document.getElementById(id).classList.remove("visible");
+}
+document.querySelectorAll(".settings-modal-close").forEach(btn => {
+  btn.addEventListener("click", () => closeModal(btn.dataset.close));
+});
+document.querySelectorAll(".settings-modal").forEach(modal => {
+  modal.addEventListener("click", (ev) => {
+    if (ev.target === modal) closeModal(modal.id);
+  });
+});
+
 async function loadSettings() {
   try {
     const [modelsResp, providersResp, generalResp, mcpResp] = await Promise.all([
@@ -1612,6 +1688,7 @@ async function loadSettings() {
     populateModelProviderDropdown();
     populateDiscoverSourceDropdown();
     populateDefaultModelDropdown();
+    populateDefaultProviderDropdown();
     renderProvidersList();
     renderGeneralForm();
     renderMcpList(mcpData.servers || []);
@@ -1674,6 +1751,11 @@ function populateModelProviderDropdown() {
   });
 }
 
+function openModelModal(title) {
+  $("model-modal-title").textContent = title;
+  openModal("model-modal");
+}
+
 function populateModelForm(m) {
   $("model-original-name").value = m.name || "";
   $("model-name").value = m.name || "";
@@ -1681,7 +1763,15 @@ function populateModelForm(m) {
   $("model-id").value = m.model_id || "";
   $("model-ctx").value = m.max_context_size || "";
   $("model-temp").value = m.temperature;
+  openModelModal("Edit Model");
 }
+
+$("model-add-btn").addEventListener("click", () => {
+  $("model-form").reset();
+  $("model-original-name").value = "";
+  $("model-temp").value = 0;
+  openModelModal("Add Model");
+});
 
 $("model-clear").addEventListener("click", () => {
   $("model-form").reset();
@@ -1713,6 +1803,7 @@ $("model-form").addEventListener("submit", async (ev) => {
     $("model-form").reset();
     $("model-original-name").value = "";
     $("model-temp").value = 0;
+    closeModal("model-modal");
     await loadSettings();
   } catch (e) {
     appendLog("Error", "save model failed: " + e);
@@ -1748,40 +1839,31 @@ async function deleteModel(name) {
   }
 }
 
-// ---- Model discovery ----
+// ---- Model discovery (now lives on the Providers page) ----
 function populateDiscoverSourceDropdown() {
   const sel = $("discover-source");
-  sel.innerHTML = '<option value="">(select source)</option>';
-  // Prefer configured models: discover uses the model's provider.
-  cachedModels.forEach(m => {
-    const opt = document.createElement("option");
-    opt.value = m.name;
-    opt.textContent = "model: " + m.name;
-    sel.appendChild(opt);
-  });
-  // Also allow discovering directly from a provider.
+  sel.innerHTML = '<option value="">(select provider)</option>';
   cachedProviders.forEach(p => {
     const opt = document.createElement("option");
-    opt.value = "provider:" + p.name;
-    opt.textContent = "provider: " + p.name;
+    opt.value = p.name;
+    opt.textContent = p.name;
     sel.appendChild(opt);
   });
 }
 
+$("provider-discover-btn").addEventListener("click", () => {
+  $("discover-source").value = "";
+  $("discover-results").innerHTML = '';
+  openModal("discover-modal");
+});
+
 $("discover-run").addEventListener("click", async () => {
-  const sel = $("discover-source");
-  const source = sel.value;
-  if (!source) return;
-  const isProvider = source.startsWith("provider:");
-  const name = isProvider ? source.slice("provider:".length) : source;
-  const endpoint = isProvider
-      ? "/settings/providers/discover?name=" + encodeURIComponent(name)
-      : "/settings/models/discover?name=" + encodeURIComponent(name);
-  const providerName = isProvider ? name : "";
+  const providerName = $("discover-source").value;
+  if (!providerName) return;
   const resultsEl = $("discover-results");
   resultsEl.innerHTML = '<span class="empty">Discovering…</span>';
   try {
-    const r = await fetch(endpoint);
+    const r = await fetch("/settings/providers/discover?name=" + encodeURIComponent(providerName));
     const j = await r.json();
     if (j.error) throw new Error(j.error);
     const models = j.models || [];
@@ -1810,12 +1892,15 @@ $("discover-run").addEventListener("click", async () => {
       addBtn.type = "button";
       addBtn.textContent = "Add as Model";
       addBtn.addEventListener("click", () => {
+        closeModal("discover-modal");
+        $("model-form").reset();
+        $("model-original-name").value = "";
         $("model-name").value = m.id;
         $("model-provider").value = providerName;
         $("model-id").value = m.id;
         $("model-ctx").value = m.context_length || "";
         $("model-temp").value = 0;
-        document.querySelector('.settings-tab[data-tab="models"]').click();
+        openModelModal("Add Model");
       });
       actions.appendChild(addBtn);
       card.appendChild(actions);
@@ -1839,7 +1924,7 @@ function renderProvidersList() {
     const card = document.createElement("div");
     card.className = "settings-card";
     const title = document.createElement("h4");
-    title.textContent = p.name;
+    title.textContent = p.name + (cachedGeneral.default_provider === p.name ? " (default)" : "");
     card.appendChild(title);
     const meta = document.createElement("p");
     meta.textContent = p.host +
@@ -1853,16 +1938,26 @@ function renderProvidersList() {
     editBtn.type = "button";
     editBtn.textContent = "Edit";
     editBtn.addEventListener("click", () => populateProviderForm(p));
+    const defaultBtn = document.createElement("button");
+    defaultBtn.type = "button";
+    defaultBtn.textContent = "Set default";
+    defaultBtn.addEventListener("click", () => setDefaultProvider(p.name));
     const delBtn = document.createElement("button");
     delBtn.type = "button";
     delBtn.className = "danger";
     delBtn.textContent = "Delete";
     delBtn.addEventListener("click", () => deleteProvider(p.name));
     actions.appendChild(editBtn);
+    actions.appendChild(defaultBtn);
     actions.appendChild(delBtn);
     card.appendChild(actions);
     list.appendChild(card);
   });
+}
+
+function openProviderModal(title) {
+  $("provider-modal-title").textContent = title;
+  openModal("provider-modal");
 }
 
 function populateProviderForm(p) {
@@ -1874,7 +1969,17 @@ function populateProviderForm(p) {
   $("provider-chat-endpoint").value = p.chat_endpoint || "/v1/chat/completions";
   $("provider-discovery-endpoint").value = p.discovery_endpoint || "/v1/models";
   $("provider-timeout").value = p.timeout_seconds || 30;
+  openProviderModal("Edit Provider");
 }
+
+$("provider-add-btn").addEventListener("click", () => {
+  $("provider-form").reset();
+  $("provider-original-name").value = "";
+  $("provider-chat-endpoint").value = "/v1/chat/completions";
+  $("provider-discovery-endpoint").value = "/v1/models";
+  $("provider-timeout").value = 30;
+  openProviderModal("Add Provider");
+});
 
 $("provider-clear").addEventListener("click", () => {
   $("provider-form").reset();
@@ -1910,11 +2015,28 @@ $("provider-form").addEventListener("submit", async (ev) => {
     $("provider-chat-endpoint").value = "/v1/chat/completions";
     $("provider-discovery-endpoint").value = "/v1/models";
     $("provider-timeout").value = 30;
+    closeModal("provider-modal");
     await loadSettings();
   } catch (e) {
     appendLog("Error", "save provider failed: " + e);
   }
 });
+
+async function setDefaultProvider(name) {
+  try {
+    const r = await fetch("/settings/general", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ default_provider: name }),
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error);
+    showToast("Default provider set: " + name);
+    await loadSettings();
+  } catch (e) {
+    appendLog("Error", "set default provider failed: " + e);
+  }
+}
 
 async function deleteProvider(name) {
   // §webui-provider-delete: deleting a provider now cascades to any
@@ -1943,6 +2065,18 @@ function populateDefaultModelDropdown() {
   });
 }
 
+function populateDefaultProviderDropdown() {
+  const sel = $("general-default-provider");
+  sel.innerHTML = '<option value="">(none)</option>';
+  cachedProviders.forEach(p => {
+    const opt = document.createElement("option");
+    opt.value = p.name;
+    opt.textContent = p.name;
+    if (cachedGeneral.default_provider === p.name) opt.selected = true;
+    sel.appendChild(opt);
+  });
+}
+
 // ---- General ----
 function renderGeneralForm() {
   $("general-auto").checked = !!cachedGeneral.auto_approve;
@@ -1957,6 +2091,7 @@ $("general-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
   const payload = {
     default_model: $("general-default").value,
+    default_provider: $("general-default-provider").value,
     auto_approve: $("general-auto").checked,
     max_agent_iterations: parseInt($("general-max-iter").value, 10),
     max_tool_result_size: parseInt($("general-tool-size").value, 10),
