@@ -20,10 +20,11 @@
  * #include "common/ThinkingSpinner.h"
  *
  * ThinkingSpinner spinner;
- * spinner.start();
- * agent.run_one_turn(stop_token);     // blocks until LLM turns are done
- * // spinner auto-stops on first on_assistant_delta, or call:
- * spinner.stop();
+ * // No need to call start() manually — wire on_llm_wait_started to
+ * // spinner.notify_llm_wait_started() and the spinner starts exactly
+ * // when the agent is waiting for the LLM.
+ * agent.run_one_turn(stop_token);
+ * // spinner auto-stops on first on_llm_response_started.
  * \endcode
  *
  * \section design Design at a glance
@@ -32,9 +33,9 @@
  *   - Each tick prints `\r` + frame N + space + custom message.
  *   - A `std::condition_variable` parks the thread when the spinner is
  *     not running, so the CPU cost when idle is essentially zero.
- *   - Sink-side auto-stop: hook into AgentSink::on_assistant_delta
- *     and/or on_state_change — first call marks a `stopped_` flag
- *     that the next tick honours.
+ *   - Sink-side auto-stop: hook into AgentSink::on_llm_response_started
+ *     and/or on_assistant_delta — first call marks a `stopped_` flag
+ *     that the next tick honours. on_llm_wait_started() starts it.
  *   - Destruction joins the thread cleanly (`stop()` is idempotent).
  *
  * \section why Why not just print a static "Thinking..." line?
@@ -143,15 +144,21 @@ public:
     //
     //   struct MySink : daedalus::AgentSink {
     //       ThinkingSpinner& spinner;
-    //       void on_assistant_delta(std::string_view) noexcept override {
-    //           spinner.notify_assistant_delta();
+    //       void on_llm_wait_started() noexcept override {
+    //           spinner.notify_llm_wait_started();
+    //       }
+    //       void on_llm_response_started() noexcept override {
+    //           spinner.notify_llm_response_started();
+    //       }
+    //       void on_llm_request_finished() noexcept override {
+    //           spinner.notify_llm_request_finished();
     //       }
     //   };
     //
-    // First call to either notify_ method stops the spinner. The agent
-    // calls on_assistant_delta from its worker thread; the spinner's
-    // background thread observes the flag and exits on the next tick.
-    // ------------------------------------------------------------------
+    // on_llm_wait_started starts the spinner; on_llm_response_started
+    // and on_llm_request_finished stop it. The agent calls these from
+    // its worker thread; the spinner's background thread observes the
+    // flag and exits on its next tick.
 
     /// @brief Hook for AgentSink::on_assistant_delta. Idempotent.
     ///
@@ -162,11 +169,28 @@ public:
     /// be a deadlock risk (the worker might be holding state_mutex_
     /// mid-callback), so we leave cleanup for later.
     void notify_assistant_delta() noexcept {
-        if (!stopped_.load(std::memory_order_acquire)) {
-            stopped_.store(true, std::memory_order_release);
-            std::lock_guard<std::mutex> lk(state_mutex_);
-            cv_.notify_all();
-        }
+        stop_async();
+    }
+
+    /// @brief Hook for AgentSink::on_llm_wait_started. Idempotent.
+    /// Starts the spinner so the user sees the agent is waiting for the
+    /// LLM. Typically wired together with set_message() from on_state_change.
+    void notify_llm_wait_started() noexcept {
+        start();
+    }
+
+    /// @brief Hook for AgentSink::on_llm_response_started. Idempotent.
+    /// The first streaming token (or complete non-streaming response) has
+    /// arrived, so the "waiting" spinner should stop.
+    void notify_llm_response_started() noexcept {
+        stop_async();
+    }
+
+    /// @brief Hook for AgentSink::on_llm_request_finished. Idempotent.
+    /// The LLM request cycle is over; stop the spinner as a safety net
+    /// for non-streaming paths or cancellations.
+    void notify_llm_request_finished() noexcept {
+        stop_async();
     }
 
     /// @brief Hook for AgentSink::on_state_change.
@@ -188,14 +212,22 @@ public:
         if (to_state == kAwaitingApproval
             || to_state == kCompressing || to_state == kDone
             || to_state == kCancelled || to_state == kError) {
-            if (!stopped_.load(std::memory_order_acquire)) {
-                stopped_.store(true, std::memory_order_release);
-                std::lock_guard<std::mutex> lk(state_mutex_);
-                cv_.notify_all();
-            }
+            stop_async();
         }
     }
 
+private:
+    /// Set the stopped flag and wake the worker without joining.
+    /// Safe to call from any thread (including AgentSink callbacks).
+    void stop_async() noexcept {
+        if (!stopped_.load(std::memory_order_acquire)) {
+            stopped_.store(true, std::memory_order_release);
+            std::lock_guard<std::mutex> lk(state_mutex_);
+            cv_.notify_all();
+        }
+    }
+
+public:
     // ------------------------------------------------------------------
     // Lifecycle.
     // ------------------------------------------------------------------

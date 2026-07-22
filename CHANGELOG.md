@@ -11,6 +11,19 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
+- **LLM lifecycle callbacks** (`AgentSink`):
+  - `on_llm_wait_started()`, `on_llm_response_started()`, and
+    `on_llm_request_finished()` give hosts precise hooks for driving a
+    "thinking" spinner. The spinner now runs only while the agent is
+    actually waiting for the LLM, instead of during prompt-building
+    work that precedes the network request.
+  - Wired through `LLMClient::run_agent_cycle` for both streaming and
+    non-streaming paths, including retry fallbacks.
+  - Updated the reference `ThinkingSpinner` and the CLI demo's
+    `ConsoleAgentSink` to use the new hooks.
+  - Documented in `docs/embedding.md`; covered by
+    `tests/test_llm_lifecycle_callbacks.cpp`.
+
 - **Runtime enable/disable API** (`Agent`):
   - `Agent::set_skill_enabled()`, `Agent::set_mcp_server_enabled()`,
     `Agent::set_tool_enabled()` and matching `is_*_enabled()` /

@@ -802,6 +802,27 @@ target_link_libraries(daedalus_sink_call_id_tests PRIVATE
 )
 add_test(NAME sink_call_id_tests COMMAND daedalus_sink_call_id_tests)
 
+# ============================================================================
+# LLM lifecycle callbacks: on_llm_wait_started / on_llm_response_started /
+# on_llm_request_finished. Hermetic portion runs always; live-LLM portion
+# is skipped unless DAEDALUS_RUN_LIVE_LLM_TESTS=1.
+# ============================================================================
+add_executable(daedalus_llm_lifecycle_callbacks_tests
+    test_llm_lifecycle_callbacks.cpp
+)
+target_include_directories(daedalus_llm_lifecycle_callbacks_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_llm_lifecycle_callbacks_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME llm_lifecycle_callbacks_tests COMMAND daedalus_llm_lifecycle_callbacks_tests)
+set_tests_properties(llm_lifecycle_callbacks_tests PROPERTIES
+    SKIP_RETURN_CODE 77
+    LABELS "live-llm"
+)
+
 # Library does not call std::cin / std::cout / std::cerr (Phase 2.5: REPL
 # belongs to the host, not the library).
 add_executable(daedalus_no_repl_tests

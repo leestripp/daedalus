@@ -439,6 +439,12 @@ std::future<std::string> LLMClient::make_api_request_async(
                     long code = result->status_code;
                     int  retry_after = result->retry_after_seconds;
                     if (code >= 200 && code < 300) {
+                        // Non-streaming responses have no per-chunk callback,
+                        // so fire the response-started hook here on the HTTP
+                        // worker thread (consistent with streaming deltas).
+                        if (!streaming_callback) {
+                            if (auto s = weak_sink.lock()) s->on_llm_response_started();
+                        }
                         return last_body;  // Success
                     } else if (code == 401) {
                         // Auth failure: never retry. Surface the error.
@@ -591,6 +597,9 @@ std::string LLMClient::make_http_request_with_retry(
 
             const long code = resp.statusCode();
             if (code >= 200 && code < 300) {
+                // Sync fallback path: the response body is now available,
+                // so the LLM has "started responding" from the host's POV.
+                if (sink_) sink_->on_llm_response_started();
                 break; // Success
             } else if (code == 401) {
                 // Don't retry on authentication errors - they won't succeed
@@ -1130,14 +1139,44 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // When false the existing buffered JSON path is used unchanged.
     MiniMaxSseParser sse_parser{std::weak_ptr<daedalus::AgentSink>(sink_)};
     std::function<void(std::string_view)> streaming_callback;
+    // Lifecycle hooks for host UI spinners. started/finished guard ensures
+    // on_llm_request_finished always fires once even on cancellation or
+    // early returns.
+    struct LlmLifecycle {
+        std::shared_ptr<daedalus::AgentSink> sink;
+        std::atomic<bool> wait_started{false};
+        std::atomic<bool> response_started{false};
+        std::atomic<bool> finished{false};
+        explicit LlmLifecycle(std::shared_ptr<daedalus::AgentSink> s)
+            : sink(std::move(s)) {}
+        void start_wait() {
+            if (!wait_started.exchange(true) && sink) {
+                sink->on_llm_wait_started();
+            }
+        }
+        void start_response() {
+            if (!response_started.exchange(true) && sink) {
+                sink->on_llm_response_started();
+            }
+        }
+        void finish() {
+            // Only fire the finished hook if the wait hook was actually
+            // started (i.e. we reached the HTTP dispatch point).
+            if (!wait_started.load() || finished.exchange(true)) return;
+            if (sink) sink->on_llm_request_finished();
+        }
+        ~LlmLifecycle() { finish(); }
+    } lifecycle{sink_};
     if (config_.stream) {
         // Capture sse_parser by reference — it lives on run_agent_cycle's
         // stack and the async task fires its callbacks while we are still
         // in the wait loop below, so the reference is always valid.
-        streaming_callback = [&sse_parser](std::string_view chunk) {
+        streaming_callback = [&sse_parser, &lifecycle](std::string_view chunk) {
+            lifecycle.start_response();
             sse_parser.on_chunk(chunk);
         };
     }
+    lifecycle.start_wait();
     auto api_future = make_api_request_async(
         api_url, request_payload.dump(), cancel_token, streaming_callback);
 
@@ -1406,6 +1445,10 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         }
         // If retry_success is true, we have a valid response_json, continue processing
     }
+
+    // The LLM request/response cycle is complete. Signal hosts so they can
+    // stop any "thinking" spinner before we move on to tool execution.
+    lifecycle.finish();
 
     // Check for valid response
     // §Phase 9.10: when streaming with `stream_options: {include_usage: true}`,

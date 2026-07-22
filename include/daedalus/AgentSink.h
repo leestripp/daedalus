@@ -12,9 +12,11 @@
  * "MANDATORY" in the comments below are not — they all have defaults —
  * but a typical host will want to override on_log at minimum.
  *
- * Threading: every method is called on the agent's worker thread. Hosts
- * that need to touch UI frameworks with thread affinity (GTK, Qt) MUST
- * marshal the call to the UI thread before acting.
+ * Threading: most methods are called on the agent's worker thread. The
+ * streaming methods on_assistant_delta and on_llm_response_started may be
+ * called from the HTTP worker thread that receives SSE chunks. Hosts that
+ * need to touch UI frameworks with thread affinity (GTK, Qt) MUST marshal
+ * the call to the UI thread before acting.
  */
 #pragma once
 
@@ -118,6 +120,26 @@ public:
     {
         (void)text;
     }
+
+    // ------------------------------------------------------------------
+    // LLM request lifecycle
+    // ------------------------------------------------------------------
+
+    /// @brief The agent has dispatched an LLM request and is now waiting
+    /// for the response. Hosts can use this to start a "thinking" spinner.
+    /// Always paired with a later on_llm_request_finished().
+    virtual void on_llm_wait_started() noexcept {}
+
+    /// @brief The LLM has started responding. For streaming responses this
+    /// fires on the first token/chunk; for non-streaming responses it fires
+    /// when the complete response body has been received. Hosts can use
+    /// this to switch from a "waiting" spinner to streaming output.
+    virtual void on_llm_response_started() noexcept {}
+
+    /// @brief The LLM request/response cycle has ended, regardless of
+    /// whether it succeeded, failed, or was cancelled. This always pairs
+    /// with a preceding on_llm_wait_started().
+    virtual void on_llm_request_finished() noexcept {}
 
     // ------------------------------------------------------------------
     // State / lifecycle

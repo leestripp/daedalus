@@ -60,6 +60,11 @@ public:
     // State / lifecycle — §Phase 9.6 observability.
     void on_state_change(int from, int to) noexcept override;
 
+    // LLM request lifecycle — precise spinner control.
+    void on_llm_wait_started() noexcept override;
+    void on_llm_response_started() noexcept override;
+    void on_llm_request_finished() noexcept override;
+
     // Context compaction — §Phase 9.6 observability.
     void on_compaction(std::size_t before_tokens,
                        std::size_t after_tokens) noexcept override;

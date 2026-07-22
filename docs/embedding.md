@@ -101,6 +101,11 @@ struct daedalus::AgentSink {
     // Streaming (one per SSE chunk)
     virtual void on_assistant_delta(std::string_view text) noexcept;
 
+    // LLM request lifecycle (precise spinner control)
+    virtual void on_llm_wait_started() noexcept;
+    virtual void on_llm_response_started() noexcept;
+    virtual void on_llm_request_finished() noexcept;
+
     // Tool lifecycle
     virtual void on_tool_call(std::string_view name,
                               const nlohmann::json& args) noexcept;
@@ -128,14 +133,17 @@ struct daedalus::AgentSink {
 2. run_one_turn()                                [host]
 3. on_state_change(Idle, Understanding)         [sink]
 4. on_log(Info, "[PERSIST] Restored N messages")
-5. (SSE tokens) on_assistant_delta(…)             [sink, many times]
-6. on_tool_call("execute_bash", {...})           [sink]  # e.g. grep / sed / cat
-7. on_tool_result("execute_bash", {...})         [sink]
-8. on_tool_call("execute_bash", {...})           [sink]  # e.g. cmake --build
-9. request_command_approval("cmake --build")     [sink — blocking]
-10. on_tool_result("execute_bash", {...})        [sink]
-13. on_state_change(Acting, Done)                [sink]
-14. run_one_turn() returns                       [host]
+5. on_llm_wait_started()                         [sink]
+6. on_llm_response_started()                     [sink]
+7. (SSE tokens) on_assistant_delta(…)             [sink, many times]
+8. on_llm_request_finished()                     [sink]
+9. on_tool_call("execute_bash", {...})           [sink]  # e.g. grep / sed / cat
+10. on_tool_result("execute_bash", {...})         [sink]
+11. on_tool_call("execute_bash", {...})           [sink]  # e.g. cmake --build
+12. request_command_approval("cmake --build")     [sink — blocking]
+13. on_tool_result("execute_bash", {...})         [sink]
+14. on_state_change(Acting, Done)                [sink]
+15. run_one_turn() returns                       [host]
 ```
 
 ### Callback Data Reference
@@ -150,6 +158,9 @@ in what format, and what it means for your host application.
 | Callback | Data Format | Purpose |
 |----------|-------------|---------|
 | `on_assistant_delta` | `text` (string_view) | **Streaming text tokens** — raw text chunks from LLM as they arrive |
+| `on_llm_wait_started` | none | **LLM wait begins** — start a "thinking" spinner |
+| `on_llm_response_started` | none | **LLM response begins** — first token/chunk arrived |
+| `on_llm_request_finished` | none | **LLM request cycle ends** — stop the spinner |
 | `on_tool_call` | `name` + `call_id` + `args` (JSON) | **Structured tool input** — the tool the LLM wants to execute |
 | `on_tool_progress` | `name` + `call_id` + `progress` (JSON) | **Tool progress updates** — `{stage, percent, message}` |
 | `on_tool_result` | `name` + `call_id` + `result` (JSON) | **Structured tool output** — tool execution result |
@@ -184,6 +195,48 @@ void on_assistant_delta(std::string_view text) noexcept override;
 {"event":"assistant_delta","data":"Hello"}
 {"event":"assistant_delta","data":"!"}
 {"event":"assistant_delta","data":" Let me find that"}
+```
+
+---
+
+### LLM Request Lifecycle — Spinner Control
+
+```cpp
+void on_llm_wait_started() noexcept override;
+void on_llm_response_started() noexcept override;
+void on_llm_request_finished() noexcept override;
+```
+
+**Called when:** The agent is waiting for, receiving, or finishing an LLM response.
+
+**Purpose:** These three hooks give hosts precise control over a "thinking"
+spinner or progress indicator:
+
+| Callback | When it fires | Typical host action |
+|----------|---------------|---------------------|
+| `on_llm_wait_started()` | The request payload is built and the HTTP request has been dispatched. | **Start** the spinner. |
+| `on_llm_response_started()` | The first streaming token/chunk arrived (or the complete body for non-streaming responses). | **Stop** the "waiting" spinner and begin streaming output. |
+| `on_llm_request_finished()` | The request/response cycle is complete, including retries, errors, or cancellation. | **Stop** the spinner as a safety net. |
+
+**Relationship to `on_state_change`:** `on_state_change` still fires for every
+state transition (Understanding, Planning, Acting, ...), but it also covers
+prompt-building work before the network request. The lifecycle hooks above are
+tighter: the spinner runs only while the agent is actually waiting for the LLM.
+
+**Threading note:** `on_llm_wait_started` and `on_llm_request_finished` are
+called on the agent's worker thread. `on_llm_response_started` may be called
+from the HTTP worker thread that receives SSE chunks (just like
+`on_assistant_delta`).
+
+**Example:**
+```cpp
+class MySink : public daedalus::AgentSink {
+    Spinner spinner;
+public:
+    void on_llm_wait_started() noexcept override { spinner.start(); }
+    void on_llm_response_started() noexcept override { spinner.stop(); }
+    void on_llm_request_finished() noexcept override { spinner.stop(); }
+};
 ```
 
 ---
@@ -423,8 +476,11 @@ on_state_change(2, 3)   // Planning -> Acting
 on_state_change(3, 7)   // Acting -> Done
 ```
 
-**CLI behavior:** Shows a "Thinking..." spinner during Thinking states
-(Understanding, Planning, Acting, Verifying, Compressing).
+**CLI behavior:** The CLI demo now uses the LLM lifecycle hooks
+(`on_llm_wait_started` / `on_llm_response_started` /
+`on_llm_request_finished`) to show the spinner only while the agent is
+actually waiting for the LLM. `on_state_change` is still useful for updating
+the spinner's label ("Planning...", "Acting...", etc.).
 
 ---
 
@@ -555,16 +611,19 @@ approved.
 2. run_one_turn()                               [host]
 3. on_state_change(Idle, Understanding)         [sink]
 4. on_log(Info, "[PERSIST] Restored 42 messages")
-5. (SSE tokens) on_assistant_delta("I'm analyzing...")  [sink, many times]
-6. on_state_change(Understanding, Planning)     [sink]
-7. on_tool_call("execute_bash", "call_1", {...})  [sink]  # e.g. grep / sed
-8. on_tool_result("execute_bash", "call_1", {...}) [sink]
-9. on_state_change(Planning, Acting)            [sink]
-10. on_tool_call("execute_bash", "call_2", {...}) [sink]  # e.g. cmake --build
-11. request_command_approval("cmake --build .")  [sink — blocking]
-12. on_tool_result("execute_bash", "call_2", {...}) [sink]
-15. on_state_change(Acting, Done)                [sink]
-16. run_one_turn() returns                       [host]
+5. on_llm_wait_started()                         [sink]
+6. on_llm_response_started()                     [sink]
+7. (SSE tokens) on_assistant_delta("I'm analyzing...")  [sink, many times]
+8. on_llm_request_finished()                     [sink]
+9. on_state_change(Understanding, Planning)     [sink]
+10. on_tool_call("execute_bash", "call_1", {...})  [sink]  # e.g. grep / sed
+11. on_tool_result("execute_bash", "call_1", {...}) [sink]
+12. on_state_change(Planning, Acting)            [sink]
+13. on_tool_call("execute_bash", "call_2", {...}) [sink]  # e.g. cmake --build
+14. request_command_approval("cmake --build .")  [sink — blocking]
+15. on_tool_result("execute_bash", "call_2", {...}) [sink]
+16. on_state_change(Acting, Done)                [sink]
+17. run_one_turn() returns                       [host]
 ```
 
 ---

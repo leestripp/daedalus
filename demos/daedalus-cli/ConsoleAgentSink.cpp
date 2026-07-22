@@ -33,21 +33,9 @@ ConsoleAgentSink::ConsoleAgentSink() {
 }
 
 void ConsoleAgentSink::on_assistant_delta(std::string_view text) noexcept {
-    // §Phase 9.10: if the spinner is currently animating, stop it
-    // BEFORE flushing any text so we leave a clean line below the
-    // spinner's last position. The flush goes to stdout (cout), the
-    // spinner was on stderr; they share the same terminal so we need
-    // the explicit `\n` to push past the cleared spinner line.
-    const bool spinner_was_running = spinner_.is_running();
-    if (spinner_was_running) {
-        spinner_.stop();   // joins the worker thread (max ~100ms)
-        std::cerr << "\n" << std::flush;
-    } else {
-        // Even without a spinner, notify so the spinner's own state
-        // is consistent (idempotent no-op if already stopped).
-        spinner_.notify_assistant_delta();
-    }
-
+    // §Phase 9.10: deltas stream after on_llm_response_started has already
+    // stopped the spinner. Just flush the text; the terminal line is clean
+    // because the spinner cleared itself before stopping.
     delta_buffer_ += text;
     if (delta_buffer_.size() >= DELTA_FLUSH_THRESHOLD ||
         delta_buffer_.find('\n') != std::string::npos) {
@@ -98,17 +86,33 @@ void ConsoleAgentSink::on_tool_display(std::string_view text) noexcept {
 
 void ConsoleAgentSink::on_state_change(int from, int to) noexcept {
     (void)from;
-    // §Phase 9.10: stop the spinner first so the new state's label
-    // appears on its own line. The spinner label ("Planning...",
-    // "Acting...") IS the state indicator now — the old
-    // "[STATE] X -> Y" log line is intentionally omitted because
-    // it would be redundant with the spinner's message.
-    spinner_.stop();
+    // §Phase 9.10: the spinner message reflects the current agent state
+    // ("Planning...", "Acting...", etc.). The actual start/stop is driven
+    // by the LLM lifecycle hooks below, so this method only updates the
+    // label and ensures the spinner stops on terminal states.
     const AgentState s = static_cast<AgentState>(to);
     if (THINKING_STATES.contains(s)) {
         spinner_.message = std::string(daedalus::to_string(s)) + "...";
-        spinner_.start();
+    } else {
+        spinner_.notify_state_change(from, to);
     }
+}
+
+void ConsoleAgentSink::on_llm_wait_started() noexcept {
+    // The agent is actually waiting for the LLM now, so show the spinner.
+    spinner_.start();
+}
+
+void ConsoleAgentSink::on_llm_response_started() noexcept {
+    // First token / response body arrived — stop the "waiting" indicator
+    // before streamed text or tool output appears.
+    spinner_.notify_llm_response_started();
+}
+
+void ConsoleAgentSink::on_llm_request_finished() noexcept {
+    // Safety net: ensure the spinner is stopped for non-streaming paths,
+    // cancellations, or any other case where response_started did not fire.
+    spinner_.notify_llm_request_finished();
 }
 
 void ConsoleAgentSink::on_compaction(std::size_t before_tokens,
