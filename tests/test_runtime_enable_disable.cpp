@@ -108,6 +108,10 @@ void test_runtime_skill_toggle() {
     assert(agent.set_skill_enabled("alpha", false));
     assert(!agent.set_skill_enabled("alpha", false));
 
+    // Unknown skill names are rejected.
+    assert(!agent.set_skill_enabled("nonexistent", false));
+    assert(!agent.set_skill_enabled("nonexistent", true));
+
     fs::remove_all(tmp);
     std::cout << "[ok] test_runtime_skill_toggle" << std::endl;
 }
@@ -170,6 +174,10 @@ void test_runtime_mcp_server_toggle() {
     assert(contains(after_enable, std::string("server-a")));
     assert(contains(after_enable, std::string("server-b")));
 
+    // Unknown server names are rejected.
+    assert(!agent.set_mcp_server_enabled("nonexistent", false));
+    assert(!agent.set_mcp_server_enabled("nonexistent", true));
+
     fs::remove_all(tmp);
     std::cout << "[ok] test_runtime_mcp_server_toggle" << std::endl;
 }
@@ -215,6 +223,10 @@ void test_runtime_tool_toggle() {
 
     // Idempotent enable returns false.
     assert(!agent.set_tool_enabled("execute_bash", true));
+
+    // Unknown tool names are rejected.
+    assert(!agent.set_tool_enabled("nonexistent", false));
+    assert(!agent.set_tool_enabled("nonexistent", true));
 
     fs::remove_all(tmp);
     std::cout << "[ok] test_runtime_tool_toggle" << std::endl;

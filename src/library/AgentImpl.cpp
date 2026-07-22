@@ -1142,6 +1142,17 @@ bool AgentImpl::set_skill_enabled(const std::string& name, bool enabled)
     }
 
     auto& sm = *body_->skill_manager;
+
+    // Reject unknown skill names so hosts cannot silently "disable" a typo.
+    if (!sm.get_all_cached_skills().count(name)) {
+        if (sink_) {
+            sink_->on_log(daedalus::LogLevel::Warn,
+                "[SKILLS] Cannot " + std::string(enabled ? "enable" : "disable") +
+                " unknown skill '" + name + "'");
+        }
+        return false;
+    }
+
     auto disabled = sm.get_disabled_skills();
     const bool was_disabled = disabled.count(name);
 
@@ -1215,6 +1226,16 @@ bool AgentImpl::set_mcp_server_enabled(const std::string& name, bool enabled)
     }
 
     if (currently_disabled) return false;
+
+    // Reject unknown server names so hosts cannot silently "disable" a typo.
+    if (!body_->store || !body_->store->get_mcp_server(name).has_value()) {
+        if (sink_) {
+            sink_->on_log(daedalus::LogLevel::Warn,
+                "[MCP] Cannot disable unknown server '" + name + "'");
+        }
+        return false;
+    }
+
     mgr.disable_server(name);
     tool_filter_.disabled_mcp_servers.insert(name);
     if (sink_) {
@@ -1239,6 +1260,16 @@ std::vector<std::string> AgentImpl::disabled_mcp_servers() const
 
 bool AgentImpl::set_tool_enabled(const std::string& name, bool enabled)
 {
+    auto factory = ToolHandler::get_tool_factory();
+    if (!factory || !factory->has_tool(name)) {
+        if (sink_) {
+            sink_->on_log(daedalus::LogLevel::Warn,
+                "[TOOLS] Cannot " + std::string(enabled ? "enable" : "disable") +
+                " unknown tool '" + name + "'");
+        }
+        return false;
+    }
+
     const bool currently_disabled = tool_filter_.disabled_tools.count(name);
     if (enabled) {
         if (!currently_disabled) return false;
