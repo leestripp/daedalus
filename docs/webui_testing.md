@@ -201,7 +201,7 @@ pgrep -f "firefox.*--profile /tmp/fx-bidi-agent" | xargs -r kill
 
 - Before merging any change to `demos/daedalus-webui/main.cpp`.
 - After upgrading OmniNet (the SSE drop regression is exactly what
-  this harness catches — see `omninet_bugs.md`).
+  this harness catches).
 - As a manual smoke test before tagging a release.
 - When debugging user reports of "the webui looks weird" or "SSE
   keeps disconnecting".
@@ -227,5 +227,4 @@ pgrep -f "firefox.*--profile /tmp/fx-bidi-agent" | xargs -r kill
 
 - `~/.daedalus/skills/firefox/scripts/bidi_client.py` — the client
 - `~/.daedalus/skills/firefox/scripts/start-firefox-debug.sh` — the launcher
-- `omninet_bugs.md` — known bugs in the underlying HTTP/SSE layer
 - `demos/daedalus-webui/main.cpp` — the demo under test

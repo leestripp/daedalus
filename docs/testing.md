@@ -250,7 +250,7 @@ Pass 2's log shows the recovery path firing on every streaming turn:
 ```
 
 This is exactly the contract documented in
-[`token_counts.md`](token_counts.md) § "Graceful Degradation".
+[`sse_streaming.md`](sse_streaming.md) § "Token-count graceful degradation".
 
 ---
 
@@ -269,8 +269,7 @@ This is exactly the contract documented in
 
 ## Related
 
-- [`sse_streaming.md`](sse_streaming.md) — SSE pipeline, EOF gotcha, trailer recovery
-- [`token_counts.md`](token_counts.md) — Token-count research + graceful-degradation contract
+- [`sse_streaming.md`](sse_streaming.md) — SSE pipeline, EOF gotcha, trailer recovery, token-count graceful degradation
 - [`crash_resilience.md`](crash_resilience.md) — What the crash-recovery unit tests verify
 - [`embedding.md`](embedding.md) — How `AgentSink` is used in tests
 - `tests/CMakeLists.txt` — Test target definitions

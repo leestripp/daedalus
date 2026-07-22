@@ -67,8 +67,6 @@ DAEDALUS_HOME=/tmp/daedalus-test daedalus-cli --migrate-data-apply
 | `mcp/.env` | `<config_root>/mcp/.env` | MCP server environment variables (env vars for subprocesses) |
 | Globally-installed skill packs | `<data_root>/skills/installed/` | User-global skill packs |
 | Library logs | `<state_root>/logs/daedalus.log` | Agent logs |
-| Conversation history (v0.3.5+) | `daedalus.db` under `msg.<session_id>` keys | SQLite |
-| Session memory (v0.3.5+) | `daedalus.db` under `mem.<session_id>` keys | SQLite |
 | Response replay cache (future) | `<cache_root>/responses/` | Future |
 | Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` | Future |
 
@@ -79,9 +77,8 @@ And so on.
 ### 1.3 XDG directory permissions
 
 `Agent::initialize()` calls `Paths::ensure_directories()` which
-auto-creates the four XDG roots with the secure permissions
-(`0750` for config/data, `0700` for state/cache). Hosts can call it
-explicitly earlier if they need to:
+auto-creates the four XDG roots with the secure permissions shown below.
+Hosts can call it explicitly earlier if they need to:
 
 ```cpp
 #include <daedalus/paths.h>
@@ -93,6 +90,14 @@ daedalus::Paths::global().ensure_directories();
 `ensure_directories()` is idempotent — safe to call multiple times — and
 silently no-ops on filesystems that don't support `chmod` (e.g. FAT32
 mounts).
+
+| Directory | Permissions | Reason |
+|-----------|-------------|--------|
+| `user_config_root()` | 0750 | Group-readable for shared daemon access |
+| `user_data_root()` | 0750 | Group-readable for skill pack sharing |
+| `user_state_root()` | 0700 | Private — logs may contain API key fragments |
+| `user_cache_root()` | 0700 | Private — cache may contain PII |
+| Project directories | 0755 | Standard project permissions |
 
 ### 1.4 System tier (read-only)
 
@@ -139,9 +144,8 @@ get different `agent_dir()` paths, so:
 |---|---|---|
 | `agent_dir/messages.json` | Conversation transcript. Atomic write via temp + rename + `fsync`; survives `kill -9` mid-save. Write-through auto-flush keeps it within ~100 ms of every `add_*()` call. | Yes (rebuilds from the agent loop on next turn) |
 | `agent_dir/messages.json.crash` | Crash mirror — written by the SIGSEGV/SIGABRT/SIGFPE/SIGILL signal handlers and re-written on every save. Read on next launch if `messages.json` is missing/corrupt. Defensive "drop last message" recovery. | Yes |
-| `agent_dir/messages.sqlite` | Conversation mirror (v0.3.5+) — SQLite | Yes |
-| `agent_dir/memory/memory.sqlite` | Long-term facts | No — losing this loses project memory |
-| `agent_dir/memory/memory.json` | Legacy memory format (backed up to `daedalus.db`) | No |
+| `agent_dir/memory/memory.json` | Long-term facts. Source of truth for `SessionMemory`. | No — losing this loses project memory |
+| `agent_dir/memory/daedalus.db` | SQLite mirror of `memory.json` under `mem.<session_id>` keys. Used for recovery if the JSON file is corrupt. | Yes (regenerable from `memory.json`) |
 | `agent_dir/sessions/<sid>/` | Per-session scratch state | Yes |
 | `agent_dir/cache/` | Project-specific regenerable caches | Yes |
 | `agent_dir/skills/active/` | Project-local skill overrides | No — losing this drops overrides |
@@ -286,10 +290,12 @@ full API reference.
 
 ### Q. Where is memory stored?
 
-**Per-project, always.** Memory is stored in `daedalus.db` under
-`mem.<session_id>` keys. The `SessionMemory` class falls back to the
-JSON file at `<project>/.daedalus/daedalus[-<agent_name>]/memory/memory.json`
-if the DB key is empty.
+**Per-project, always.** The source of truth is the JSON file at
+`<project>/.daedalus/daedalus[-<agent_name>]/memory/memory.json`.
+`SessionMemory` also writes a best-effort SQLite mirror to
+`<project>/.daedalus/daedalus[-<agent_name>]/memory/daedalus.db` under
+`mem.<session_id>` keys, which is used as a fallback if the JSON file
+is corrupt or missing.
 
 **Never** in XDG. See `tests/test_two_tier_rule.cpp` for the test that
 enforces this.
@@ -335,4 +341,4 @@ daedalus::Paths::set_override(nullptr);
 - `tests/test_ensure_directories.cpp` — XDG-permissions test.
 - `demos/daedalus-cli/migrate.cpp` — migration CLI implementation.
 
-*Last updated 2026-07-19 (Phase 16: single `.daedalus` base directory).*
+*Last updated 2026-07-22 (docs cleanup: memory paths corrected).*

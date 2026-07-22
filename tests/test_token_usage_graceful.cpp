@@ -7,7 +7,7 @@
  * erroring. A warning is emitted (per turn) but the agent loop state
  * is unaffected.
  *
- * Contract under test (see docs/token_counts.md § "Graceful Degradation"):
+ * Contract under test (see docs/sse_streaming.md § "Token-count graceful degradation"):
  *
  *   1. `usage` field missing      → tokens=0, Warn emitted, no throw
  *   2. `usage` field is null      → tokens=0, Warn emitted, no throw

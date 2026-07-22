@@ -1,133 +1,122 @@
 # Session Memory
 
-> **Updated (2026-07-13):** this document has been rewritten from
-> scratch to reflect the per-Agent `daedalus_home` design (§Phase 8.8).
-> The old file described a monolithic `~/.daedalus/session_memory.db`
-> shared across all agents. Each agent now has its own database under
-> `~/.daedalus/{agent_name}/session_memory.db`.
+Session Memory is the agent's persistent scratch-pad — a JSON-backed store
+that survives between sessions so the agent doesn't have to rediscover the
+same patterns every time it starts up.
 
-## What Session Memory Is
+> **Storage location:** per-project, never in the XDG user tier. See
+> [`docs/storage.md`](storage.md) for the exact path resolution and the
+> two-tier rule.
 
-Session Memory is the agent's persistent scratch-pad — a SQLite database
-that survives between sessions so the agent doesn't have to rediscover
-the same patterns every time it starts up. It lives alongside the
-messages history and settings in the per-agent data directory.
+## What is remembered
 
-The agent uses it to store:
-- **Build patterns** — commands + flags that worked (`cmake --build build -j8`)
-- **Error patterns** — known errors and their solutions
-- **Preferences** — inferred from repeated behaviour (e.g. "user prefers `git switch` over `git checkout`")
-- **Patterns** — file locations, naming conventions, style preferences
-- **Session summaries** — what happened at end of session for next session's context
+The agent stores several categories of facts:
 
-The host can also write entries directly via the `remember()` tool.
+- **Builds** — commands + flags that worked (e.g. `cmake --build build -j8`).
+- **Errors** — error patterns and their solutions.
+- **Preferences** — inferred from repeated behaviour (e.g. "user prefers
+  `git switch` over `git checkout`").
+- **Patterns** — file locations, naming conventions, style preferences.
+- **Session summaries** — a short recap of what happened at the end of a
+  session for the next session's context.
 
-## Storage location
+The host can also write explicit entries through the `remember()` tool.
+
+## Storage
+
+Session memory lives in the project tier:
 
 ```
-~/.local/share/daedalus/{agent_name}/
-├── daedalus.db               ← SettingsStore (v0.4.0+)
-└── session_memory.db         ← SQLite database for memories
-
-# Per-project runtime state (separate from the user-level data above):
-<project_root>/.daedalus[-<agent_name>]/
+<project_root>/.daedalus/daedalus[-<agent_name>]/
+├── memory/
+│   ├── memory.json          ← source of truth
+│   └── daedalus.db          ← SQLite mirror (best-effort recovery aid)
 ├── messages.json
-└── (other session files)
+└── ...
 ```
 
-`agent_name` defaults to `""` (no namespace) when not specified in
-`AgentConfig`. The database is created automatically on first use;
-its parent directory is `cfg.daedalus_home/{agent_name}/`.
+- `memory.json` is the source of truth. It is written atomically on
+  `SessionMemory` destruction and after notable lifecycle events.
+- `daedalus.db` (inside the `memory/` directory) is a SQLite mirror keyed
+  by `mem.<session_id>`. If `memory.json` is corrupt or missing on the
+  next load, the mirror is used as a fallback.
+
+`agent_name` defaults to `""` (the default namespace). Multiple agents on
+same project use separate subdirectories and do not share memory.
 
 ## Schema
 
-```sql
-CREATE TABLE memories (
-    id           TEXT PRIMARY KEY,
-    category     TEXT NOT NULL,   -- builds | errors | preferences | patterns | sessions
-    content      TEXT NOT NULL,
-    metadata     TEXT,            -- JSON: extra key-value pairs
-    tags         TEXT,            -- JSON: array of strings
-    created_at   INTEGER,
-    updated_at   INTEGER,
-    confidence   INTEGER DEFAULT 3
-);
-```
+The JSON file contains:
 
-The `id` is assigned by the agent (e.g. `err_001`, `bld_abc`). The host
-does not need to manage IDs — the `remember()` tool handles ID assignment.
-
-## API (host-facing)
-
-The `SessionMemory` class is constructed by `AgentImpl`. Hosts don't
-construct it directly unless they need to query the database without the
-agent (e.g. a "show memory" UI panel):
-
-```cpp
-// include/daedalus/SessionMemory.h
-namespace daedalus {
-struct MemoryEntry { /* id, category, content, metadata, tags, timestamps, confidence */ };
-
-class SessionMemory {
-public:
-    // Construct — opens (or creates) the per-agent DB
-    explicit SessionMemory(const std::string& db_path);
-
-    // ---- agent writes ----
-    bool remember(const MemoryEntry& entry);
-    bool forget(const std::string& id);
-    bool update(const MemoryEntry& entry);
-
-    // ---- agent reads ----
-    std::vector<MemoryEntry> get_all() const;
-    std::vector<MemoryEntry> get_by_category(const std::string& cat) const;
-    std::optional<MemoryEntry> get_by_id(const std::string& id) const;
-
-    // ---- context injection ----
-    std::string inject_as_context(size_t max_entries = 10) const;
-    // Returns a string like:
-    //   ## Session Memory\n- [builds] bld_001: cmake --build build -j8 (src/)\n...
-};
+```json
+{
+  "version": "1.0",
+  "updated_at": "2026-07-22T04:00:00Z",
+  "builds": [...],
+  "errors": [...],
+  "preferences": [...],
+  "patterns": [...],
+  "sessions": [...],
+  "project": {...},
+  "config": {...}
 }
 ```
 
-## What the agent writes vs what the host controls
+Key entry types:
+
+| Type | Fields |
+|------|--------|
+| `BuildEntry` | `id`, `command`, `success`, `attempts`, `first_used`, `last_used`, `use_count`, `notes` |
+| `ErrorEntry` | `id`, `pattern`, `solution`, `occurrences`, `first_seen`, `last_seen`, `resolved`, `confidence` |
+| `PreferenceEntry` | `id`, `key`, `value`, `inferred_from`, `first_observed`, `observation_count`, `user_confirmed` |
+| `PatternEntry` | `id`, `type`, `description`, `example`, `confidence` |
+| `SessionSummary` | `id`, `summary`, `timestamp`, `files_touched`, `iterations` |
+
+All stored strings are sanitized to valid UTF-8 before persistence.
+
+## Who writes what
 
 | Who | What | How |
 |-----|------|-----|
-| Agent | Learned build commands | Writes `BuildEntry` on successful builds |
-| Agent | Learned error solutions | Writes `ErrorEntry` on first fix |
-| Agent | Session summary | Writes `SessionSummary` when `stop` fires |
-| Host | Explicit preferences | Calls `SessionMemory::remember()` via `remember()` tool |
-| Host | Manual entries | Calls `SessionMemory::remember()` directly |
-| Host | Clear memory | Calls `forget()` or wipes the DB |
+| Agent | Learned build commands | Writes a `BuildEntry` on successful builds |
+| Agent | Learned error solutions | Writes an `ErrorEntry` when a fix succeeds |
+| Agent | Session summary | Writes a `SessionSummary` when the session ends |
+| Host / user | Explicit preferences | Calls the `remember()` tool |
+| Host / user | Manual entries | Calls the `remember()` tool |
+| Host / user | Clear memory | Calls the `forget()` tool or deletes `memory.json` |
 
-The agent's `remember` / `forget` tools translate to direct calls on the
-`SessionMemory` singleton owned by `AgentImpl`.
+## Memory tools
 
-## What the host does NOT control
+The following tools are available to the agent by default:
 
-- The agent decides what patterns to remember (e.g. after a successful
-  build, after a build error is fixed). The host cannot veto a memory
-  write.
-- The agent decides how to format `inject_as_context`. Hosts should
-  treat the returned string as opaque and insert it into the system
-  prompt verbatim.
+- `remember` — store a fact under a category.
+- `forget` — remove a fact by ID.
+- `memories` — list or search stored facts.
+- `memory_stats` — show memory size and category counts.
 
-## UTF-8 safety
+See [`docs/tools.md`](tools.md) for the exact JSON schemas.
 
-The `SessionMemory` implementation sanitises all stored strings to valid
-UTF-8 before writing to the database. Invalid bytes are replaced with
-`?`. This prevents the database from becoming unreadable on non-UTF-8
-systems.
+## Configuration
 
-## Session end
+`SessionMemory::Config` controls sizing and auto-learning behaviour:
 
-On `stop` tool, the agent writes a `SessionSummary` entry with:
-- Session ID
-- Summary of what was accomplished
-- Files touched
-- Tags (`["session-end"]`)
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `enabled` | `true` | Master switch |
+| `max_total_size_kb` | 100 | Soft cap on total memory size |
+| `max_entries_per_category` | 50 | Per-category entry limit |
+| `max_session_history` | 20 | How many session summaries to keep |
+| `max_entry_size_bytes` | 2048 | Max size of a single stored string |
+| `memory_age_days` | 30 | Age at which entries are eligible for pruning |
+| `auto_detect_errors` | `true` | Learn from errors automatically |
+| `auto_detect_preferences` | `true` | Learn preferences automatically |
+| `auto_detect_patterns` | `true` | Learn project patterns automatically |
+| `auto_learn_builds` | `true` | Record successful build commands |
 
-This gives the next session a one-paragraph recap without re-reading the
-full conversation.
+Hosts can disable memory entirely via `AgentConfig::memory_enabled`.
+
+## See also
+
+- [`docs/storage.md`](storage.md) — path layout and the two-tier rule
+- [`docs/tools.md`](tools.md) — tool specifications including memory tools
+- `src/core/SessionMemory.{h,cpp}` — implementation

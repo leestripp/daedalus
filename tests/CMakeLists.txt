@@ -525,8 +525,8 @@ add_test(NAME minimax_sse_parser_tests COMMAND daedalus_minimax_sse_parser_tests
 # §TOKEN-COUNT-GRACEFUL (2026-07-17): Verifies the contract that
 # missing/null/malformed `usage` in an LLM response does NOT crash
 # the agent loop. The agent continues with a warning (per turn) and
-# last_total_tokens_ remains 0. See docs/token_counts.md §
-# "Graceful Degradation" and the comments in test_token_usage_graceful.cpp.
+# last_total_tokens_ remains 0. See docs/sse_streaming.md §
+# "Token-count graceful degradation" and the comments in test_token_usage_graceful.cpp.
 add_executable(daedalus_token_usage_graceful_tests
     test_token_usage_graceful.cpp
 )

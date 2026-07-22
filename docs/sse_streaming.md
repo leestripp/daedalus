@@ -209,6 +209,41 @@ on the first API call from a fresh agent session.
 
 ---
 
+## Token-count graceful degradation
+
+When token counts are unavailable during SSE streaming, the agent loop
+**continues normally** with a warning. Missing token counts must never
+terminate the agent cycle.
+
+`LLMClient::update_token_usage()` implements this contract:
+
+```cpp
+void LLMClient::update_token_usage(const json& response_json) {
+    if (!response_json.contains("usage")) {
+        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+            "[LLM] No 'usage' field in response (SSE stream? — token counts are 0)");
+        return;  // ← Continue, don't fail
+    }
+    if (response_json["usage"].is_null()) {
+        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+            "[LLM] 'usage' is null in SSE stream — token counts unavailable");
+        return;  // ← Continue, don't fail
+    }
+    // ... parse usage ...
+}
+```
+
+Key behaviours:
+
+- Missing or null `usage` → tokens default to `0`, one warning per turn.
+- Malformed `usage` types (string, number, etc.) → caught and warned.
+- Partial `usage` objects → missing fields default to `0`, no warning.
+- Warnings are deduplicated per turn via `warned_no_usage_this_turn_`.
+
+Unit-test coverage lives in `tests/test_token_usage_graceful.cpp`.
+
+---
+
 ## Reference
 
 - `src/api/HttpSession.cpp` — the streaming loop (this is where

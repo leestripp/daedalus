@@ -331,7 +331,7 @@ See `Readme.md` §Security for the full access-by-operation matrix.
 | Network tools | `docs/network-tools.md` |
 | Skills | `docs/skills.md` |
 | Testing strategy | `docs/testing.md` |
-| State machine | `docs/agent_state_machine.md` (redirects to `Agent.md`) |
+| State machine | `docs/agent_state_machine.md` (redirects to `include/daedalus/Agent.h`) |
 | A2A protocol | `docs/a2a.md` |
 
 ## Quick checklist before submitting changes
