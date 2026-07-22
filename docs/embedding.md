@@ -749,6 +749,7 @@ for the full field list. The most-used fields:
 | `skills_dirs` | Directories to scan for `SKILL.md` files. Default empty = no skills. |
 | `skills` | Names to pre-activate. Loaded from any dir in `skills_dirs`. |
 | `skills_disabled` | Per-skill gate. Set of skill names (matching `metadata.name`) that the host has disabled. Empty = all enabled. Disabled skills don't appear in the catalog, can't be pre-activated, and `load_skill <name>` fails at runtime. See "Per-skill gate" below. |
+| `tools_disabled` | Per-tool gate. Set of tool names that the host has disabled at construction time. Empty = all enabled. Disabled tools are hidden from the LLM and rejected if invoked. See "Runtime enable/disable" below. |
 
 If `model_name` is empty *and* there are no explicit `api_key` + `api_host`,
 `initialize()` skips creating the internal `LLMClient`. This is the
@@ -870,6 +871,40 @@ cfg.skills_disabled = { "firefox" };                                 // but not 
 
 Empty `skills_disabled` (default) is fully backward-compatible —
 all discovered skills are visible.
+
+### Runtime enable/disable (§Phase 16)
+
+In addition to the construction-time disabled sets above, the public API
+lets you toggle skills, MCP servers, and tools on/off after
+`Agent::initialize()`:
+
+```cpp
+// Skills
+agent.set_skill_enabled("firefox", false);
+agent.set_skill_enabled("firefox", true);
+
+// MCP servers
+agent.set_mcp_server_enabled("untrusted-server", false);
+agent.set_mcp_server_enabled("untrusted-server", true);
+
+// Individual tools
+agent.set_tool_enabled("execute_bash", false);
+agent.set_tool_enabled("execute_bash", true);
+```
+
+Each category has matching query helpers:
+
+```cpp
+bool ok = agent.is_skill_enabled("firefox");
+auto disabled_skills = agent.disabled_skills();
+auto disabled_servers = agent.disabled_mcp_servers();
+auto disabled_tools = agent.disabled_tools();
+```
+
+The toggle state is scoped to the `Agent` instance.  Disabled entries are
+removed from the LLM-visible tool/skill catalog, disabled MCP servers are
+disconnected, and direct `Agent::execute_tool()` calls for a disabled tool
+return an error.
 
 ### Per-project `system_prompt.txt` override (§Phase 14.7 Q2)
 

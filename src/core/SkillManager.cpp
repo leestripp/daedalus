@@ -33,6 +33,21 @@ namespace {
         static SkillManager* g_default = nullptr;
         return g_default;
     }
+
+    SkillManager*& current_skill_manager_ref() {
+        thread_local SkillManager* g_current = nullptr;
+        return g_current;
+    }
+}
+
+void SkillManager::set_current(SkillManager* manager) {
+    current_skill_manager_ref() = manager;
+}
+
+SkillManager* SkillManager::current() {
+    SkillManager* p = current_skill_manager_ref();
+    if (p) return p;
+    return get_instance();
 }
 
 SkillManager* SkillManager::get_instance() {

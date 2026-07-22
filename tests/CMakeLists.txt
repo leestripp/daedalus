@@ -107,6 +107,24 @@ add_test(NAME phase15_disabled_switches_tests
          COMMAND daedalus_phase15_disabled_switches_tests)
 
 # ============================================================================
+# §Phase 16: runtime enable/disable for skills, MCP servers, and tools.
+# Exercises the public Agent API end-to-end.
+# ============================================================================
+add_executable(daedalus_runtime_enable_disable_tests
+    test_runtime_enable_disable.cpp
+)
+target_include_directories(daedalus_runtime_enable_disable_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_runtime_enable_disable_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME runtime_enable_disable_tests
+         COMMAND daedalus_runtime_enable_disable_tests)
+
+# ============================================================================
 # §Phase 15: typo-detection warning for *_disabled lists.
 # Verifies that Agent::initialize() emits a Warn log when a disabled
 # name doesn't match any loaded server/skill. Uses a recording sink.

@@ -39,7 +39,9 @@
 #include "daedalus/settings.h"
 
 #include "api/LLMClient.h"
+#include "core/SkillManager.h"
 #include "mcp/McpServerManager.h"  // §Phase 11
+#include "tools/ToolFilter.h"
 
 namespace daedalus::detail {
 
@@ -114,6 +116,19 @@ public:
     [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
     [[nodiscard]] std::string last_assistant_text() const;
 
+    // §Phase 16: runtime enable/disable
+    bool set_skill_enabled(const std::string& name, bool enabled);
+    [[nodiscard]] bool is_skill_enabled(const std::string& name) const;
+    [[nodiscard]] std::vector<std::string> disabled_skills() const;
+
+    bool set_mcp_server_enabled(const std::string& name, bool enabled);
+    [[nodiscard]] bool is_mcp_server_enabled(const std::string& name) const;
+    [[nodiscard]] std::vector<std::string> disabled_mcp_servers() const;
+
+    bool set_tool_enabled(const std::string& name, bool enabled);
+    [[nodiscard]] bool is_tool_enabled(const std::string& name) const;
+    [[nodiscard]] std::vector<std::string> disabled_tools() const;
+
 private:
     void set_state(AgentState s) noexcept;
 
@@ -137,9 +152,14 @@ private:
         // shutdown()).
         std::optional<daedalus::SettingsStore> store;
         std::unique_ptr<mcp::McpServerManager> mcp;   // §Phase 11: owned; nullptr when mcp_enabled=false
+        std::unique_ptr<SkillManager>          skill_manager;  // §Phase 16: per-agent
         std::unique_ptr<LLMClient>             client;
         std::stop_source                       cancel_source;
     };
+
+    // §Phase 16: per-agent tool/MCP filter. Mutable so const list methods
+    // can apply the current disabled sets.
+    mutable ToolFilter tool_filter_;
     std::unique_ptr<Body> body_;
 
     // Host-registered tools (Phase 6: registered with ToolFactory).

@@ -595,6 +595,30 @@ The current implementation has:
 - ✅ Tool discovery via `list_tools()`
 - ✅ Tool execution via `call_tool()`
 - ✅ Environment variable substitution
+- ✅ Per-agent runtime enable/disable of servers
+
+### Runtime enable/disable
+
+You can disable an MCP server at construction time:
+
+```cpp
+daedalus::AgentConfig cfg;
+cfg.mcp_enabled = true;
+cfg.mcp_servers_disabled = { "untrusted-server" };
+```
+
+Or toggle it on/off after `initialize()`:
+
+```cpp
+agent.set_mcp_server_enabled("untrusted-server", false);  // disconnect + hide tools
+agent.set_mcp_server_enabled("untrusted-server", true);   // reconnect + restore tools
+
+if (agent.is_mcp_server_enabled("untrusted-server")) { /* ... */ }
+auto disabled = agent.disabled_mcp_servers();
+```
+
+Each `Agent` owns its own `McpServerManager`, so runtime toggles are isolated
+per agent.
 
 ### Remaining Work
 

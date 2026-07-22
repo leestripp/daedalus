@@ -171,4 +171,53 @@ std::string Agent::last_assistant_text() const
     return impl_->last_assistant_text();
 }
 
+// ----------------------------------------------------------------------------
+// Runtime enable/disable
+// ----------------------------------------------------------------------------
+
+bool Agent::set_skill_enabled(const std::string& name, bool enabled)
+{
+    return impl_->set_skill_enabled(name, enabled);
+}
+
+bool Agent::is_skill_enabled(const std::string& name) const
+{
+    return impl_->is_skill_enabled(name);
+}
+
+std::vector<std::string> Agent::disabled_skills() const
+{
+    return impl_->disabled_skills();
+}
+
+bool Agent::set_mcp_server_enabled(const std::string& name, bool enabled)
+{
+    return impl_->set_mcp_server_enabled(name, enabled);
+}
+
+bool Agent::is_mcp_server_enabled(const std::string& name) const
+{
+    return impl_->is_mcp_server_enabled(name);
+}
+
+std::vector<std::string> Agent::disabled_mcp_servers() const
+{
+    return impl_->disabled_mcp_servers();
+}
+
+bool Agent::set_tool_enabled(const std::string& name, bool enabled)
+{
+    return impl_->set_tool_enabled(name, enabled);
+}
+
+bool Agent::is_tool_enabled(const std::string& name) const
+{
+    return impl_->is_tool_enabled(name);
+}
+
+std::vector<std::string> Agent::disabled_tools() const
+{
+    return impl_->disabled_tools();
+}
+
 }  // namespace daedalus

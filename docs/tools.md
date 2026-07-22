@@ -107,6 +107,24 @@ example tools so the schema reference stays in one place.
 
 ---
 
+# Disabling tools at runtime
+
+You can hide individual tools from the LLM and reject any attempts to call
+them without recreating the `Agent`.
+
+```cpp
+agent.set_tool_enabled("execute_bash", false);   // hide it
+agent.set_tool_enabled("execute_bash", true);    // restore it
+
+if (agent.is_tool_enabled("execute_bash")) { /* ... */ }
+auto disabled = agent.disabled_tools();
+```
+
+You can also set the initial disabled set at construction time via
+`AgentConfig::tools_disabled`.
+
+---
+
 # Tool Call Pairs and Message Chain Integrity
 
 This section explains how tool calls work in daedalus, why maintaining message chain integrity is critical, and how we fixed issues that could break the tool call sequence.

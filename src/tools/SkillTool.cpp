@@ -37,7 +37,7 @@ json DiscoverSkillsTool::get_definition() const {
 }
 
 json DiscoverSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
-    SkillManager* skill_manager = SkillManager::get_instance();
+    SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
             {"status", "error"},
@@ -100,7 +100,7 @@ json LoadSkillTool::get_definition() const {
 }
 
 json LoadSkillTool::execute(const json& args, FileIO& /*file_io*/) {
-    SkillManager* skill_manager = SkillManager::get_instance();
+    SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
             {"status", "error"},
@@ -170,7 +170,7 @@ json GetActiveSkillsTool::get_definition() const {
 }
 
 json GetActiveSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
-    SkillManager* skill_manager = SkillManager::get_instance();
+    SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
             {"status", "error"},
@@ -225,7 +225,7 @@ json SearchSkillsTool::get_definition() const {
 }
 
 json SearchSkillsTool::execute(const json& args, FileIO& /*file_io*/) {
-    SkillManager* skill_manager = SkillManager::get_instance();
+    SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
             {"status", "error"},
@@ -293,7 +293,7 @@ json DeactivateSkillTool::get_definition() const {
 }
 
 json DeactivateSkillTool::execute(const json& args, FileIO& /*file_io*/) {
-    SkillManager* skill_manager = SkillManager::get_instance();
+    SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
             {"status", "error"},
@@ -352,7 +352,7 @@ json GetSkillContextTool::get_definition() const {
 }
 
 json GetSkillContextTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
-    SkillManager* skill_manager = SkillManager::get_instance();
+    SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
             {"status", "error"},

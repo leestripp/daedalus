@@ -299,6 +299,32 @@ Agent Skills has been adopted by major companies:
 
 ---
 
+## Loading and disabling skills in daedalus
+
+Skills are configured per `Agent` through `AgentConfig`:
+
+```cpp
+daedalus::AgentConfig cfg;
+cfg.skills_dirs = { "~/.daedalus/skills/", "./.agents/skills/" };
+cfg.skills      = { "cmake-helper", "cpp-best-practices" };   // auto-activate
+cfg.skills_disabled = { "noisy-skill" };                      // never visible
+```
+
+You can also toggle skills on/off after `initialize()`:
+
+```cpp
+agent.set_skill_enabled("noisy-skill", false);  // hide and deactivate
+agent.set_skill_enabled("noisy-skill", true);   // restore
+
+if (agent.is_skill_enabled("cmake-helper")) { /* ... */ }
+auto disabled = agent.disabled_skills();
+```
+
+Each `Agent` owns its own `SkillManager`, so disabling a skill in one agent
+never affects another agent in the same process.
+
+---
+
 ## Best Practices
 
 1. **Write Clear Trigger Descriptions**

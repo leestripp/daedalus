@@ -82,6 +82,10 @@ json ToolFactory::get_all_definitions() const {
     }
     return definitions;
 }
+
+json ToolFactory::get_all_definitions(const ToolFilter& filter) const {
+    return filter.filter_definitions(get_all_definitions());
+}
 json ToolFactory::execute_tool(const std::string& tool_name, const json& args, FileIO& file_io) {
     return execute_tool(tool_name, args, file_io, nullptr);
 }
@@ -96,6 +100,20 @@ json ToolFactory::execute_tool(const std::string& tool_name,
         }
     }
     return json::object({{"status", "error"}, {"message", "Unknown tool: " + tool_name}});
+}
+
+json ToolFactory::execute_tool(const std::string& tool_name,
+                               const json& args,
+                               FileIO& file_io,
+                               ToolProgressFn progress,
+                               const ToolFilter& filter) {
+    if (!filter.is_tool_allowed(tool_name)) {
+        return json::object({
+            {"status", "error"},
+            {"message", "Tool '" + tool_name + "' is disabled by host policy"}
+        });
+    }
+    return execute_tool(tool_name, args, file_io, progress);
 }
 
 void ToolFactory::refresh_mcp_tools() {

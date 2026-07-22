@@ -8,6 +8,7 @@
 
 #include "BaseTool.h"  // for ToolProgressFn
 #include "daedalus/AgentSink.h"
+#include "ToolFilter.h"
 
 class FileIO;  // Forward declaration
 class ToolFactory;
@@ -44,10 +45,19 @@ namespace ToolHandler {
     json execute_tool_call(const json& tool_call,
                            FileIO& file_io,
                            ToolProgressFn progress);
+
+    // Execute a tool call with optional progress callback and per-agent filter.
+    json execute_tool_call(const json& tool_call,
+                           FileIO& file_io,
+                           ToolProgressFn progress,
+                           const ToolFilter& filter);
     
     // Get tool definitions as JSON string
     std::string get_tool_definitions();
-    
+
+    // Get tool definitions filtered by a per-agent ToolFilter
+    std::string get_tool_definitions_filtered(const ToolFilter& filter);
+
     // Get tool definitions excluding specified tools (for sub-agent mode)
     std::string get_tool_definitions_filtered(const std::vector<std::string>& exclude_tools);
     

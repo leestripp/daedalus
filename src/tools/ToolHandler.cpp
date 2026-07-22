@@ -462,12 +462,46 @@ namespace ToolHandler {
         return g_tool_factory->execute_tool(tool_name, args, file_io, progress);
     }
 
+    json execute_tool_call(const json& tool_call,
+                           FileIO& file_io,
+                           ToolProgressFn progress,
+                           const ToolFilter& filter) {
+        // Parse the call, then execute with the filter.
+        std::string tool_name;
+        json args;
+
+        if (tool_call.is_object()) {
+            if (tool_call.contains("function") && tool_call["function"].is_object()) {
+                tool_name = tool_call["function"].value("name", "");
+            } else {
+                tool_name = tool_call.value("name", "");
+            }
+        }
+
+        if (!filter.is_tool_allowed(tool_name)) {
+            return json::object({
+                {"status", "error"},
+                {"message", "Tool '" + tool_name + "' is disabled by host policy"}
+            });
+        }
+
+        return execute_tool_call(tool_call, file_io, progress);
+    }
+
     // Get tool definitions as JSON string
     std::string get_tool_definitions() {
         // Initialize tool factory if not done
         init_tool_factory();
         
         json definitions = g_tool_factory->get_all_definitions();
+        return definitions.dump();
+    }
+
+    // Get tool definitions filtered by a per-agent ToolFilter
+    std::string get_tool_definitions_filtered(const ToolFilter& filter) {
+        init_tool_factory();
+
+        json definitions = g_tool_factory->get_all_definitions(filter);
         return definitions.dump();
     }
     

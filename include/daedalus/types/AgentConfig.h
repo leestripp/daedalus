@@ -144,8 +144,12 @@ struct AgentConfig {
     //     get_all_cached_skills() / get_active_skills(); the load_skill
     //     tool returns "skill disabled by host config" if the agent tries
     //     to activate one at runtime.
+    //   tools_disabled: Tool names that are hidden from the LLM and rejected
+    //     if invoked. Exact tool names (including host-registered tools) and
+    //     the built-in names such as "execute_bash" or "discover_skills".
     std::set<std::string> mcp_servers_disabled;
     std::set<std::string> skills_disabled;
+    std::set<std::string> tools_disabled;
 
     // ----- Correlation -----
     // Opaque session id (e.g. web UI session uuid). Propagated to log lines.

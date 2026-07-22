@@ -45,6 +45,14 @@ public:
     // disabled. Empty = all enabled. load_from_store() skips disabled servers.
     void set_disabled_servers(const std::set<std::string>& names) { disabled_servers_ = names; }
     bool is_server_disabled(const std::string& name) const { return disabled_servers_.count(name) > 0; }
+    [[nodiscard]] std::set<std::string> get_disabled_servers() const { return disabled_servers_; }
+
+    // §Phase 16: runtime enable/disable of a single server.
+    // enable_server() adds/updates the in-memory config and attempts to
+    // connect; disable_server() disconnects and marks tools dirty.
+    bool enable_server(const McpServerConfig& config);
+    void disable_server(const std::string& name);
+    void add_config(const McpServerConfig& config);
 
     // §v0.5.0: Load configuration from a SettingsStore (SQLite).
     // Pops McpServer entries out of the daedalus.db's mcp_servers table

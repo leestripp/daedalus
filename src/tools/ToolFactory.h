@@ -5,6 +5,7 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include "BaseTool.h"
+#include "ToolFilter.h"
 
 class FileIO;
 namespace mcp { class McpServerManager; }  // §Phase 11: forward declaration
@@ -23,6 +24,11 @@ public:
      * Get all tool definitions as a JSON array
      */
     [[nodiscard]] json get_all_definitions() const;
+
+    /**
+     * Get tool definitions filtered by a per-agent ToolFilter.
+     */
+    [[nodiscard]] json get_all_definitions(const ToolFilter& filter) const;
     
     /**
      * Execute a tool by name (no progress callback).
@@ -43,6 +49,16 @@ public:
                       const json& args,
                       FileIO& file_io,
                       ToolProgressFn progress);
+
+    /**
+     * Execute a tool by name, with optional progress callback and a
+     * per-agent disabled-tool filter.
+     */
+    json execute_tool(const std::string& tool_name,
+                      const json& args,
+                      FileIO& file_io,
+                      ToolProgressFn progress,
+                      const ToolFilter& filter);
 
     /**
      * Rebuild the registered set of MCP-proxied tools from the currently

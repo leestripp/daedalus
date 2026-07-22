@@ -7,9 +7,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [v0.5.0] — Unreleased
 
 Crash-resilient message persistence + libcurl removal + Agent
-Communication Protocol (ACP) sub-library.
+Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
+
+- **Runtime enable/disable API** (`Agent`):
+  - `Agent::set_skill_enabled()`, `Agent::set_mcp_server_enabled()`,
+    `Agent::set_tool_enabled()` and matching `is_*_enabled()` /
+    `disabled_*()` query helpers.
+  - Toggle state is scoped to each `Agent` instance: skills use a per-agent
+    `SkillManager`, MCP servers use the existing per-agent
+    `McpServerManager`, and tools are filtered through a per-agent
+    `ToolFilter`.
+  - Construction-time defaults via new `AgentConfig::tools_disabled` plus the
+    existing `skills_disabled` and `mcp_servers_disabled` fields.
 
 - **Crash-resilient message persistence** (`Messages`):
   - **Atomic save** (CRASH-1): every `save()` writes to `messages.json.tmp`,

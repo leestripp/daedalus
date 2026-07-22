@@ -230,6 +230,44 @@ public:
     ///        Returns an error if no provider is set.
     [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
 
+    // ------------------------------------------------------------------
+    // Runtime enable/disable for skills, MCP servers, and tools
+    // ------------------------------------------------------------------
+
+    /// @brief Enable or disable a skill by name at runtime. Disabled skills
+    ///        are hidden from the skill catalog and cannot be activated.
+    ///        Returns true if the skill exists and the state changed.
+    bool set_skill_enabled(const std::string& name, bool enabled);
+
+    /// @brief Query whether a skill is currently enabled.
+    [[nodiscard]] bool is_skill_enabled(const std::string& name) const;
+
+    /// @brief Names of skills currently disabled by host policy.
+    [[nodiscard]] std::vector<std::string> disabled_skills() const;
+
+    /// @brief Enable or disable an MCP server by name at runtime. A disabled
+    ///        server is disconnected and its proxied tools are removed from
+    ///        the tool surface; enabling reconnects and refreshes tools.
+    ///        Returns true if the server is known and the state changed.
+    bool set_mcp_server_enabled(const std::string& name, bool enabled);
+
+    /// @brief Query whether an MCP server is currently enabled.
+    [[nodiscard]] bool is_mcp_server_enabled(const std::string& name) const;
+
+    /// @brief Names of MCP servers currently disabled by host policy.
+    [[nodiscard]] std::vector<std::string> disabled_mcp_servers() const;
+
+    /// @brief Enable or disable a tool by name at runtime. Disabled tools are
+    ///        omitted from the tool definitions and rejected if invoked.
+    ///        Returns true if the tool exists and the state changed.
+    bool set_tool_enabled(const std::string& name, bool enabled);
+
+    /// @brief Query whether a tool is currently enabled.
+    [[nodiscard]] bool is_tool_enabled(const std::string& name) const;
+
+    /// @brief Names of tools currently disabled by host policy.
+    [[nodiscard]] std::vector<std::string> disabled_tools() const;
+
     /// @brief Return the body of the most recent assistant message,
     ///        or empty string if no assistant turn has completed yet.
     ///        Useful for hosts that need the agent's final text after

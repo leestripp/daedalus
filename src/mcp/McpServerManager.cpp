@@ -604,6 +604,29 @@ const McpServerConfig* McpServerManager::get_config(const std::string& server_na
     return &it->second;
 }
 
+void McpServerManager::add_config(const McpServerConfig& config) {
+    if (config.is_valid()) {
+        configs_[config.name] = config;
+        config_loaded_ = true;
+    }
+}
+
+bool McpServerManager::enable_server(const McpServerConfig& config) {
+    add_config(config);
+    disabled_servers_.erase(config.name);
+    mark_mcp_tools_dirty();
+    if (is_connected(config.name)) {
+        return true;
+    }
+    return connect(config.name);
+}
+
+void McpServerManager::disable_server(const std::string& name) {
+    disabled_servers_.insert(name);
+    disconnect(name);
+    mark_mcp_tools_dirty();
+}
+
 std::vector<std::string> McpServerManager::list_configured_servers() const {
     std::vector<std::string> servers;
     for (const auto& [name, config] : configs_) {

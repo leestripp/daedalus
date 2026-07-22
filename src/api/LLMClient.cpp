@@ -182,12 +182,16 @@ static LastToolCall find_last_tool_call(const json& messages,
 
 // Implementation of LLMClient methods
 LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_store,
-                       mcp::McpServerManager* mcp_manager) :
+                       mcp::McpServerManager* mcp_manager,
+                       SkillManager* skill_manager,
+                       const ToolFilter* tool_filter) :
     config_(config),
     file_io_(std::make_unique<FileIO>(config.target_directory, config.agent_name)),
     settings_store_(settings_store),
     iteration_count_(0),   // §Phase 11: order follows declaration; sink_ defaulted
-    mcp_manager_(mcp_manager)   // §Phase 11: injected; nullptr = MCP disabled
+    mcp_manager_(mcp_manager),   // §Phase 11: injected; nullptr = MCP disabled
+    skill_manager_(skill_manager),   // §Phase 16: per-agent skill manager
+    tool_filter_(tool_filter)        // §Phase 16: per-agent tool filter
 {
     // Load persisted command approvals
     ToolHandler::load_persisted_approvals(config.target_directory, config.agent_name);
@@ -1685,8 +1689,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         sink_->on_tool_progress(function_name, call_id, p);
                     };
                 }
-                result = ToolHandler::execute_tool_call(
-                    tool_call, *file_io_, progress_cb);
+                result = tool_filter_
+                    ? ToolHandler::execute_tool_call(
+                        tool_call, *file_io_, progress_cb, *tool_filter_)
+                    : ToolHandler::execute_tool_call(
+                        tool_call, *file_io_, progress_cb);
                 result["tool_name"] = function_name;
 
                 std::string status = result.value("status", "unknown");
@@ -2008,9 +2015,8 @@ void LLMClient::inject_context_stats(json& messages) {
     }
 
     // Active skills
-    SkillManager* skill_manager = SkillManager::get_instance();
-    if (skill_manager) {
-        auto active = skill_manager->get_active_skills();
+    if (skill_manager_) {
+        auto active = skill_manager_->get_visible_active_skills();
         stats << "| Active Skills | " << active.size() << " |\n";
         if (!active.empty()) {
             stats << "| | ";
@@ -2330,6 +2336,17 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // token is taken from it (run_agent_cycle calls get_token()).
     cancel_source_ = std::stop_source{};
 
+    // §Phase 16: route skill tools to this Agent's owned SkillManager while
+    // this turn is executing.
+    struct SkillManagerGuard {
+        SkillManager* prev_;
+        explicit SkillManagerGuard(SkillManager* sm)
+            : prev_(SkillManager::current()) {
+            SkillManager::set_current(sm);
+        }
+        ~SkillManagerGuard() { SkillManager::set_current(prev_); }
+    } skill_guard(skill_manager_);
+
     std::string api_url = config_.base_url + config_.chat_endpoint;
 
     // Get current user and datetime for system prompt
@@ -2409,7 +2426,9 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // Live tool JSON schema (post-MCP-refresh). Empty if no tools are
     // registered (degenerate — the agent has nothing to call).
     {
-        std::string defs = ToolHandler::get_tool_definitions();
+        std::string defs = tool_filter_
+            ? ToolHandler::get_tool_definitions_filtered(*tool_filter_)
+            : ToolHandler::get_tool_definitions();
         if (!defs.empty() && defs != "[]") {
             options.tool_definitions = std::move(defs);
         }
@@ -2424,10 +2443,10 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // demand via the get_skill_context tool). Available catalog = name +
     // description, with active skills filtered out so each skill appears
     // in exactly one of the two sections.
-    if (SkillManager* skill_manager = SkillManager::get_instance()) {
+    if (skill_manager_) {
         // Active skills — use the §Phase 15 filtered view (excludes
         // host-disabled skills even if they were previously activated).
-        const auto active_skills = skill_manager->get_visible_active_skills();
+        const auto active_skills = skill_manager_->get_visible_active_skills();
         if (!active_skills.empty()) {
             std::ostringstream active_block;
             active_block << "| Skill | Description |\n";
@@ -2443,12 +2462,12 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         // Available skills — use the §Phase 15 filtered view (only
         // non-disabled skills appear). Already excludes active skills.
         // (§Phase 14 fix: was duplicating them in both sections.)
-        const auto visible_skills = skill_manager->get_visible_cached_skills();
+        const auto visible_skills = skill_manager_->get_visible_cached_skills();
         if (visible_skills.size() <= 50) {
             std::ostringstream cat;
             int listed = 0;
             for (const auto& [name, skill] : visible_skills) {
-                if (skill_manager->is_skill_active(name)) continue;
+                if (skill_manager_->is_skill_active(name)) continue;
                 cat << "- **" << name << "**: " << skill.metadata.description << "\n";
                 ++listed;
             }
@@ -2494,7 +2513,9 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     AgentState final_state = AgentState::DONE;
 
     // Live tool definitions (re-fetched when MCP dirty flag flips).
-    json tool_defs = json::parse(ToolHandler::get_tool_definitions());
+    json tool_defs = json::parse(tool_filter_
+        ? ToolHandler::get_tool_definitions_filtered(*tool_filter_)
+        : ToolHandler::get_tool_definitions());
 
     while (agent_running) {
         // §Phase 5.1: cancel via cancel_source_ (fired by

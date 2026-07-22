@@ -65,6 +65,12 @@ public:
     // Production code (Agent) constructs and owns its own instance.
     SkillManager() = default;
 
+    // §Phase 16: per-agent SkillManager support. The skill tools live in the
+    // shared ToolFactory, so they reach the manager that belongs to the
+    // currently running Agent via a thread-local current pointer.
+    static void set_current(SkillManager* manager);
+    static SkillManager* current();
+
     // Initialize skill directories and settings.
     // MUST be called once before the manager is used (Agent's
     // initialize() does this after constructing settings).
@@ -200,6 +206,7 @@ public:
     // appear in the catalog and can't be activated at runtime.
     // Empty = all enabled (back-compat). Names match metadata.name.
     void set_disabled_skills(const std::set<std::string>& names) { disabled_skills_ = names; }
+    [[nodiscard]] const std::set<std::string>& get_disabled_skills() const { return disabled_skills_; }
     bool is_skill_disabled(const std::string& name) const { return disabled_skills_.count(name) > 0; }
 
     // §Phase 15: filtered view of cached skills. The full

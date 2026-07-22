@@ -130,6 +130,10 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
     } else {
         body_->store.emplace(daedalus::SettingsStore::instance());
     }
+
+    // §Phase 16: initialize per-agent tool/MCP filter from AgentConfig.
+    tool_filter_.disabled_tools = cfg_.tools_disabled;
+    tool_filter_.disabled_mcp_servers = cfg_.mcp_servers_disabled;
 }
 
 void AgentImpl::set_state(AgentState s) noexcept
@@ -376,7 +380,8 @@ void AgentImpl::initialize()
         // on having LLM creds.)
 
         body_->client = std::make_unique<LLMClient>(
-            app, std::addressof(*body_->store), body_->mcp.get());
+            app, std::addressof(*body_->store), body_->mcp.get(),
+            body_->skill_manager.get(), &tool_filter_);
         if (sink_) {
             body_->client->set_sink(sink_);
         }
@@ -395,76 +400,65 @@ void AgentImpl::initialize()
         }
     }
 
-    // §Phase 9.7: Skill loading driven by AgentConfig. Previously the
-    // library had a process-wide SkillManager singleton that registered
-    // ~/.daedalus/skills/ in init_after_settings(), but AgentImpl never
-    // called discover_all_skills(), so cached_skills_ stayed empty and
-    // the system prompt's "Active Skills | 0" was always wrong.
-    //
-    // New contract: skills_dirs + skills on AgentConfig are the source
-    // of truth. Both default to empty, so hosts that don't want skills
-    // (embedded sandboxed agents, tests) get none — no surprise
-    // injection from the singleton defaults. Hosts that do want them
-    // (webui demo) set the fields explicitly.
+    // §Phase 9.7/§Phase 16: Skill loading driven by AgentConfig and owned
+    // per-agent.  Previously the library used a process-wide singleton, but
+    // runtime enable/disable must be scoped to each Agent.
     if (!cfg_.skills_dirs.empty() || !cfg_.skills.empty() ||
         !cfg_.skills_disabled.empty()) {
         try {
-            auto* sm = SkillManager::get_instance();
-            if (sm) {
-                // §Phase 15: install the per-skill gate BEFORE discovery
-                // so the catalog loop in build_system_instruction() never
-                // sees disabled skills, and activate_skill() refuses them
-                // at runtime.
-                sm->set_disabled_skills(cfg_.skills_disabled);
-                // Add developer-specified directories to the search
-                // list (append, don't replace — the singleton's
-                // defaults from init_after_settings() are still useful
-                // for tests that call the API directly).
-                for (const auto& dir : cfg_.skills_dirs) {
-                    sm->add_skill_directory(dir);
-                }
-                // Discover everything currently visible. This populates
-                // cached_skills_, so the discover_skills tool returns
-                // the installed skills and the system prompt's Active
-                // Skills count reflects reality.
-                auto discovered = sm->discover_all_skills();
-                // Activate any skills the host asked for by name. If a
-                // name isn't in the cache (typo / not installed),
-                // surface it via on_log instead of failing silently.
-                size_t activated = 0;
-                for (const auto& name : cfg_.skills) {
-                    auto loaded = sm->load_skill_by_name(name);
-                    if (loaded && sm->activate_skill(*loaded)) {
-                        ++activated;
-                    } else {
-                        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
-                            "[SKILLS] Requested skill not found or not activatable: '"
-                            + name + "' (not in any configured skills_dir)");
-                    }
-                }
-                if (sink_) {
-                    sink_->on_log(daedalus::LogLevel::Info,
-                        "[SKILLS] Discovered " + std::to_string(discovered.size())
-                        + " skill(s) from " + std::to_string(cfg_.skills_dirs.size())
-                        + " dir(s); activated " + std::to_string(activated)
-                        + " of " + std::to_string(cfg_.skills.size()) + " requested");
-                }
+            body_->skill_manager = std::make_unique<SkillManager>();
+            body_->skill_manager->init_after_settings();
+            auto* sm = body_->skill_manager.get();
 
-                // §Phase 15: typo-detection for the disabled list.
-                // Warn if a name in skills_disabled doesn't match any
-                // discovered skill — likely a typo. Not an error since
-                // skills may be installed later or via a different dir.
-                if (!cfg_.skills_disabled.empty() && sink_) {
-                    std::set<std::string> known;
-                    for (const auto& s : sm->get_all_cached_skills()) {
-                        known.insert(s.first);
-                    }
-                    for (const auto& name : cfg_.skills_disabled) {
-                        if (!known.count(name)) {
-                            sink_->on_log(daedalus::LogLevel::Warn,
-                                "[SKILLS] skills_disabled entry '" + name
-                                + "' does not match any discovered skill (typo?)");
-                        }
+            // §Phase 15: install the per-skill gate BEFORE discovery
+            // so the catalog loop in build_system_instruction() never
+            // sees disabled skills, and activate_skill() refuses them
+            // at runtime.
+            sm->set_disabled_skills(cfg_.skills_disabled);
+            // Add developer-specified directories to the search
+            // list (append, don't replace — init_after_settings() already
+            // added the default user/project directories).
+            for (const auto& dir : cfg_.skills_dirs) {
+                sm->add_skill_directory(dir);
+            }
+            // Discover everything currently visible. This populates
+            // cached_skills_, so the discover_skills tool returns
+            // the installed skills and the system prompt's Active
+            // Skills count reflects reality.
+            auto discovered = sm->discover_all_skills();
+            // Activate any skills the host asked for by name. If a
+            // name isn't in the cache (typo / not installed),
+            // surface it via on_log instead of failing silently.
+            size_t activated = 0;
+            for (const auto& name : cfg_.skills) {
+                auto loaded = sm->load_skill_by_name(name);
+                if (loaded && sm->activate_skill(*loaded)) {
+                    ++activated;
+                } else {
+                    if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+                        "[SKILLS] Requested skill not found or not activatable: '"
+                        + name + "' (not in any configured skills_dir)");
+                }
+            }
+            if (sink_) {
+                sink_->on_log(daedalus::LogLevel::Info,
+                    "[SKILLS] Discovered " + std::to_string(discovered.size())
+                    + " skill(s) from " + std::to_string(cfg_.skills_dirs.size())
+                    + " dir(s); activated " + std::to_string(activated)
+                    + " of " + std::to_string(cfg_.skills.size()) + " requested");
+            }
+
+            // §Phase 15: typo-detection for the disabled list.
+            if (!cfg_.skills_disabled.empty() && sink_) {
+                std::set<std::string> known;
+                for (const auto& s : sm->get_all_cached_skills()) {
+                    known.insert(s.first);
+                }
+                for (const auto& name : cfg_.skills_disabled) {
+                    if (!known.count(name)) {
+                        sink_->on_log(daedalus::LogLevel::Warn,
+                            "[SKILLS] skills_disabled entry '" + name
+                            + "' does not match any discovered skill (typo?)");
                     }
                 }
             }
@@ -657,10 +651,11 @@ std::vector<std::string> AgentImpl::mcp_configured_servers() const
 std::vector<ToolInfo> AgentImpl::list_tools() const
 {
     // Surface ToolFactory::get_all_definitions() as ToolInfo records.
+    // §Phase 16: apply the per-agent disabled-tool filter.
     std::vector<ToolInfo> out;
     auto factory = ToolHandler::get_tool_factory();
     if (!factory) return out;
-    json defs = factory->get_all_definitions();
+    json defs = factory->get_all_definitions(tool_filter_);
     if (!defs.is_array()) return out;
     out.reserve(defs.size());
     for (const auto& def : defs) {
@@ -682,14 +677,15 @@ std::vector<ToolInfo> AgentImpl::list_tools() const
 
 std::vector<SkillInfo> AgentImpl::list_skills() const
 {
-    // §Phase 1+: surface SkillManager's discovered skills. The Agent's
-    // initialize() runs discovery; if it wasn't called yet, return empty.
+    // §Phase 16: surface this Agent's owned SkillManager. Runtime disabled
+    // skills are hidden via the visible view.
     std::vector<SkillInfo> out;
-    SkillManager* sm = SkillManager::get_instance();
+    SkillManager* sm = body_->skill_manager ? body_->skill_manager.get()
+                                            : SkillManager::current();
     if (!sm) return out;
-    auto skills = sm->discover_all_skills();
+    auto skills = sm->get_visible_cached_skills();
     out.reserve(skills.size());
-    for (const auto& s : skills) {
+    for (const auto& [name, s] : skills) {
         if (!s.is_valid()) continue;
         SkillInfo si;
         si.name        = s.metadata.name;
@@ -861,7 +857,19 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
         ToolHandler::set_auto_mode(true);
     }
 
-    nlohmann::json result = ToolHandler::execute_tool_call(tool_call, file_io);
+    // §Phase 16: route skill tools to this Agent's owned SkillManager and
+    // enforce the per-agent tool filter for direct execution.
+    struct SkillManagerGuard {
+        SkillManager* prev_;
+        explicit SkillManagerGuard(SkillManager* sm)
+            : prev_(SkillManager::current()) {
+            SkillManager::set_current(sm);
+        }
+        ~SkillManagerGuard() { SkillManager::set_current(prev_); }
+    } skill_guard(body_->skill_manager.get());
+
+    nlohmann::json result = ToolHandler::execute_tool_call(
+        tool_call, file_io, nullptr, tool_filter_);
 
     if (sink_) {
         sink_->on_log(daedalus::LogLevel::Info,
@@ -1120,6 +1128,144 @@ std::string AgentImpl::last_assistant_text() const
 {
     if (!body_->client) return {};
     return body_->client->get_last_assistant_text();
+}
+
+// ============================================================================
+// Runtime enable/disable for skills, MCP servers, and tools
+// ============================================================================
+
+bool AgentImpl::set_skill_enabled(const std::string& name, bool enabled)
+{
+    if (!body_->skill_manager) {
+        // No skill manager means no skills were configured; nothing to toggle.
+        return false;
+    }
+
+    auto& sm = *body_->skill_manager;
+    auto disabled = sm.get_disabled_skills();
+    const bool was_disabled = disabled.count(name);
+
+    if (enabled) {
+        if (!was_disabled) return false;
+        disabled.erase(name);
+    } else {
+        if (was_disabled) return false;
+        disabled.insert(name);
+        // If the skill is currently active, deactivate it so its context
+        // disappears immediately.
+        sm.deactivate_skill(name);
+    }
+
+    sm.set_disabled_skills(disabled);
+
+    if (sink_) {
+        sink_->on_log(daedalus::LogLevel::Info,
+            "[SKILLS] " + name + " " + std::string(enabled ? "enabled" : "disabled")
+            + " at runtime");
+    }
+    return true;
+}
+
+bool AgentImpl::is_skill_enabled(const std::string& name) const
+{
+    if (!body_->skill_manager) return false;
+    return !body_->skill_manager->is_skill_disabled(name);
+}
+
+std::vector<std::string> AgentImpl::disabled_skills() const
+{
+    if (!body_->skill_manager) return {};
+    const auto& disabled = body_->skill_manager->get_disabled_skills();
+    return std::vector<std::string>(disabled.begin(), disabled.end());
+}
+
+bool AgentImpl::set_mcp_server_enabled(const std::string& name, bool enabled)
+{
+    if (!body_->mcp || !body_->store) return false;
+
+    auto& mgr = *body_->mcp;
+    const bool currently_disabled = mgr.is_server_disabled(name);
+
+    if (enabled) {
+        if (!currently_disabled) return false;
+        // Load the server config from the store so we can reconnect.
+        auto server = body_->store->get_mcp_server(name);
+        if (!server.has_value()) return false;
+
+        mcp::McpServerConfig sc;
+        sc.name         = server->name;
+        sc.command      = server->command;
+        sc.args         = server->args;
+        sc.env          = server->env;
+        sc.transport    = server->transport;
+        sc.url          = server->url;
+        sc.bearer_token = server->bearer_token;
+        sc.description  = server->description;
+        sc.enabled      = server->enabled;
+
+        if (!sc.is_valid()) return false;
+
+        bool ok = mgr.enable_server(sc);
+        tool_filter_.disabled_mcp_servers.erase(name);
+        if (sink_) {
+            sink_->on_log(daedalus::LogLevel::Info,
+                "[MCP] Server '" + name + "' enabled at runtime");
+        }
+        return ok;
+    }
+
+    if (currently_disabled) return false;
+    mgr.disable_server(name);
+    tool_filter_.disabled_mcp_servers.insert(name);
+    if (sink_) {
+        sink_->on_log(daedalus::LogLevel::Info,
+            "[MCP] Server '" + name + "' disabled at runtime");
+    }
+    return true;
+}
+
+bool AgentImpl::is_mcp_server_enabled(const std::string& name) const
+{
+    if (!body_->mcp) return false;
+    return !body_->mcp->is_server_disabled(name);
+}
+
+std::vector<std::string> AgentImpl::disabled_mcp_servers() const
+{
+    if (!body_->mcp) return {};
+    const auto disabled = body_->mcp->get_disabled_servers();
+    return std::vector<std::string>(disabled.begin(), disabled.end());
+}
+
+bool AgentImpl::set_tool_enabled(const std::string& name, bool enabled)
+{
+    const bool currently_disabled = tool_filter_.disabled_tools.count(name);
+    if (enabled) {
+        if (!currently_disabled) return false;
+        tool_filter_.disabled_tools.erase(name);
+    } else {
+        if (currently_disabled) return false;
+        tool_filter_.disabled_tools.insert(name);
+    }
+
+    if (sink_) {
+        sink_->on_log(daedalus::LogLevel::Info,
+            "[TOOLS] " + name + " " + std::string(enabled ? "enabled" : "disabled")
+            + " at runtime");
+    }
+    return true;
+}
+
+bool AgentImpl::is_tool_enabled(const std::string& name) const
+{
+    return tool_filter_.is_tool_allowed(name);
+}
+
+std::vector<std::string> AgentImpl::disabled_tools() const
+{
+    return std::vector<std::string>(
+        tool_filter_.disabled_tools.begin(),
+        tool_filter_.disabled_tools.end());
 }
 
 }  // namespace daedalus::detail

@@ -16,7 +16,9 @@
 // §Phase 11: McpServerManager* is now passed in via the ctor (injected),
 // not accessed via the singleton. Forward-declare instead of including.
 namespace mcp { class McpServerManager; }
+class SkillManager;                        // §Phase 16: per-agent skill manager
 #include "tools/ToolHandler.h"
+#include "tools/ToolFilter.h"
 
 #include "daedalus/AgentSink.h"
 #include "daedalus/settings.h"   // §v0.5.0: SettingsStore* replaces SettingsManager*
@@ -118,6 +120,12 @@ private:
     // nullptr means mcp_enabled=false — all MCP operations become no-ops.
     mcp::McpServerManager* mcp_manager_ = nullptr;
 
+    // §Phase 16: per-agent SkillManager. nullptr means no skills configured.
+    SkillManager* skill_manager_ = nullptr;
+
+    // §Phase 16: per-agent tool filter. nullptr means all tools allowed.
+    const ToolFilter* tool_filter_ = nullptr;
+
     // Tracks whether McpServerManager has signalled that the MCP tool
     // surface needs rebuilding. Set true when mcp_tools_dirty() returns true.
     bool mcp_tools_refresh_pending_ = true;
@@ -169,7 +177,9 @@ public:
     // §v0.5.0: settings_manager replaced with settings_store (SettingsStore*).
     explicit LLMClient(const AppConfig& config,
                        daedalus::SettingsStore* settings_store = nullptr,
-                       mcp::McpServerManager* mcp_manager = nullptr);
+                       mcp::McpServerManager* mcp_manager = nullptr,
+                       SkillManager* skill_manager = nullptr,
+                       const ToolFilter* tool_filter = nullptr);
 
     /// @brief Attach a sink. Call this after construction and before
     ///        initialize(). Required for streaming output, log routing, and
