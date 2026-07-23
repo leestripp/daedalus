@@ -19,12 +19,16 @@ public:
     explicit TodoListHandle(std::filesystem::path file_path);
     ~TodoListHandle();
 
-    nlohmann::json add(const std::string& text, bool done);
+    nlohmann::json add(const std::string& text,
+                        const std::optional<std::string>& status,
+                        const std::optional<std::string>& group);
     nlohmann::json edit(int id,
                         const std::optional<std::string>& text,
-                        const std::optional<bool>& done);
+                        const std::optional<std::string>& status,
+                        const std::optional<std::string>& group);
     nlohmann::json remove(int id);
-    nlohmann::json list(std::string_view filter) const;
+    nlohmann::json list(std::string_view filter,
+                        const std::optional<std::string>& group) const;
     nlohmann::json count() const;
     nlohmann::json set_max(int max);
     nlohmann::json clear();

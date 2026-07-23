@@ -45,20 +45,25 @@ struct TempProject {
     }
 };
 
-static json todo_add(FileIO& io, const std::string& text, bool done = false) {
+static json todo_add(FileIO& io, const std::string& text,
+                     const std::optional<std::string>& status = std::nullopt,
+                     const std::optional<std::string>& group = std::nullopt) {
     TodoAddTool tool;
     json args = json::object({{"text", text}});
-    if (done) args["done"] = true;
+    if (status) args["status"] = *status;
+    if (group) args["group"] = *group;
     return tool.execute(args, io);
 }
 
 static json todo_edit(FileIO& io, int id,
                       const std::optional<std::string>& text = std::nullopt,
-                      const std::optional<bool>& done = std::nullopt) {
+                      const std::optional<std::string>& status = std::nullopt,
+                      const std::optional<std::string>& group = std::nullopt) {
     TodoEditTool tool;
     json args = json::object({{"id", id}});
     if (text) args["text"] = *text;
-    if (done) args["done"] = *done;
+    if (status) args["status"] = *status;
+    if (group) args["group"] = *group;
     return tool.execute(args, io);
 }
 
@@ -136,7 +141,7 @@ TEST_SUITE("TodoListTool — CRUD") {
         CHECK(r["status"] == "success");
         CHECK(r["todo"]["id"] == 1);
         CHECK(r["todo"]["text"] == "Fix the build");
-        CHECK(r["todo"]["done"] == false);
+        CHECK(r["todo"]["status"] == "pending");
 
         json list = todo_list(io);
         CHECK(list["status"] == "success");
@@ -152,10 +157,10 @@ TEST_SUITE("TodoListTool — CRUD") {
         FileIO io(tp.dir);
 
         todo_add(io, "Original text");
-        json r = todo_edit(io, 1, "Updated text", true);
+        json r = todo_edit(io, 1, "Updated text", "done");
         CHECK(r["status"] == "success");
         CHECK(r["todo"]["text"] == "Updated text");
-        CHECK(r["todo"]["done"] == true);
+        CHECK(r["todo"]["status"] == "done");
 
         json count = todo_count(io);
         CHECK(count["total"] == 1);
@@ -250,7 +255,7 @@ TEST_SUITE("TodoListTool — listing") {
         FileIO io(tp.dir);
 
         todo_add(io, "Pending task");
-        todo_add(io, "Done task", true);
+        todo_add(io, "Done task", "done");
 
         json pending = todo_list(io, "pending");
         CHECK(pending["pending"] == 1);
@@ -371,5 +376,191 @@ TEST_SUITE("TodoListTool — persistence & isolation") {
 
         CHECK(fs::exists(tp.todos_file("agent_a")));
         CHECK(fs::exists(tp.todos_file("agent_b")));
+    }
+}
+
+// ============================================================================
+// Status and groups
+// ============================================================================
+
+TEST_SUITE("TodoListTool — status lifecycle") {
+
+    TEST_CASE("Default status is pending and default group is General") {
+        TempProject tp("status_default");
+        FileIO io(tp.dir);
+
+        json r = todo_add(io, "A task");
+        CHECK(r["status"] == "success");
+        CHECK(r["todo"]["status"] == "pending");
+        CHECK(r["todo"]["group"] == "General");
+
+        json list = todo_list(io);
+        CHECK(list["pending"] == 1);
+        CHECK(list["in_progress"] == 0);
+        CHECK(list["done"] == 0);
+        CHECK(list["blocked"] == 0);
+    }
+
+    TEST_CASE("Status transitions through todo_edit") {
+        TempProject tp("status_transition");
+        FileIO io(tp.dir);
+
+        todo_add(io, "Task");
+        CHECK(todo_edit(io, 1, std::nullopt, "in_progress")["todo"]["status"] ==
+              "in_progress");
+        CHECK(todo_edit(io, 1, std::nullopt, "blocked")["todo"]["status"] ==
+              "blocked");
+        CHECK(todo_edit(io, 1, std::nullopt, "done")["todo"]["status"] == "done");
+        CHECK(todo_edit(io, 1, std::nullopt, "pending")["todo"]["status"] ==
+              "pending");
+    }
+
+    TEST_CASE("Invalid status normalises to pending") {
+        TempProject tp("status_invalid");
+        FileIO io(tp.dir);
+
+        TodoAddTool tool;
+        json args = json::object({
+            {"text", "Task"},
+            {"status", "not_a_status"}
+        });
+        json r = tool.execute(args, io);
+        CHECK(r["todo"]["status"] == "pending");
+    }
+}
+
+TEST_SUITE("TodoListTool — groups") {
+
+    TEST_CASE("Group is stored and returned") {
+        TempProject tp("group_store");
+        FileIO io(tp.dir);
+
+        json r = todo_add(io, "Read code", std::nullopt, "Understand");
+        CHECK(r["todo"]["group"] == "Understand");
+    }
+
+    TEST_CASE("Group filter narrows listing") {
+        TempProject tp("group_filter");
+        FileIO io(tp.dir);
+
+        todo_add(io, "Read code", std::nullopt, "Understand");
+        todo_add(io, "Write code", std::nullopt, "Implement");
+        todo_add(io, "Run tests", std::nullopt, "Verify");
+
+        json all = todo_list(io);
+        CHECK(all["total"] == 3);
+
+        json impl = TodoListTool().execute(
+            json::object({{"filter", "all"}, {"group", "Implement"}}), io);
+        CHECK(impl["total"] == 1);
+        CHECK(impl["pending"] == 1);
+        std::string out = impl["output"].get<std::string>();
+        CHECK(out.find("Write code") != std::string::npos);
+        CHECK(out.find("Read code") == std::string::npos);
+        CHECK(out.find("Run tests") == std::string::npos);
+    }
+
+    TEST_CASE("Status filter works across groups") {
+        TempProject tp("status_filter_groups");
+        FileIO io(tp.dir);
+
+        todo_add(io, "A", "done", "Implement");
+        todo_add(io, "B", "pending", "Implement");
+        todo_add(io, "C", "done", "Verify");
+
+        json done = TodoListTool().execute(
+            json::object({{"filter", "done"}}), io);
+        CHECK(done["done"] == 2);
+        std::string out = done["output"].get<std::string>();
+        CHECK(out.find("[1] A") != std::string::npos);
+        CHECK(out.find("[2] B") == std::string::npos);
+        CHECK(out.find("[3] C") != std::string::npos);
+    }
+}
+
+TEST_SUITE("TodoListTool — count summary") {
+
+    TEST_CASE("Count returns per-status and per-group breakdown") {
+        TempProject tp("count_summary");
+        FileIO io(tp.dir);
+
+        todo_add(io, "Read code", std::nullopt, "Understand");
+        todo_add(io, "Plan fix", "in_progress", "Plan");
+        todo_add(io, "Apply fix", "pending", "Implement");
+        todo_add(io, "Run tests", "blocked", "Verify");
+
+        json count = todo_count(io);
+        CHECK(count["total"] == 4);
+        CHECK(count["pending"] == 2);
+        CHECK(count["in_progress"] == 1);
+        CHECK(count["done"] == 0);
+        CHECK(count["blocked"] == 1);
+        REQUIRE(count.contains("by_group"));
+        CHECK(count["by_group"]["Understand"] == 1);
+        CHECK(count["by_group"]["Plan"] == 1);
+        CHECK(count["by_group"]["Implement"] == 1);
+        CHECK(count["by_group"]["Verify"] == 1);
+    }
+}
+
+TEST_SUITE("TodoListTool — legacy migration") {
+
+    TEST_CASE("Legacy 'done': true is migrated to status 'done'") {
+        TempProject tp("legacy_done");
+        fs::path f = tp.todos_file();
+        fs::create_directories(f.parent_path());
+
+        json legacy = json::object({
+            {"max_todos", 100},
+            {"next_id", 2},
+            {"todos", json::array({
+                json::object({
+                    {"id", 1},
+                    {"text", "Legacy task"},
+                    {"done", true},
+                    {"created_at", "2026-01-01 00:00"}
+                })
+            })}
+        });
+        {
+            std::ofstream out(f);
+            out << legacy.dump(2);
+        }
+
+        FileIO io(tp.dir);
+        json list = todo_list(io);
+        CHECK(list["done"] == 1);
+        CHECK(list["pending"] == 0);
+
+        json count = todo_count(io);
+        CHECK(count["done"] == 1);
+    }
+
+    TEST_CASE("Legacy pending todo keeps default status") {
+        TempProject tp("legacy_pending");
+        fs::path f = tp.todos_file();
+        fs::create_directories(f.parent_path());
+
+        json legacy = json::object({
+            {"max_todos", 100},
+            {"next_id", 2},
+            {"todos", json::array({
+                json::object({
+                    {"id", 1},
+                    {"text", "Legacy pending"},
+                    {"done", false},
+                    {"created_at", "2026-01-01 00:00"}
+                })
+            })}
+        });
+        {
+            std::ofstream out(f);
+            out << legacy.dump(2);
+        }
+
+        FileIO io(tp.dir);
+        json list = todo_list(io);
+        CHECK(list["pending"] == 1);
+        CHECK(list["done"] == 0);
     }
 }

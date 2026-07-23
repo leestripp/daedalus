@@ -51,6 +51,23 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   - Construction-time defaults via new `AgentConfig::tools_disabled` plus the
     existing `skills_disabled` and `mcp_servers_disabled` fields.
 
+- **Phased todo list** (`TodoListTool`, `TodoListService`, `Agent`):
+  - Todos now carry a `status` (`pending`/`in_progress`/`done`/`blocked`) and
+    an optional `group` (phase/category, e.g. `Understand`, `Plan`,
+    `Implement`, `Verify`).
+  - `todo_add`, `todo_edit`, and `todo_list` expose the new fields; the
+    listing is grouped by phase and includes a per-status progress summary.
+  - `todo_count` returns per-status totals plus a `by_group` breakdown.
+  - The CLI system prompt teaches the agent to phase-group work and keep
+    exactly one task `in_progress` at a time.
+  - Public API updated: `Agent::add_todo(text, status?, group?)`,
+    `Agent::edit_todo(id, text?, status?, group?)`, and
+    `Agent::list_todos(filter, group?)`.
+  - Legacy persisted todos with boolean `done` are migrated to `status: done`
+    on load.
+  - Covered by `tests/test_todo_list_tool.cpp` and
+    `tests/test_todo_public_api.cpp`.
+
 - **Crash-resilient message persistence** (`Messages`):
   - **Atomic save** (CRASH-1): every `save()` writes to `messages.json.tmp`,
     `fsync()`s, then `rename()`s over `messages.json`. POSIX `rename()`

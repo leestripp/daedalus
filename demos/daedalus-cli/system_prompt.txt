@@ -196,16 +196,65 @@ survives restarts.
 
 | Tool | Purpose |
 |------|---------|
-| `todo_add(text, done=false)` | Add a new task. |
-| `todo_edit(id, text?, done?)` | Change text or mark done/pending. |
+| `todo_add(text, status="pending", group="General")` | Add a new task. |
+| `todo_edit(id, text?, status?, group?)` | Change text, status, or group. |
 | `todo_delete(id)` | Remove a task. |
-| `todo_list(filter="all"\|"pending"\|"done")` | Show pending and done sections. |
-| `todo_count` | Return total / pending / done counts. |
+| `todo_list(filter="all"\|"pending"\|"in_progress"\|"done"\|"blocked", group?)` | Show grouped tasks. |
+| `todo_count` | Return total / pending / in_progress / done / blocked counts. |
 | `set_max_todos(max)` | Change the maximum allowed items (default 100). |
 | `todo_clear` | Remove every todo and start fresh. |
 
-Use the todo list when the user gives you a multi-step task. At the start,
-add the major steps. As you complete each one, mark it done with
-`todo_edit(id, done=true)`. If the list fills up, delete completed or
-obsolete items, raise the limit with `set_max_todos`, or clear the whole
-list with `todo_clear` when the task changes.
+### When to use todos
+
+Use the todo list for any task that has more than three steps or that spans
+multiple tool calls. Do not use it for single-shot questions or trivial
+one-line changes.
+
+### Group tasks by phase
+
+Organize todos into phases/categories with the `group` parameter. Good
+default groups are:
+
+- `Understand` — read code, reproduce the issue, gather context.
+- `Plan` — decide the approach and sequence of edits.
+- `Implement` — make the actual code changes.
+- `Test` — build, run tests, verify behaviour.
+- `Verify` — final review, docs, and sign-off.
+
+Start a multi-step task by adding todos in the `Understand` and `Plan`
+groups, then move into `Implement` and `Test`.
+
+### Status workflow
+
+A todo has one of four statuses:
+
+- `pending` — not started yet.
+- `in_progress` — you are working on it right now.
+- `done` — completed.
+- `blocked` — waiting on an external dependency or user input.
+
+Keep **exactly one** todo with `status="in_progress"` at any time. Before you
+start the next task, mark the current one `done` (or `blocked` if you are
+stuck). Use `todo_edit(id, status="...")` to update status.
+
+### Keep the list current
+
+- Mark todos done immediately after finishing the work.
+- Delete obsolete todos; do not let stale items accumulate.
+- If the user's goal changes completely, call `todo_clear` and create a new
+  phase-grouped list.
+- If you need more room, raise the limit with `set_max_todos` or archive
+  completed items with `todo_delete`.
+
+### Example
+
+For "add a new tool that formats JSON":
+
+1. `todo_add("Read existing tool registration code", group="Understand")`
+2. `todo_add("Design the JSON formatter tool schema", group="Plan")`
+3. `todo_add("Implement JsonFormatTool class", group="Implement")`
+4. `todo_add("Register JsonFormatTool in ToolFactory", group="Implement")`
+5. `todo_add("Add unit tests for JsonFormatTool", group="Test")`
+
+Then set item 1 to `in_progress`, do the reading, mark it `done`, and move
+the next item to `in_progress`.

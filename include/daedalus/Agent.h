@@ -164,20 +164,30 @@ public:
     // ------------------------------------------------------------------
 
     /// @brief Add a todo item. Returns the same JSON the `todo_add` tool returns.
-    nlohmann::json add_todo(const std::string& text, bool done = false);
+    /// status is one of "pending", "in_progress", "done", or "blocked".
+    nlohmann::json add_todo(
+        const std::string& text,
+        const std::optional<std::string>& status = std::nullopt,
+        const std::optional<std::string>& group = std::nullopt);
 
-    /// @brief Edit a todo item by id. Optional text and/or done update.
-    nlohmann::json edit_todo(int id,
-                             const std::optional<std::string>& text = std::nullopt,
-                             const std::optional<bool>& done = std::nullopt);
+    /// @brief Edit a todo item by id. Optional text, status, and/or group update.
+    nlohmann::json edit_todo(
+        int id,
+        const std::optional<std::string>& text = std::nullopt,
+        const std::optional<std::string>& status = std::nullopt,
+        const std::optional<std::string>& group = std::nullopt);
 
     /// @brief Delete a todo item by id.
     nlohmann::json delete_todo(int id);
 
-    /// @brief List todos. filter is "all" (default), "pending", or "done".
-    nlohmann::json list_todos(const std::string& filter = "all");
+    /// @brief List todos. filter is "all" (default), "pending", "in_progress",
+    /// "done", or "blocked".
+    nlohmann::json list_todos(
+        const std::string& filter = "all",
+        const std::optional<std::string>& group = std::nullopt);
 
-    /// @brief Return total / pending / done counts plus the current max.
+    /// @brief Return total / pending / in_progress / done / blocked counts plus
+    /// the current max and per-group counts.
     nlohmann::json count_todos();
 
     /// @brief Set the maximum number of todos (1-1000).

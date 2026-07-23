@@ -31,8 +31,18 @@ static std::optional<int> parse_id(const json& args) {
 
 static std::string normalise_filter(const json& args) {
     std::string f = args.value("filter", "all");
-    if (f == "pending" || f == "done") return f;
+    if (f == "pending" || f == "in_progress" || f == "done" || f == "blocked") {
+        return f;
+    }
     return "all";
+}
+
+static std::optional<std::string> opt_string(const json& args,
+                                              const std::string& key) {
+    if (!args.contains(key)) return std::nullopt;
+    const auto& v = args[key];
+    if (v.is_string()) return v.get<std::string>();
+    return std::nullopt;
 }
 
 static json make_tool_def(const std::string& name,
@@ -74,9 +84,14 @@ json TodoAddTool::get_definition() const {
                 {"type", "string"},
                 {"description", "The task description."}
             })},
-            {"done", json::object({
-                {"type", "boolean"},
-                {"description", "Whether the task is already done (default: false)."}
+            {"status", json::object({
+                {"type", "string"},
+                {"description", "Task status: 'pending' (default), 'in_progress', 'done', or 'blocked'."},
+                {"enum", json::array({"pending", "in_progress", "done", "blocked"})}
+            })},
+            {"group", json::object({
+                {"type", "string"},
+                {"description", "Phase or category, e.g. 'Understand', 'Plan', 'Implement', 'Verify' (default: 'General')."}
             })}
         }),
         json::array({"text"})
@@ -86,8 +101,8 @@ json TodoAddTool::get_definition() const {
 json TodoAddTool::execute(const json& args, FileIO& file_io) {
     try {
         std::string text = args.value("text", "");
-        bool done = args.value("done", false);
-        return get_list(file_io).add(text, done);
+        return get_list(file_io).add(text, opt_string(args, "status"),
+                                     opt_string(args, "group"));
     } catch (const std::exception& e) {
         LOG_ERROR(std::string("[TODO] todo_add failed: ") + e.what());
         return json::object({{"status", "error"}, {"message", e.what()}});
@@ -97,7 +112,7 @@ json TodoAddTool::execute(const json& args, FileIO& file_io) {
 json TodoEditTool::get_definition() const {
     return make_tool_def(
         get_name(),
-        "Edit an existing todo by id. Change the text and/or mark it done or pending.",
+        "Edit an existing todo by id. Change the text, status, and/or group.",
         json::object({
             {"id", json::object({
                 {"type", "integer"},
@@ -107,9 +122,14 @@ json TodoEditTool::get_definition() const {
                 {"type", "string"},
                 {"description", "New task description (optional)."}
             })},
-            {"done", json::object({
-                {"type", "boolean"},
-                {"description", "New done state (optional)."}
+            {"status", json::object({
+                {"type", "string"},
+                {"description", "New status: 'pending', 'in_progress', 'done', or 'blocked' (optional)."},
+                {"enum", json::array({"pending", "in_progress", "done", "blocked"})}
+            })},
+            {"group", json::object({
+                {"type", "string"},
+                {"description", "New phase or category (optional)."}
             })}
         }),
         json::array({"id"})
@@ -131,15 +151,8 @@ json TodoEditTool::execute(const json& args, FileIO& file_io) {
             }
             text = args["text"].get<std::string>();
         }
-        std::optional<bool> done;
-        if (args.contains("done")) {
-            if (!args["done"].is_boolean()) {
-                return json::object(
-                    {{"status", "error"}, {"message", "'done' must be a boolean"}});
-            }
-            done = args["done"].get<bool>();
-        }
-        return get_list(file_io).edit(*id_opt, text, done);
+        return get_list(file_io).edit(*id_opt, text, opt_string(args, "status"),
+                                      opt_string(args, "group"));
     } catch (const std::exception& e) {
         LOG_ERROR(std::string("[TODO] todo_edit failed: ") + e.what());
         return json::object({{"status", "error"}, {"message", e.what()}});
@@ -177,13 +190,17 @@ json TodoDeleteTool::execute(const json& args, FileIO& file_io) {
 json TodoListTool::get_definition() const {
     return make_tool_def(
         get_name(),
-        "List all todos, grouped into pending and done sections. Use filter to show "
-        "only pending or only done items.",
+        "List todos grouped by phase/category and status. Use filter and group to "
+        "narrow the view.",
         json::object({
             {"filter", json::object({
                 {"type", "string"},
-                {"description", "Filter: 'all' (default), 'pending', or 'done'."},
-                {"enum", json::array({"all", "pending", "done"})}
+                {"description", "Status filter: 'all' (default), 'pending', 'in_progress', 'done', or 'blocked'."},
+                {"enum", json::array({"all", "pending", "in_progress", "done", "blocked"})}
+            })},
+            {"group", json::object({
+                {"type", "string"},
+                {"description", "Optional phase/category filter, e.g. 'Implement' or 'Verify'."}
             })}
         })
     );
@@ -192,7 +209,7 @@ json TodoListTool::get_definition() const {
 json TodoListTool::execute(const json& args, FileIO& file_io) {
     try {
         std::string filter = normalise_filter(args);
-        return get_list(file_io).list(filter);
+        return get_list(file_io).list(filter, opt_string(args, "group"));
     } catch (const std::exception& e) {
         LOG_ERROR(std::string("[TODO] todo_list failed: ") + e.what());
         return json::object({{"status", "error"}, {"message", e.what()}});

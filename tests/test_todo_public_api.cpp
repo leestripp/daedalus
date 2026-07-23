@@ -62,9 +62,9 @@ TEST_SUITE("Agent public todo API") {
         CHECK(add["todo"]["id"] == 1);
         CHECK(add["todo"]["text"] == "Fix build");
 
-        json edit = agent.edit_todo(1, std::nullopt, true);
+        json edit = agent.edit_todo(1, std::nullopt, "done");
         CHECK(edit["status"] == "success");
-        CHECK(edit["todo"]["done"] == true);
+        CHECK(edit["todo"]["status"] == "done");
 
         json list = agent.list_todos("all");
         CHECK(list["status"] == "success");

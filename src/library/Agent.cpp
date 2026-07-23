@@ -82,16 +82,19 @@ nlohmann::json Agent::execute_tool(const std::string& name,
     return impl_->execute_tool(name, args);
 }
 
-nlohmann::json Agent::add_todo(const std::string& text, bool done)
+nlohmann::json Agent::add_todo(const std::string& text,
+                               const std::optional<std::string>& status,
+                               const std::optional<std::string>& group)
 {
-    return impl_->add_todo(text, done);
+    return impl_->add_todo(text, status, group);
 }
 
 nlohmann::json Agent::edit_todo(int id,
                                 const std::optional<std::string>& text,
-                                const std::optional<bool>& done)
+                                const std::optional<std::string>& status,
+                                const std::optional<std::string>& group)
 {
-    return impl_->edit_todo(id, text, done);
+    return impl_->edit_todo(id, text, status, group);
 }
 
 nlohmann::json Agent::delete_todo(int id)
@@ -99,9 +102,10 @@ nlohmann::json Agent::delete_todo(int id)
     return impl_->delete_todo(id);
 }
 
-nlohmann::json Agent::list_todos(const std::string& filter)
+nlohmann::json Agent::list_todos(const std::string& filter,
+                                 const std::optional<std::string>& group)
 {
-    return impl_->list_todos(filter);
+    return impl_->list_todos(filter, group);
 }
 
 nlohmann::json Agent::count_todos()

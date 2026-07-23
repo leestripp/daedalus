@@ -7,7 +7,7 @@ plus four worked example hosts (`demos/`). Embed it in any C++23 host
 (CLI, web, IDE plugin, CI bot) and drive one or more `Agent` instances
 via the public API. See `docs/embedding.md` to get started.
 
-**Current tag: `0.4.1`** — stable library. See `CHANGELOG.md` for what's
+**Current tag: `0.7.5`** — stable library. See `CHANGELOG.md` for what's
 in each release. See `docs/storage.md` for the storage architecture,
 `docs/settings.md` for the SQLite-backed settings model (v0.4.0+).
 
@@ -625,6 +625,10 @@ Underlying infrastructure:
   `{"stage":"output","output_chunk":"..."}` events. TTY control sequences
   are stripped so hosts can safely print the chunks; the full result is still
   returned to the LLM at the end.
+- **Phased Todo List**: Per-project, per-agent task tracking with `status`
+  (`pending`/`in_progress`/`done`/`blocked`) and `group` phases such as
+  `Understand`, `Plan`, `Implement`, `Verify`. Persists across restarts in
+  `.daedalus/daedalus[-<agent_name>]/todos.json`.
 - **Developer-controlled Skill loading**: `cfg.skills_dirs` + `cfg.skills` — empty by default, opt in only to what the host needs. (§Phase 9.7)
 - **Sink Observability**: Every state transition fires `on_state_change` so hosts can render real-time status (busy indicator, progress bar, cancel button). (§Phase 9.6)
 - **Per-Agent Config Home**: `cfg.daedalus_home` lets multiple Agents in one process own separate settings/skills/memory dirs. (§Phase 8.5)

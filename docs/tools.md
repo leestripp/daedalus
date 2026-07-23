@@ -1590,22 +1590,29 @@ The agent has a per-project, per-agent todo list that persists in
 `<project_root>/.daedalus/daedalus[-<agent_name>]/todos.json`.
 Default maximum is 100 items; change it with `set_max_todos`.
 
+Todos have a `status` (`pending`, `in_progress`, `done`, or `blocked`) and an
+optional `group` (phase/category, e.g. `Understand`, `Plan`, `Implement`,
+`Test`, `Verify`). Use groups to keep multi-step tasks organised and use
+`in_progress` to show which single task is currently active.
+
 ### `todo_add`
 
-| Name  | Type    | Required | Description                        |
-|-------|---------|----------|------------------------------------|
-| text  | string  | Yes      | Task description                   |
-| done  | boolean | No       | Initial state (default: `false`)   |
+| Name   | Type    | Required | Description                                              |
+|--------|---------|----------|----------------------------------------------------------|
+| text   | string  | Yes      | Task description                                         |
+| status | string  | No       | `pending` (default), `in_progress`, `done`, `blocked`    |
+| group  | string  | No       | Phase/category (default: `General`)                      |
 
 ### `todo_edit`
 
-| Name  | Type    | Required | Description                        |
-|-------|---------|----------|------------------------------------|
-| id    | integer | Yes      | Todo id to update                  |
-| text  | string  | No       | New task description               |
-| done  | boolean | No       | New done/pending state             |
+| Name   | Type    | Required | Description                                              |
+|--------|---------|----------|----------------------------------------------------------|
+| id     | integer | Yes      | Todo id to update                                        |
+| text   | string  | No       | New task description                                     |
+| status | string  | No       | `pending`, `in_progress`, `done`, or `blocked`           |
+| group  | string  | No       | New phase/category                                       |
 
-At least one of `text` or `done` must be provided.
+At least one of `text`, `status`, or `group` must be provided.
 
 ### `todo_delete`
 
@@ -1615,15 +1622,17 @@ At least one of `text` or `done` must be provided.
 
 ### `todo_list`
 
-| Name   | Type   | Required | Description                              |
-|--------|--------|----------|------------------------------------------|
-| filter | string | No       | `all` (default), `pending`, or `done`    |
+| Name   | Type   | Required | Description                                                  |
+|--------|--------|----------|--------------------------------------------------------------|
+| filter | string | No       | `all` (default), `pending`, `in_progress`, `done`, `blocked` |
+| group  | string | No       | Optional phase/category filter                               |
 
-Returns a grouped view with Pending and Done sections.
+Returns a grouped view by `group`, then status, plus a progress summary.
 
 ### `todo_count`
 
-No parameters. Returns `total`, `pending`, `done`, and `max_todos`.
+No parameters. Returns `total`, `pending`, `in_progress`, `done`, `blocked`,
+`max_todos`, and `by_group` counts.
 
 ### `set_max_todos`
 

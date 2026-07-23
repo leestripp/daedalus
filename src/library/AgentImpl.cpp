@@ -894,20 +894,23 @@ static fs::path todo_project_root(const fs::path& cfg_root)
     return fs::absolute(root);
 }
 
-nlohmann::json AgentImpl::add_todo(const std::string& text, bool done)
+nlohmann::json AgentImpl::add_todo(const std::string& text,
+                                   const std::optional<std::string>& status,
+                                   const std::optional<std::string>& group)
 {
     return TodoListService::instance()
         .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
-        .add(text, done);
+        .add(text, status, group);
 }
 
 nlohmann::json AgentImpl::edit_todo(int id,
                                     const std::optional<std::string>& text,
-                                    const std::optional<bool>& done)
+                                    const std::optional<std::string>& status,
+                                    const std::optional<std::string>& group)
 {
     return TodoListService::instance()
         .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
-        .edit(id, text, done);
+        .edit(id, text, status, group);
 }
 
 nlohmann::json AgentImpl::delete_todo(int id)
@@ -917,11 +920,12 @@ nlohmann::json AgentImpl::delete_todo(int id)
         .remove(id);
 }
 
-nlohmann::json AgentImpl::list_todos(const std::string& filter)
+nlohmann::json AgentImpl::list_todos(const std::string& filter,
+                                     const std::optional<std::string>& group)
 {
     return TodoListService::instance()
         .get(todo_project_root(cfg_.project_root), cfg_.agent_name)
-        .list(filter);
+        .list(filter, group);
 }
 
 nlohmann::json AgentImpl::count_todos()
