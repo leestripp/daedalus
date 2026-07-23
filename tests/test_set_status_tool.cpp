@@ -63,7 +63,7 @@ TEST_SUITE("SetStatusTool — valid input") {
         FileIO io(std::filesystem::temp_directory_path());  // unused by SetStatusTool
         const std::vector<std::string> valid = {
             "Idle", "Understanding", "Planning", "Acting", "Verifying",
-            "AwaitingApproval", "Compressing",
+            "Documenting", "AwaitingApproval", "Compressing",
             "Done", "Cancelled", "Error",
         };
         for (const auto& name : valid) {
@@ -127,10 +127,11 @@ TEST_SUITE("SetStatusTool — invalid input") {
         std::string msg = r["message"].get<std::string>();
         CHECK(msg.find("Foo") != std::string::npos);
         // Message should list every valid state so the model can self-correct.
-        CHECK(msg.find("Planning")   != std::string::npos);
-        CHECK(msg.find("Acting")     != std::string::npos);
-        CHECK(msg.find("Verifying")  != std::string::npos);
-        CHECK(msg.find("Done")       != std::string::npos);
+        CHECK(msg.find("Planning")    != std::string::npos);
+        CHECK(msg.find("Acting")      != std::string::npos);
+        CHECK(msg.find("Verifying")   != std::string::npos);
+        CHECK(msg.find("Documenting") != std::string::npos);
+        CHECK(msg.find("Done")        != std::string::npos);
     }
 
     TEST_CASE("Empty string returns error") {
@@ -198,6 +199,7 @@ TEST_SUITE("daedalus::agent_state_from") {
         CHECK(daedalus::agent_state_from("Planning", &ok)         == daedalus::AgentState::Planning);         CHECK(ok);
         CHECK(daedalus::agent_state_from("Acting", &ok)           == daedalus::AgentState::Acting);           CHECK(ok);
         CHECK(daedalus::agent_state_from("Verifying", &ok)        == daedalus::AgentState::Verifying);        CHECK(ok);
+        CHECK(daedalus::agent_state_from("Documenting", &ok)      == daedalus::AgentState::Documenting);      CHECK(ok);
         CHECK(daedalus::agent_state_from("AwaitingApproval", &ok) == daedalus::AgentState::AwaitingApproval); CHECK(ok);
         CHECK(daedalus::agent_state_from("Compressing", &ok)      == daedalus::AgentState::Compressing);      CHECK(ok);
         CHECK(daedalus::agent_state_from("Done", &ok)             == daedalus::AgentState::Done);             CHECK(ok);
@@ -242,7 +244,7 @@ TEST_SUITE("to_string ↔ agent_state_from round-trip") {
     TEST_CASE("Every public name survives a round-trip") {
         const std::vector<std::string> names = {
             "Idle", "Understanding", "Planning", "Acting", "Verifying",
-            "AwaitingApproval", "Compressing",
+            "Documenting", "AwaitingApproval", "Compressing",
             "Done", "Cancelled", "Error",
         };
         for (const auto& name : names) {

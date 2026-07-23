@@ -68,6 +68,17 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   - Covered by `tests/test_todo_list_tool.cpp` and
     `tests/test_todo_public_api.cpp`.
 
+- **Agent state machine — verification gate + Documenting state**:
+  - Added public `AgentState::Documenting` for README, CHANGELOG, comment,
+    and docs updates after verification.
+  - `set_status` accepts `Documenting`; hosts receive `state_change` events
+    for the new phase.
+  - Rewrote the library state-machine prompt section and the CLI workflow
+    section to teach the agent that `Verifying` is a decision gate: inspect
+    build/test output, and on failure loop back to `Understanding` or
+    `Planning` with new todos. Only transition to `Done` after verification
+    passes and any needed documentation is complete.
+
 - **Crash-resilient message persistence** (`Messages`):
   - **Atomic save** (CRASH-1): every `save()` writes to `messages.json.tmp`,
     `fsync()`s, then `rename()`s over `messages.json`. POSIX `rename()`

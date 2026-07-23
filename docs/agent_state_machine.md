@@ -5,7 +5,10 @@
 > fully documented there. This file is kept as a stub to avoid breaking
 > any external links.
 >
-> **Full reference:** see `include/daedalus/Agent.h` — the public
-> `daedalus::AgentState` enum, what each state means, and the simplified
-> state flow. For host-facing lifecycle guidance, see
-> [`docs/embedding.md`](embedding.md).
+> **Full reference:** see `include/daedalus/types/AgentState.h` — the public
+> `daedalus::AgentState` enum and what each state means. The agent drives
+> state transitions itself via the `set_status` tool; `Verifying` is a
+> decision gate where the agent inspects build/test output and loops back
+> to `Understanding`/`Planning` on failure, and `Documenting` is used for
+> README/CHANGELOG/docs updates after verification passes. For host-facing
+> lifecycle guidance, see [`docs/embedding.md`](embedding.md).

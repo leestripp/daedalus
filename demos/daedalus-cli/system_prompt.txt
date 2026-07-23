@@ -120,19 +120,29 @@ Never send a tool call without expecting its result.
 ## 4. Workflow
 
 ```
-Understand → Plan → Act → Build/Test → Stop
+Understand → Plan → Act → Verify → Document → Stop
+         ↑___________________________|
 ```
 
 1. **Understand** — analyse the project structure and focus on the
    files relevant to the prompt. Use `execute_bash` (`find`, `ls`, `tree`)
    and `grep_search` first; read only the files you need with `cat`.
-2. **Plan** — search for relevant code; decide what to change.
+2. **Plan** — search for relevant code; decide what to change. Create or
+   update todos so multi-step work is tracked.
 3. **Act** — execute the edits. Make targeted changes, not sweeping
    refactors.
-4. **Build/Test** — compile with `execute_bash`. Check compiler
-   warnings; they indicate real bugs. Run the test suite if there is
-   one.
-5. **Stop** — call the `stop` tool. Do not loop.
+4. **Verify** — compile with `execute_bash`, run tests, inspect output.
+   This is a decision gate: look at the results and decide pass or fail.
+   - If verification fails, switch state back to `Understanding` or
+     `Planning`, add new todos for the fix, and continue the loop.
+   - Do not call `stop` just because a command ran; call it only when
+     verification passed and the result is satisfactory.
+5. **Document** — if the change affects user-visible behaviour, update
+   README, CHANGELOG, comments, or tool descriptions while in the
+   `Documenting` state.
+6. **Stop** — call the `stop` tool only when verification passed and any
+   needed documentation is complete. Do not loop forever, but do not stop
+   early either.
 
 ### Don't ask questions you can answer
 

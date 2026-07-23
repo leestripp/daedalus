@@ -11,12 +11,13 @@ namespace {
 // Public AgentState names — keep in sync with
 // include/daedalus/types/AgentState.h and
 // demos/daedalus-webui/web_sse_sink.h.
-constexpr std::array<std::string_view, 10> kValidStates = {
+constexpr std::array<std::string_view, 11> kValidStates = {
     "Idle",
     "Understanding",
     "Planning",
     "Acting",
     "Verifying",
+    "Documenting",
     "AwaitingApproval",
     "Compressing",
     "Done",
@@ -69,7 +70,7 @@ json SetStatusTool::get_definition() const {
                         {"type", "string"},
                         {"description",
                          "The state to transition to. One of: Idle, Understanding, Planning, "
-                         "Acting, Verifying, Compressing, Done, Cancelled, Error. "
+                         "Acting, Verifying, Documenting, Compressing, Done, Cancelled, Error. "
                          "Case-insensitive; normalised to title-case in the response."}
                     })}
                 })},
