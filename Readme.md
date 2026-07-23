@@ -620,6 +620,11 @@ Underlying infrastructure:
 - **Context Compression**: "70/30 Split" algorithm - compresses oldest 70%, keeps newest 30% intact for seamless continuation
 - **Manager Mode**: Orchestrate multiple sub-agents for complex projects
 - **SSE Streaming**: Token-by-token responses via `on_assistant_delta` sink callbacks — turn off with `cfg.stream = false` for buffered batch hosts. (§Phase 9.8)
+- **Live Bash Output Streaming**: Long-running `execute_bash` commands stream
+  sanitised stdout/stderr chunks to `AgentSink::on_tool_progress()` as
+  `{"stage":"output","output_chunk":"..."}` events. TTY control sequences
+  are stripped so hosts can safely print the chunks; the full result is still
+  returned to the LLM at the end.
 - **Developer-controlled Skill loading**: `cfg.skills_dirs` + `cfg.skills` — empty by default, opt in only to what the host needs. (§Phase 9.7)
 - **Sink Observability**: Every state transition fires `on_state_change` so hosts can render real-time status (busy indicator, progress bar, cancel button). (§Phase 9.6)
 - **Per-Agent Config Home**: `cfg.daedalus_home` lets multiple Agents in one process own separate settings/skills/memory dirs. (§Phase 8.5)
@@ -682,7 +687,10 @@ registered example tools under `demos/example-tools/`.
 
 ### Shell
 - `execute_bash` - run shell commands with chaining (`&&`, `||`, `;`) and
-  process isolation. This is the **only** core tool that calls
+  process isolation. Output is sanitised before being returned (TTY control
+  sequences stripped, UTF-8 and ANSI SGR colour/style preserved). Long-running
+  commands stream sanitised output chunks to `AgentSink::on_tool_progress()`
+  while they execute. This is the **only** core tool that calls
   `AgentSink::request_command_approval()` (unless `auto_approve` is set).
 
 ### User Interaction

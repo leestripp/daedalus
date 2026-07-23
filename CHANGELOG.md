@@ -11,6 +11,22 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
+- **TTY-safe live bash output streaming** (`BashTool`, `BashCommandExecutor`):
+  - `BashCommandExecutor::sanitize_tty_sequences()` strips terminal-control
+    sequences (cursor movement, screen erase, alternate buffer, OSC, DCS,
+    etc.) from captured shell output while preserving UTF-8 text and ANSI
+    SGR colour/style codes.
+  - Sanitisation is applied to synchronous bash output and to background
+    process `stdout`/`stderr` before they are returned to the API or host.
+  - `Subprocess::execute()` and `BashCommandExecutor::execute()` gained
+    streaming overloads that emit output chunks as they arrive.
+  - `BashTool::run_sync()` forwards sanitised chunks via the existing
+    `ToolProgressFn` callback as `{"stage":"output","output_chunk":"..."}`
+    events, so hosts can display live command output during long-running
+    commands while the LLM still receives the complete result at the end.
+  - Documented in `BaseTool.h` and `include/daedalus/AgentSink.h`; covered by
+    `tests/test_bash_output_sanitize.cpp`.
+
 - **LLM lifecycle callbacks** (`AgentSink`):
   - `on_llm_wait_started()`, `on_llm_response_started()`, and
     `on_llm_request_finished()` give hosts precise hooks for driving a
