@@ -13,7 +13,9 @@
 #ifndef SUBPROCESS_H
 #define SUBPROCESS_H
 
+#include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <cstdint>
 
@@ -104,6 +106,19 @@ public:
     static SubprocessResult execute(const std::string& command,
                                      const std::string& cwd = "",
                                      int timeout_ms = 120000);
+
+    /**
+     * Execute a command with timeout, invoking a callback for each chunk of
+     * output as it arrives. The callback receives raw stdout/stderr bytes
+     * (already combined if using execute_combined). The complete output is
+     * still returned in the result.
+     */
+    using OutputChunkFn = std::function<void(std::string_view chunk)>;
+
+    static SubprocessResult execute(const std::string& command,
+                                     const std::string& cwd,
+                                     int timeout_ms,
+                                     OutputChunkFn output_chunk_cb);
     
     /**
      * Execute a command with timeout, combining stdout and stderr
@@ -116,6 +131,15 @@ public:
     static SubprocessResult execute_combined(const std::string& command,
                                               const std::string& cwd = "",
                                               int timeout_ms = 120000);
+
+    /**
+     * Execute a command with timeout, combining stdout and stderr, and
+     * invoke a callback for each output chunk as it arrives.
+     */
+    static SubprocessResult execute_combined(const std::string& command,
+                                              const std::string& cwd,
+                                              int timeout_ms,
+                                              OutputChunkFn output_chunk_cb);
     
     /**
      * Parse a shell command string into argument vector
@@ -149,8 +173,9 @@ private:
                                      int pipe_stdout[2],
                                      int pipe_stderr[2]);
     
-    // Read from a pipe into a string (non-blocking)
-    static void read_from_pipe(int pipe_fd, std::string& output, bool& eof);
+    // Read from a pipe into a string (non-blocking). Returns the number of
+    // bytes read, or 0 if nothing was read / EOF already reached.
+    static ssize_t read_from_pipe(int pipe_fd, std::string& output, bool& eof);
     
     // Close pipe and set to -1
     static void close_pipe(int& fd);

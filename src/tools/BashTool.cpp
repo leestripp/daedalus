@@ -254,8 +254,20 @@ std::string BashTool::strip_background_ampersand(const std::string& command) {
 json BashTool::run_sync(const std::string& command,
                         const std::string& project_path,
                         int timeout_seconds,
-                        ToolProgressFn /*progress*/) {
-    auto result = BashCommandExecutor::execute(command, project_path, timeout_seconds);
+                        ToolProgressFn progress) {
+    // Forward live output chunks through the progress callback so the host
+    // can display sanitised command output while the command is still running.
+    auto chunk_cb = [&progress](std::string_view chunk) {
+        if (!progress) return;
+        json p = {
+            {"stage", "output"},
+            {"output_chunk", std::string(chunk)},
+        };
+        progress(p);
+    };
+
+    auto result = BashCommandExecutor::execute(
+        command, project_path, timeout_seconds, std::move(chunk_cb));
     trigger_build_callback(command, result.exit_code);
 
     return json::object({
@@ -312,6 +324,12 @@ json BashTool::poll_background(const std::string& process_id, bool clear_output)
     }
 
     auto output = manager.poll_output(process_id, clear_output);
+
+    // Strip terminal-control sequences (cursor movement, screen erase, etc.)
+    // while preserving UTF-8 text and ANSI SGR colour/style codes. This keeps
+    // background process output safe to forward to the API/host TTY.
+    output.stdout = BashCommandExecutor::sanitize_tty_sequences(output.stdout);
+    output.stderr = BashCommandExecutor::sanitize_tty_sequences(output.stderr);
 
     json result = json::object({
         {"status", "success"},

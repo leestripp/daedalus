@@ -606,6 +606,21 @@ target_link_libraries(daedalus_bash_background_tests PRIVATE
 )
 add_test(NAME bash_background_tests COMMAND daedalus_bash_background_tests)
 
+# BashTool output sanitization tests (TTY control-sequence stripping)
+add_executable(daedalus_bash_output_sanitize_tests
+    test_bash_output_sanitize.cpp
+)
+target_include_directories(daedalus_bash_output_sanitize_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/tools
+)
+target_link_libraries(daedalus_bash_output_sanitize_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME bash_output_sanitize_tests COMMAND daedalus_bash_output_sanitize_tests)
+
 # Create SystemInfoTool test
 add_executable(daedalus_system_info_tests
     test_system_info.cpp

@@ -16,14 +16,20 @@ using json = nlohmann::json;
  *
  * The `progress` JSON shape is:
  *   {
- *     "stage":   "starting" | "executing" | "finalizing" | "done",
+ *     "stage":   "starting" | "executing" | "output" | "finalizing" | "done",
  *     "percent": 0..100,           // optional
- *     "message": "human-readable"  // optional
+ *     "message": "human-readable", // optional
+ *     "output_chunk": "..."        // optional, sanitised live stdout/stderr
  *   }
  *
+ * The "output_chunk" stage is used by tools such as execute_bash to stream
+ * live command output to the host while a long-running command is still
+ * executing. The chunk is already sanitised (TTY control sequences stripped,
+ * UTF-8 and ANSI SGR colour/style preserved).
+ *
  * Tools MAY ignore the callback entirely. Tools that do emit progress
- * should call it at most a few times per execution (start, mid, end) —
- * flooding it with hundreds of updates will spam the host's UI.
+ * should avoid flooding the host; output chunks are rate-limited by the
+ * emitting tool (e.g. on line boundaries and size thresholds).
  */
 using ToolProgressFn = std::function<void(const json& progress)>;
 

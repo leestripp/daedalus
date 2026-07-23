@@ -94,10 +94,15 @@ public:
     ///
     /// `progress` JSON shape:
     ///   {
-    ///     "stage":   "starting" | "executing" | "finalizing" | "done",
-    ///     "percent": 0..100,           // optional
-    ///     "message": "human-readable"  // optional
+    ///     "stage":   "starting" | "executing" | "output" | "finalizing" | "done",
+    ///     "percent": 0..100,            // optional
+    ///     "message": "human-readable",  // optional
+    ///     "output_chunk": "..."         // optional, live sanitised output
     ///   }
+    ///
+    /// The "output_chunk" stage is emitted by execute_bash (and potentially
+    /// other long-running tools) to stream live stdout/stderr to the host.
+    /// The chunk has already been sanitised so it is safe to print to a TTY.
     virtual void on_tool_progress(std::string_view name,
                                   std::string_view call_id,
                                   const nlohmann::json& progress) noexcept

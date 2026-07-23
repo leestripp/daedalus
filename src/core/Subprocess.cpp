@@ -46,19 +46,20 @@ void Subprocess::close_pipe(int& fd) {
     }
 }
 
-void Subprocess::read_from_pipe(int pipe_fd, std::string& output, bool& eof) {
-    if (pipe_fd < 0 || eof) return;
+ssize_t Subprocess::read_from_pipe(int pipe_fd, std::string& output, bool& eof) {
+    if (pipe_fd < 0 || eof) return 0;
     
     char buffer[4096];
     ssize_t n = read(pipe_fd, buffer, sizeof(buffer) - 1);
     
     if (n > 0) {
         buffer[n] = '\0';
-        output += buffer;
+        output.append(buffer, static_cast<size_t>(n));
     } else if (n == 0) {
         eof = true;
     }
     // If n < 0, just try again later (EAGAIN is normal for non-blocking)
+    return n;
 }
 
 int64_t Subprocess::spawn_with_pipes(const std::vector<std::string>& args,
@@ -297,7 +298,8 @@ SubprocessResult Subprocess::execute_shell(const std::string& command,
 
 SubprocessResult Subprocess::execute_combined(const std::string& command,
                                               const std::string& cwd,
-                                              int timeout_ms) {
+                                              int timeout_ms,
+                                              OutputChunkFn output_chunk_cb) {
     SubprocessResult result;
     
     // Use shell to execute the command
@@ -368,6 +370,15 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
     int remaining = timeout_ms;
     bool exit_status_captured = false;  // Track if we've already reaped the process
     
+    // Local helper to read a pipe and optionally forward the new bytes.
+    auto read_pipe = [&](int fd, std::string& buffer, bool& eof) {
+        size_t before = buffer.size();
+        ssize_t n = read_from_pipe(fd, buffer, eof);
+        if (output_chunk_cb && n > 0) {
+            output_chunk_cb(std::string_view(buffer.data() + before, static_cast<size_t>(n)));
+        }
+    };
+    
     while (true) {
         // Check if process exited
         pid_t ret = waitpid(pid, nullptr, WNOHANG);
@@ -378,8 +389,8 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
             // never arrives and this loop would hang forever.
             int drain_iters = 0;
             while (!stdout_eof || !stderr_eof) {
-                read_from_pipe(pipe_stdout[0], stdout_output, stdout_eof);
-                read_from_pipe(pipe_stderr[0], stderr_output, stderr_eof);
+                read_pipe(pipe_stdout[0], stdout_output, stdout_eof);
+                read_pipe(pipe_stderr[0], stderr_output, stderr_eof);
                 if (stdout_eof && stderr_eof) break;
                 if (++drain_iters > 100) break;  // ~1s at 10ms/iter
                 usleep(10000);
@@ -388,8 +399,8 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
         }
         
         // Read from pipes
-        read_from_pipe(pipe_stdout[0], stdout_output, stdout_eof);
-        read_from_pipe(pipe_stderr[0], stderr_output, stderr_eof);
+        read_pipe(pipe_stdout[0], stdout_output, stdout_eof);
+        read_pipe(pipe_stderr[0], stderr_output, stderr_eof);
         
         // If both pipes closed, process should have exited
         if (stdout_eof && stderr_eof) {
@@ -422,8 +433,8 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
             
             // Drain remaining output
             while (!stdout_eof && !stderr_eof) {
-                read_from_pipe(pipe_stdout[0], stdout_output, stdout_eof);
-                read_from_pipe(pipe_stderr[0], stderr_output, stderr_eof);
+                read_pipe(pipe_stdout[0], stdout_output, stdout_eof);
+                read_pipe(pipe_stderr[0], stderr_output, stderr_eof);
             }
             
             // Get exit status (process was killed)
@@ -498,6 +509,19 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
     }
     
     return result;
+}
+
+SubprocessResult Subprocess::execute_combined(const std::string& command,
+                                              const std::string& cwd,
+                                              int timeout_ms) {
+    return execute_combined(command, cwd, timeout_ms, nullptr);
+}
+
+SubprocessResult Subprocess::execute(const std::string& command,
+                                    const std::string& cwd,
+                                    int timeout_ms,
+                                    OutputChunkFn output_chunk_cb) {
+    return execute_combined(command, cwd, timeout_ms, std::move(output_chunk_cb));
 }
 
 SubprocessResult Subprocess::execute(const std::string& command,
