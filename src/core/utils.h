@@ -57,39 +57,6 @@ std::string get_image_extension(const std::string& url_or_path);
 std::string download_image_as_base64(const std::string& url);
 
 /**
- * @brief Formats a tool result header with bordered box.
- * @param tool_name The name of the tool being executed.
- * @param info_lines Vector of info lines to display.
- * @param width The width of the bordered box (default 62 characters).
- * @return The formatted string. §Phase 5.1: was `print_tool_header`
- *         writing to std::cout — now returns the string so the
- *         host can route it (typically via sink_->on_log).
- */
-std::string format_tool_header(const std::string& tool_name,
-                                const std::vector<std::string>& info_lines,
-                                int width = 62);
-
-/**
- * @brief Formats a separator line for tool output.
- * @param width The width of the separator (default 62 characters).
- */
-std::string format_tool_separator(int width = 62);
-
-/**
- * @brief Formats a summary of tool execution results.
- * @param result The JSON response from the tool handler.
- * @return The formatted string. §Phase 5.1: was `print_tool_result`.
- */
-std::string format_tool_result(const nlohmann::json& result);
-
-/**
- * @brief Formats a tool result as a string for logging purposes.
- * @param result The JSON response from the tool handler.
- * @return A formatted string suitable for logging.
- */
-std::string format_tool_result_for_log(const nlohmann::json& result);
-
-/**
  * @brief Trim whitespace from both ends of a string.
  * @param str The string to trim.
  * @return The trimmed string.
@@ -104,15 +71,5 @@ std::string trim(const std::string& str);
  * @return Truncated string with "..." appended if truncated.
  */
 std::string truncate_for_display(const std::string& str, size_t max_len);
-
-/**
- * @brief Formats tool header BEFORE execution starts.
- * §Phase 5.1: was `print_tool_header_before` writing to std::cout.
- */
-std::string format_tool_header_before(
-    const std::string& tool_name,
-    const std::string& action_description,
-    const nlohmann::json& args = nlohmann::json::object(),
-    int width = 62);
 
 

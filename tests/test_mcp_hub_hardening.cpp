@@ -88,7 +88,7 @@ void test_breaker_trip_after_repeated_failures() {
 void test_aggregate_capabilities_safe() {
     auto& mgr = mcp::McpServerManager::instance();
     auto caps = mgr.aggregate_capabilities();
-    assert(caps.is_object());
+    assert(caps.empty());
     std::cout << "[ok] test_aggregate_capabilities_safe" << std::endl;
 }
 

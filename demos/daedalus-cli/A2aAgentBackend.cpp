@@ -60,10 +60,6 @@ public:
         base_.on_tool_progress(name, call_id, progress);
     }
 
-    void on_tool_display(std::string_view text) noexcept override {
-        base_.on_tool_display(text);
-    }
-
     void on_state_change(int from, int to) noexcept override {
         base_.on_state_change(from, to);
     }

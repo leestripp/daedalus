@@ -5,9 +5,8 @@
  * Wires every sink event to the console:
  *   - on_assistant_delta → cout (with buffering and final newline)
  *   - on_log            → cerr
- *   - on_tool_display   → cerr (formatted tool blocks, no log prefix)
- *   - on_tool_call      → no-op (display handled by on_tool_display)
- *   - on_tool_result    → no-op (display handled by on_tool_display)
+ *   - on_tool_call      → cerr (compact raw args)
+ *   - on_tool_result    → cerr (compact raw result)
  *   - on_state_change   → cerr (Phase 9.6)
  *   - on_compaction     → cerr (Phase 9.6)
  *   - on_bell           → play_system_bell()
@@ -46,7 +45,8 @@ public:
     // Streaming output — buffer deltas, flush on final newline or buffer limit.
     void on_assistant_delta(std::string_view text) noexcept override;
 
-    // Tool lifecycle — display handled by on_tool_display; these are no-ops.
+    // Tool lifecycle — compact raw JSON on stderr so the CLI stays
+    // readable without the library imposing any box styling.
     void on_tool_call(std::string_view name,
                       const nlohmann::json& args) noexcept override;
     void on_tool_result(std::string_view name,
@@ -54,8 +54,6 @@ public:
     // §Phase C1: streaming tool-call progress (compact stderr marker).
     void on_tool_progress(std::string_view name,
                           const nlohmann::json& progress) noexcept override;
-    // Human-readable tool header/result/separator blocks.
-    void on_tool_display(std::string_view text) noexcept override;
 
     // State / lifecycle — §Phase 9.6 observability.
     void on_state_change(int from, int to) noexcept override;

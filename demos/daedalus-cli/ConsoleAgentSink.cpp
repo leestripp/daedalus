@@ -50,15 +50,16 @@ void ConsoleAgentSink::flush_delta_buffer() {
     }
 }
 
-void ConsoleAgentSink::on_tool_call(std::string_view /*name*/,
-                                    const nlohmann::json& /*args*/) noexcept {
-    // Intentionally empty: formatted tool display is handled by on_tool_display
-    // so the CLI does not emit redundant [TOOL] tags around the block.
+void ConsoleAgentSink::on_tool_call(std::string_view name,
+                                    const nlohmann::json& args) noexcept {
+    // Compact raw output: no box styling imposed by the library.
+    std::cerr << "[TOOL CALL] " << name << " " << args.dump() << "\n";
 }
 
-void ConsoleAgentSink::on_tool_result(std::string_view /*name*/,
-                                     const nlohmann::json& /*result*/) noexcept {
-    // Intentionally empty: formatted tool display is handled by on_tool_display.
+void ConsoleAgentSink::on_tool_result(std::string_view name,
+                                     const nlohmann::json& result) noexcept {
+    // Compact raw output: no box styling imposed by the library.
+    std::cerr << "[TOOL RESULT] " << name << " " << result.dump() << "\n";
 }
 
 /// §Phase C1: streaming tool-call progress. Most useful for slow tools
@@ -76,12 +77,6 @@ void ConsoleAgentSink::on_tool_progress(std::string_view name,
     } else {
         std::cerr << "  ↳ " << name << ": " << stage << "\n";
     }
-}
-
-void ConsoleAgentSink::on_tool_display(std::string_view text) noexcept {
-    // Print the library's formatted tool block directly without a log-level
-    // prefix so the CLI output stays clean.
-    std::cerr << text << std::flush;
 }
 
 void ConsoleAgentSink::on_state_change(int from, int to) noexcept {

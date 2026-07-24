@@ -1655,40 +1655,21 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             
             // Mark as EXECUTING in Messages (ephemeral runtime state)
             messages_->mark_tool_executing(call_id);
-            
-            // OUTPUT: Print tool header BEFORE execution
-            // Handle arguments - can be string (JSON) or object
+
+            // Parse arguments for the structured on_tool_call event.
             json args_for_display = json::object();
-            std::string action_desc;
-            
             if (tool_call["function"].contains("arguments")) {
                 auto& args = tool_call["function"]["arguments"];
                 if (args.is_object()) {
-                    // Arguments is already an object
                     args_for_display = args;
-                    // Extract first string value from args as action description
-                    for (auto& [key, val] : args.items()) {
-                        if (val.is_string() && !val.get<std::string>().empty()) {
-                            action_desc = val.get<std::string>();
-                            if (action_desc.length() > 50) {
-                                action_desc = action_desc.substr(0, 47) + "...";
-                            }
-                            break;
-                        }
-                    }
                 } else if (args.is_string()) {
-                    // Arguments is a JSON string - parse it
                     try {
                         args_for_display = json::parse(args.get<std::string>());
                     } catch (...) {
-                        // Failed to parse, keep empty object
+                        // Leave empty if arguments string is not valid JSON.
                     }
                 }
             }
-            // §Phase 5.1: render the tool header as a string and
-            // route it through the sink instead of std::cout.
-            if (sink_) sink_->on_tool_display(
-                format_tool_header_before(function_name, action_desc, args_for_display));
 
             // §Phase 9.6: notify the host that a tool is about to run.
             // This was missing from the library — AgentSink::on_tool_call
@@ -1769,19 +1750,13 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     }
                 }
 
-                // Always show formatted result so the user sees exit codes,
-                // output excerpts, and error details for both successes and failures.
-                // The separator that follows is also always shown so the visual
-                // block is complete regardless of the outcome.
+                // Log tool failures for operators; the structured result is
+                // already delivered via on_tool_result above.
                 if (status == "error") {
                     const std::string msg = result.value("message",
                                               result.value("error", "unknown error"));
                     LOG_ERROR("Tool " + function_name + " failed: " + msg);
                 }
-                if (sink_) sink_->on_tool_display(format_tool_result(result));
-
-                // OUTPUT: separator after result
-                if (sink_) sink_->on_tool_display(format_tool_separator());
 
             } catch (const std::exception& e) {
                 result = json{{"status", "error"}, {"message", std::string(e.what())}};

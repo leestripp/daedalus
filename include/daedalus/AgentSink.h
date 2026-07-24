@@ -118,14 +118,6 @@ public:
         (void)name; (void)progress;
     }
 
-    /// @brief Human-readable tool display (header, result, separator).
-    /// Routed separately from on_log so hosts can render tool UI without
-    /// a log-level prefix. Default: no-op.
-    virtual void on_tool_display(std::string_view text) noexcept
-    {
-        (void)text;
-    }
-
     // ------------------------------------------------------------------
     // LLM request lifecycle
     // ------------------------------------------------------------------

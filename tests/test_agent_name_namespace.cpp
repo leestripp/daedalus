@@ -29,6 +29,7 @@
 #include <string_view>
 
 #include <daedalus.h>
+#include <daedalus/default_paths.h>
 
 namespace fs = std::filesystem;
 

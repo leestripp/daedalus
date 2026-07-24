@@ -60,16 +60,6 @@ public:
         sse_->broadcast("tool_result", j.dump());
     }
 
-    // §webui-tool-display: human-readable tool header/result/separator
-    // produced by the library. The structured tool_call/tool_result events
-    // already drive the side panel; this text stream is rendered inline in
-    // the transcript so a turn that only executes tools is not empty.
-    void on_tool_display(std::string_view text) noexcept override {
-        if (!sse_) return;
-        json j = { {"text", std::string(text)} };
-        sse_->broadcast("tool_display", j.dump());
-    }
-
     /// §Phase C1: streaming tool-call progress — fires between
     /// tool_call and tool_result. The webui can show a live progress
     /// bar / status text per tool, instead of waiting in silence.
