@@ -162,7 +162,7 @@ in what format, and what it means for your host application.
 | `on_llm_response_started` | none | **LLM response begins** — first token/chunk arrived |
 | `on_llm_request_finished` | none | **LLM request cycle ends** — stop the spinner |
 | `on_tool_call` | `name` + `call_id` + `args` (JSON) | **Structured tool input** — the tool the LLM wants to execute |
-| `on_tool_progress` | `name` + `call_id` + `progress` (JSON) | **Tool progress updates** — `{stage, percent, message}` |
+| `on_tool_progress` | `name` + `call_id` + `progress` (JSON) | **Tool progress updates** — `{stage, percent, message, output_chunk}` |
 | `on_tool_result` | `name` + `call_id` + `result` (JSON) | **Structured tool output** — tool execution result |
 | `on_state_change` | `from` + `to` (int enum values) | **State transitions** — agent lifecycle |
 | `on_log` | `level` (enum) + `message` (string) | **Library diagnostics** — NOT LLM output |
@@ -306,11 +306,27 @@ void on_tool_progress(std::string_view name,
 **Data:**
 ```json
 {
-  "stage": "starting" | "executing" | "finalizing" | "done",
+  "stage": "starting" | "executing" | "output" | "finalizing" | "done",
   "percent": 0-100,           // optional, for progress bars
-  "message": "human-readable"  // optional, e.g., "Compiling..."
+  "message": "human-readable", // optional, e.g., "Compiling..."
+  "output_chunk": "..."        // optional, live sanitised output (stage "output")
 }
 ```
+
+**Live output streaming (`stage: "output"`):** `execute_bash` (and potentially
+other long-running tools) streams stdout/stderr while the command runs. Each
+`output_chunk` has already been sanitised — TTY control sequences stripped,
+UTF-8 and ANSI SGR colour codes preserved — so it is safe to print straight
+to a terminal. Chunks are produced by `SanitizedOutputStream`
+(`src/tools/SanitizedOutputStream.h`), which sanitises incrementally: **the
+concatenation of all `output_chunk` values for a call is byte-identical to
+the sanitised full output**, for any chunk split. A chunk boundary can never
+split an ANSI escape sequence, a multi-byte UTF-8 character, or a CR/LF
+pair, so hosts should simply concatenate/print chunks in order — no
+reassembly logic is needed. The complete (also sanitised) output still
+arrives in `on_tool_result`, so hosts that print chunks live may want to
+elide the `output` field from the final result display to avoid showing it
+twice (the CLI demo's `ConsoleAgentSink` does exactly this).
 
 **Example (execute_bash during build):**
 ```json

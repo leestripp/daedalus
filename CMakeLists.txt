@@ -282,6 +282,7 @@ set(TOOLS_SOURCES
 	src/tools/BashTool.cpp
 	src/tools/BashChainer.cpp
 	src/tools/BashCommandExecutor.cpp
+	src/tools/SanitizedOutputStream.cpp
 	src/tools/BashPathChecker.cpp
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp

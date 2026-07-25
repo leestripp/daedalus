@@ -19,6 +19,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -109,14 +110,18 @@ TEST_CASE("P1+P2: BashTool emits starting+executing progress events") {
     REQUIRE(result.value("status", "") == "success");
     REQUIRE(events.size() >= 2);
 
-    // First event must be "starting" (0%), last event must be "executing".
+    // First event must be "starting" (0%). An "executing" (50%) event must
+    // also be present — live "output" chunk events (§bash output streaming)
+    // are emitted after it, so "executing" is no longer guaranteed last.
     CHECK(events.front().value("stage", "") == "starting");
     CHECK(events.front().value("percent", -1) == 0);
     CHECK(events.front().contains("message"));
     CHECK_FALSE(events.front()["message"].get<std::string>().empty());
 
-    CHECK(events.back().value("stage", "") == "executing");
-    CHECK(events.back().value("percent", -1) == 50);
+    const auto executing = std::find_if(events.begin(), events.end(),
+        [](const json& e) { return e.value("stage", "") == "executing"; });
+    REQUIRE(executing != events.end());
+    CHECK(executing->value("percent", -1) == 50);
 }
 
 // ---------------------------------------------------------------------------

@@ -26,6 +26,21 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     commands while the LLM still receives the complete result at the end.
   - Documented in `BaseTool.h` and `include/daedalus/AgentSink.h`; covered by
     `tests/test_bash_output_sanitize.cpp`.
+  - Streamed chunks are now sanitised **incrementally** by the new reusable
+    `SanitizedOutputStream` class (`src/tools/SanitizedOutputStream.h`), which
+    replaces the per-slice `OutputChunkBuffer`. Parser state (escape
+    sequences, UTF-8 validation, CR/LF normalisation) persists across feeds,
+    so a chunk boundary can never split an ANSI escape sequence, a
+    multi-byte UTF-8 character, or a CR/LF pair — concatenating all emitted
+    chunks is byte-identical to one-shot `sanitize_tty_sequences()` of the
+    whole input for any split pattern. `sanitize_tty_sequences()` is now a
+    one-shot wrapper over the same core, so the two paths cannot diverge.
+    Pinned by split-invariance tests (every two-part split, byte-at-a-time,
+    random pieces) in `tests/test_bash_output_sanitize.cpp`.
+  - The CLI demo's `ConsoleAgentSink` now prints `output_chunk` progress
+    events live (previously it dropped the payload and showed only a stage
+    marker), and elides the duplicated `output` field from the final
+    `[TOOL RESULT]` dump when the output already streamed.
 
 - **LLM lifecycle callbacks** (`AgentSink`):
   - `on_llm_wait_started()`, `on_llm_response_started()`, and

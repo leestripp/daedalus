@@ -520,6 +520,15 @@ Result:
 }
 ```
 
+**Live output streaming:** while the command runs, sanitised stdout/stderr
+chunks are pushed to `AgentSink::on_tool_progress()` as
+`{"stage":"output","output_chunk":"..."}` events, so hosts can display
+output in real time instead of waiting for the result. The chunks are
+sanitised incrementally (`SanitizedOutputStream`), so concatenating them in
+order always reproduces the exact sanitised `output` field — a chunk
+boundary can never corrupt an escape sequence, UTF-8 character, or CR/LF
+pair. See `docs/embedding.md` § `on_tool_progress` for the host contract.
+
 ### Background mode (`action=start` or `background=true`)
 
 ```json

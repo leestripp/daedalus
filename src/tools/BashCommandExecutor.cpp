@@ -1,7 +1,7 @@
 #include "tools/BashCommandExecutor.h"
+#include "tools/SanitizedOutputStream.h"
 #include "core/Subprocess.h"
 #include "core/ThreadPool.h"
-#include "core/Utf8Utils.h"
 
 #include <thread>
 #include <atomic>
@@ -72,80 +72,6 @@ private:
     std::future<void> spinner_future;
 };
 
-// Buffers raw output chunks from a subprocess and forwards them to a host
-// callback in a rate-limited, line-friendly way. Chunks are sanitised
-// (TTY control sequences stripped) before forwarding so the host TTY is
-// never corrupted by streaming display updates.
-class OutputChunkBuffer {
-public:
-    using ChunkCallback = std::function<void(std::string_view)>;
-
-    explicit OutputChunkBuffer(ChunkCallback cb,
-                               size_t max_line_buffer = 4096,
-                               int min_interval_ms = 100)
-        : callback_(std::move(cb)),
-          max_line_buffer_(max_line_buffer),
-          min_interval_ms_(min_interval_ms),
-          last_emit_(std::chrono::steady_clock::now()) {}
-
-    void append(std::string_view chunk) {
-        if (!callback_) return;
-        buffer_.append(chunk);
-        try_emit(false);
-    }
-
-    void flush() {
-        if (!callback_) return;
-        try_emit(true);
-    }
-
-private:
-    void try_emit(bool force) {
-        if (buffer_.empty()) return;
-
-        auto now = std::chrono::steady_clock::now();
-        auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            now - last_emit_).count();
-
-        // Prefer to emit on line boundaries so the streaming display is
-        // coherent and we don't split UTF-8 / ANSI sequences.
-        size_t emit_end = buffer_.find_last_of('\n');
-        bool has_newline = emit_end != std::string::npos;
-        if (has_newline) {
-            emit_end += 1; // include the newline
-        }
-
-        bool threshold_reached = buffer_.size() >= max_line_buffer_;
-        bool time_elapsed = elapsed_ms >= min_interval_ms_;
-
-        if (!force && !has_newline && !threshold_reached && !time_elapsed) {
-            return;
-        }
-
-        // If we have no newline but are emitting for threshold/time reasons,
-        // emit the whole current buffer. This is rare (very long single line).
-        if (!has_newline) {
-            emit_end = buffer_.size();
-        }
-
-        if (emit_end == 0) return;
-
-        std::string chunk = BashCommandExecutor::sanitize_tty_sequences(
-            buffer_.substr(0, emit_end));
-        if (!chunk.empty()) {
-            callback_(chunk);
-        }
-        buffer_.erase(0, emit_end);
-        last_emit_ = now;
-    }
-
-    ChunkCallback callback_;
-    std::string buffer_;
-    size_t max_line_buffer_;
-    int min_interval_ms_;
-    std::chrono::steady_clock::time_point last_emit_;
-};
-
 // ========== Public Interface ==========
 
 BashCommandExecutor::Result BashCommandExecutor::execute(const std::string& command,
@@ -197,9 +123,9 @@ BashCommandExecutor::Result BashCommandExecutor::execute_internal(
     CommandSpinner spinner(display_command);
 
     // Capture whether a chunk callback was supplied before moving it into
-    // the buffering wrapper.
+    // the sanitising stream wrapper.
     const bool has_chunk_cb = static_cast<bool>(output_chunk_cb);
-    OutputChunkBuffer chunk_buffer(std::move(output_chunk_cb));
+    SanitizedOutputStream chunk_buffer(std::move(output_chunk_cb));
 
     // Use Subprocess for crash isolation with specified timeout. If a chunk
     // callback is provided, forward each raw output chunk through the buffer
@@ -253,184 +179,10 @@ std::string BashCommandExecutor::escape_shell_arg(const std::string& input) {
 }
 
 std::string BashCommandExecutor::sanitize_tty_sequences(const std::string& output) {
-    if (output.empty()) {
-        return output;
-    }
-
-    enum class State {
-        Normal,
-        Escape,          // saw ESC
-        EscIntermediate, // ESC + one or more intermediate bytes (0x20-0x2F)
-        CSI,             // ESC [ collecting parameter bytes
-        CSIIntermediate, // ESC [ params + intermediate bytes
-        OSC,             // ESC ] collecting until BEL or ST
-        OSC_ST,          // saw ESC inside OSC, expect '\' to terminate
-        String,          // ESC P/^/_/X collecting until ST
-        String_ST        // saw ESC inside String, expect '\' to terminate
-    };
-
-    constexpr unsigned char ESC = 0x1B;
-    constexpr unsigned char BEL = 0x07;
-
-    std::string result;
-    result.reserve(output.size());
-
-    State state = State::Normal;
-    std::string csi_buffer;      // bytes collected for a CSI sequence
-    bool csi_has_intermediate = false;
-
-    for (size_t i = 0; i < output.size(); ++i) {
-        const unsigned char c = static_cast<unsigned char>(output[i]);
-
-        switch (state) {
-        case State::Normal:
-            if (c == ESC) {
-                state = State::Escape;
-            } else if (c == '\r') {
-                // Normalise CR and CR/LF to a single LF so output cannot
-                // overwrite previous lines in the host terminal.
-                if (i + 1 < output.size() && static_cast<unsigned char>(output[i + 1]) == '\n') {
-                    ++i; // skip the following LF
-                }
-                result.push_back('\n');
-            } else if (c == '\t' || c == '\n') {
-                result.push_back(static_cast<char>(c));
-            } else if (c < 0x20 || c == 0x7F) {
-                // Drop other C0 controls (bell, backspace, vertical tab,
-                // form feed) and DEL.
-            } else if ((c & 0x80) != 0) {
-                // Start of a multi-byte UTF-8 sequence. Copy the whole
-                // code point if it is valid and complete.
-                const size_t char_len = utf8_char_length_from_first_byte(c);
-                if (char_len > 1 && i + char_len <= output.size() &&
-                    is_valid_utf8_char(output.data(), i, output.size())) {
-                    result.append(output, i, char_len);
-                    i += char_len - 1;
-                }
-                // Invalid high byte: drop it.
-            } else {
-                // Printable ASCII.
-                result.push_back(static_cast<char>(c));
-            }
-            break;
-
-        case State::Escape:
-            if (c == '[') {
-                state = State::CSI;
-                csi_buffer.clear();
-                csi_buffer.push_back(static_cast<char>(ESC));
-                csi_buffer.push_back('[');
-                csi_has_intermediate = false;
-            } else if (c == ']') {
-                state = State::OSC;
-            } else if (c == 'P' || c == '^' || c == '_' || c == 'X') {
-                state = State::String;
-            } else if (c >= 0x30 && c <= 0x7E) {
-                // ESC + final byte (e.g. ESC c, ESC 7, ESC 8). Drop.
-                state = State::Normal;
-            } else if (c >= 0x20 && c <= 0x2F) {
-                // ESC + intermediate byte; wait for final byte.
-                state = State::EscIntermediate;
-            } else {
-                // Unrecognised ESC sequence: drop ESC and this byte.
-                state = State::Normal;
-            }
-            break;
-
-        case State::EscIntermediate:
-            if (c >= 0x30 && c <= 0x7E) {
-                // Final byte reached; drop the whole ESC sequence.
-                state = State::Normal;
-            } else if (c < 0x20 || c > 0x2F) {
-                // Invalid byte in the middle of the sequence; recover.
-                state = State::Normal;
-            }
-            // Otherwise remain in EscIntermediate waiting for the final byte.
-            break;
-
-        case State::CSI:
-            csi_buffer.push_back(static_cast<char>(c));
-            if (c >= 0x30 && c <= 0x3F) {
-                // Parameter byte: remain in CSI.
-            } else if (c >= 0x20 && c <= 0x2F) {
-                csi_has_intermediate = true;
-                state = State::CSIIntermediate;
-            } else if (c >= 0x40 && c <= 0x7E) {
-                // Final byte. Keep only Select Graphic Rendition (SGR),
-                // which uses final byte 'm' with no intermediate bytes.
-                if (c == 'm' && !csi_has_intermediate) {
-                    result.append(csi_buffer);
-                }
-                state = State::Normal;
-                csi_buffer.clear();
-                csi_has_intermediate = false;
-            } else {
-                // Malformed CSI; recover to normal state.
-                state = State::Normal;
-                csi_buffer.clear();
-                csi_has_intermediate = false;
-            }
-            break;
-
-        case State::CSIIntermediate:
-            csi_buffer.push_back(static_cast<char>(c));
-            if (c >= 0x20 && c <= 0x2F) {
-                // Another intermediate byte.
-            } else if (c >= 0x40 && c <= 0x7E) {
-                // Final byte reached. Not SGR (SGR has no intermediates),
-                // so drop the sequence.
-                state = State::Normal;
-                csi_buffer.clear();
-                csi_has_intermediate = false;
-            } else {
-                // Malformed; recover.
-                state = State::Normal;
-                csi_buffer.clear();
-                csi_has_intermediate = false;
-            }
-            break;
-
-        case State::OSC:
-            if (c == ESC) {
-                state = State::OSC_ST;
-            } else if (c == BEL) {
-                // BEL-terminated OSC (xterm legacy). Drop.
-                state = State::Normal;
-            }
-            // Otherwise remain in OSC, dropping bytes.
-            break;
-
-        case State::OSC_ST:
-            if (c == '\\') {
-                // String terminator (ESC \). Drop.
-                state = State::Normal;
-            } else {
-                // Not a terminator; continue OSC.
-                state = State::OSC;
-            }
-            break;
-
-        case State::String:
-            if (c == ESC) {
-                state = State::String_ST;
-            }
-            // Otherwise remain in String, dropping bytes.
-            break;
-
-        case State::String_ST:
-            if (c == '\\') {
-                // String terminator. Drop.
-                state = State::Normal;
-            } else {
-                state = State::String;
-            }
-            break;
-        }
-    }
-
-    // If the output ends in the middle of a control sequence, the trailing
-    // partial bytes are implicitly dropped by returning `result`.
-    return result;
+    // One-shot wrapper over the incremental sanitiser. Keeping this as
+    // append()+flush() over SanitizedOutputStream guarantees one-shot and
+    // streamed sanitisation can never diverge.
+    return SanitizedOutputStream::sanitize(output);
 }
 
 std::string BashCommandExecutor::sanitize_output(const std::string& output) {

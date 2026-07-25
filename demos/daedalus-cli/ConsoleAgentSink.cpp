@@ -59,16 +59,29 @@ void ConsoleAgentSink::on_tool_call(std::string_view name,
 void ConsoleAgentSink::on_tool_result(std::string_view name,
                                      const nlohmann::json& result) noexcept {
     // Compact raw output: no box styling imposed by the library.
-    std::cerr << "[TOOL RESULT] " << name << " " << result.dump() << "\n";
+    // If the output already streamed live via output_chunk progress events,
+    // elide it from the dump so it is not printed twice.
+    nlohmann::json display = result;
+    if (streamed_tool_output_ && display.contains("output")) {
+        display["output"] = "<streamed live above>";
+    }
+    streamed_tool_output_ = false;
+    std::cerr << "[TOOL RESULT] " << name << " " << display.dump() << "\n";
 }
 
 /// §Phase C1: streaming tool-call progress. Most useful for slow tools
-/// like `execute_bash` running a long build. We just print a compact
-/// one-liner so the user knows the tool is alive between [TOOL] and
-/// [/TOOL]. The webui SSE stream (which renders it per-event) gets the
-/// full JSON; the CLI only needs this compact marker.
+/// like `execute_bash` running a long build. Live output chunks are printed
+/// verbatim; other stages get a compact one-liner so the user knows the
+/// tool is alive between [TOOL] and [/TOOL]. The webui SSE stream (which
+/// renders it per-event) gets the full JSON.
 void ConsoleAgentSink::on_tool_progress(std::string_view name,
                                        const nlohmann::json& progress) noexcept {
+    if (auto it = progress.find("output_chunk");
+        it != progress.end() && it->is_string()) {
+        std::cout << it->get_ref<const std::string&>() << std::flush;
+        streamed_tool_output_ = true;
+        return;
+    }
     const std::string stage = progress.value("stage", "");
     const int percent = progress.value("percent", -1);
     if (percent >= 0) {

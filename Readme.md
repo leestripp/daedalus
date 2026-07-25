@@ -624,7 +624,12 @@ Underlying infrastructure:
   sanitised stdout/stderr chunks to `AgentSink::on_tool_progress()` as
   `{"stage":"output","output_chunk":"..."}` events. TTY control sequences
   are stripped so hosts can safely print the chunks; the full result is still
-  returned to the LLM at the end.
+  returned to the LLM at the end. Chunks are produced incrementally by
+  `SanitizedOutputStream` (`src/tools/SanitizedOutputStream.h`), so their
+  concatenation is byte-identical to the final sanitised output — a chunk
+  boundary can never split an escape sequence, UTF-8 character, or CR/LF
+  pair. The CLI demo prints chunks live and elides the duplicated `output`
+  field from the final tool-result dump.
 - **Phased Todo List**: Per-project, per-agent task tracking with `status`
   (`pending`/`in_progress`/`done`/`blocked`) and `group` phases such as
   `Understand`, `Plan`, `Implement`, `Verify`. Persists across restarts in
@@ -694,7 +699,10 @@ registered example tools under `demos/example-tools/`.
   process isolation. Output is sanitised before being returned (TTY control
   sequences stripped, UTF-8 and ANSI SGR colour/style preserved). Long-running
   commands stream sanitised output chunks to `AgentSink::on_tool_progress()`
-  while they execute. This is the **only** core tool that calls
+  while they execute; chunks are sanitised incrementally
+  (`SanitizedOutputStream`), so concatenating them reproduces the exact final
+  output — chunk boundaries can never corrupt a sequence. This is the
+  **only** core tool that calls
   `AgentSink::request_command_approval()` (unless `auto_approve` is set).
 
 ### User Interaction

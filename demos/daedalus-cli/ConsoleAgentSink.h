@@ -51,7 +51,8 @@ public:
                       const nlohmann::json& args) noexcept override;
     void on_tool_result(std::string_view name,
                         const nlohmann::json& result) noexcept override;
-    // §Phase C1: streaming tool-call progress (compact stderr marker).
+    // §Phase C1: streaming tool-call progress. output_chunk events are
+    // printed live to stdout; other stages get a compact stderr marker.
     void on_tool_progress(std::string_view name,
                           const nlohmann::json& progress) noexcept override;
 
@@ -83,6 +84,11 @@ private:
 
     std::string delta_buffer_;
     static constexpr std::size_t DELTA_FLUSH_THRESHOLD = 2048;
+
+    // §Phase C1: set when output_chunk progress events streamed a tool's
+    // output live, so on_tool_result can elide the duplicated "output"
+    // field from its dump. Reset on every tool result.
+    bool streamed_tool_output_ = false;
 
     // §Phase 9.10: spinner shown on stderr between user submit and the
     // first streamed assistant_delta. See demos/common/ThinkingSpinner.h

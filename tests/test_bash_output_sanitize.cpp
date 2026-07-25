@@ -11,8 +11,11 @@
 #include <doctest/doctest.h>
 
 #include "tools/BashCommandExecutor.h"
+#include "tools/SanitizedOutputStream.h"
 
+#include <random>
 #include <string>
+#include <vector>
 
 // ============================================================================
 // Helpers
@@ -297,4 +300,132 @@ TEST_CASE("No chunks emitted for command with no output") {
     CHECK(result.success);
     CHECK(result.output.empty());
     CHECK(chunks.empty());
+}
+
+// ============================================================================
+// Tests for SanitizedOutputStream — split-invariance / reassembly guarantee
+//
+// The core streaming guarantee: for ANY input and ANY append() split
+// pattern, concatenating all emitted chunks equals one-shot sanitisation
+// of the whole input. A chunk boundary must never split an ANSI escape
+// sequence, a multi-byte UTF-8 character, or a CR/LF pair.
+// ============================================================================
+
+// Feed `input` through a stream in `piece_size` pieces and return the
+// concatenation of all emitted chunks.
+static std::string streamed_in_pieces(const std::string& input, size_t piece_size) {
+    std::string joined;
+    SanitizedOutputStream stream(
+        [&joined](std::string_view chunk) { joined.append(chunk); });
+    for (size_t pos = 0; pos < input.size(); pos += piece_size) {
+        stream.append(input.substr(pos, piece_size));
+    }
+    stream.flush();
+    return joined;
+}
+
+TEST_CASE("Every two-part split matches one-shot sanitisation") {
+    // Nasty input: SGR, cursor movement, OSC, multi-byte UTF-8 (2/3/4-byte),
+    // CR/LF pairs, a lone CR, and control characters.
+    const std::string input =
+        "start\n" +
+        esc("[31m") + "red" + esc("[0m") + "\n" +
+        esc("[2J") + esc("[10D") +
+        esc("]8;;http://example.com") + "\x07" + "link\n" +
+        "h\xC3\xA9llo " +              // é (2-byte)
+        "\xE4\xBD\xA0\xE5\xA5\xBD " +  // 你好 (3-byte)
+        "\xF0\x9F\x9A\x80 " +          // 🚀 (4-byte)
+        "win\r\nline\rlone\n" +
+        "bell\x07 end\n";
+
+    const std::string expected =
+        BashCommandExecutor::sanitize_tty_sequences(input);
+
+    for (size_t cut = 0; cut <= input.size(); ++cut) {
+        std::string joined;
+        SanitizedOutputStream stream(
+            [&joined](std::string_view chunk) { joined.append(chunk); });
+        stream.append(input.substr(0, cut));
+        stream.append(input.substr(cut));
+        stream.flush();
+        CHECK(joined == expected);
+    }
+}
+
+TEST_CASE("Split-invariance across a battery of inputs and piece sizes") {
+    const std::string long_line =
+        std::string(3000, 'a') + esc("[32m") + std::string(3000, 'b') +
+        esc("[0m");  // newline-less, crosses the 4096 emission threshold
+
+    const std::vector<std::string> inputs = {
+        "plain text\nwith lines\n",
+        esc("[31m") + "colour" + esc("[0m") + esc("[2J") + "cleared\n",
+        "h\xC3\xA9llo \xE4\xBD\xA0\xE5\xA5\xBD \xF0\x9F\x9A\x80\n",
+        "win\r\nline\rlone\rend\r",
+        "truncated escape at end" + esc("[31"),
+        "invalid \x80\x80 utf-\xff\xFE text\n",
+        esc("]0;window title") + "\x07" + "after osc\n",
+        esc("P1;2|payload") + esc("\\") + "after dcs\n",
+        long_line,
+    };
+
+    for (const auto& input : inputs) {
+        const std::string expected =
+            BashCommandExecutor::sanitize_tty_sequences(input);
+
+        SUBCASE("byte-at-a-time") {
+            CHECK(streamed_in_pieces(input, 1) == expected);
+        }
+        SUBCASE("small fixed pieces") {
+            CHECK(streamed_in_pieces(input, 3) == expected);
+            CHECK(streamed_in_pieces(input, 7) == expected);
+        }
+        SUBCASE("random pieces (fixed seed)") {
+            std::mt19937 rng(42);
+            std::uniform_int_distribution<size_t> dist(1, 11);
+            std::string joined;
+            SanitizedOutputStream stream(
+                [&joined](std::string_view chunk) { joined.append(chunk); });
+            size_t pos = 0;
+            while (pos < input.size()) {
+                const size_t n = std::min(dist(rng), input.size() - pos);
+                stream.append(input.substr(pos, n));
+                pos += n;
+            }
+            stream.flush();
+            CHECK(joined == expected);
+        }
+    }
+}
+
+TEST_CASE("Streamed chunks reassemble exactly for long newline-less output") {
+    // Regression: the old per-slice sanitiser corrupted output when the
+    // 4096-byte / 100 ms fallback cut mid-UTF-8 or mid-escape. A single
+    // >4096-byte line forces that path repeatedly.
+    std::vector<std::string> chunks;
+    auto chunk_cb = [&chunks](std::string_view chunk) {
+        chunks.emplace_back(chunk);
+    };
+
+    std::string command =
+        std::string("printf '\\033[31m'; ") +
+        "head -c 5000 </dev/zero | tr '\\000' 'a'; " +
+        "printf '\\033[0m\\n'";
+
+    auto result = BashCommandExecutor::execute(command, ".", 10, chunk_cb);
+
+    const std::string expected =
+        esc("[31m") + std::string(5000, 'a') + esc("[0m") + "\n";
+    CHECK(result.success);
+    CHECK(result.output == expected);
+
+    // The concatenation of all emitted chunks must equal the full output.
+    // (Chunk count is timing-dependent — the subprocess may deliver the
+    // whole line in one read; the deterministic threshold-path coverage
+    // is the `long_line` case in the split-invariance battery above.)
+    std::string joined;
+    for (const auto& c : chunks) {
+        joined += c;
+    }
+    CHECK(joined == result.output);
 }

@@ -69,6 +69,10 @@ public:
      * Strip terminal-control sequences (cursor movement, screen erase,
      * alternate buffer, OSC, DCS, etc.) while preserving UTF-8 text and
      * ANSI SGR colour/style codes.
+     *
+     * One-shot wrapper over SanitizedOutputStream — identical to the
+     * concatenation of all chunks emitted when streaming the same input
+     * through SanitizedOutputStream::append()/flush().
      */
     static std::string sanitize_tty_sequences(const std::string& output);
 
