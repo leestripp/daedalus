@@ -282,9 +282,14 @@ set of state-transition rules in every prompt:
 ```
 # State Machine
 
-You drive a state machine. The library fires `state_change` SSE events
-on every transition; the host UI uses them to render the stage chips
-(Understanding → Planning → Acting → Verifying).
+You drive a state machine. On every transition the library notifies
+the host through its `on_state_change` callback; the host UI uses
+those events to render the current stage.
+
+**How to change state:** call the `set_status` tool with
+`{"state": "<Name>"}` whenever you enter a new phase. This is the
+ONLY mechanism — tool calls do not carry an implicit state, and the
+host cannot see your phase unless you call `set_status`.
 
 States:
 | State | Meaning |
@@ -293,35 +298,46 @@ States:
 | Understanding | Reading the request, parsing input, gathering context. |
 | Planning     | Designing the approach, choosing which tools to call. |
 | Acting       | Running tools (file edits, bash, MCP, etc.). |
-| Verifying    | Compiling, testing, validating the result. |
-| Compressing  | Context compaction in flight (rare, do not initiate). |
+| Verifying    | Compiling, testing, inspecting output — a decision gate. |
+| Documenting  | Updating README, CHANGELOG, comments, docs after verification. |
 | Done         | Turn complete — emit your final assistant message and stop. |
 | Cancelled    | Host cancelled the turn; stop work and ack. |
 | Error        | Unrecoverable error; report to host and stop. |
 
+Runtime-owned states (informational — the library sets these itself;
+never pass them to `set_status`):
+| State | Meaning |
+|-------|---------|
+| AwaitingApproval | A bash command is waiting for host approval. |
+| Compressing  | Context compaction in flight. |
+
 Rules:
 1. You are the only one who knows when the work is truly done. Do
-   not stay in `Acting` after the last tool result — switch to
-   `Verifying`, run the build / tests if applicable, then `Done`.
-2. If verification fails, switch back to `Understanding` (or
-   `Planning`) before re-planning the fix — never loop silently
-   inside `Acting`.
-3. Each tool call you emit carries a `state` field. Set it to the
-   state you are in WHEN you make the call. The library uses it to
-   fire the corresponding `state_change` event to the host.
-4. Never stay in `Acting` forever. If you have no more tools to
-   call, transition to `Verifying` (and then `Done`) or back to
-   `Planning` if more work is needed.
-5. Always end with `Done`. Every turn MUST end with a `Done`
-   transition; otherwise the host UI will leave the chips stuck.
+   not stay in `Acting` after the last tool result — call
+   `set_status` to switch to `Verifying` and actually inspect the
+   results.
+2. If verification fails, loop back via `set_status` to
+   `Understanding` (or `Planning`) before re-planning the fix —
+   never go to `Done`.
+3. If verification passes but docs need updating, switch to
+   `Documenting`. Only go to `Done` after docs are complete.
+4. Call `set_status` on every phase change. The host UI shows stale
+   stage chips until you do.
+5. Never stay in `Acting` forever. If you have no more tools to
+   call, transition to `Verifying` (and then `Done` or
+   `Documenting`) or back to `Planning` if more work is needed.
+6. Always end with `Done`. Call `set_status` with `Done`
+   immediately before your final assistant message; otherwise the
+   host UI will leave the stage chips stuck.
 ```
 
 **Why the library owns this.** The host UI (webui demo, plus any host
 that consumes `AgentSink::on_state_change`) renders state chips from
-`state_change` SSE events. If the agent isn't taught to set the
-state on every tool call, the UI breaks. Embedding the rules in the
-prompt (rather than expecting each host to remember them in their
-own prose) guarantees consistent behaviour across all hosts.
+the transition events. If the agent isn't taught to call `set_status`
+on every phase change, the UI stalls on the turn's opening state
+(`Understanding`). Embedding the rules in the prompt (rather than
+expecting each host to remember them in their own prose) guarantees
+consistent behaviour across all hosts.
 
 **If you want to augment it.** You may add complementary *workflow
 prose* in your `system_prompt` (e.g. "always plan in detail before

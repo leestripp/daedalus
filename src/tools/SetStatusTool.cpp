@@ -70,7 +70,9 @@ json SetStatusTool::get_definition() const {
                         {"type", "string"},
                         {"description",
                          "The state to transition to. One of: Idle, Understanding, Planning, "
-                         "Acting, Verifying, Documenting, Compressing, Done, Cancelled, Error. "
+                         "Acting, Verifying, Documenting, Done, Cancelled, Error. "
+                         "(AwaitingApproval and Compressing are runtime-managed — the library "
+                         "sets them itself.) "
                          "Case-insensitive; normalised to title-case in the response."}
                     })}
                 })},

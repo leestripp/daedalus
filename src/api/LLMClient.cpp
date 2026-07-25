@@ -945,6 +945,37 @@ std::string LLMClient::get_state_name(AgentState state) const {
     }
 }
 
+// §State Machine: handle a `set_status` tool result carrying a state
+// transition. Extracted from run_agent_cycle() so it is unit-testable.
+bool LLMClient::handle_set_state_result(const json& result) {
+    if (!result.is_object()
+        || result.value("status", "") != "set_state"
+        || !result.contains("state")
+        || !result["state"].is_string()) {
+        return false;
+    }
+    bool ok = false;
+    auto new_state = daedalus::agent_state_from(
+        result["state"].get<std::string>(), &ok);
+    if (!ok) return false;
+
+    if (state_change_cb_) {
+        // Normal path: the owning AgentImpl updates its atomic public
+        // state and fires AgentSink::on_state_change with the correct
+        // prev — Agent::state() stays live during the turn.
+        state_change_cb_(new_state);
+    } else if (sink_) {
+        // Fallback for direct LLMClient users (no AgentImpl above us):
+        // preserve the old direct-sink behaviour with locally tracked prev.
+        int current = static_cast<int>(new_state);
+        sink_->on_state_change(fallback_prev_public_state_, current);
+        fallback_prev_public_state_ = current;
+    }
+    LOG_INFO("State machine: set_status → "
+             + std::string(daedalus::to_string(new_state)));
+    return true;
+}
+
 // Helper method to extract error message from raw API response
 std::string LLMClient::extract_error_message(const std::string& response) const {
     // Try to find JSON error object in the response
@@ -1728,27 +1759,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 if (sink_) sink_->on_tool_result(function_name, call_id, result);
 
                 // §State Machine: when the agent explicitly drives its
-                // own state via the `set_status` tool, fire
-                // on_state_change so the host UI / SSE stream see the
-                // transition immediately (e.g. webui chip row updates).
-                // Only fires when the host wired a sink — old behaviour
-                // is preserved when no sink is attached.
-                if (status == "set_state" && sink_ && result.contains("state")
-                    && result["state"].is_string()) {
-                    bool ok = false;
-                    auto new_state = daedalus::agent_state_from(
-                        result["state"].get<std::string>(), &ok);
-                    if (ok) {
-                        // §B23 fix: track previous and current public state so we
-                        // can emit the correct on_state_change(prev, current) transition.
-                        auto prev = previous_public_state_;
-                        current_public_state_ = static_cast<int>(new_state);
-                        previous_public_state_ = current_public_state_;
-                        sink_->on_state_change(prev, current_public_state_);
-                        LOG_INFO("State machine: set_status → "
-                                 + std::string(daedalus::to_string(new_state)));
-                    }
-                }
+                // own state via the `set_status` tool, dispatch the
+                // transition so the host UI sees it immediately (e.g.
+                // webui chip row updates). Routed through the owner's
+                // callback when wired (normal Agent path); falls back to
+                // firing the sink directly for direct LLMClient users.
+                handle_set_state_result(result);
 
                 // Log tool failures for operators; the structured result is
                 // already delivered via on_tool_result above.

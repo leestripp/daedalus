@@ -3,6 +3,7 @@
 #include <string>
 #include <nlohmann/json.hpp>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <atomic>
 #include <cstdint>
@@ -22,6 +23,7 @@ class SkillManager;                        // §Phase 16: per-agent skill manage
 
 #include "daedalus/AgentSink.h"
 #include "daedalus/settings.h"   // §v0.5.0: SettingsStore* replaces SettingsManager*
+#include "daedalus/types/AgentState.h"  // §State Machine: public state for the change callback
 
 using json = nlohmann::json;
 
@@ -72,6 +74,10 @@ enum class AgentState : std::uint8_t {
     CANCELLED    // Interrupted by user (ESC key)
 };
 
+// §State Machine: callback used to report LLM-driven public-state
+// transitions (set_status tool) up to the owner (AgentImpl).
+using StateChangeCallback = std::function<void(daedalus::AgentState)>;
+
 // §Phase 5.1: ESCKeyDetector removed. Library has no terminal
 // coupling — no termios, no stdin polling. Cancellation flows
 // through `Agent::cancel()` → `LLMClient::cancel()` → a
@@ -99,10 +105,14 @@ private:
     // §B32: suppresses duplicate "no usage" warnings per turn.
     bool warned_no_usage_this_turn_ = false;
 
-    // §B23: tracks the previous public AgentState so set_status tool can emit
-    // on_state_change(prev, current) instead of (-1, current).
-    int previous_public_state_ = 0;  // daedalus::AgentState int value
-    int current_public_state_ = 0;   // daedalus::AgentState int value
+    // §State Machine: LLM-driven transitions (via the `set_status` tool)
+    // are reported through this callback so the owning AgentImpl can keep
+    // its atomic public state as the single source of truth (Agent::state()
+    // + AgentSink::on_state_change with the correct prev). When unset, the
+    // fallback fires sink_->on_state_change directly with locally tracked
+    // prev — preserving behaviour for direct LLMClient users.
+    StateChangeCallback state_change_cb_;
+    int fallback_prev_public_state_ = 0;  // daedalus::AgentState int value
 
     // §Phase 5.1: cancellation flows through this stop_source.
     // Agent::cancel() → LLMClient::cancel() → cancel_source_.request_stop().
@@ -190,6 +200,21 @@ public:
         sink_ = sink;
         ToolHandler::set_sink(std::move(sink));
     }
+
+    /// @brief Wire the LLM-driven public-state transition report. When set,
+    ///        `set_status` tool results are forwarded here instead of firing
+    ///        the sink directly, so the owner (AgentImpl) stays the single
+    ///        source of truth for the public AgentState.
+    void set_state_change_callback(StateChangeCallback cb) {
+        state_change_cb_ = std::move(cb);
+    }
+
+    /// @brief Handle a tool result that may carry a `set_status` state
+    ///        transition ({"status":"set_state","state":"<Name>"}).
+    ///        Dispatches via state_change_cb_ (or the sink fallback) and
+    ///        returns true when a valid transition was dispatched.
+    ///        Extracted from run_agent_cycle() so it is unit-testable.
+    bool handle_set_state_result(const json& result);
 
     /// @brief Update the running AppConfig (e.g., after a model switch).
     ///        Also refreshes the Messages compression config so context-size

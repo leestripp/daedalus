@@ -187,6 +187,30 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **State machine stuck in `Understanding`**: LLM-driven state
+  transitions (via the `set_status` tool) were handled inside
+  `LLMClient::run_agent_cycle`, which updated only LLMClient-private
+  bookkeeping and fired `AgentSink::on_state_change` directly —
+  `AgentImpl::state_` never saw them. As a result `Agent::state()`
+  returned `Understanding` for the entire turn, the first transition
+  event carried a bogus `Idle` prev, and the turn always ended with
+  `Understanding → Done` regardless of intermediate states.
+  `LLMClient` now exposes `set_state_change_callback()` +
+  `handle_set_state_result()`; `AgentImpl` wires the callback to its
+  own `set_state()`, making it the single source of truth for the
+  public state (live `Agent::state()`, correct `from`/`to` on every
+  `on_state_change`). Without a callback the old direct-sink
+  behaviour is preserved for direct `LLMClient` users. Covered by
+  `tests/test_state_change_routing.cpp`.
+- **`# State Machine` system-prompt section mis-described the
+  mechanism**: it claimed "each tool call carries a `state` field"
+  (no code ever read such a field) and said the library fires
+  "`state_change` SSE events" (SSE is a webui-host concept; the
+  library fires the `on_state_change` sink callback). The section now
+  instructs the agent to call the `set_status` tool on every phase
+  change, documents the full state table including `AwaitingApproval`,
+  and marks `AwaitingApproval`/`Compressing` as runtime-owned.
+  `SetStatusTool`'s schema description was aligned accordingly.
 - **Crash-safe message persistence**: every crash scenario
   (SIGSEGV, SIGABRT, SIGFPE, SIGILL, `kill -9`, power loss, OOM kill)
   now recovers up to the last successfully-`fsync()`'d save().

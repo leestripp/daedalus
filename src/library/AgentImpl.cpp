@@ -385,6 +385,12 @@ void AgentImpl::initialize()
         if (sink_) {
             body_->client->set_sink(sink_);
         }
+        // §State Machine: route LLM-driven transitions (set_status tool)
+        // through AgentImpl::set_state so state_ stays the single source
+        // of truth — Agent::state() is live mid-turn and on_state_change
+        // always carries the correct prev.
+        body_->client->set_state_change_callback(
+            [this](daedalus::AgentState s) { set_state(s); });
         body_->client->initialize();
     }
 

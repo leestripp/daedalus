@@ -473,7 +473,7 @@ daedalus::to_string(static_cast<daedalus::AgentState>(to))
 on_state_change(0, 1)   // Idle -> Understanding
 on_state_change(1, 2)   // Understanding -> Planning
 on_state_change(2, 3)   // Planning -> Acting
-on_state_change(3, 7)   // Acting -> Done
+on_state_change(3, 8)   // Acting -> Done
 ```
 
 **CLI behavior:** The CLI demo now uses the LLM lifecycle hooks

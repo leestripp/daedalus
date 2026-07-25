@@ -88,14 +88,19 @@ std::string SystemPromptBuilder::getStateMachineSection() {
     // knows when it is done — and when it is NOT done (e.g. verification
     // failed → switch back to Understanding).  We tell it explicitly so
     // it never stalls in a state, and so the host UI / sink can render
-    // the current stage correctly.  Each tool call carries a `state`
-    // field; set it to the state you are in WHEN you make the call.
+    // the current stage correctly.  The ONLY way to change state is the
+    // `set_status` tool — there is no implicit per-tool-call state field.
     return
         "# State Machine\n"
         "\n"
-        "You drive a state machine. The library fires `state_change` SSE\n"
-        "events on every transition; the host UI uses them to render the\n"
-        "stage chips.\n"
+        "You drive a state machine. On every transition the library\n"
+        "notifies the host through its `on_state_change` callback; the\n"
+        "host UI uses those events to render the current stage.\n"
+        "\n"
+        "**How to change state:** call the `set_status` tool with\n"
+        "`{\"state\": \"<Name>\"}` whenever you enter a new phase. This is\n"
+        "the ONLY mechanism — tool calls do not carry an implicit state,\n"
+        "and the host cannot see your phase unless you call `set_status`.\n"
         "\n"
         "States:\n"
         "\n"
@@ -107,10 +112,17 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "| `Acting` | Running tools (file edits, bash, MCP, etc.). |\n"
         "| `Verifying` | Compiling, testing, inspecting output — this is a decision gate. |\n"
         "| `Documenting` | Updating README, CHANGELOG, comments, docs after verification. |\n"
-        "| `Compressing` | Context compaction in flight (rare, do not initiate). |\n"
         "| `Done` | Turn complete — emit your final assistant message and stop. |\n"
         "| `Cancelled` | Host cancelled the turn; stop work and ack. |\n"
         "| `Error` | Unrecoverable error; report to host and stop. |\n"
+        "\n"
+        "Runtime-owned states (informational — the library sets these\n"
+        "itself; never pass them to `set_status`):\n"
+        "\n"
+        "| State | Meaning |\n"
+        "|-------|---------|\n"
+        "| `AwaitingApproval` | A bash command is waiting for host approval. |\n"
+        "| `Compressing` | Context compaction in flight. |\n"
         "\n"
         "Workflow:\n"
         "\n"
@@ -126,23 +138,23 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "Rules:\n"
         "\n"
         "1. **You are the only one who knows when the work is truly done.**\n"
-        "   Do not stay in `Acting` after the last tool result — switch to\n"
-        "   `Verifying` and actually inspect the results.\n"
+        "   Do not stay in `Acting` after the last tool result — call\n"
+        "   `set_status` to switch to `Verifying` and actually inspect the\n"
+        "   results.\n"
         "2. **If verification fails, loop back.** Do not go to `Done`.\n"
-        "   - If you need more context, switch to `Understanding`.\n"
-        "   - If you know what to fix, switch to `Planning`, add new todos,\n"
-        "     then continue.\n"
-        "   Call `set_status` to reflect the new phase so the host UI updates.\n"
+        "   - If you need more context, call `set_status` with `Understanding`.\n"
+        "   - If you know what to fix, call `set_status` with `Planning`,\n"
+        "     add new todos, then continue.\n"
         "3. **If verification passes but docs need updating, switch to\n"
         "   `Documenting`.** Only go to `Done` after docs are complete.\n"
-        "4. Each tool call you emit carries a `state` field. Set it to the\n"
-        "   state you are in WHEN you make the call. The library uses it to\n"
-        "   fire the corresponding `state_change` event to the host.\n"
+        "4. **Call `set_status` on every phase change.** The host UI shows\n"
+        "   stale stage chips until you do.\n"
         "5. **Never stay in `Acting` forever.** If you have no more tools to\n"
         "   call, transition to `Verifying` (and then `Done` or `Documenting`)\n"
         "   or back to `Planning` if more work is needed.\n"
-        "6. **Always end with `Done`.** Every turn MUST end with a `Done`\n"
-        "   transition; otherwise the host UI will leave the chips stuck.\n";
+        "6. **Always end with `Done`.** Call `set_status` with `Done`\n"
+        "   immediately before your final assistant message; otherwise the\n"
+        "   host UI will leave the stage chips stuck.\n";
 }
 
 std::string SystemPromptBuilder::getContextStatsSection(size_t current_tokens,

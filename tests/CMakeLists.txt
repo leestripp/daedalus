@@ -705,6 +705,25 @@ target_link_libraries(daedalus_set_status_tool_tests PRIVATE
 add_test(NAME set_status_tool_tests COMMAND daedalus_set_status_tool_tests)
 
 # ============================================================================
+# §State Machine: LLMClient set_status → state-change routing tests
+# ============================================================================
+
+add_executable(daedalus_state_change_routing_tests
+    test_state_change_routing.cpp
+)
+target_include_directories(daedalus_state_change_routing_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_state_change_routing_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME state_change_routing_tests COMMAND daedalus_state_change_routing_tests)
+
+# ============================================================================
 # Todo list tools tests
 # ============================================================================
 
