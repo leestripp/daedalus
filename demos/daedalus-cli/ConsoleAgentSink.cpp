@@ -50,23 +50,50 @@ void ConsoleAgentSink::flush_delta_buffer() {
     }
 }
 
+void ConsoleAgentSink::print_field_lines(const nlohmann::json& j) {
+    // Simple formatter for tool payloads: one `key: value` line per field.
+    // String values are printed verbatim (real newlines, no JSON escaping)
+    // so the developer sees the actual data; multi-line strings become an
+    // indented block; non-string values fall back to compact JSON.
+    for (const auto& [key, value] : j.items()) {
+        if (value.is_string()) {
+            const auto& text = value.get_ref<const std::string&>();
+            if (text.find('\n') != std::string::npos) {
+                std::cerr << "  " << key << ":\n";
+                std::istringstream iss(text);
+                std::string line;
+                while (std::getline(iss, line)) {
+                    std::cerr << "    " << line << "\n";
+                }
+            } else {
+                std::cerr << "  " << key << ": " << text << "\n";
+            }
+        } else {
+            std::cerr << "  " << key << ": " << value.dump() << "\n";
+        }
+    }
+}
+
 void ConsoleAgentSink::on_tool_call(std::string_view name,
                                     const nlohmann::json& args) noexcept {
-    // Compact raw output: no box styling imposed by the library.
-    std::cerr << "[TOOL CALL] " << name << " " << args.dump() << "\n";
+    // Simple header + one line per argument. String values are printed
+    // verbatim (real newlines, no JSON escaping) so the developer sees
+    // exactly what the tool receives.
+    std::cerr << "\n[TOOL CALL] " << name << "\n";
+    print_field_lines(args);
 }
 
 void ConsoleAgentSink::on_tool_result(std::string_view name,
                                      const nlohmann::json& result) noexcept {
-    // Compact raw output: no box styling imposed by the library.
     // If the output already streamed live via output_chunk progress events,
-    // elide it from the dump so it is not printed twice.
+    // elide it from the display so it is not printed twice.
     nlohmann::json display = result;
     if (streamed_tool_output_ && display.contains("output")) {
         display["output"] = "<streamed live above>";
     }
     streamed_tool_output_ = false;
-    std::cerr << "[TOOL RESULT] " << name << " " << display.dump() << "\n";
+    std::cerr << "[TOOL RESULT] " << name << "\n";
+    print_field_lines(display);
 }
 
 /// §Phase C1: streaming tool-call progress. Most useful for slow tools

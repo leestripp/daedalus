@@ -40,7 +40,10 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   - The CLI demo's `ConsoleAgentSink` now prints `output_chunk` progress
     events live (previously it dropped the payload and showed only a stage
     marker), and elides the duplicated `output` field from the final
-    `[TOOL RESULT]` dump when the output already streamed.
+    `[TOOL RESULT]` dump when the output already streamed. Tool calls and
+    results are displayed as a simple header with readable `key: value`
+    field lines (multi-line strings shown as indented raw blocks) instead
+    of raw JSON dumps.
 
 - **LLM lifecycle callbacks** (`AgentSink`):
   - `on_llm_wait_started()`, `on_llm_response_started()`, and

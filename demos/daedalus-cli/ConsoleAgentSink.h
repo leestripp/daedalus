@@ -5,8 +5,8 @@
  * Wires every sink event to the console:
  *   - on_assistant_delta → cout (with buffering and final newline)
  *   - on_log            → cerr
- *   - on_tool_call      → cerr (compact raw args)
- *   - on_tool_result    → cerr (compact raw result)
+ *   - on_tool_call      → cerr (header + readable arg lines)
+ *   - on_tool_result    → cerr (header + readable field lines)
  *   - on_state_change   → cerr (Phase 9.6)
  *   - on_compaction     → cerr (Phase 9.6)
  *   - on_bell           → play_system_bell()
@@ -45,8 +45,8 @@ public:
     // Streaming output — buffer deltas, flush on final newline or buffer limit.
     void on_assistant_delta(std::string_view text) noexcept override;
 
-    // Tool lifecycle — compact raw JSON on stderr so the CLI stays
-    // readable without the library imposing any box styling.
+    // Tool lifecycle — header + readable field lines on stderr so the CLI
+    // shows the real payloads without raw-JSON noise.
     void on_tool_call(std::string_view name,
                       const nlohmann::json& args) noexcept override;
     void on_tool_result(std::string_view name,
@@ -81,6 +81,10 @@ public:
 private:
     /// Flush any buffered assistant text to stdout.
     void flush_delta_buffer();
+
+    /// Print a tool payload as readable `key: value` lines on stderr
+    /// (multi-line strings become indented blocks; no JSON escaping).
+    void print_field_lines(const nlohmann::json& j);
 
     std::string delta_buffer_;
     static constexpr std::size_t DELTA_FLUSH_THRESHOLD = 2048;
