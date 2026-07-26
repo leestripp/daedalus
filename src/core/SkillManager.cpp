@@ -90,9 +90,9 @@ void SkillManager::init_after_settings() {
 
     // Add default skill directories.
     // Discovery order:
-    //   1. <data_root>/skills/installed/    - daedalus-specific user-global skills
-    //      (XDG_DATA_HOME/daedalus/skills/installed, default
-    //      ~/.local/share/daedalus/skills/installed)
+    //   1. <data_root>/skills/               - daedalus-specific user-global skills
+    //      (XDG_DATA_HOME/daedalus/skills, default
+    //      ~/.local/share/daedalus/skills)
     //   2. ~/.agents/skills/                - Anthropic Agent Skills standard (user-global)
     //   3. .agents/skills/                  - Anthropic Agent Skills standard (project-local)
     const char* home = std::getenv("HOME");

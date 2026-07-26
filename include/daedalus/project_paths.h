@@ -17,7 +17,7 @@
  *
  * Skills search priority (highest first):
  *   1. `<project_root>/.daedalus/daedalus[-<name>]/skills/active/` — project-local
- *   2. `<user_data_root>/skills/installed/`                        — user-installed
+ *   2. `<user_data_root>/skills/`                                  — user-installed
  *   3. `<system_data_dirs[0]>/skills/default/`                     — system-shipped
  *
  * Memory, sessions, scratch, project config, and the lock file ALL

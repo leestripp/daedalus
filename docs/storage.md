@@ -65,7 +65,7 @@ DAEDALUS_HOME=/tmp/daedalus-test daedalus-cli --migrate-data-apply
 |---|---|---|
 | `daedalus.db` (settings store) | `<data_root>/daedalus.db` | **v0.4.0+**: SQLite-backed settings. Stores models, MCP servers, Serper key. |
 | `mcp/.env` | `<config_root>/mcp/.env` | MCP server environment variables (env vars for subprocesses) |
-| Globally-installed skill packs | `<data_root>/skills/installed/` | User-global skill packs |
+| Globally-installed skill packs | `<data_root>/skills/` | User-global skill packs |
 | Library logs | `<state_root>/logs/daedalus.log` | Agent logs |
 | Response replay cache (future) | `<cache_root>/responses/` | Future |
 | Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` | Future |

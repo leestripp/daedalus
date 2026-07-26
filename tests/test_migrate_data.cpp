@@ -119,7 +119,7 @@ static void test_plan_nonempty_when_legacy_present()
 	write_text( home / ".daedalus" / "settings" / "settings.json",
 	            "{\"default_model\":\"x\"}" );
 	write_text( home / ".daedalus" / "mcp" / "servers.json", "{}" );
-	write_text( home / ".daedalus" / "skills" / "installed" / "readme.md",
+	write_text( home / ".daedalus" / "skills" / "readme.md",
 	            "hi" );
 
 	daedalus_cli::MigrateOptions opt;
@@ -199,7 +199,7 @@ static void test_apply_copies_all()
 		ss << f.rdbuf();
 		EXPECT( ss.str() == env_src );
 	}
-	EXPECT( fs::exists( xdg_d / "daedalus" / "skills" / "installed" / "pack" / "SKILL.md" ) );
+	EXPECT( fs::exists( xdg_d / "daedalus" / "skills" / "pack" / "SKILL.md" ) );
 
 	std::cout << "ok\n";
 

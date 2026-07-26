@@ -80,7 +80,7 @@ MigratePlan compute_migration_plan( const MigrateOptions& opt )
 	//   ~/.daedalus/settings/settings.json  →  $XDG_CONFIG_HOME/daedalus/config.json
 	//   ~/.daedalus/mcp/servers.json        →  $XDG_CONFIG_HOME/daedalus/mcp/servers.json
 	//   ~/.daedalus/mcp/.env                →  $XDG_CONFIG_HOME/daedalus/mcp/.env
-	//   ~/.daedalus/skills/                 →  $XDG_DATA_HOME/daedalus/skills/installed/
+	//   ~/.daedalus/skills/                 →  $XDG_DATA_HOME/daedalus/skills/
 	struct Mapping
 	{
 		fs::path from;
@@ -94,7 +94,7 @@ MigratePlan compute_migration_plan( const MigrateOptions& opt )
 		{ plan.from_root / "mcp" / ".env",
 		  xdg.config_root / "mcp" / ".env" },
 		{ plan.from_root / "skills",
-		  xdg.data_root / "skills" / "installed" },
+		  xdg.data_root / "skills" },
 	};
 
 	plan.entries.reserve( mappings.size() );
@@ -249,7 +249,7 @@ int run_migrate_data( const MigrateOptions& opt )
 	}
 	std::cout << "Migrated " << rc << " entries. Verify with:\n";
 	std::cout << "  ls -la " << plan.xdg_config_home << "\n";
-	std::cout << "  ls -la " << plan.xdg_data_home << "/skills/installed/\n";
+	std::cout << "  ls -la " << plan.xdg_data_home << "/skills/\n";
 	std::cout << "Then manually remove the legacy directory:\n";
 	std::cout << "  rm -rf " << plan.from_root << "\n";
 	return rc == 0 ? 1 : 0;  // exit 1 = "nothing to migrate"

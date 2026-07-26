@@ -10,7 +10,7 @@
  * - The Skill catalog can be formatted for system prompt injection
  *
  * Note: These tests use the singleton SkillManager. The actual skill files
- * (in ~/.daedalus/skills/ and .agents/skills/) must be present for the
+ * (in ~/.local/share/daedalus/skills/ and .agents/skills/) must be present for the
  * metadata tests to be meaningful. The behavioral tests work even if no
  * skills are installed.
  */

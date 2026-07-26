@@ -468,7 +468,7 @@ a `SKILL.md` file (the body the agent sees after loading) and an
 optional `skill.json` metadata file.
 
 ```
-~/.daedalus/skills/
+~/.local/share/daedalus/skills/
 ├── codemax-container-setup/
 │   ├── SKILL.md
 │   └── skill.json
@@ -484,7 +484,7 @@ containing `SKILL.md`. Configure with:
 
 ```cpp
 // Scan these directories for available skills
-cfg.skills_dirs = { "/home/user/.daedalus/skills/" };
+cfg.skills_dirs = { daedalus::Paths::global().global_skills_dir() };
 
 // Pre-load these skills (they appear in slot 5 immediately)
 cfg.skills = { "gdb-crash-debugger", "memory-leak" };

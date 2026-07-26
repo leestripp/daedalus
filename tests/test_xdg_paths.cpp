@@ -112,7 +112,7 @@ public:
 	std::filesystem::path config_file() const override { return user_config_root() / "config.json"; }
 	std::filesystem::path mcp_servers_file() const override { return user_config_root() / "mcp/servers.json"; }
 	std::filesystem::path mcp_env_file() const override { return user_config_root() / "mcp/.env"; }
-	std::filesystem::path global_skills_dir() const override { return user_data_root() / "skills/installed"; }
+	std::filesystem::path global_skills_dir() const override { return user_data_root() / "skills"; }
 	std::filesystem::path log_file() const override { return user_state_root() / "logs/daedalus.log"; }
 	std::filesystem::path response_cache_dir() const override { return user_cache_root() / "responses"; }
 	void ensure_directories() const override {}
@@ -167,7 +167,7 @@ static void test_xdg_data_home()
 	ScopedEnv h( "DAEDALUS_HOME", "" );
 	ScopedEnv h2( "DAEDALUS_DATA_HOME", "" );
 	assert( daedalus::Paths::global().user_data_root() == "/tmp/xdg-data/daedalus" );
-	assert( daedalus::Paths::global().global_skills_dir() == "/tmp/xdg-data/daedalus/skills/installed" );
+	assert( daedalus::Paths::global().global_skills_dir() == "/tmp/xdg-data/daedalus/skills" );
 	std::cout << "ok\n";
 }
 

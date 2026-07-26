@@ -105,7 +105,7 @@ public:
 	/// `user_config_root() / "mcp" / ".env"`.
 	virtual std::filesystem::path mcp_env_file() const = 0;
 
-	/// `user_data_root() / "skills" / "installed"`.
+	/// `user_data_root() / "skills"`.
 	virtual std::filesystem::path global_skills_dir() const = 0;
 
 	/// `user_state_root() / "logs" / "daedalus.log"`.
@@ -144,7 +144,7 @@ public:
 	/// already exist. Respects `$HOME/.daedalus/` legacy layout when
 	/// `user_root()` resolves there (permission applied to that path).
 	///
-	/// Does NOT create subdirectories (logs/, mcp/, skills/installed/);
+	/// Does NOT create subdirectories (logs/, mcp/, skills/);
 	/// those are created on-demand by the subsystem writing the file.
 	/// Hosts typically call this once during `Agent::initialize()`.
 	virtual void ensure_directories() const = 0;

@@ -204,7 +204,7 @@ public:
 
 	fs::path global_skills_dir() const override
 	{
-		return user_data_root() / "skills" / "installed";
+		return user_data_root() / "skills";
 	}
 
 	fs::path log_file() const override

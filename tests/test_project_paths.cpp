@@ -158,7 +158,7 @@ static void test_skills_search_path()
 		fs::path config_file() const override { return {}; }
 		fs::path mcp_servers_file() const override { return {}; }
 		fs::path mcp_env_file() const override { return {}; }
-		fs::path global_skills_dir() const override { return user_data_root() / "skills/installed"; }
+		fs::path global_skills_dir() const override { return user_data_root() / "skills"; }
 		fs::path log_file() const override { return {}; }
 		fs::path response_cache_dir() const override { return {}; }
 		void ensure_directories() const override {}
@@ -171,7 +171,7 @@ static void test_skills_search_path()
 
 	assert( sp.size() == 3 );
 	assert( sp[0] == root / ".daedalus" / "daedalus-alice" / "skills" / "active" );  // project wins
-	assert( sp[1] == "/user/data/skills/installed" );                                 // user-installed
+	assert( sp[1] == "/user/data/skills" );                                           // user-installed
 	assert( sp[2] == "/sys/data/skills/default" );                                    // system-shipped
 
 	std::cout << "ok\n";

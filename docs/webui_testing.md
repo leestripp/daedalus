@@ -8,7 +8,7 @@ and visual regressions in one shot.
 ## Why BiDi (not selenium / playwright)
 
 - **Zero deps.** The Python client at
-  `~/.daedalus/skills/firefox/scripts/bidi_client.py` is stdlib only
+  `~/.local/share/daedalus/skills/firefox/scripts/bidi_client.py` is stdlib only
   (`socket`, `json`, `struct`, `base64`). No `pip install`.
 - **Direct to Firefox.** No driver download, no Chrome-vs-Firefox
   parity concerns, no MCP tool registration needed.
@@ -46,7 +46,7 @@ cmake --build build -j12 --target daedalus-webui
 ## Start Firefox with BiDi
 
 ```bash
-FIREFOX_DEBUGGER_PORT=9222 ~/.daedalus/skills/firefox/scripts/start-firefox-debug.sh
+FIREFOX_DEBUGGER_PORT=9222 ~/.local/share/daedalus/skills/firefox/scripts/start-firefox-debug.sh
 ```
 
 Wait for the line `✓ Firefox BiDi is up at ws://localhost:9222/session`.
@@ -60,7 +60,7 @@ Save this as `tests/test_webui_bidi.py` (or use it as a CI step):
 """Smoke-test demos/daedalus-webui via Firefox BiDi."""
 
 import sys, time, json, os
-sys.path.insert(0, os.path.expanduser("~/.daedalus/skills/firefox/scripts"))
+sys.path.insert(0, os.path.expanduser("~/.local/share/daedalus/skills/firefox/scripts"))
 from bidi_client import BidiClient, log_collector, console_messages, css_warnings
 
 URL = "http://127.0.0.1:8088"
@@ -135,7 +135,7 @@ Sometimes you want to **prove** that the SSE connection is stable
 
 ```python
 import json, time, sys, os
-sys.path.insert(0, os.path.expanduser("~/.daedalus/skills/firefox/scripts"))
+sys.path.insert(0, os.path.expanduser("~/.local/share/daedalus/skills/firefox/scripts"))
 from bidi_client import BidiClient
 
 with BidiClient("localhost", 9222) as bc:
@@ -225,6 +225,6 @@ pgrep -f "firefox.*--profile /tmp/fx-bidi-agent" | xargs -r kill
 
 ## Reference
 
-- `~/.daedalus/skills/firefox/scripts/bidi_client.py` — the client
-- `~/.daedalus/skills/firefox/scripts/start-firefox-debug.sh` — the launcher
+- `~/.local/share/daedalus/skills/firefox/scripts/bidi_client.py` — the client
+- `~/.local/share/daedalus/skills/firefox/scripts/start-firefox-debug.sh` — the launcher
 - `demos/daedalus-webui/main.cpp` — the demo under test

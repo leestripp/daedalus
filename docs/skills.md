@@ -171,7 +171,7 @@ The SDK provides functions for:
 | Path | Description |
 |------|-------------|
 | `.agents/skills/` | Project-local skills |
-| `~/.daedalus/skills/` | User-level skills (daedalus convention) |
+| `~/.local/share/daedalus/skills/` | User-level skills (daedalus convention, `$XDG_DATA_HOME/daedalus/skills/`) |
 | `~/.claude/skills/` | Claude Code convention |
 | `/usr/local/share/agent-skills/` | System-wide skills |
 
@@ -180,7 +180,7 @@ The SDK provides functions for:
 daedalus ships with a memory-leak skill that uses Valgrind:
 
 ```
-~/.daedalus/skills/memory-leak/
+~/.local/share/daedalus/skills/memory-leak/
 └── SKILL.md
 ```
 
@@ -305,7 +305,7 @@ Skills are configured per `Agent` through `AgentConfig`:
 
 ```cpp
 daedalus::AgentConfig cfg;
-cfg.skills_dirs = { "~/.daedalus/skills/", "./.agents/skills/" };
+cfg.skills_dirs = { daedalus::Paths::global().global_skills_dir(), "./.agents/skills/" };
 cfg.skills      = { "cmake-helper", "cpp-best-practices" };   // auto-activate
 cfg.skills_disabled = { "noisy-skill" };                      // never visible
 ```

@@ -128,7 +128,7 @@ struct AgentConfig {
     //                any dir already in skills_dirs.
     //
     // Example (webui demo loads the user's global skills):
-    //   cfg.skills_dirs = { "~/.daedalus/skills/" };
+    //   cfg.skills_dirs = { daedalus::Paths::global().global_skills_dir() };
     //   cfg.skills      = { "firefox", "memory-leak" };
     std::vector<std::filesystem::path> skills_dirs;
     std::vector<std::string>           skills;

@@ -16,7 +16,7 @@ in each release. See `docs/storage.md` for the storage architecture,
 | Path | Contents |
 |------|----------|
 | `~/.local/share/daedalus/daedalus.db` | Settings store (models, key/value, MCP servers) — v0.4.0+ |
-| `~/.local/share/daedalus/skills/installed/` | Agent skills |
+| `~/.local/share/daedalus/skills/` | Agent skills |
 | `~/.local/share/daedalus/memory/` | Session memory |
 | `<project>/.daedalus[-<agent_name>]/messages.json` | Conversation transcript (atomic-rename save; auto-flush every ~100 ms) |
 | `<project>/.daedalus[-<agent_name>]/messages.json.crash` | Crash mirror (written by SIGSEGV/SIGABRT/SIGFPE/SIGILL handler; recovered on next launch) |
@@ -522,7 +522,7 @@ working directory). Skills are loaded from the skills directory listed above.
 To exercise the webui from a terminal (uses the Firefox BiDi skill):
 
 ```bash
-~/.local/share/daedalus/skills/installed/firefox/scripts/start-firefox-debug.sh &
+~/.local/share/daedalus/skills/firefox/scripts/start-firefox-debug.sh &
 ./build/demos/daedalus-webui/daedalus-webui 8088 &
 # Then open http://127.0.0.1:8088/ in Firefox, type a message.
 ```

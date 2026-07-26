@@ -171,7 +171,8 @@ public:
 
     /**
      * @brief Save currently active skills to a JSON file
-     * @param path Where to save (default: ~/.daedalus/skills/active.json)
+     * @param path Where to save (default: <data_root>/skills/active.json,
+     *        i.e. ~/.local/share/daedalus/skills/active.json)
      * @return true on success
      */
     bool save_active_skills(const std::filesystem::path& path = "") const;
