@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
-#include <sys/socket.h>  // send(), MSG_NOSIGNAL
 #include <sys/wait.h>
 #include <unistd.h>
 #include <cerrno>
@@ -20,21 +19,50 @@ namespace mcp {
 
 namespace {
 
-// §fix (2026-07-18): send() may write fewer bytes than requested; loop
-// until the whole frame is on the wire (or a real error occurs).
-// MSG_NOSIGNAL suppresses SIGPIPE if the subprocess has closed stdin.
+// §fix (2026-07-26): write(), not send() — these fds are pipes, and
+// send() on a pipe fails with ENOTSOCK on Linux, so no stdio MCP server
+// ever received a request. Regressed by the §fix (2026-07-18) change
+// that switched write() → send(MSG_NOSIGNAL) to dodge SIGPIPE; we keep
+// that SIGPIPE safety by blocking SIGPIPE in the calling thread for the
+// duration of the write instead. A closed subprocess stdin then returns
+// EPIPE instead of raising SIGPIPE that would kill the host process.
+// Loops on short writes; returns false on error with errno preserved.
 bool write_all(int fd, const std::string& data) {
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &mask, &prev_mask);
+
     size_t off = 0;
+    bool ok = true;
+    int saved_errno = 0;
     while (off < data.size()) {
-        ssize_t n = send(fd, data.c_str() + off, data.size() - off,
-                         MSG_NOSIGNAL);
+        ssize_t n = write(fd, data.c_str() + off, data.size() - off);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return false;
+            saved_errno = errno;
+            ok = false;
+            break;
         }
         off += static_cast<size_t>(n);
     }
-    return true;
+
+    // A SIGPIPE raised while blocked is pending on this thread; discard
+    // it before restoring the mask so it can't fire later. Skip this if
+    // the caller had SIGPIPE blocked already — their pending signals are
+    // their own business.
+    if (!sigismember(&prev_mask, SIGPIPE)) {
+        sigset_t pending;
+        sigpending(&pending);
+        if (sigismember(&pending, SIGPIPE)) {
+            const timespec ts{0, 0};
+            sigtimedwait(&mask, nullptr, &ts);
+        }
+    }
+    pthread_sigmask(SIG_SETMASK, &prev_mask, nullptr);
+
+    if (!ok) errno = saved_errno;
+    return ok;
 }
 
 } // namespace
@@ -197,8 +225,8 @@ StdioMcpTransport::send_request(
         pending_[request_id] = promise;
     }
 
-    // Write request. write_all() loops on short writes; MSG_NOSIGNAL:
-    // see McpClient::send_request() — if the subprocess has closed stdin
+    // Write request. write_all() loops on short writes and blocks
+    // SIGPIPE in the calling thread — if the subprocess has closed stdin
     // we get EPIPE back instead of a SIGPIPE that would kill the daemon.
     std::string req_str = request.dump() + "\n";
     if (!write_all(stdin_write_, req_str)) {
@@ -226,8 +254,8 @@ std::expected<void, TransportError> StdioMcpTransport::send_notification(
         notification["params"] = params;
     }
 
-    // write_all() loops on short writes; MSG_NOSIGNAL: see send_request()
-    // above.
+    // write_all() loops on short writes and blocks SIGPIPE: see
+    // send_request() above.
     std::string notif_str = notification.dump() + "\n";
     if (!write_all(stdin_write_, notif_str)) {
         return std::unexpected(TransportError::WriteFailed);

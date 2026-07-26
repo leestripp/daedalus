@@ -17,9 +17,13 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <thread>
+#include <unistd.h>
+#include <sys/stat.h>
 
 namespace {
 
@@ -125,6 +129,48 @@ void test_listener_lifecycle_unconnected() {
 
 }  // namespace
 
+// §fix (2026-07-26) regression — McpClient's write_all() used
+// send(fd, ..., MSG_NOSIGNAL) on the child stdin pipe; send() on a pipe
+// fails with ENOTSOCK, so no stdio MCP server ever received a request.
+// Run a real initialize + tools/list round trip against a fake server
+// and require an actual tool list back. (Outside the anonymous namespace
+// so the helper name can't collide with the manager tests above.)
+void test_client_round_trip_over_stdio_pipe() {
+    // Fake server as a script file: McpClient::connect() re-quotes the
+    // command for bash -c, which mangles inline one-liners. GNU sed -u
+    // answers any request line with an id-echoing tools/list result.
+    std::string path = "/tmp/daedalus_fake_mcp_server_" +
+                       std::to_string(getpid()) + ".sh";
+    {
+        std::ofstream f(path);
+        f << "#!/bin/sh\n"
+             "exec sed -u -n 's/.*\"id\":\\([0-9][0-9]*\\).*/"
+             "{\"jsonrpc\":\"2.0\",\"id\":\\1,\"result\":{\"tools\":["
+             "{\"name\":\"echo_tool\",\"description\":\"d\","
+             "\"inputSchema\":{\"type\":\"object\"}}]}}/p'\n";
+    }
+    chmod(path.c_str(), 0755);
+
+    // NOTE: explicit checks, not assert() — this target builds with
+    // NDEBUG in Release, which would compile the checks away.
+    auto fail = [&](const char* what) {
+        std::cerr << "[FAIL] test_client_round_trip_over_stdio_pipe: "
+                  << what << std::endl;
+        unlink(path.c_str());
+        std::exit(1);
+    };
+
+    mcp::McpClient client;
+    if (!client.connect(path, {}, 5000)) fail("connect");
+    if (!client.initialize()) fail("initialize");
+    auto tools = client.list_tools();
+    if (tools.size() != 1) fail("tools.size() != 1 (ENOTSOCK regression?)");
+    if (tools[0].name != "echo_tool") fail("unexpected tool name");
+    client.disconnect();
+    unlink(path.c_str());
+    std::cout << "[ok] test_client_round_trip_over_stdio_pipe" << std::endl;
+}
+
 int main() {
     // Logger::init is called by main(); tests run in-process without it.
     // We don't need logging for these assertions.
@@ -138,6 +184,7 @@ int main() {
     test_handle_list_changed_unknown_safe();
     test_list_changed_capability_unknown_safe();
     test_listener_lifecycle_unconnected();
-    std::cout << "test_mcp_hub_hardening: 10 tests passed" << std::endl;
+    test_client_round_trip_over_stdio_pipe();
+    std::cout << "test_mcp_hub_hardening: 11 tests passed" << std::endl;
     return 0;
 }

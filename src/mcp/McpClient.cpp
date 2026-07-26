@@ -8,7 +8,6 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
-#include <sys/socket.h>  // send(), MSG_NOSIGNAL
 #include <sys/wait.h>
 #include <sys/types.h>
 #include <optional>
@@ -34,23 +33,50 @@ namespace mcp {
 
 namespace {
 
-// §fix (2026-07-18): send() may write fewer bytes than requested; loop
-// until the whole frame is on the wire (or a real error occurs).
-// MSG_NOSIGNAL suppresses SIGPIPE if the subprocess has closed stdin
-// (see the §SIGPIPE note in McpClient::initialize()). Returns false on
-// error with errno preserved for the caller.
+// §fix (2026-07-26): write(), not send() — these fds are pipes, and
+// send() on a pipe fails with ENOTSOCK on Linux, so no stdio MCP server
+// ever received a request. Regressed by the §fix (2026-07-18) change
+// that switched write() → send(MSG_NOSIGNAL) to dodge SIGPIPE; we keep
+// that SIGPIPE safety by blocking SIGPIPE in the calling thread for the
+// duration of the write instead. A closed subprocess stdin then returns
+// EPIPE instead of raising SIGPIPE that would kill the host process.
+// Loops on short writes; returns false on error with errno preserved.
 bool write_all(int fd, const std::string& data) {
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &mask, &prev_mask);
+
     size_t off = 0;
+    bool ok = true;
+    int saved_errno = 0;
     while (off < data.size()) {
-        ssize_t n = send(fd, data.c_str() + off, data.size() - off,
-                         MSG_NOSIGNAL);
+        ssize_t n = write(fd, data.c_str() + off, data.size() - off);
         if (n < 0) {
             if (errno == EINTR) continue;
-            return false;
+            saved_errno = errno;
+            ok = false;
+            break;
         }
         off += static_cast<size_t>(n);
     }
-    return true;
+
+    // A SIGPIPE raised while blocked is pending on this thread; discard
+    // it before restoring the mask so it can't fire later. Skip this if
+    // the caller had SIGPIPE blocked already — their pending signals are
+    // their own business.
+    if (!sigismember(&prev_mask, SIGPIPE)) {
+        sigset_t pending;
+        sigpending(&pending);
+        if (sigismember(&pending, SIGPIPE)) {
+            const timespec ts{0, 0};
+            sigtimedwait(&mask, nullptr, &ts);
+        }
+    }
+    pthread_sigmask(SIG_SETMASK, &prev_mask, nullptr);
+
+    if (!ok) errno = saved_errno;
+    return ok;
 }
 
 } // namespace
@@ -303,10 +329,11 @@ bool McpClient::initialize() {
         return true;
     }
 
-    // §SIGPIPE note (2026-07-14): the underlying transport's
-    // send_request() / send_notification() write to the MCP subprocess's
-    // stdin pipe via send(fd, ..., MSG_NOSIGNAL), which is the surgical
-    // fix for "subprocess exits before parent writes its notification".
+    // §SIGPIPE note (2026-07-14, updated 2026-07-26): the underlying
+    // transport's send_request() / send_notification() write to the MCP
+    // subprocess's stdin pipe via write() with SIGPIPE blocked in the
+    // calling thread (see write_all()), which is the surgical fix for
+    // "subprocess exits before parent writes its notification".
     // A closed pipe then returns EPIPE instead of raising SIGPIPE that
     // would kill the daemon. No signal-handler dance required.
 
@@ -527,10 +554,10 @@ json McpClient::send_request(const std::string& method, const json& params, int 
         request["params"] = params;
     }
 
-    // Send request. write_all() loops on short writes; MSG_NOSIGNAL
-    // suppresses SIGPIPE if the subprocess has closed stdin (e.g. it
-    // crashed/exited before reading our request). On Linux this works
-    // for pipe FDs as well as sockets (since 2.6.32).
+    // Send request. write_all() loops on short writes and blocks SIGPIPE
+    // in the calling thread, so a subprocess that has closed stdin (e.g.
+    // it crashed/exited before reading our request) yields EPIPE instead
+    // of killing the host.
     std::string request_str = request.dump() + "\n";
     if (!write_all(pipes_->stdin_write, request_str)) {
         last_error_ = "Failed to write to stdin: " + std::string(strerror(errno));
@@ -556,9 +583,9 @@ void McpClient::send_notification(const std::string& method, const json& params)
     }
     
     std::string notif_str = notification.dump() + "\n";
-    // write_all() loops on short writes; MSG_NOSIGNAL: see send_request()
-    // comment. Subprocess may have closed stdin between initialize() and
-    // this notification.
+    // write_all() loops on short writes and blocks SIGPIPE: see
+    // send_request() comment. Subprocess may have closed stdin between
+    // initialize() and this notification.
     [[maybe_unused]] bool sent = write_all(pipes_->stdin_write, notif_str);
 }
 

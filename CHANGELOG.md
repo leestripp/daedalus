@@ -205,6 +205,21 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **stdio MCP servers never received requests** (`McpClient`,
+  `StdioMcpTransport`): the 2026-07-18 SIGPIPE fix switched the stdin
+  pipe write from `write()` to `send(fd, ..., MSG_NOSIGNAL)` — but
+  `send()` on a pipe fd fails with `ENOTSOCK` on Linux, so every write
+  to a stdio MCP subprocess failed and no `mcp__*` tools were ever
+  registered. `write_all()` now uses `write()` with `SIGPIPE` blocked
+  in the calling thread for the duration of the call (mask restored
+  afterwards, pending `SIGPIPE` drained), preserving the EPIPE-instead-
+  of-signal behaviour without changing the process-wide signal
+  disposition. Regression-pinned by a real JSON-RPC round trip over a
+  pipe in `tests/test_mcp_transport.cpp`
+  (`stdio_transport_jsonrpc_round_trip_over_pipe` — the old `/bin/cat`
+  echo test accepted `WriteFailed` as a pass, which is how this slipped
+  in) and `tests/test_mcp_hub_hardening.cpp`
+  (`test_client_round_trip_over_stdio_pipe`).
 - **State machine stuck in `Understanding`**: LLM-driven state
   transitions (via the `set_status` tool) were handled inside
   `LLMClient::run_agent_cycle`, which updated only LLMClient-private

@@ -11,8 +11,11 @@
 
 #include <iostream>
 #include <chrono>
+#include <fstream>
 #include <future>
 #include <thread>
+#include <unistd.h>
+#include <sys/stat.h>
 
 #include "mcp/McpTransport.h"
 #include "mcp/StdioMcpTransport.h"
@@ -144,6 +147,56 @@ TEST(stdio_transport_echo_with_cat) {
 }
 
 // ============================================================================
+// Regression test: JSON-RPC round trip over the stdio pipe
+// ============================================================================
+// §fix (2026-07-26): write_all() used send(fd, ..., MSG_NOSIGNAL), which
+// fails with ENOTSOCK on a pipe fd — so no stdio MCP server ever received
+// a request. The echo test above didn't catch it because it accepted ANY
+// outcome (including WriteFailed) as a pass. This test requires a real
+// response to come back through the pipe.
+//
+// The fake server is a script (not an inline one-liner) because the
+// transport re-quotes the command for `sh -c`; GNU sed -u gives us
+// line-buffered, id-echoing JSON-RPC responses with no quoting pitfalls.
+static std::string write_fake_mcp_server_script() {
+    std::string path = "/tmp/daedalus_fake_mcp_server_" +
+                       std::to_string(getpid()) + ".sh";
+    {
+        std::ofstream f(path);
+        f << "#!/bin/sh\n"
+             "exec sed -u -n 's/.*\"id\":\\([0-9][0-9]*\\).*/"
+             "{\"jsonrpc\":\"2.0\",\"id\":\\1,"
+             "\"result\":{\"ok\":true}}/p'\n";
+    }
+    chmod(path.c_str(), 0755);
+    return path;
+}
+
+TEST(stdio_transport_jsonrpc_round_trip_over_pipe) {
+    std::string script = write_fake_mcp_server_script();
+    StdioMcpTransport transport(script);
+    auto result = transport.connect();
+    CHECK(result.has_value());
+
+    auto fut = transport.send_request("ping", nlohmann::json::object(),
+                                      /*timeout_ms=*/5000);
+    auto status = fut.wait_for(6s);
+    CHECK(status == std::future_status::ready);
+    if (status == std::future_status::ready) {
+        auto response = fut.get();
+        // WriteFailed here is the ENOTSOCK regression. The future
+        // resolves with the unwrapped "result" payload (reader_loop).
+        CHECK(response.has_value());
+        if (response) {
+            CHECK(response->value("ok", false) == true);
+        }
+    }
+    transport.disconnect();
+    unlink(script.c_str());
+    return 0;
+}
+
+// ============================================================================
 // Test: StdioMcpTransport transport_name
 // ============================================================================
 TEST(stdio_transport_name) {
@@ -229,6 +282,7 @@ int main() {
     local_failures += test_http_transport_name();
     local_failures += test_http_transport_send_request_not_connected();
     local_failures += test_stdio_transport_echo_with_cat();
+    local_failures += test_stdio_transport_jsonrpc_round_trip_over_pipe();
     local_failures += test_stdio_transport_name();
     local_failures += test_stdio_transport_disconnect();
     local_failures += test_stdio_transport_child_exit_fails_pending();
