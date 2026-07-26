@@ -815,6 +815,19 @@ target_link_libraries(daedalus_sink_events_tests PRIVATE
 )
 add_test(NAME sink_events_tests COMMAND daedalus_sink_events_tests)
 
+# §BUG-005 regression: cancel() at idle must not poison the next turn.
+add_executable(daedalus_cancel_stale_flag_tests
+    test_cancel_stale_flag.cpp
+)
+target_include_directories(daedalus_cancel_stale_flag_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_cancel_stale_flag_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME cancel_stale_flag_tests COMMAND daedalus_cancel_stale_flag_tests)
+
 # §Phase C1: streaming tool-call progress events.
 # Exercises BaseTool::execute(args, file_io, ToolProgressFn) end-to-end,
 # plus the ToolHandler → AgentSink routing. See test_tool_progress.cpp.

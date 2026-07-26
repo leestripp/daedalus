@@ -592,7 +592,25 @@ void AgentImpl::submit_user_message(std::string text,
 
 void AgentImpl::cancel() noexcept
 {
-    cancel_requested_.store(true, std::memory_order_release);
+    // §BUG-005 (2026-07-26): only latch cancel_requested_ when there is
+    // work for it to interrupt — a turn in flight (busy state) or queued
+    // user messages. Previously a bare cancel() at idle latched the flag,
+    // and since it was only cleared by the exchange() at the entry of the
+    // NEXT run_one_turn(), the following turn aborted instantly with a
+    // spurious Cancelled (and a mid-flight cancel leaked the same way —
+    // the interrupting turn never consumed the flag it had already
+    // acted on via client->cancel()).
+    const AgentState s = state_.load(std::memory_order_acquire);
+    const bool busy = s == AgentState::Understanding    ||
+                      s == AgentState::Planning         ||
+                      s == AgentState::Acting           ||
+                      s == AgentState::Verifying        ||
+                      s == AgentState::Documenting      ||
+                      s == AgentState::AwaitingApproval ||
+                      s == AgentState::Compressing;
+    if (busy || !pending_user_messages_.empty()) {
+        cancel_requested_.store(true, std::memory_order_release);
+    }
     if (body_->cancel_source.stop_possible()) {
         body_->cancel_source.request_stop();
     }
@@ -641,6 +659,9 @@ void AgentImpl::run_one_turn(std::stop_token st)
 
     set_state(AgentState::Understanding);
     ::AgentState r = body_->client->run_one_turn(user_msg);
+    // §BUG-005: a cancel() that interrupted this turn has been fully
+    // consumed — never let the flag leak into the next turn.
+    cancel_requested_.store(false, std::memory_order_release);
     set_state(map_from_internal(r));
 }
 
