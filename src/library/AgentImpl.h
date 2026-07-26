@@ -128,6 +128,11 @@ public:
     [[nodiscard]] bool is_skill_enabled(const std::string& name) const;
     [[nodiscard]] std::vector<std::string> disabled_skills() const;
 
+    /// @brief §SKILL-ORDER regression hook: true when the LLMClient
+    ///        exists and has the per-agent SkillManager attached.
+    ///        Exposed for tests; not part of the public Agent API.
+    [[nodiscard]] bool client_has_skill_manager() const noexcept;
+
     bool set_mcp_server_enabled(const std::string& name, bool enabled);
     [[nodiscard]] bool is_mcp_server_enabled(const std::string& name) const;
     [[nodiscard]] std::vector<std::string> disabled_mcp_servers() const;

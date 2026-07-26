@@ -144,6 +144,26 @@ add_test(NAME phase15_typo_warning_tests
          COMMAND daedalus_phase15_typo_warning_tests)
 
 # ============================================================================
+# §SKILL-ORDER regression: AgentImpl::initialize() must attach the per-agent
+# SkillManager to the LLMClient (the client is constructed before the
+# manager exists, so the constructor always received nullptr). Hermetic —
+# dummy creds force client construction without any network access.
+# ============================================================================
+add_executable(daedalus_skill_manager_wiring_tests
+    test_skill_manager_wiring.cpp
+)
+target_include_directories(daedalus_skill_manager_wiring_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_skill_manager_wiring_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME skill_manager_wiring_tests
+         COMMAND daedalus_skill_manager_wiring_tests)
+
+# ============================================================================
 # §Phase 14.7 (Q2, decided YES): per-project system_prompt override.
 # Verifies that <project_root>/.daedalus/daedalus/system_prompt.txt is
 # read during initialize() and appended to cfg.system_prompt (or used

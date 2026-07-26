@@ -209,6 +209,24 @@ public:
         state_change_cb_ = std::move(cb);
     }
 
+    /// @brief Attach the per-agent SkillManager after construction.
+    ///        §SKILL-ORDER fix: AgentImpl constructs the LLMClient before
+    ///        the SkillManager exists, so the constructor always received
+    ///        nullptr and skill_manager_ stayed null for the agent's
+    ///        lifetime (SkillManager::current() null inside every turn,
+    ///        no skills catalog in the system prompt). AgentImpl calls
+    ///        this once the manager has been created. Must be called
+    ///        before any turn runs.
+    void set_skill_manager(SkillManager* skill_manager) {
+        skill_manager_ = skill_manager;
+    }
+
+    /// @brief True when a SkillManager is attached (testing/diagnostics
+    ///        for the §SKILL-ORDER wiring).
+    [[nodiscard]] bool has_skill_manager() const noexcept {
+        return skill_manager_ != nullptr;
+    }
+
     /// @brief Handle a tool result that may carry a `set_status` state
     ///        transition ({"status":"set_state","state":"<Name>"}).
     ///        Dispatches via state_change_cb_ (or the sink fallback) and

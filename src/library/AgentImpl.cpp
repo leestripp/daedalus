@@ -379,6 +379,10 @@ void AgentImpl::initialize()
         // per §FIX-MCP-STORE-LOAD plan R3-P1 so MCP doesn't depend
         // on having LLM creds.)
 
+        // Note: body_->skill_manager does not exist yet at this point
+        // (it is created further below), so the constructor receives
+        // nullptr here — the manager is attached via set_skill_manager()
+        // right after it is created (§SKILL-ORDER fix).
         body_->client = std::make_unique<LLMClient>(
             app, std::addressof(*body_->store), body_->mcp.get(),
             body_->skill_manager.get(), &tool_filter_);
@@ -472,6 +476,19 @@ void AgentImpl::initialize()
             if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
                 std::string("[SKILLS] Discovery failed: ") + e.what());
         }
+    }
+
+    // §SKILL-ORDER fix: the LLMClient is constructed above (in the
+    // has_explicit_creds block) BEFORE the SkillManager exists, so its
+    // constructor always received nullptr for skill_manager and
+    // LLMClient::skill_manager_ stayed null for the agent's lifetime.
+    // That null propagated into SkillManagerGuard(skill_manager_) at the
+    // top of every turn, making SkillManager::current() null — so the
+    // discover_skills tool failed with "SkillManager not initialized"
+    // and the system-prompt skills catalog was never emitted. Hand the
+    // now-created manager to the client explicitly.
+    if (body_->client && body_->skill_manager) {
+        body_->client->set_skill_manager(body_->skill_manager.get());
     }
 
     // §Phase 15: typo-detection for the mcp_servers_disabled list.
@@ -700,6 +717,11 @@ std::vector<SkillInfo> AgentImpl::list_skills() const
         out.push_back(std::move(si));
     }
     return out;
+}
+
+bool AgentImpl::client_has_skill_manager() const noexcept
+{
+    return body_ && body_->client && body_->client->has_skill_manager();
 }
 
 // §B18 refactor: shared helper to build ModelInfo from resolved settings.
