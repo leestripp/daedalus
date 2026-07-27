@@ -50,8 +50,9 @@ sudo apt install -y nlohmann-json3-dev
 ```
 
 `libcurl4-openssl-dev` and `libsqlite3-dev` are pulled in as transitive OmniNet
-requirements. OmniNet, nlohmann_json (optional), sqlite-vec, and doctest are
-downloaded automatically by CMake into `build/_deps/` on first build.
+requirements. OmniNet, nlohmann_json (optional), sqlite-vec, doctest, and FTXUI
+(for the `daedalus-settings-tui` demo) are downloaded automatically by CMake
+into `build/_deps/` on first build.
 
 ## Project structure
 
@@ -78,7 +79,8 @@ downloaded automatically by CMake into `build/_deps/` on first build.
 │   ├── daedalus-cli/           # Reference console REPL
 │   ├── daedalus-manager/       # Multi-agent orchestration demo
 │   ├── daedalus-subagent/      # Agent-spawns-agent demo
-│   └── daedalus-webui/         # HTTP + SSE web host
+│   ├── daedalus-webui/         # HTTP + SSE web host
+│   └── daedalus-settings-tui/  # FTXUI settings editor (SettingsStore TUI)
 ├── tests/                      # doctest-based unit tests
 ├── docs/                       # Living documentation
 └── resources/                  # Banner, icons
@@ -156,6 +158,7 @@ if missing the targets are omitted with a status message.
 | `DAEDALUS_DEMO_SUBAGENT` | ON | `demos/daedalus-subagent/` |
 | `DAEDALUS_DEMO_MANAGER` | ON | `demos/daedalus-manager/` |
 | `DAEDALUS_DEMO_WEBUI` | OFF | `demos/daedalus-webui/` |
+| `DAEDALUS_DEMO_SETTINGS_TUI` | ON | `demos/daedalus-settings-tui/` |
 
 ```bash
 cmake -S . -B build -DCODEMAX_DEMO_WEBUI=ON
@@ -323,6 +326,7 @@ See `Readme.md` §Security for the full access-by-operation matrix.
 | Embedding and sink contract | `docs/embedding.md` |
 | Storage layout and env vars | `docs/storage.md` |
 | Settings API | `docs/settings.md` |
+| Settings TUI editor | `docs/settings-tui.md` |
 | Tool specifications | `docs/tools.md` |
 | Context compression | `docs/how_compress_works.md` |
 | Crash resilience | `docs/crash_resilience.md` |

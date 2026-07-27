@@ -1536,3 +1536,17 @@ set_tests_properties(demos_hello_world_tests PROPERTIES
 # When the project grows a node-based test runner (e.g. CI with
 # Playwright preinstalled), both files should be wired into ctest.
 # ============================================================================
+
+# ============================================================================
+# daedalus-settings-tui smoke test: the FTXUI settings editor must boot
+# without a TTY, open a fresh settings DB, and dump every section with
+# exit code 0. XDG_DATA_HOME redirects the store to a hermetic tmp dir.
+# ============================================================================
+if(DAEDALUS_DEMO_SETTINGS_TUI)
+    add_test(NAME settings_tui_dump
+             COMMAND daedalus-settings-tui --dump)
+    set_tests_properties(settings_tui_dump PROPERTIES
+        ENVIRONMENT "XDG_DATA_HOME=${CMAKE_CURRENT_BINARY_DIR}/settings_tui_home"
+        LABELS "smoke"
+    )
+endif()

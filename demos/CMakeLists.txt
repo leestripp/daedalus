@@ -47,3 +47,11 @@ option(DAEDALUS_DEMO_WEBUI "Build webui demo"      OFF)
 if(DAEDALUS_DEMO_WEBUI)
     add_subdirectory(daedalus-webui)
 endif()
+
+# Settings TUI: FTXUI-based editor for the SQLite SettingsStore
+# (providers, models, MCP servers, agent kv settings). FTXUI is fetched
+# into build/_deps/ like the other CMake-managed dependencies.
+option(DAEDALUS_DEMO_SETTINGS_TUI "Build settings TUI demo" ON)
+if(DAEDALUS_DEMO_SETTINGS_TUI)
+    add_subdirectory(daedalus-settings-tui)
+endif()

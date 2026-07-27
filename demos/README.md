@@ -19,6 +19,7 @@ application copies this layout.
 | `daedalus-manager` | **ON** | 3-Agent orchestration (planner → actor → validator) from a host loop. The pattern that replaced `--manager-mode`. | [`demos/daedalus-manager/`](daedalus-manager/) |
 | `daedalus-subagent` | **ON** | Parent agent spawns a child agent via a host-registered tool. The pattern that replaced `--sub-agent`. | [`demos/daedalus-subagent/`](daedalus-subagent/) |
 | `daedalus-webui` | OFF | HTTP + Server-Sent Events host: one agent per browser session, streamed live. | [`demos/daedalus-webui/`](daedalus-webui/) |
+| `daedalus-settings-tui` | **ON** | FTXUI terminal UI for editing the SQLite `SettingsStore`: providers, models, MCP servers, agent options. No agent loop — pure settings CRUD. | [`demos/daedalus-settings-tui/`](daedalus-settings-tui/) |
 
 ---
 
@@ -29,6 +30,7 @@ option(DAEDALUS_BUILD_DEMOS       "Build demo executables"  ON)
 option(DAEDALUS_DEMO_SUBAGENT     "Build sub-agent demo"    ON)
 option(DAEDALUS_DEMO_MANAGER      "Build manager demo"      ON)
 option(DAEDALUS_DEMO_WEBUI        "Build webui demo"        OFF)
+option(DAEDALUS_DEMO_SETTINGS_TUI "Build settings TUI demo" ON)
 ```
 
 Set the ones you don't want on the cmake command line:
@@ -58,11 +60,15 @@ cmake -S . -B build -DDAEDALUS_BUILD_DEMOS=OFF
 # Webui — open in a browser
 ./build/demos/daedalus-webui/daedalus-webui 8088
 # then open http://127.0.0.1:8088/
+
+# Settings TUI — edit providers / models / MCP servers / agent options
+./build/demos/daedalus-settings-tui/daedalus-settings-tui
+./build/demos/daedalus-settings-tui/daedalus-settings-tui --dump   # scriptable
 ```
 
 ---
 
-## Code layout (all 4 demos)
+## Code layout
 
 Each demo follows the same pattern:
 
