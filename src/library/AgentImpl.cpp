@@ -1071,6 +1071,21 @@ bool AgentImpl::switch_model(const std::string& model_name)
         AppConfig new_app = make_app_config(cfg_, *body_->store);
         body_->client->set_config(new_app);
         body_->client->clear_messages();
+    } else if (initialized_) {
+        // §MODEL-SWITCH-CREATE: no LLMClient was created at startup (no
+        // resolvable default model), so there is nothing to reconfigure —
+        // create the client now that a model has been selected, otherwise
+        // run_one_turn() reports "no model configured" forever.
+        AppConfig app = make_app_config(cfg_, *body_->store);
+        body_->client = std::make_unique<LLMClient>(
+            app, std::addressof(*body_->store), body_->mcp.get(),
+            body_->skill_manager.get(), &tool_filter_);
+        if (sink_) {
+            body_->client->set_sink(sink_);
+        }
+        body_->client->set_state_change_callback(
+            [this](daedalus::AgentState s) { set_state(s); });
+        body_->client->initialize();
     }
 
     if (sink_) {

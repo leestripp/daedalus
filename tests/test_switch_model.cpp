@@ -220,6 +220,42 @@ TEST_CASE("switch_provider persists provider and switches to a model of that pro
     fs::remove_all(home);
 }
 
+TEST_CASE("switch_model creates the LLMClient when none existed at startup") {
+    fs::path home = make_temp_home("create-client");
+    {
+        // Providers and models exist, but NO default model is configured —
+        // initialize() must skip LLMClient creation.
+        auto store = daedalus::SettingsStore::for_home(home);
+        store.upsert_provider(make_provider("p1", "http://p1.example"));
+        store.upsert_model(make_model("small", "http://small.example", 10000, "p1"));
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root  = project;
+    cfg.daedalus_home = home;
+    cfg.session_id    = "switch-create-client";
+
+    auto sink = std::make_shared<NullSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    // No client at startup: stats report a zero context size.
+    CHECK(agent.stats().max_context_size == 0);
+
+    // Switching to a valid configured model must create the client,
+    // otherwise run_one_turn() fails with "no model configured" forever.
+    bool switched = agent.switch_model("small");
+    CHECK(switched);
+    CHECK(agent.active_model().name == "small");
+    CHECK(agent.stats().max_context_size == 10000);
+
+    agent.shutdown();
+    fs::remove_all(home);
+}
+
 TEST_CASE("switch_model creates config for discovered provider model id") {
     fs::path home = make_temp_home("discovered");
     {
