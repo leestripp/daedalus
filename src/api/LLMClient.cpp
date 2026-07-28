@@ -1,5 +1,6 @@
 #include "api/LLMClient.h"
 #include "api/MiniMaxSseParser.h"   // §BUG-001: exposed for tests
+#include "api/ErrorMapping.h"       // §on_error: HTTP status / error-type → ErrorKind
 #include "core/version.h"
 #include "core/FileIO.h"
 #include "core/utils.h"
@@ -384,8 +385,15 @@ std::future<std::string> LLMClient::make_api_request_async(
 
     // Capture sink for error routing from the worker thread.
     std::weak_ptr<daedalus::AgentSink> weak_sink = sink_;
+    // Plain log line (kept for notices that are not structured errors).
     auto log_err = [weak_sink](std::string msg) {
         if (auto s = weak_sink.lock()) s->on_log(daedalus::LogLevel::Error, msg);
+        else LOG_ERROR(msg);
+    };
+    // §on_error: structured error report. The default AgentSink::on_error
+    // forwards to on_log(Error), so hosts see the same output as before.
+    auto report_err = [weak_sink](daedalus::ErrorKind kind, std::string msg, bool will_retry) {
+        if (auto s = weak_sink.lock()) s->on_error(kind, msg, will_retry);
         else LOG_ERROR(msg);
     };
 
@@ -394,7 +402,7 @@ std::future<std::string> LLMClient::make_api_request_async(
     return daedalus::concurrent::ThreadPool::get_instance().submit(
         daedalus::concurrent::TaskPriority::HIGH,
         [this, url, payload, stop_token, server_error_settings,
-         streaming_callback, weak_sink, log_err]() mutable -> std::string {
+         streaming_callback, weak_sink, log_err, report_err]() mutable -> std::string {
             int max_retries = server_error_settings.max_retries_per_call;
             int wait_time = server_error_settings.initial_wait_seconds;
             bool last_attempt_was_transport = false;  // §B14 fix
@@ -447,13 +455,19 @@ std::future<std::string> LLMClient::make_api_request_async(
                         }
                         return last_body;  // Success
                     } else if (code == 401) {
-                        // Auth failure: never retry. Surface the error.
-                        log_err("[API] HTTP " + std::to_string(code) + " (auth failed)");
+                        // Auth failure: never retry. The body is returned so
+                        // the downstream error-object handler can surface the
+                        // provider's structured error via on_error — here we
+                        // only log (avoids a duplicate structured event).
+                        log_err("[API] HTTP " + std::to_string(code) + " (auth failed). "
+                                "Response body (first 500 chars): " + last_body.substr(0, 500));
                         return last_body;
                     } else if (code == 429) {
                         // §B14 fix: rate-limited. Honour Retry-After if present;
                         // otherwise fall through to the exponential-backoff path.
-                        log_err("[API] HTTP 429 (rate limited)");
+                        report_err(daedalus::ErrorKind::RateLimited,
+                                   "[API] HTTP 429 (rate limited)",
+                                   attempt < max_retries && server_error_settings.enabled);
                         if (retry_after > 0) {
                             wait_time = retry_after;
                             log_err("[API] Honoring Retry-After: " +
@@ -462,19 +476,30 @@ std::future<std::string> LLMClient::make_api_request_async(
                         // Continue to retry block below.
                     } else if (code >= 400 && code < 500) {
                         // 4xx (other than 401/429): client error, no point retrying.
-                        log_err("[API] HTTP " + std::to_string(code) + " (client error)");
+                        // Same as 401: body flows downstream for the structured
+                        // on_error; log only here.
+                        log_err("[API] HTTP " + std::to_string(code) + " (client error). "
+                                "Response body (first 500 chars): " + last_body.substr(0, 500));
                         return last_body;
                     } else {
-                        log_err("[API] HTTP " + std::to_string(code) + " (server error)");
+                        report_err(daedalus::ErrorKind::ServerError,
+                                   "[API] HTTP " + std::to_string(code) + " (server error)",
+                                   attempt < max_retries && server_error_settings.enabled);
                     }
                 } else {
                     HttpError err = result.error();
                     if (err == HttpError::Cancelled) {
                         throw std::runtime_error("API request cancelled");
                     } else if (err == HttpError::Timeout) {
-                        log_err("[API] request timed out (attempt " + std::to_string(attempt) + ")");
+                        // §B14: transport errors always retry (subject to
+                        // max_retries), hence will_retry = attempt < max.
+                        report_err(daedalus::ErrorKind::Timeout,
+                                   "[API] request timed out (attempt " + std::to_string(attempt) + ")",
+                                   attempt < max_retries);
                     } else {
-                        log_err("[API] request failed (attempt " + std::to_string(attempt) + "): " + to_string(err));
+                        report_err(daedalus::ErrorKind::Network,
+                                   "[API] request failed (attempt " + std::to_string(attempt) + "): " + to_string(err),
+                                   attempt < max_retries);
                     }
                     // §B14 fix: transport errors (timeout / network) should retry
                     // regardless of server_error_settings.enabled — a single blip
@@ -630,47 +655,30 @@ std::string LLMClient::make_http_request_with_retry(
                 }
                 break;
             } else if (code >= 500) {
-                // Server error - retry with exponential backoff if enabled
-                if (sink_) {
-                    std::ostringstream e5xx;
-                    e5xx << "HTTP " << code << " (server error";
-                    if (server_error_settings.enabled) {
-                        e5xx << ", retrying in " << wait_time << "s";
-                    }
-                    e5xx << ")\nResponse body (first 500 chars): "
-                          << response_buffer.substr(0, 500);
-                    sink_->on_log(daedalus::LogLevel::Warn, e5xx.str());
-                } else {
-                    std::ostringstream msg;
-                    msg << "HTTP " << code << " (server error";
-                    if (server_error_settings.enabled) {
-                        msg << ", retrying in " << wait_time << "s";
-                    }
-                    msg << "). Response body (first 500 chars): "
-                        << response_buffer.substr(0, 500);
-                    LOG_WARNING(msg.str());
+                // Server error - retry with exponential backoff if enabled.
+                // §on_error: structured report (default sink forwards to
+                // on_log(Error), matching the previous Warn visibility).
+                std::ostringstream e5xx;
+                e5xx << "HTTP " << code << " (server error";
+                if (server_error_settings.enabled) {
+                    e5xx << ", retrying in " << wait_time << "s";
                 }
+                e5xx << ")\nResponse body (first 500 chars): "
+                      << response_buffer.substr(0, 500);
+                emit_error(daedalus::ErrorKind::ServerError, e5xx.str(),
+                           server_error_settings.enabled && attempt < max_retries);
             }
         } else {
             // Transport-level failure (OmniNet::HTTP::ClientError).
             const char* err_name = OmniNet::HTTP::clientErrorName(result.error());
-            if (sink_) {
-                std::ostringstream msg;
-                msg << "transport error on attempt " << attempt
-                    << ": " << err_name;
-                if (server_error_settings.enabled) {
-                    msg << " (retrying in " << wait_time << "s)";
-                }
-                sink_->on_log(daedalus::LogLevel::Error, msg.str());
-            } else {
-                std::ostringstream msg;
-                msg << "transport error on attempt " << attempt
-                    << ": " << err_name;
-                if (server_error_settings.enabled) {
-                    msg << " (retrying in " << wait_time << "s)";
-                }
-                LOG_ERROR(msg.str());
+            std::ostringstream msg;
+            msg << "transport error on attempt " << attempt
+                << ": " << err_name;
+            if (server_error_settings.enabled) {
+                msg << " (retrying in " << wait_time << "s)";
             }
+            emit_error(daedalus::ErrorKind::Network, msg.str(),
+                       server_error_settings.enabled && attempt < max_retries);
         }
 
         // If we're not done yet, wait before retrying with exponential backoff
@@ -689,6 +697,8 @@ std::string LLMClient::make_http_request_with_retry(
         // We exhausted retries but still got a response, return it
         return response_buffer;
     } else if (attempt == max_retries) {
+        // Note: no terminal emit_error here — the final attempt already
+        // reported on_error(will_retry=false) above.
         throw std::runtime_error("API request failed after "
                                  + std::to_string(max_retries) + " attempts");
     }
@@ -976,6 +986,15 @@ bool LLMClient::handle_set_state_result(const json& result) {
     return true;
 }
 
+// §on_error: structured error routing to the host sink.
+void LLMClient::emit_error(daedalus::ErrorKind kind, const std::string& message, bool will_retry) {
+    if (sink_) {
+        sink_->on_error(kind, message, will_retry);
+    } else {
+        LOG_ERROR("[" + std::string(daedalus::to_string(kind)) + "] " + message);
+    }
+}
+
 // Helper method to extract error message from raw API response
 std::string LLMClient::extract_error_message(const std::string& response) const {
     // Try to find JSON error object in the response
@@ -1050,6 +1069,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         payload_str = request_payload.dump();
     } catch (const std::exception& e) {
         LOG_ERROR("Failed to serialize request payload: " + std::string(e.what()));
+        // §on_error: was LOG-only — the host saw nothing and the turn
+        // ended as if successful (DONE).
+        emit_error(daedalus::ErrorKind::Internal,
+                   "Failed to serialize request payload: " + std::string(e.what()),
+                   /*will_retry=*/false);
         // Try to identify which message is problematic
         for (size_t i = 0; i < messages.size(); i++) {
             try {
@@ -1066,6 +1090,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         json parsed_verify = json::parse(payload_str);
         if (!parsed_verify.contains("messages") || !parsed_verify["messages"].is_array()) {
             LOG_ERROR("JSON validation failed: messages array missing or invalid");
+            emit_error(daedalus::ErrorKind::Internal,
+                       "JSON validation failed: messages array missing or invalid",
+                       /*will_retry=*/false);
             return AgentState::DONE;
         }
         
@@ -1104,6 +1131,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     } catch (const std::exception& e) {
         LOG_ERROR("JSON parse verification failed: " + std::string(e.what()));
         LOG_ERROR("Payload (first 500 chars): " + payload_str.substr(0, 500));
+        emit_error(daedalus::ErrorKind::Internal,
+                   "JSON parse verification failed: " + std::string(e.what()),
+                   /*will_retry=*/false);
         return AgentState::DONE;
     }
     
@@ -1128,12 +1158,18 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 std::string tc_id = tc.value("id", "");
                 if (tc_id.empty() || tc_id.find('\0') != std::string::npos) {
                     LOG_ERROR("Invalid tool_call_id at message " + std::to_string(i) + ": empty or contains null");
+                    emit_error(daedalus::ErrorKind::Internal,
+                               "Invalid tool_call_id at message " + std::to_string(i) + ": empty or contains null",
+                               /*will_retry=*/false);
                     return AgentState::DONE;
                 }
                 // Check for control characters that might break JSON
                 for (char c : tc_id) {
                     if (c < 0x20 && c != '\t' && c != '\n' && c != '\r') {
                         LOG_ERROR("Invalid control char in tool_call_id at message " + std::to_string(i));
+                        emit_error(daedalus::ErrorKind::Internal,
+                                   "Invalid control char in tool_call_id at message " + std::to_string(i),
+                                   /*will_retry=*/false);
                         return AgentState::DONE;
                     }
                 }
@@ -1143,6 +1179,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::string tc_id = msg.value("tool_call_id", "");
             if (tc_id.empty() || tc_id.find('\0') != std::string::npos) {
                 LOG_ERROR("Invalid tool_call_id in tool result at message " + std::to_string(i));
+                emit_error(daedalus::ErrorKind::Internal,
+                           "Invalid tool_call_id in tool result at message " + std::to_string(i),
+                           /*will_retry=*/false);
                 return AgentState::DONE;
             }
         }
@@ -1234,6 +1273,26 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     sse_parser.finish();
 
     // Get the result from the API call.
+    // §on_error fix: actually consume the future. Previously
+    // api_future.get() was never called — the task's terminal exception
+    // ("API request failed after N attempts") and the HTTP error body
+    // were silently discarded, and non-streaming turns fell into the
+    // parse-failure fallback below and issued a duplicate request.
+    try {
+        response_body = api_future.get();
+    } catch (const std::exception& e) {
+        if (cancel_token.stop_requested()) {
+            // Cancellation is reported via the wait-loop branch, not as
+            // an error.
+            return AgentState::CANCELLED;
+        }
+        // Terminal transport failure (retries already exhausted inside
+        // make_api_request_async — which also fired per-attempt
+        // on_error events; this is the terminal one).
+        emit_error(daedalus::ErrorKind::Network, e.what(), /*will_retry=*/false);
+        return AgentState::DONE;
+    }
+
     // With config_.stream=true, response_body may be empty (HttpSession
     // takes the streaming branch and doesn't accumulate when stream_callback
     // is set). In that case sse_parser.final_event() carries the data.
@@ -1305,16 +1364,18 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     if (sink_) sink_->on_log(daedalus::LogLevel::Error, api_retry.str());
                 }
             } else {
-                // All retries exhausted
+                // All retries exhausted — terminal parse failure.
                 std::string error_msg = extract_error_message(response_body);
                 if (!error_msg.empty()) {
-                    if (sink_) sink_->on_log(daedalus::LogLevel::Error, error_msg);
+                    emit_error(daedalus::ErrorKind::Parse, error_msg,
+                               /*will_retry=*/false);
                     LOG_ERROR("JSON parse error with API message: " + error_msg);
                 } else {
                     std::ostringstream parse_err;
                     parse_err << "Failed to parse JSON response after " << max_retries
                               << " attempts: " << e.what();
-                    if (sink_) sink_->on_log(daedalus::LogLevel::Error, parse_err.str());
+                    emit_error(daedalus::ErrorKind::Parse, parse_err.str(),
+                               /*will_retry=*/false);
                     LOG_ERROR("Response was: " + response_body.substr(0, 500));
                     LOG_ERROR("JSON parse failed: " + std::string(e.what()));
                 }
@@ -1324,6 +1385,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     }
     
     if (!parse_success) {
+        // Reached only when server-error retry is disabled (B27) and the
+        // first parse attempt failed — was a silent DONE before §on_error.
+        emit_error(daedalus::ErrorKind::Parse,
+                   "Failed to parse JSON response (server-error retry disabled)",
+                   /*will_retry=*/false);
         return AgentState::DONE;
     }
 
@@ -1335,6 +1401,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         auto& error = response_json["error"];
         std::string error_message = error.value("message", "Unknown error");
         std::string error_type = error.value("type", "unknown");
+        // §on_error: keep the untruncated provider message for the host;
+        // the truncation below is only for the conversation-injected copy.
+        const std::string full_error_message = error_message;
+        const daedalus::ErrorKind error_kind =
+            daedalus::error_kind_from_api_type(error_type);
 
         // Remove provider-specific text from the error message (URLs, help text)
         // Find the first period followed by space, or " at ", or " You " and cut there
@@ -1358,12 +1429,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         ErrorCategory category = classify_api_error(error_type, error_message);
         
         if (category == ErrorCategory::FATAL) {
-            // Fatal error - add error message to conversation and continue
-            {
-            std::ostringstream api_err;
-            api_err << error_type << ": " << error_message;
-            if (sink_) sink_->on_log(daedalus::LogLevel::Error, api_err.str());
-        }
+            // Fatal error - add error message to conversation and continue.
+            // §on_error: structured terminal report with the FULL provider
+            // message (replaces the previous truncated on_log line — the
+            // default sink forwards on_error to on_log, preserving output).
+            emit_error(error_kind, error_type + ": " + full_error_message,
+                       /*will_retry=*/false);
             LOG_DEBUG("Last tool call: id=" + last_tool_call_id + " name=" + last_tool_name);
             LOG_DEBUG("Args: " + last_tool_args);
             LOG_ERROR("API error [FATAL, " + error_type + "]: " + error_message + " | Tool: " + last_tool_name + " (id=" + last_tool_call_id + ")");
@@ -1394,6 +1465,8 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         std::ostringstream retry_msg2;
         retry_msg2 << error_type << ": " << error_message << " - will retry...";
         if (sink_) sink_->on_log(daedalus::LogLevel::Warn, retry_msg2.str());
+        emit_error(error_kind, error_type + ": " + full_error_message,
+                   /*will_retry=*/true);
         LOG_ERROR("API error [TRANSIENT, " + error_type + "]: " + error_message);
         
         bool retry_success = false;
@@ -1424,6 +1497,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     std::string retry_error_msg = retry_error.value("message", "Unknown error");
                     if (classify_api_error(retry_error_type, retry_error_msg) == ErrorCategory::FATAL) {
                         LOG_ERROR("Fatal error during retry: " + retry_error_type);
+                        // §on_error: was LOG-only — the host never saw the
+                        // fatal classification, only the earlier transient
+                        // warning.
+                        emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                                   retry_error_type + ": " + retry_error_msg,
+                                   /*will_retry=*/false);
                         // §B9: reuse the shared helper.
                         LastToolCall last_retry = find_last_tool_call(messages);
                         const std::string& last_tool_id   = last_retry.id;
@@ -1445,19 +1524,21 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     }
                     std::ostringstream persist_msg;
                     persist_msg << "Error persisted: " << retry_error_type;
-                    if (sink_) sink_->on_log(daedalus::LogLevel::Error, persist_msg.str());
+                    emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                               persist_msg.str(), /*will_retry=*/true);
                 }
             } catch (const std::exception& e) {
                 std::ostringstream exc_msg;
                 exc_msg << "Exception during retry: " << e.what();
-                if (sink_) sink_->on_log(daedalus::LogLevel::Error, exc_msg.str());
+                emit_error(daedalus::ErrorKind::Unknown, exc_msg.str(),
+                           /*will_retry=*/true);
             }
         }
         
         if (!retry_success) {
             std::ostringstream failed_msg;
             failed_msg << "All API retries failed. Adding error to conversation and continuing.";
-            if (sink_) sink_->on_log(daedalus::LogLevel::Error, failed_msg.str());
+            emit_error(error_kind, failed_msg.str(), /*will_retry=*/false);
             // CRITICAL FIX: Add a tool result for the failed call
             // to keep conversation state valid (no orphan tool_calls)
             if (!last_tool_call_id.empty() && last_tool_call_id != "UNKNOWN") {
@@ -1551,10 +1632,14 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     std::string retry_error_msg = retry_error.value("message", "Unknown error");
                     std::ostringstream got_err_msg;
                     got_err_msg << "Got error: " << retry_error_type << ": " << retry_error_msg;
-                    if (sink_) sink_->on_log(daedalus::LogLevel::Warn, got_err_msg.str());
+                    emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                               got_err_msg.str(), /*will_retry=*/true);
                     
                     if (classify_api_error(retry_error_type) == ErrorCategory::FATAL) {
                         LOG_ERROR("Fatal error: " + retry_error_type);
+                        emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                                   retry_error_type + ": " + retry_error_msg,
+                                   /*will_retry=*/false);
                         // Find the last tool call for debugging
                         std::string last_tool_name = "UNKNOWN";
                         std::string last_tool_id = "UNKNOWN";
@@ -1584,12 +1669,19 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             } catch (const std::exception& e) {
                 std::ostringstream exc2_msg;
                 exc2_msg << "Exception during retry: " << e.what();
-                if (sink_) sink_->on_log(daedalus::LogLevel::Error, exc2_msg.str());
+                emit_error(daedalus::ErrorKind::Unknown, exc2_msg.str(),
+                           /*will_retry=*/true);
             }
         }
         
         if (!api_success) {
             LOG_ERROR("All API retries failed. Adding error to conversation and continuing.");
+            // §on_error: was LOG-only — terminal empty-response failure
+            // never reached the host.
+            emit_error(daedalus::ErrorKind::ServerError,
+                       "API returned empty response (no choices) after "
+                           + std::to_string(max_retries) + " retries",
+                       /*will_retry=*/false);
             // CRITICAL FIX: Find the last tool_call_id and add a tool result
             // to keep conversation state valid (no orphan tool_calls)
             std::string orphan_tc_id = "UNKNOWN";

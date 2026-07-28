@@ -11,6 +11,39 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
+- **Structured error channel: `AgentSink::on_error()`**
+  (`include/daedalus/AgentSink.h`, new `include/daedalus/types/ErrorKind.h`):
+  - New public callback
+    `on_error(daedalus::ErrorKind kind, std::string_view message, bool will_retry)`
+    fired on every LLM/API error path: HTTP 401/429/4xx/5xx, transport
+    failures, timeouts, malformed provider responses, structured
+    `{"error": ...}` payloads, and library-side request failures.
+  - `ErrorKind` gives hosts a machine-readable classification (`Network`,
+    `Timeout`, `RateLimited`, `Auth`, `ClientError`, `ServerError`,
+    `Parse`, `ApiError`, `Internal`); `will_retry` distinguishes transient
+    failures (backoff in progress) from terminal ones. Provider error
+    messages are delivered untruncated.
+  - The default implementation forwards to `on_log(LogLevel::Error, ...)`,
+    so existing hosts see identical output and opt in only when they want
+    to act on errors (banner, backoff, model switch, abort).
+  - Covered by `tests/test_on_error_callback.cpp`; documented in
+    `docs/embedding.md`.
+
+### Fixed
+
+- **LLM errors that never reached the host** (`src/api/LLMClient.cpp`):
+  - `run_agent_cycle()` never called `api_future.get()`: the async
+    request's terminal exception ("API request failed after N attempts")
+    and the HTTP error body were silently discarded, and non-streaming
+    turns fell into the parse-failure fallback and issued a duplicate API
+    request. The future is now consumed; terminal failures fire
+    `on_error(ErrorKind::Network, ..., will_retry=false)`.
+  - Several failure exits were `LOG_ERROR`-only (file log) — payload
+    serialization/validation failures, invalid `tool_call_id`s, fatal
+    errors during retry, and the terminal empty-response ("no choices")
+    path. All now fire `on_error` (previously the host saw nothing and the
+    turn ended as `AgentState::Done`).
+
 - **TTY-safe live bash output streaming** (`BashTool`, `BashCommandExecutor`):
   - `BashCommandExecutor::sanitize_tty_sequences()` strips terminal-control
     sequences (cursor movement, screen erase, alternate buffer, OSC, DCS,

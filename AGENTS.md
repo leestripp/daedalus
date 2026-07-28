@@ -284,6 +284,8 @@ public:
     void on_tool_result(std::string_view name, std::string_view call_id,
                         const nlohmann::json& result) noexcept override;
     void on_state_change(int from, int to) noexcept override;
+    void on_error(daedalus::ErrorKind kind, std::string_view msg,
+                  bool will_retry) noexcept override;
     void on_log(daedalus::LogLevel lvl, std::string_view msg) noexcept override;
     bool request_command_approval(std::string_view cmd) override;
 };

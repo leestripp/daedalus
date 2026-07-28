@@ -1550,3 +1550,22 @@ if(DAEDALUS_DEMO_SETTINGS_TUI)
         LABELS "smoke"
     )
 endif()
+
+# ============================================================================
+# §on_error: AgentSink::on_error structured error channel + ErrorKind
+# mapping (HTTP status / provider error-type) unit tests
+# ============================================================================
+add_executable(daedalus_on_error_tests
+    test_on_error_callback.cpp
+)
+target_include_directories(daedalus_on_error_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_on_error_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME on_error_callback_tests COMMAND daedalus_on_error_tests)

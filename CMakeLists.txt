@@ -296,6 +296,7 @@ set(LIBRARY_PUBLIC_SOURCES
 	src/library/AgentImpl.cpp
 	src/library/AgentSink.cpp
 	src/library/AgentState.cpp
+	src/library/ErrorKind.cpp
 	src/library/LogLevel.cpp
 	src/library/LibraryToolContext.cpp
 	src/library/default_paths.cpp

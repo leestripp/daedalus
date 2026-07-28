@@ -24,6 +24,17 @@
     } while (0)
 namespace daedalus {
 
+void AgentSink::on_error(daedalus::ErrorKind kind,
+                         std::string_view message,
+                         bool will_retry) noexcept
+{
+    // Default: preserve pre-on_error behaviour — hosts that only override
+    // on_log keep seeing every error as an Error-level log line.
+    (void)kind;
+    (void)will_retry;
+    on_log(daedalus::LogLevel::Error, message);
+}
+
 void AgentSink::on_log(daedalus::LogLevel level,
                        std::string_view message) noexcept
 {

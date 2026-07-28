@@ -114,6 +114,9 @@ struct daedalus::AgentSink {
 
     // State / lifecycle
     virtual void on_state_change(int from, int to) noexcept;
+    virtual void on_error(daedalus::ErrorKind kind,
+                          std::string_view message,
+                          bool will_retry) noexcept;
     virtual void on_log(daedalus::LogLevel level,
                         std::string_view message) noexcept;
 
@@ -165,6 +168,7 @@ in what format, and what it means for your host application.
 | `on_tool_progress` | `name` + `call_id` + `progress` (JSON) | **Tool progress updates** — `{stage, percent, message, output_chunk}` |
 | `on_tool_result` | `name` + `call_id` + `result` (JSON) | **Structured tool output** — tool execution result |
 | `on_state_change` | `from` + `to` (int enum values) | **State transitions** — agent lifecycle |
+| `on_error` | `kind` (enum) + `message` (string) + `will_retry` (bool) | **Structured LLM/API errors** — machine-readable failure channel |
 | `on_log` | `level` (enum) + `message` (string) | **Library diagnostics** — NOT LLM output |
 | `on_compaction` | `before` + `after` (size_t) | **Context compression stats** |
 | `on_bell` | none | **Notification signal** — ring the bell |
@@ -497,6 +501,50 @@ on_state_change(3, 8)   // Acting -> Done
 `on_llm_request_finished`) to show the spinner only while the agent is
 actually waiting for the LLM. `on_state_change` is still useful for updating
 the spinner's label ("Planning...", "Acting...", etc.).
+
+---
+
+### `on_error(kind, message, will_retry)` — Structured LLM/API Errors
+
+```cpp
+void on_error(daedalus::ErrorKind kind,
+              std::string_view message,
+              bool will_retry) noexcept override;
+```
+
+**Called when:** any LLM/API error occurs — HTTP failures (401, 429, 4xx,
+5xx), transport errors, timeouts, malformed provider responses, structured
+`{"error": ...}` payloads from the provider, and library-side request
+failures (payload serialization/validation).
+
+**Data:**
+- `kind`: `daedalus::ErrorKind` — machine-readable classification:
+  `Network`, `Timeout`, `RateLimited`, `Auth`, `ClientError`,
+  `ServerError`, `Parse`, `ApiError`, `Internal`, `Unknown`.
+- `message`: human-readable detail. For provider error objects this is the
+  **full** provider message (unlike the copy injected into the
+  conversation, which is truncated).
+- `will_retry`: `true` if the library will attempt the request again
+  (transient failure, backoff in progress); `false` if the failure is
+  terminal for this turn.
+
+**Why it exists:** `on_log` is free-form diagnostics — parseable only by
+string matching. `on_error` lets the host *act*: show an error banner,
+back off, switch model, or abort the session.
+
+**IMPORTANT — terminal failures end as `AgentState::Done`:** the internal
+state machine has no error state, so a turn whose LLM request ultimately
+failed still finishes with `on_state_change(..., Done)`. A host that needs
+to know whether a turn failed MUST track `on_error` (e.g. set a flag when
+`will_retry == false` fires and check it when the turn ends).
+
+**Default:** forwards to `on_log(LogLevel::Error, message)`, so hosts
+written before `on_error` existed see identical output and only need to
+override it when they want the structured form.
+
+**Threading:** may fire on the HTTP worker thread (same rule as
+`on_assistant_delta`) as well as the agent worker thread — marshal to the
+UI thread if your framework requires it.
 
 ---
 

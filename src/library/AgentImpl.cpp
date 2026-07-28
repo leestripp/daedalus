@@ -646,9 +646,10 @@ void AgentImpl::run_one_turn(std::stop_token st)
         std::string msg = std::move(pending_user_messages_.front());
         pending_user_messages_.erase(pending_user_messages_.begin());
         if (sink_) {
-            sink_->on_log(daedalus::LogLevel::Error,
-                          "Agent::run_one_turn() — no model configured; "
-                          "cannot dispatch message: " + msg);
+            sink_->on_error(daedalus::ErrorKind::Internal,
+                            "Agent::run_one_turn() — no model configured; "
+                            "cannot dispatch message: " + msg,
+                            /*will_retry=*/false);
         }
         set_state(AgentState::Error);
         return;

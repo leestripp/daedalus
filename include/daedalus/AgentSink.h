@@ -26,6 +26,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "daedalus/types/ErrorKind.h"
 #include "daedalus/types/LogLevel.h"
 
 namespace daedalus {
@@ -145,6 +146,26 @@ public:
     /// @brief Agent transitioned from one state to another. `to` is the
     /// cast-to-int value of the new AgentState.
     virtual void on_state_change(int /*from*/, int /*to*/) noexcept {}
+
+    /// @brief An LLM/API error occurred. This is the structured error
+    /// channel: unlike on_log (free-form diagnostics), on_error carries a
+    /// machine-readable ErrorKind so hosts can *act* on failures — show an
+    /// error banner, back off, switch model, or abort the session.
+    ///
+    /// `will_retry` is true when the library will attempt the request again
+    /// (transient failure); false means the failure is terminal for this
+    /// turn. Terminal LLM failures still end the turn with public
+    /// AgentState::Done (the internal state machine has no error state), so
+    /// hosts that need to know a turn failed MUST track on_error.
+    ///
+    /// Threading: may be called on the HTTP worker thread (same rule as
+    /// on_assistant_delta) as well as the agent worker thread.
+    ///
+    /// Default: forwards to on_log(LogLevel::Error, message), so existing
+    /// hosts that only override on_log see identical output.
+    virtual void on_error(daedalus::ErrorKind kind,
+                          std::string_view message,
+                          bool will_retry) noexcept;
 
     /// @brief Free-form log message from the agent.
     /// Default: writes to stderr. Hosts typically override this.

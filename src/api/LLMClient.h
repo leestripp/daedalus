@@ -147,6 +147,12 @@ private:
     [[nodiscard]] std::string get_state_name(AgentState state) const;
     [[nodiscard]] std::string extract_error_message(const std::string& response) const;
 
+    // §on_error: route a structured error to the host via
+    // AgentSink::on_error (falls back to the file Logger when no sink is
+    // attached). `will_retry` tells the host whether the library will
+    // attempt the request again.
+    void emit_error(daedalus::ErrorKind kind, const std::string& message, bool will_retry);
+
     // Buffer management
     // Truncate messages if they exceed max_request_size (keeps system + recent messages)
     json truncate_messages_if_needed(json& messages, size_t max_size);
