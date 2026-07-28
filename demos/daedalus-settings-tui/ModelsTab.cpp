@@ -66,7 +66,10 @@ Component MakeModelsTab(AppContext& ctx)
     refresh();
 
     // -- form open helpers --------------------------------------------------
-    auto open_add = [st] {
+    // refresh() runs first so the provider dropdown picks up providers
+    // added/deleted in the Providers tab since this tab was constructed.
+    auto open_add = [st, refresh] {
+        refresh();
         st->editing = false;
         st->original_name.clear();
         st->f_name.clear();
@@ -78,10 +81,11 @@ Component MakeModelsTab(AppContext& ctx)
         st->show_form = true;
     };
 
-    auto open_edit = [&ctx, st] {
+    auto open_edit = [&ctx, st, refresh] {
         if (st->names.empty()) return;
         auto m = ctx.store.get_model(st->names[st->selected]);
         if (!m) return;
+        refresh();
         st->editing       = true;
         st->original_name = m->name;
         st->f_name        = m->name;
