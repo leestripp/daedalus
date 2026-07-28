@@ -66,7 +66,7 @@ DAEDALUS_HOME=/tmp/daedalus-test daedalus-cli --migrate-data-apply
 | `daedalus.db` (settings store) | `<data_root>/daedalus.db` | **v0.4.0+**: SQLite-backed settings. Stores models, MCP servers, Serper key. |
 | `mcp/.env` | `<config_root>/mcp/.env` | MCP server environment variables (env vars for subprocesses) |
 | Globally-installed skill packs | `<data_root>/skills/` | User-global skill packs |
-| Library logs | `<state_root>/logs/daedalus.log` | Agent logs |
+| Library logs | `agent_dir/logs/` (**project tier**, see §2.2) | `core/Logger.h` diagnostics. Note: `Paths::log_file()` (`<state_root>/logs/daedalus.log`) exists in the API but nothing currently writes to it. |
 | Response replay cache (future) | `<cache_root>/responses/` | Future |
 | Unix socket (future daemon mode) | `$XDG_RUNTIME_DIR/daedalus/agent.sock` | Future |
 
@@ -147,6 +147,7 @@ get different `agent_dir()` paths, so:
 | `agent_dir/memory/memory.json` | Long-term facts. Source of truth for `SessionMemory`. | No — losing this loses project memory |
 | `agent_dir/memory/daedalus.db` | SQLite mirror of `memory.json` under `mem.<session_id>` keys. Used for recovery if the JSON file is corrupt. | Yes (regenerable from `memory.json`) |
 | `agent_dir/sessions/<sid>/` | Per-session scratch state | Yes |
+| `agent_dir/logs/<timestamp>_session.log` | Internal diagnostics written by the `LOG_*` macros (`core/Logger.h`). One file per session; rotated to `.old` past 10 MB; files older than 30 days are deleted on startup. | Yes |
 | `agent_dir/cache/` | Project-specific regenerable caches | Yes |
 | `agent_dir/skills/active/` | Project-local skill overrides | No — losing this drops overrides |
 | `agent_dir/agents/<sub_name>/` | Sub-agent state | Depends on sub-agent |
