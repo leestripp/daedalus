@@ -1569,3 +1569,19 @@ target_link_libraries(daedalus_on_error_tests PRIVATE
     pthread
 )
 add_test(NAME on_error_callback_tests COMMAND daedalus_on_error_tests)
+
+# ============================================================================
+# §logging: Logger self-initialization (cwd fallback), explicit project
+# init, and level filtering unit tests
+# ============================================================================
+add_executable(daedalus_logger_tests
+    test_logger.cpp
+)
+target_include_directories(daedalus_logger_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_logger_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME logger_tests COMMAND daedalus_logger_tests)

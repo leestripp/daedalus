@@ -40,9 +40,15 @@ restarts it.
 1. **`AgentSink`** (host-controlled callback) — primary I/O path for
    user-visible text. Hosts wire this to their own stdout, a log
    file, an in-memory buffer, whatever fits the host's I/O model.
-2. **`core/Logger.h`** — `LOG_INFO` / `LOG_WARNING` / `LOG_ERROR`
-   macros for internal diagnostics. Writes to a per-project log
-   file under `<project>/.daedalus/daedalus/logs/`. Does NOT touch stdio.
+2. **`core/Logger.h`** — `LOG_DEBUG` / `LOG_INFO` / `LOG_WARNING` /
+   `LOG_ERROR` macros for internal diagnostics. Writes to a per-project
+   log file under `<project>/.daedalus/daedalus[-<name>]/logs/`. Does NOT
+   touch stdio. The logger self-initializes on first use: `AgentImpl`
+   initializes it with the project-scoped per-agent directory during
+   `Agent::initialize()`; a bare `LOG_*` call before that falls back to
+   `<cwd>/.daedalus/daedalus/logs/` (marked auto-initialized, and upgraded
+   to the project path when the agent initializes). All filesystem
+   failures are swallowed — logging never throws into library code.
 
 ### Output channels the library MUST NOT use
 

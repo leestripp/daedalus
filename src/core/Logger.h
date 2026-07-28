@@ -66,6 +66,13 @@ public:
      * @brief Check if logger is initialized
      */
     bool is_initialized() const { return initialized_; }
+
+    /**
+     * @brief True when the logger self-initialized with the cwd fallback
+     *        (first LOG_* call before any explicit initialize()). Hosts can
+     *        use this to re-initialize with a project-scoped path.
+     */
+    bool is_auto_initialized() const { return auto_initialized_; }
     
     /**
      * @brief Shutdown logger gracefully
@@ -121,7 +128,12 @@ public:
 private:
     Logger() = default;
     ~Logger();
-    
+
+    // §logging: best-effort self-initialization with the cwd fallback, so a
+    // bare LOG_* call before any explicit initialize() still lands on disk.
+    // Called from log()/log_with_context() WITHOUT log_mutex_ held.
+    void ensure_initialized();
+
     void ensure_log_directory();
     void rotate_log_if_needed();
     void cleanup_old_logs();
@@ -134,6 +146,8 @@ private:
     
     bool initialized_ = false;
     bool enabled_ = true;
+    bool init_attempted_ = false;     // lazy self-init happens at most once
+    bool auto_initialized_ = false;   // set when ensure_initialized() succeeded
     fs::path project_root_;
     fs::path current_log_path_;
     LoggerConfig config_;

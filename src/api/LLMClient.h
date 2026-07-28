@@ -148,9 +148,10 @@ private:
     [[nodiscard]] std::string extract_error_message(const std::string& response) const;
 
     // §on_error: route a structured error to the host via
-    // AgentSink::on_error (falls back to the file Logger when no sink is
-    // attached). `will_retry` tells the host whether the library will
-    // attempt the request again.
+    // AgentSink::on_error. Every error is also written unconditionally to the
+    // file Logger, so hosts that override on_error/on_log still leave a trace
+    // in the project log file. `will_retry` tells the host whether the
+    // library will attempt the request again.
     void emit_error(daedalus::ErrorKind kind, const std::string& message, bool will_retry);
 
     // Buffer management

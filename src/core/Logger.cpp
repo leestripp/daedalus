@@ -37,30 +37,59 @@ Logger::~Logger() {
 
 void Logger::initialize(const fs::path& project_root, const LoggerConfig& config) {
     std::scoped_lock lock(log_mutex_);
-    
-    project_root_ = fs::absolute(project_root);
-    config_ = config;
-    enabled_ = config.enabled;
-    
-    // Create log directory
-    ensure_log_directory();
-    
-    // Generate initial log file name
-    current_log_path_ = get_log_directory() / generate_log_filename();
-    
-    // Cleanup old logs on startup
-    cleanup_old_logs();
-    
-    session_start_ = std::chrono::system_clock::now();
-    initialized_ = true;
-    
-    // Write session start marker
-    std::stringstream ss;
-    ss << "===========================================\n";
-    ss << "daedalus Session Started\n";
-    ss << "Project: " << project_root_.string() << "\n";
-    ss << "===========================================\n";
-    write_to_file(ss.str());
+
+    // Explicit initialization wins over the cwd fallback (ensure_initialized).
+    auto_initialized_ = false;
+
+    // §logging: hardened — fs::absolute / create_directories /
+    // directory_iterator can throw fs::filesystem_error. Logging is
+    // best-effort: on failure stay uninitialized rather than throwing into
+    // library code (callers include noexcept paths and worker threads).
+    try {
+        project_root_ = fs::absolute(project_root);
+        config_ = config;
+        enabled_ = config.enabled;
+
+        // Create log directory
+        ensure_log_directory();
+
+        // Generate initial log file name
+        current_log_path_ = get_log_directory() / generate_log_filename();
+
+        // Cleanup old logs on startup
+        cleanup_old_logs();
+
+        session_start_ = std::chrono::system_clock::now();
+        initialized_ = true;
+
+        // Write session start marker
+        std::stringstream ss;
+        ss << "===========================================\n";
+        ss << "daedalus Session Started\n";
+        ss << "Project: " << project_root_.string() << "\n";
+        ss << "===========================================\n";
+        write_to_file(ss.str());
+    } catch (const std::exception&) {
+        initialized_ = false;
+    }
+}
+
+void Logger::ensure_initialized() {
+    if (initialized_ || init_attempted_) return;  // fast path (benign race)
+    {
+        std::scoped_lock lock(log_mutex_);
+        if (initialized_ || init_attempted_) return;  // double-checked
+        init_attempted_ = true;  // one attempt only — no retry storms
+    }
+    // initialize() takes log_mutex_ itself, so it must be called here with
+    // the lock released. fs::current_path() can throw — best-effort only.
+    try {
+        initialize(fs::current_path());
+    } catch (const std::exception&) {
+        // stay dark
+    }
+    std::scoped_lock lock(log_mutex_);
+    auto_initialized_ = initialized_;
 }
 
 void Logger::shutdown() {
@@ -99,6 +128,7 @@ void Logger::error(const std::string& message) {
 }
 
 void Logger::log(LogLevel level, const std::string& message) {
+    ensure_initialized();
     if (!initialized_ || !enabled_) return;
     if (level < config_.level) return;
     
@@ -121,6 +151,7 @@ void Logger::log(LogLevel level, const std::string& message) {
 
 void Logger::log_with_context(LogLevel level, const std::string& message,
                                const std::vector<std::pair<std::string, std::string>>& context) {
+    ensure_initialized();
     if (!initialized_ || !enabled_) return;
     if (level < config_.level) return;
     

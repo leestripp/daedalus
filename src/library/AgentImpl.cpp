@@ -24,6 +24,7 @@
 #include "daedalus/settings.h"
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
 #include "core/FileIO.h"             // for execute_tool FileIO construction
+#include "core/Logger.h"             // LOG_ERROR for on_error file logging
 #include "core/SessionMemory.h"      // internal subsystem (src/core/)
 #include "core/SkillManager.h"       // internal subsystem (src/core/)
 #include "tools/ToolHandler.h"       // internal subsystem (src/tools/)
@@ -139,6 +140,12 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
 void AgentImpl::set_state(AgentState s) noexcept
 {
     AgentState old = state_.exchange(s, std::memory_order_acq_rel);
+    if (old != s) {
+        // §logging: state transitions at DEBUG — below the default INFO
+        // level, so no log spam unless the level is lowered.
+        LOG_DEBUG(std::string("Agent state: ") + daedalus::to_string(old)
+                  + " -> " + daedalus::to_string(s));
+    }
     if (old != s && sink_) {
         sink_->on_state_change(static_cast<int>(old), static_cast<int>(s));
         // §Phase 9.6: notify the host on turn completion. The CLI rings
@@ -154,6 +161,28 @@ void AgentImpl::set_state(AgentState s) noexcept
 void AgentImpl::initialize()
 {
     if (initialized_) return;
+
+    // §logging: give the Logger a project-scoped home before anything else
+    // logs. If it already self-initialized with the cwd fallback (a LOG_*
+    // call ran before agent init), re-initialize with the per-agent project
+    // directory. initialize() is hardened against fs errors; the try/catch
+    // is belt-and-braces so logging can never break agent startup.
+    {
+        auto& logger = Logger::get_instance();
+        if (!logger.is_initialized() || logger.is_auto_initialized()) {
+            try {
+                LoggerConfig lcfg;
+                lcfg.log_path = "logs/";  // relative to the agent dir
+                logger.initialize(
+                    resolve_agent_dir(cfg_.project_root, cfg_.agent_name), lcfg);
+            } catch (const std::exception& e) {
+                if (sink_) {
+                    sink_->on_log(daedalus::LogLevel::Warn,
+                                  std::string("Logger init failed: ") + e.what());
+                }
+            }
+        }
+    }
 
     // §Phase 14.7: per-project system_prompt override.
     // Decision (see Agent.md §14.7 Q2): if
@@ -640,11 +669,18 @@ void AgentImpl::run_one_turn(std::stop_token st)
         return;
     }
 
+    LOG_DEBUG("run_one_turn: dispatching "
+              + std::to_string(pending_user_messages_.size())
+              + " pending message(s)");
+
     if (!body_->client) {
         // No LLMClient spun up (no model credentials configured). Surface
-        // as Error rather than crashing.
+        // as Error rather than crashing. File-log unconditionally (also
+        // covers the no-sink case, which was previously dropped silently).
         std::string msg = std::move(pending_user_messages_.front());
         pending_user_messages_.erase(pending_user_messages_.begin());
+        LOG_ERROR("[Internal] Agent::run_one_turn() — no model configured; "
+                  "cannot dispatch message: " + msg);
         if (sink_) {
             sink_->on_error(daedalus::ErrorKind::Internal,
                             "Agent::run_one_turn() — no model configured; "

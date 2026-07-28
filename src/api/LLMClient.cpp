@@ -392,9 +392,12 @@ std::future<std::string> LLMClient::make_api_request_async(
     };
     // §on_error: structured error report. The default AgentSink::on_error
     // forwards to on_log(Error), so hosts see the same output as before.
+    // Every error is also file-logged unconditionally — hosts that override
+    // on_error/on_log for console rendering still get a project log trace.
     auto report_err = [weak_sink](daedalus::ErrorKind kind, std::string msg, bool will_retry) {
+        LOG_ERROR("[" + std::string(daedalus::to_string(kind)) + "] " + msg
+                  + (will_retry ? " (will_retry=true)" : " (will_retry=false)"));
         if (auto s = weak_sink.lock()) s->on_error(kind, msg, will_retry);
-        else LOG_ERROR(msg);
     };
 
     // Submit the entire retry loop to the ThreadPool so it doesn't block
@@ -686,6 +689,10 @@ std::string LLMClient::make_http_request_with_retry(
             std::ostringstream wait;
             wait << "Waiting " << wait_time << " seconds before retry...";
             if (sink_) sink_->on_log(daedalus::LogLevel::Info, wait.str());
+            // §logging: per-attempt detail at DEBUG (below default INFO).
+            LOG_DEBUG("[API] attempt " + std::to_string(attempt) + "/"
+                      + std::to_string(max_retries) + " failed; backoff "
+                      + std::to_string(wait_time) + "s before next attempt");
             std::this_thread::sleep_for(std::chrono::seconds(wait_time));
             // Exponential backoff: multiply by backoff_multiplier, cap at max_wait
             wait_time = std::min(static_cast<int>(wait_time * server_error_settings.backoff_multiplier),
@@ -986,12 +993,14 @@ bool LLMClient::handle_set_state_result(const json& result) {
     return true;
 }
 
-// §on_error: structured error routing to the host sink.
+// §on_error: structured error routing to the host sink. Every error is also
+// written to the file Logger unconditionally, so hosts that override on_error
+// / on_log (console rendering) still leave a trace in the project log file.
 void LLMClient::emit_error(daedalus::ErrorKind kind, const std::string& message, bool will_retry) {
+    LOG_ERROR("[" + std::string(daedalus::to_string(kind)) + "] " + message
+              + (will_retry ? " (will_retry=true)" : " (will_retry=false)"));
     if (sink_) {
         sink_->on_error(kind, message, will_retry);
-    } else {
-        LOG_ERROR("[" + std::string(daedalus::to_string(kind)) + "] " + message);
     }
 }
 

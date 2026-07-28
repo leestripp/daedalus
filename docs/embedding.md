@@ -542,6 +542,10 @@ to know whether a turn failed MUST track `on_error` (e.g. set a flag when
 written before `on_error` existed see identical output and only need to
 override it when they want the structured form.
 
+**File logging:** every `on_error` event is also written unconditionally to
+the project log file via the internal Logger, regardless of whether (or how)
+the host overrides the sink.
+
 **Threading:** may fire on the HTTP worker thread (same rule as
 `on_assistant_delta`) as well as the agent worker thread — marshal to the
 UI thread if your framework requires it.
