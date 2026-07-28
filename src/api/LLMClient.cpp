@@ -358,7 +358,7 @@ void LLMClient::clear_messages() {
 // stdin for ESC bytes. Hosts that want ESC-cancel capture it in
 // their own thread and call Agent::cancel() / LLMClient::cancel().
 
-std::future<std::string> LLMClient::make_api_request_async(
+std::future<LLMClient::ApiResponse> LLMClient::make_api_request_async(
     const std::string& url,
     const std::string& payload,
     std::stop_token stop_token,
@@ -405,11 +405,11 @@ std::future<std::string> LLMClient::make_api_request_async(
     return daedalus::concurrent::ThreadPool::get_instance().submit(
         daedalus::concurrent::TaskPriority::HIGH,
         [this, url, payload, stop_token, server_error_settings,
-         streaming_callback, weak_sink, log_err, report_err]() mutable -> std::string {
+         streaming_callback, weak_sink, log_err, report_err]() mutable -> ApiResponse {
             int max_retries = server_error_settings.max_retries_per_call;
             int wait_time = server_error_settings.initial_wait_seconds;
             bool last_attempt_was_transport = false;  // §B14 fix
-            std::string last_body;
+            ApiResponse last_response;
 
             for (int attempt = 1; attempt <= max_retries; ++attempt) {
                 if (stop_token.stop_requested()) {
@@ -446,8 +446,9 @@ std::future<std::string> LLMClient::make_api_request_async(
                 auto result = fut.get();
 
                 if (result) {
-                    last_body = std::move(result->body);
-                    long code = result->status_code;
+                    last_response.status_code = result->status_code;
+                    last_response.body        = std::move(result->body);
+                    long code = last_response.status_code;
                     int  retry_after = result->retry_after_seconds;
                     if (code >= 200 && code < 300) {
                         // Non-streaming responses have no per-chunk callback,
@@ -456,15 +457,16 @@ std::future<std::string> LLMClient::make_api_request_async(
                         if (!streaming_callback) {
                             if (auto s = weak_sink.lock()) s->on_llm_response_started();
                         }
-                        return last_body;  // Success
+                        return last_response;  // Success
                     } else if (code == 401) {
-                        // Auth failure: never retry. The body is returned so
-                        // the downstream error-object handler can surface the
+                        // Auth failure: never retry. The body (now preserved
+                        // even in streaming mode) is returned so the
+                        // downstream status-first handler can surface the
                         // provider's structured error via on_error — here we
                         // only log (avoids a duplicate structured event).
                         log_err("[API] HTTP " + std::to_string(code) + " (auth failed). "
-                                "Response body (first 500 chars): " + last_body.substr(0, 500));
-                        return last_body;
+                                "Response body (first 500 chars): " + last_response.body.substr(0, 500));
+                        return last_response;
                     } else if (code == 429) {
                         // §B14 fix: rate-limited. Honour Retry-After if present;
                         // otherwise fall through to the exponential-backoff path.
@@ -482,8 +484,8 @@ std::future<std::string> LLMClient::make_api_request_async(
                         // Same as 401: body flows downstream for the structured
                         // on_error; log only here.
                         log_err("[API] HTTP " + std::to_string(code) + " (client error). "
-                                "Response body (first 500 chars): " + last_body.substr(0, 500));
-                        return last_body;
+                                "Response body (first 500 chars): " + last_response.body.substr(0, 500));
+                        return last_response;
                     } else {
                         report_err(daedalus::ErrorKind::ServerError,
                                    "[API] HTTP " + std::to_string(code) + " (server error)",
@@ -540,7 +542,11 @@ std::future<std::string> LLMClient::make_api_request_async(
                 }
             }
 
-            if (!last_body.empty()) return last_body;
+            // Retries exhausted (or loop otherwise ended without success).
+            // If the server gave us an HTTP response at all (e.g. a 5xx body
+            // after the final attempt), return it so the caller can handle
+            // the status; otherwise this was a pure transport failure.
+            if (last_response.status_code != 0) return last_response;
             throw std::runtime_error("API request failed after " +
                                      std::to_string(max_retries) + " attempts");
         });
@@ -556,10 +562,13 @@ std::future<std::string> LLMClient::make_api_request_async(
 //   - 4xx (other) → log + return body (no retry, client error)
 //   - 5xx → log + exponential backoff via server_error_settings
 //   - Transport error → log + exponential backoff (if enabled)
-std::string LLMClient::make_http_request_with_retry(
+//
+// §robust-client: returns ApiResponse (status + body) so callers can key
+// error handling on the HTTP status instead of re-parsing error bodies.
+LLMClient::ApiResponse LLMClient::make_http_request_with_retry(
     const std::string& url, const std::string& payload, int max_retries)
 {
-    std::string response_buffer;
+    ApiResponse response;
 
     // Get server error settings for configurable retry behavior
     daedalus::ServerErrorSettings server_error_settings;
@@ -583,7 +592,7 @@ std::string LLMClient::make_http_request_with_retry(
     while (attempt < max_retries) {
         attempt++;
 
-        response_buffer.clear();
+        response.body.clear();
 
         // Build the OmniNet request.
         OmniNet::HTTP::ClientRequest req;
@@ -614,16 +623,17 @@ std::string LLMClient::make_http_request_with_retry(
 
         if (result.has_value()) {
             const auto& resp = result.value();
-            response_buffer = resp.bodyAsString();
+            response.body = resp.bodyAsString();
             // Enforce response size cap (matches old WriteBuffer::max_size).
-            if (response_buffer.size() > max_response_size_) {
-                response_buffer.resize(max_response_size_);
+            if (response.body.size() > max_response_size_) {
+                response.body.resize(max_response_size_);
                 std::ostringstream trunc;
                 trunc << "Response was truncated to " << max_response_size_ << " bytes";
                 if (sink_) sink_->on_log(daedalus::LogLevel::Warn, trunc.str());
             }
 
             const long code = resp.statusCode();
+            response.status_code = code;
             if (code >= 200 && code < 300) {
                 // Sync fallback path: the response body is now available,
                 // so the LLM has "started responding" from the host's POV.
@@ -635,12 +645,12 @@ std::string LLMClient::make_http_request_with_retry(
                     std::ostringstream e401;
                     e401 << "HTTP " << code
                          << " (authentication failed, not retrying)\n"
-                         << "Response body: " << response_buffer;
+                         << "Response body: " << response.body;
                     sink_->on_log(daedalus::LogLevel::Error, e401.str());
                 } else {
                     LOG_ERROR("HTTP error " + std::to_string(code)
                               + " (authentication failed, not retrying). "
-                              + "Response body: " + response_buffer);
+                              + "Response body: " + response.body);
                 }
                 break;
             } else if (code >= 400 && code < 500) {
@@ -649,12 +659,12 @@ std::string LLMClient::make_http_request_with_retry(
                     std::ostringstream e4xx;
                     e4xx << "HTTP " << code
                          << " (client error, not retrying)\n"
-                         << "Response body: " << response_buffer;
+                         << "Response body: " << response.body;
                     sink_->on_log(daedalus::LogLevel::Error, e4xx.str());
                 } else {
                     LOG_ERROR("HTTP error " + std::to_string(code)
                               + " (client error, not retrying). "
-                              + "Response body: " + response_buffer);
+                              + "Response body: " + response.body);
                 }
                 break;
             } else if (code >= 500) {
@@ -667,7 +677,7 @@ std::string LLMClient::make_http_request_with_retry(
                     e5xx << ", retrying in " << wait_time << "s";
                 }
                 e5xx << ")\nResponse body (first 500 chars): "
-                      << response_buffer.substr(0, 500);
+                      << response.body.substr(0, 500);
                 emit_error(daedalus::ErrorKind::ServerError, e5xx.str(),
                            server_error_settings.enabled && attempt < max_retries);
             }
@@ -700,9 +710,11 @@ std::string LLMClient::make_http_request_with_retry(
         }
     }
 
-    if (attempt == max_retries && !response_buffer.empty()) {
-        // We exhausted retries but still got a response, return it
-        return response_buffer;
+    if (attempt == max_retries && response.status_code != 0) {
+        // We exhausted retries but still got an HTTP response (e.g. a 5xx
+        // body on the final attempt) — return it so the caller can handle
+        // the status.
+        return response;
     } else if (attempt == max_retries) {
         // Note: no terminal emit_error here — the final attempt already
         // reported on_error(will_retry=false) above.
@@ -712,12 +724,12 @@ std::string LLMClient::make_http_request_with_retry(
 
     // Extract and store token usage (via shared helper)
     try {
-        update_token_usage(json::parse(response_buffer));
+        update_token_usage(json::parse(response.body));
     } catch (...) {
         // Ignore parsing errors - usage is best-effort
     }
 
-    return response_buffer;
+    return response;
 }
 
 
@@ -1205,6 +1217,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // Reset cancellation flag
 
     // Make the API call with retry logic - run in thread for ESC cancellation support
+    ApiResponse api_response;
     std::string response_body;
 
     // Make the API call asynchronously via HttpSession
@@ -1288,7 +1301,8 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // were silently discarded, and non-streaming turns fell into the
     // parse-failure fallback below and issued a duplicate request.
     try {
-        response_body = api_future.get();
+        api_response = api_future.get();
+        response_body = api_response.body;
     } catch (const std::exception& e) {
         if (cancel_token.stop_requested()) {
             // Cancellation is reported via the wait-loop branch, not as
@@ -1303,13 +1317,80 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     }
 
     // With config_.stream=true, response_body may be empty (HttpSession
-    // takes the streaming branch and doesn't accumulate when stream_callback
-    // is set). In that case sse_parser.final_event() carries the data.
+    // takes the streaming branch and doesn't accumulate 2xx bodies when
+    // stream_callback is set). In that case sse_parser.final_event()
+    // carries the data.
     // With config_.stream=false, response_body holds the full JSON and
     // sse_parser.final_event() is always null.
     const int max_retries = 3;
     bool parse_success = false;
     json response_json;
+
+    // §robust-client: handle HTTP error statuses ONCE, keyed on the status
+    // code — never by trying to json::parse an (often empty, in streaming
+    // mode) error body. Returns the AgentState to exit with when the
+    // response is a terminal HTTP error; std::nullopt when the caller may
+    // continue. On a structured {"error": {...}} body from a non-auth 4xx,
+    // fills `out_json` and returns nullopt so the existing FATAL/TRANSIENT
+    // pipeline below can classify it (request-shape fatals are still
+    // recoverable by the model).
+    auto handle_http_error_status =
+        [this](const ApiResponse& resp, json& out_json) -> std::optional<AgentState> {
+        if (resp.ok()) return std::nullopt;
+
+        const long code = resp.status_code;
+        std::string err_type, err_msg;
+        try {
+            json j = json::parse(resp.body);
+            if (j.contains("error") && j["error"].is_object()) {
+                err_type = j["error"].value("type", "");
+                err_msg  = j["error"].value("message", "");
+                if (!err_type.empty()) out_json = std::move(j);
+            }
+        } catch (...) {
+            // Non-JSON error body (proxy HTML, empty, ...) — handled below.
+        }
+
+        // Auth: always terminal. The model cannot fix credentials —
+        // retrying or injecting "try a different approach" just loops
+        // the 401 until the iteration cap.
+        if (code == 401 || code == 403) {
+            const std::string msg = err_msg.empty()
+                ? "HTTP " + std::to_string(code) + " (authentication failed)"
+                : err_type + ": " + err_msg;
+            emit_error(daedalus::ErrorKind::Auth, msg, /*will_retry=*/false);
+            return AgentState::DONE;
+        }
+
+        // Structured provider error on a non-auth 4xx: hand it to the
+        // existing classification pipeline (rate-limit retry / request-shape
+        // recovery preserved).
+        if (!err_type.empty() && code < 500) return std::nullopt;
+
+        // 5xx (retries already exhausted in the request layer) or an
+        // unstructured error body: terminal, keyed on the status code.
+        const auto kind = daedalus::error_kind_from_http_status(code);
+        std::string msg = "HTTP " + std::to_string(code) + " error";
+        if (!err_msg.empty()) {
+            msg += ": " + err_type + ": " + err_msg;
+        } else if (!resp.body.empty()) {
+            msg += ": " + resp.body.substr(0, 300);
+        }
+        emit_error(kind, msg, /*will_retry=*/false);
+        return AgentState::DONE;
+    };
+
+    {
+        json err_json;
+        if (auto terminal = handle_http_error_status(api_response, err_json)) {
+            return *terminal;
+        } else if (!err_json.is_null()) {
+            // Structured provider error on a non-auth 4xx — feed it to the
+            // FATAL/TRANSIENT pipeline as if it had parsed cleanly.
+            response_json = std::move(err_json);
+            parse_success = true;
+        }
+    }
 
     // Load server_error_settings to gate the SSE retry loop (B27)
     daedalus::ServerErrorSettings server_error_settings;
@@ -1321,7 +1402,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         server_error_settings.enabled = true;
     }
 
-    for (int retry = 1; retry <= max_retries; retry++) {
+    for (int retry = 1; retry <= max_retries && !parse_success; retry++) {
         if (retry == 1 && !sse_parser.final_event().is_null()) {
             // First attempt: use the JSON from SSE streaming (has complete
             // usage + finish_reason from the final SSE event). Fall through
@@ -1331,14 +1412,41 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             break;
         }
 
+        // §robust-client: in streaming mode a 2xx response body is not
+        // accumulated — if the SSE parser produced no final event there is
+        // NOTHING to parse. Skip the pointless json::parse("") attempt (and
+        // its misleading "JSON parse failed" warning) and go straight to
+        // the synchronous fallback request.
+        const bool nothing_to_parse =
+            config_.stream && sse_parser.final_event().is_null()
+            && response_body.empty();
+        if (nothing_to_parse && retry < max_retries) {
+            retry++;  // consume this attempt; fall into the fallback below
+        } else if (nothing_to_parse) {
+            break;  // handled by the !parse_success path below
+        }
+
         // §Phase 9.8: if streaming was on but the SSE parser got no final
         // event (e.g. server doesn't support SSE, or the Accept header wasn't
         // honoured), fall back to a synchronous non-streaming request for this
         // retry instead of trying to json::parse an empty response_body.
         if (retry >= 2 && config_.stream && sse_parser.final_event().is_null()) {
             try {
-                response_body = make_http_request_with_retry( api_url,
+                api_response = make_http_request_with_retry( api_url,
                     request_payload.dump());
+                response_body = api_response.body;
+                // §robust-client: the fallback may itself return an HTTP
+                // error status — handle it by status, not by parse luck.
+                {
+                    json fb_err_json;
+                    if (auto terminal = handle_http_error_status(api_response, fb_err_json)) {
+                        return *terminal;
+                    } else if (!fb_err_json.is_null()) {
+                        response_json = std::move(fb_err_json);
+                        parse_success = true;
+                        break;
+                    }
+                }
             } catch (const std::exception& api_e) {
                 std::ostringstream api_retry;
                 api_retry << "API request also failed: " << api_e.what();
@@ -1365,8 +1473,21 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
                 // Try to get a fresh response from the API (non-streaming fallback)
                 try {
-                    response_body = make_http_request_with_retry( api_url,
+                    api_response = make_http_request_with_retry( api_url,
                         request_payload.dump());
+                    response_body = api_response.body;
+                    // §robust-client: the fallback may itself return an HTTP
+                    // error status — handle it by status, not by parse luck.
+                    {
+                        json fb_err_json;
+                        if (auto terminal = handle_http_error_status(api_response, fb_err_json)) {
+                            return *terminal;
+                        } else if (!fb_err_json.is_null()) {
+                            response_json = std::move(fb_err_json);
+                            parse_success = true;
+                            break;
+                        }
+                    }
                 } catch (const std::exception& api_e) {
                     std::ostringstream api_retry;
                     api_retry << "API request also failed: " << api_e.what();
@@ -1448,6 +1569,14 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             LOG_DEBUG("Args: " + last_tool_args);
             LOG_ERROR("API error [FATAL, " + error_type + "]: " + error_message + " | Tool: " + last_tool_name + " (id=" + last_tool_call_id + ")");
 
+            // §robust-client: auth failures are terminal for the turn. The
+            // model cannot fix credentials — injecting "try a different
+            // approach" and returning ACT just re-issues the same request
+            // and loops the 401 until the iteration cap.
+            if (error_kind == daedalus::ErrorKind::Auth) {
+                return AgentState::DONE;
+            }
+
             // CRITICAL FIX: Add a tool result for the failed call so the
             // conversation state stays valid. Without this, the assistant's
             // tool_call is orphaned (no matching tool result) and the LLM
@@ -1487,12 +1616,24 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_http_request_with_retry( api_url, request_payload.dump());
-                response_json = json::parse(response_body);
-                
+                api_response = make_http_request_with_retry( api_url, request_payload.dump());
+                response_body = api_response.body;
+                // §robust-client: status first — a terminal HTTP error
+                // (auth / 5xx / unstructured body) ends the turn here.
+                {
+                    json fb_err_json;
+                    if (auto terminal = handle_http_error_status(api_response, fb_err_json)) {
+                        return *terminal;
+                    } else if (!fb_err_json.is_null()) {
+                        response_json = std::move(fb_err_json);
+                    } else {
+                        response_json = json::parse(response_body);
+                    }
+                }
+
                 // Check if this response is valid
-                if (!response_json.contains("error") && 
-                    response_json.contains("choices") && 
+                if (!response_json.contains("error") &&
+                    response_json.contains("choices") &&
                     !response_json["choices"].empty()) {
                     LOG_INFO("API call succeeded on retry " + std::to_string(retry));
                     retry_success = true;
@@ -1509,9 +1650,17 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         // §on_error: was LOG-only — the host never saw the
                         // fatal classification, only the earlier transient
                         // warning.
-                        emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                        const auto retry_kind = daedalus::error_kind_from_api_type(retry_error_type);
+                        emit_error(retry_kind,
                                    retry_error_type + ": " + retry_error_msg,
                                    /*will_retry=*/false);
+                        // §robust-client: auth failures are terminal for the
+                        // turn — the model cannot fix credentials, so do not
+                        // inject a "try a different approach" prompt (that
+                        // just loops the 401).
+                        if (retry_kind == daedalus::ErrorKind::Auth) {
+                            return AgentState::DONE;
+                        }
                         // §B9: reuse the shared helper.
                         LastToolCall last_retry = find_last_tool_call(messages);
                         const std::string& last_tool_id   = last_retry.id;
@@ -1625,8 +1774,20 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                response_body = make_http_request_with_retry( api_url, request_payload.dump());
-                response_json = json::parse(response_body);
+                api_response = make_http_request_with_retry( api_url, request_payload.dump());
+                response_body = api_response.body;
+                // §robust-client: status first — a terminal HTTP error
+                // (auth / 5xx / unstructured body) ends the turn here.
+                {
+                    json fb_err_json;
+                    if (auto terminal = handle_http_error_status(api_response, fb_err_json)) {
+                        return *terminal;
+                    } else if (!fb_err_json.is_null()) {
+                        response_json = std::move(fb_err_json);
+                    } else {
+                        response_json = json::parse(response_body);
+                    }
+                }
                 
                 if (response_json.contains("choices") && !response_json["choices"].empty()) {
                     LOG_INFO("Got valid response on retry " + std::to_string(retry));
@@ -1646,9 +1807,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     
                     if (classify_api_error(retry_error_type) == ErrorCategory::FATAL) {
                         LOG_ERROR("Fatal error: " + retry_error_type);
-                        emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                        const auto nochoices_kind = daedalus::error_kind_from_api_type(retry_error_type);
+                        emit_error(nochoices_kind,
                                    retry_error_type + ": " + retry_error_msg,
                                    /*will_retry=*/false);
+                        // §robust-client: auth failures are terminal for the
+                        // turn — the model cannot fix credentials, so do not
+                        // inject a recovery prompt (that just loops the 401).
+                        if (nochoices_kind == daedalus::ErrorKind::Auth) {
+                            return AgentState::DONE;
+                        }
                         // Find the last tool call for debugging
                         std::string last_tool_name = "UNKNOWN";
                         std::string last_tool_id = "UNKNOWN";

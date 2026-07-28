@@ -34,6 +34,8 @@ inline ErrorKind error_kind_from_http_status(long code) noexcept {
 /// structured error object").
 inline ErrorKind error_kind_from_api_type(std::string_view error_type) noexcept {
     if (error_type == "authentication_error" ||
+        error_type == "invalid_authentication_error" ||   // Kimi/Moonshot
+        error_type == "invalid_authentication" ||
         error_type == "invalid_api_key" ||
         error_type == "permission_error" ||
         error_type == "authorized_error") {

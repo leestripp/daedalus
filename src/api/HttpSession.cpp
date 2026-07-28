@@ -222,6 +222,15 @@ HttpSession::submit_cancellable(const HttpRequest& request,
             resp.mcp_session_id = stream.header("Mcp-Session-Id");
             resp.body.clear();
 
+            // §robust-client: on HTTP error status (>= 400) the body is a
+            // plain JSON error document, NOT an SSE stream. Accumulate it
+            // into resp.body so callers can surface the provider's
+            // structured error message, and skip stream_callback entirely —
+            // feeding error JSON into the SSE parser just produced an empty
+            // final_event and a downstream "JSON parse failed" on an empty
+            // buffer.
+            const bool is_error_status = (resp.status_code >= 400);
+
             // §Fix: SSE BUG — nullopt from read_some() is NOT always EOF.
             // The OmniNet read_some() implementation calls
             // socket->waitForRead(100ms) and returns nullopt on timeout
@@ -258,6 +267,13 @@ HttpSession::submit_cancellable(const HttpRequest& request,
                 if (chunk->empty()) continue;
                 std::string_view sv(reinterpret_cast<const char*>(chunk->data()),
                                      chunk->size());
+                if (is_error_status) {
+                    // §robust-client: error status — keep the body for the
+                    // caller's error handling; it is not SSE, so the stream
+                    // callback is skipped.
+                    resp.body.append(sv);
+                    continue;
+                }
                 // §fix (2026-07-18): a throwing stream callback must never
                 // escape this detached thread (std::terminate). Abort the
                 // stream with an error instead of crashing the host.

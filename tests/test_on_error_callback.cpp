@@ -107,6 +107,10 @@ TEST_CASE("error_kind_from_api_type maps provider error types") {
         CHECK(error_kind_from_api_type("invalid_api_key")      == ErrorKind::Auth);
         CHECK(error_kind_from_api_type("permission_error")     == ErrorKind::Auth);
         CHECK(error_kind_from_api_type("authorized_error")     == ErrorKind::Auth);
+        // §robust-client: Kimi/Moonshot's actual 401 error type — this is
+        // what makes its auth failures terminal instead of looping.
+        CHECK(error_kind_from_api_type("invalid_authentication_error") == ErrorKind::Auth);
+        CHECK(error_kind_from_api_type("invalid_authentication")       == ErrorKind::Auth);
     }
     SUBCASE("rate limit family") {
         CHECK(error_kind_from_api_type("rate_limit")       == ErrorKind::RateLimited);

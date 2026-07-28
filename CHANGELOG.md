@@ -44,6 +44,31 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     path. All now fire `on_error` (previously the host saw nothing and the
     turn ended as `AgentState::Done`).
 
+- **Robust HTTP-error handling in the LLM client** (`src/api/LLMClient.{h,cpp}`,
+  `src/api/HttpSession.cpp`, `src/api/ErrorMapping.h`):
+  - HTTP status codes are no longer dropped between the transport layer and
+    response handling. `make_api_request_async()` /
+    `make_http_request_with_retry()` now return an internal `ApiResponse`
+    (status + body) instead of a bare body string, and `run_agent_cycle()`
+    handles error statuses first, keyed on the status code.
+  - Streaming mode no longer feeds HTTP error bodies (plain JSON, not SSE)
+    into the SSE parser. `HttpSession` accumulates the body on status >= 400
+    and skips the stream callback, so the provider's structured error
+    message survives. Previously a streaming 401 produced an empty buffer,
+    a misleading `JSON parse failed (attempt 1/3)` warning, a 1s sleep and
+    a duplicate fallback request before the real error surfaced.
+  - Auth failures (401/403, and provider error types mapping to
+    `ErrorKind::Auth` — including Kimi/Moonshot's
+    `invalid_authentication_error`, now covered by
+    `error_kind_from_api_type()`) are terminal for the turn: one
+    `on_error(Auth, ..., will_retry=false)` and `AgentState::Done`.
+    Previously the FATAL path injected "try a different approach" messages
+    and returned `ACT`, looping the 401 until user interrupt or the
+    iteration cap. Request-shape fatals (bad request, invalid message role,
+    tool-call desync) keep the inject-and-recover behaviour.
+  - Covered by `tests/test_on_error_callback.cpp`; verified live against
+    the Kimi provider (happy path + forced 401).
+
 - **TTY-safe live bash output streaming** (`BashTool`, `BashCommandExecutor`):
   - `BashCommandExecutor::sanitize_tty_sequences()` strips terminal-control
     sequences (cursor movement, screen erase, alternate buffer, OSC, DCS,

@@ -258,19 +258,37 @@ public:
     void refresh_mcp_tools();
 
     // API interaction functions
+
+    // §robust-client: result of one HTTP round-trip to the chat endpoint.
+    // Carries the HTTP status alongside the body so error handling can key
+    // on the status code instead of trying to json::parse an (often empty,
+    // in streaming mode) error body. status_code == 0 means the request
+    // never got an HTTP response (transport failure — in that case an
+    // exception is thrown instead, so 0 should not normally be observed).
+    struct ApiResponse {
+        long        status_code = 0;
+        std::string body;   // response body; the provider's error document on >= 400
+
+        [[nodiscard]] bool ok() const noexcept {
+            return status_code >= 200 && status_code < 300;
+        }
+    };
+
     // §NC-8 (2026-07-16): CURL* parameter dropped. Implementation
     // uses OmniNet::HTTP::Client::send_blocking.
-    std::string make_http_request_with_retry(const std::string& url, const std::string& payload, int max_retries = 3);
+    ApiResponse make_http_request_with_retry(const std::string& url, const std::string& payload, int max_retries = 3);
 
     // Async API request using HttpSession with optional cancellation.
-    // Returns a future to the response body string. Throws std::runtime_error
-    // on permanent failure (e.g., all retries exhausted).
+    // Returns a future to an ApiResponse (HTTP status + body). Throws
+    // std::runtime_error on permanent failure (e.g., all retries exhausted).
     //
     // When streaming_callback is provided, the Accept header is set to
     // SSE and chunks are delivered to the callback as they arrive. The
     // caller is responsible for SSE-parsing and calling
-    // sink_->on_assistant_delta() per text delta.
-    std::future<std::string> make_api_request_async(
+    // sink_->on_assistant_delta() per text delta. On HTTP error status
+    // (>= 400) the callback is NOT invoked and the error body is
+    // accumulated into ApiResponse::body instead.
+    std::future<ApiResponse> make_api_request_async(
         const std::string& url,
         const std::string& payload,
         std::stop_token stop_token = {},
