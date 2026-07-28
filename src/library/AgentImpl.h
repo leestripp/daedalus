@@ -119,6 +119,7 @@ public:
     bool upsert_provider(const ProviderConfig& provider);
     bool delete_provider(const std::string& provider);
     bool upsert_model(const ModelConfig& model);
+    bool delete_model(const std::string& name);
     bool switch_provider(const std::string& provider);
     [[nodiscard]] ModelDiscoveryResult discover_provider_models() const;
     [[nodiscard]] std::string last_assistant_text() const;

@@ -1166,6 +1166,13 @@ bool AgentImpl::upsert_model(const ModelConfig& model)
     return true;
 }
 
+bool AgentImpl::delete_model(const std::string& name)
+{
+    if (!body_->store || name.empty()) return false;
+    body_->store->delete_model(name);
+    return true;
+}
+
 bool AgentImpl::switch_provider(const std::string& provider)
 {
     if (!body_->store || provider.empty()) return false;

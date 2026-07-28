@@ -29,6 +29,13 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   - Covered by `tests/test_on_error_callback.cpp`; documented in
     `docs/embedding.md`.
 
+- **`Agent::delete_model()`** (`include/daedalus/Agent.h`,
+  `src/library/Agent.{cpp,h}`): public-API passthrough to
+  `SettingsStore::delete_model()`, symmetric with the existing
+  `Agent::delete_provider()`. Returns false for an empty name or a
+  missing SettingsStore; deleting an unknown name is idempotent.
+  Covered by `tests/test_delete_model.cpp`.
+
 ### Fixed
 
 - **LLM errors that never reached the host** (`src/api/LLMClient.cpp`):

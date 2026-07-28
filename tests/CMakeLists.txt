@@ -934,6 +934,21 @@ target_link_libraries(daedalus_switch_model_tests PRIVATE
 )
 add_test(NAME switch_model_tests COMMAND daedalus_switch_model_tests)
 
+# Agent::delete_model() — public-API passthrough to
+# SettingsStore::delete_model(). Hermetic — no network.
+add_executable(daedalus_delete_model_tests
+    test_delete_model.cpp
+)
+target_include_directories(daedalus_delete_model_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_delete_model_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME delete_model_tests COMMAND daedalus_delete_model_tests)
+
 # §CUSTOM-TOOLS: daedalus::BaseTool subclassing + Agent::register_tool().
 # Hermetic — no network; exercises the public API end-to-end.
 add_executable(daedalus_custom_tool_tests

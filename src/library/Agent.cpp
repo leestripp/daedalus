@@ -160,6 +160,11 @@ bool Agent::upsert_model(const ModelConfig& model)
     return impl_->upsert_model(model);
 }
 
+bool Agent::delete_model(const std::string& name)
+{
+    return impl_->delete_model(name);
+}
+
 bool Agent::switch_provider(const std::string& provider)
 {
     return impl_->switch_provider(provider);

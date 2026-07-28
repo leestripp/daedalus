@@ -231,6 +231,9 @@ public:
     /// @brief Add or update a model configuration.
     bool upsert_model(const ModelConfig& model);
 
+    /// @brief Delete a model configuration by name.
+    bool delete_model(const std::string& name);
+
     /// @brief Switch the current provider. Persisted in SettingsStore.
     ///        If the current model does not belong to the new provider,
     ///        switches to the first configured model of that provider.
