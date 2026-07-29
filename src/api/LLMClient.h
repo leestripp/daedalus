@@ -58,6 +58,11 @@ struct AppConfig {
     // Empty = no note appended.
     std::string system_info_note;
 
+    // §UA: HTTP User-Agent sent on LLM API requests (both the streaming
+    // path via HttpSession and the sync OmniNet fallback). Defaults to the
+    // library identity; hosts override it via AgentConfig::user_agent.
+    std::string user_agent = "daedalus/1.0";
+
     // Phase 2.7: removed sub_agent_mode, sub_agent_looping, manager_mode.
     // The Agent has no notion of modes — those are host concerns. Demos
     // for manager / sub-agent patterns live in demos/daedalus-manager/

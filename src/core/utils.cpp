@@ -184,9 +184,12 @@ std::string download_image_as_base64(const std::string& url) {
     OmniNet::HTTP::ClientRequest req;
     req.url(url);
     req.method("GET");
-    req.header("User-Agent", "daedalus/1.0");
 
     OmniNet::HTTP::ClientConfig cfg;
+    // §UA: set the User-Agent on the config, not as a request header —
+    // OmniNet always emits its own User-Agent first on the wire, so a
+    // request-level header would just be a duplicate second line.
+    cfg.user_agent = "daedalus/1.0";
     cfg.connect_timeout = std::chrono::seconds(10);
     cfg.request_timeout = std::chrono::seconds(30);
     cfg.follow_redirects = true;

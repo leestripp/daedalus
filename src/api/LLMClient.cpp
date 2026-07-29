@@ -440,6 +440,7 @@ std::future<LLMClient::ApiResponse> LLMClient::make_api_request_async(
                 }
                 req.timeout_seconds = 900;  // 15 minutes
                 req.follow_redirects = true;
+                req.user_agent = config_.user_agent;  // §UA
 
                 // Submit via HttpSession (async, non-blocking)
                 auto fut = HttpSession::get_instance().submit_cancellable(req, stop_token);
@@ -612,6 +613,7 @@ LLMClient::ApiResponse LLMClient::make_http_request_with_retry(
         }
 
         OmniNet::HTTP::ClientConfig cfg;
+        cfg.user_agent       = config_.user_agent;  // §UA
         cfg.connect_timeout = std::chrono::seconds(10);
         cfg.request_timeout = std::chrono::seconds(900);  // 15 minutes
         cfg.follow_redirects = true;

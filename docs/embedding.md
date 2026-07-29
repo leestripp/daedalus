@@ -869,6 +869,7 @@ for the full field list. The most-used fields:
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
 | `session_id` | Opaque correlation id (logged, surfaced to sinks). |
 | `system_prompt` | Override the role the agent plays. See [`docs/agent_system_prompts.md`](./agent_system_prompts.md) — the library appends 9 more sections (tool defs, MCP status, skills, memory, context stats, and the two **always-on** `# State Machine` + `# Reserved Agent Directories` blocks) below your text. |
+| `user_agent` | HTTP `User-Agent` sent on LLM API requests. Empty = library default (`daedalus/1.0`). Hosts should set this to identify themselves to the provider, e.g. `icarus/1.2.0`. |
 | `stream` | `true` (default): SSE streaming — assistant text arrives token-by-token via `on_assistant_delta` (requires an SSE-capable sink). `false`: buffered — full reply arrives in one chunk. |
 | `temperature` | Sampling temperature. See "Temperature priority chain" below. |
 | `mcp_enabled` | `true` (default): load MCP servers from `SettingsStore::list_mcp_servers()` (or legacy JSON). `false`: skip MCP entirely (no servers spawned, no MCP tools registered, no `# Active MCP Servers` block). |

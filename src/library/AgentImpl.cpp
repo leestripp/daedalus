@@ -92,6 +92,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
     out.auto_mode      = cfg.auto_approve;
     out.memory_disabled = !cfg.memory_enabled;
     out.system_prompt  = cfg.system_prompt;   // §Phase 6: host-supplied role
+    if (!cfg.user_agent.empty()) out.user_agent = cfg.user_agent;  // §UA
     out.stream         = cfg.stream;            // §Phase 9.8: SSE streaming
     // §Phase 8.7: temperature resolution. Explicit cfg.temperature >= 0
     // wins over the model's value. Negative = use model's or default 0.0.

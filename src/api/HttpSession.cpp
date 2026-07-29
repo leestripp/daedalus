@@ -53,9 +53,6 @@ OmniNet::HTTP::ClientRequest make_omninet_request(const HttpRequest& req) {
     if (!req.body.empty()) {
         out.body(req.body);
     }
-    if (!req.user_agent.empty()) {
-        out.header("User-Agent", req.user_agent);
-    }
     if (!req.bearer_token.empty()) {
         out.header("Authorization", std::string("Bearer ") + req.bearer_token);
     }
@@ -70,6 +67,13 @@ OmniNet::HTTP::ClientRequest make_omninet_request(const HttpRequest& req) {
 /// Build a ClientConfig matching the legacy HttpRequest knobs.
 OmniNet::HTTP::ClientConfig make_omninet_config(const HttpRequest& req) {
     OmniNet::HTTP::ClientConfig cfg;
+    // §UA: the User-Agent belongs on the config. OmniNet always writes its
+    // own User-Agent header first on the wire (replacing a placeholder
+    // before request headers are appended), so setting it here produces a
+    // single User-Agent line; a request-level header would be a duplicate.
+    if (!req.user_agent.empty()) {
+        cfg.user_agent = req.user_agent;
+    }
     cfg.connect_timeout = std::chrono::seconds(10);
     cfg.request_timeout = std::chrono::seconds(
         req.timeout_seconds > 0 ? req.timeout_seconds : 60);

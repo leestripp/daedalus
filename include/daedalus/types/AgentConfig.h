@@ -160,6 +160,12 @@ struct AgentConfig {
     // to the composed system prompt so it dominates the agent's identity.
     // Empty = use the library default role (no override).
     std::string system_prompt;
+
+    // ----- HTTP identity -----
+    // User-Agent sent on LLM API requests. Empty = library default
+    // ("daedalus/1.0"). Hosts embedding the library should set this to
+    // identify themselves to the provider, e.g. "icarus/1.2.0".
+    std::string user_agent;
 };
 
 }  // namespace daedalus
