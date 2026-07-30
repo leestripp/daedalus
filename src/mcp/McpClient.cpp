@@ -223,18 +223,22 @@ bool McpClient::connect(const std::string& command,
         argv.push_back(const_cast<char*>("/bin/bash"));
         argv.push_back(const_cast<char*>("-c"));
         
-        // Reconstruct the command string for bash -c
+        // Reconstruct the command string for bash -c. Single-quote EVERY
+        // argument, escaping embedded single quotes as '\''. The previous
+        // selective quoting (only spaces, '*', '?') let other shell
+        // metacharacters through unquoted — e.g. the version spec
+        // "mcp<2" was interpreted by bash as a stdin redirection from a
+        // file named "2", which killed the server before it started
+        // (§MCP-QUOTE).
         std::string full_command;
         for (size_t i = 0; i < args.size(); ++i) {
             if (i > 0) full_command += " ";
-            // Quote args that contain spaces or special chars
-            if (args[i].find(' ') != std::string::npos || 
-                args[i].find('*') != std::string::npos ||
-                args[i].find('?') != std::string::npos) {
-                full_command += "\"" + args[i] + "\"";
-            } else {
-                full_command += args[i];
+            full_command += '\'';
+            for (const char ch : args[i]) {
+                if (ch == '\'') full_command += "'\\''";
+                else full_command += ch;
             }
+            full_command += '\'';
         }
         argv.push_back(const_cast<char*>(full_command.c_str()));
         argv.push_back(nullptr);
@@ -533,7 +537,8 @@ std::string McpClient::get_last_error() const {
 json McpClient::send_request(const std::string& method, const json& params, int timeout_ms) {
     if (!pipes_ || pipes_->stdin_write < 0 || pipes_->stdout_read < 0) {
         last_error_ = "Not connected";
-        return json::object();
+        // §MCP-EOF: callers treat null (not {}) as the failure sentinel.
+        return json();
     }
 
     // §fix (2026-07-18): serialize the whole request/response exchange.
@@ -561,7 +566,7 @@ json McpClient::send_request(const std::string& method, const json& params, int 
     std::string request_str = request.dump() + "\n";
     if (!write_all(pipes_->stdin_write, request_str)) {
         last_error_ = "Failed to write to stdin: " + std::string(strerror(errno));
-        return json::object();
+        return json();  // §MCP-EOF: null = failure
     }
 
     // Read response — only accept the frame whose "id" matches ours.
@@ -591,7 +596,7 @@ void McpClient::send_notification(const std::string& method, const json& params)
 
 json McpClient::read_response(int timeout_ms, int expected_id) {
     if (!pipes_ || pipes_->stdout_read < 0) {
-        return json::object();
+        return json();  // §MCP-EOF: null = failure
     }
 
     std::string buffer;
@@ -702,7 +707,7 @@ json McpClient::read_response(int timeout_ms, int expected_id) {
                 continue;
             }
             last_error_ = "Poll error: " + std::string(strerror(errno));
-            return json::object();
+            return json();
         }
 
         if (ret == 0) {
@@ -711,7 +716,7 @@ json McpClient::read_response(int timeout_ms, int expected_id) {
                 remaining -= 100;
                 if (remaining <= 0) {
                     last_error_ = "Timeout waiting for response";
-                    return json::object();
+                    return json();
                 }
             }
             continue;
@@ -726,13 +731,16 @@ json McpClient::read_response(int timeout_ms, int expected_id) {
                     continue;
                 }
                 last_error_ = "Read error: " + std::string(strerror(errno));
-                return json::object();
+                return json();
             }
 
             if (n == 0) {
-                // EOF
+                // EOF — the server process closed its stdout (typically
+                // it crashed or exited during startup). §MCP-EOF: this
+                // MUST surface as null so initialize()/connect() fail
+                // instead of reporting a phantom success.
                 last_error_ = "Server closed connection";
-                return json::object();
+                return json();
             }
 
             buf[n] = '\0';
@@ -748,7 +756,7 @@ json McpClient::read_response(int timeout_ms, int expected_id) {
                 return *ready;
             }
             last_error_ = "Server disconnected";
-            return json::object();
+            return json();
         }
     }
 }

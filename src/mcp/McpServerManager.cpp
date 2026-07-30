@@ -585,7 +585,8 @@ void McpServerManager::breaker_record_failure(const std::string& server) {
     b.broken_until = b.last_failure + std::chrono::seconds(cd);
     LOG_CERR(INFO, "[MCP] server '" << server
               << "' failed (count=" << b.fail_count
-              << "), retrying in " << cd << "s");
+              << "), retrying in " << cd << "s"
+              << (last_error_.empty() ? "" : " — " + last_error_));
 }
 
 McpClient* McpServerManager::get_client(const std::string& server_name) {

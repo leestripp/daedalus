@@ -124,7 +124,9 @@ public:
     }
 
 private:
-    // Internal helper to send JSON-RPC request and get response
+    // Internal helper to send JSON-RPC request and get response.
+    // §MCP-EOF: returns null json on ANY failure (write error, EOF,
+    // timeout, ...); callers distinguish failure via is_null().
     json send_request(const std::string& method, const json& params, int timeout_ms = 30000);
     
     // Internal helper to send notification (no response expected)

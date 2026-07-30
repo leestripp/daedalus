@@ -58,6 +58,28 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **MCP stdio servers died silently on shell metacharacters + dead
+  servers reported as connected** (§MCP-QUOTE, §MCP-EOF, 2026-07-30):
+  - `McpClient::connect()` rebuilds the spawn command for `bash -c` but
+    only re-quoted args containing spaces, `*`, or `?`. Any other shell
+    metacharacter went through bare — e.g. a version spec like `mcp<2`
+    was parsed by bash as a stdin redirection from a file named `2`,
+    killing the server instantly. Every argument is now single-quoted
+    (embedded single quotes escaped as `'\''`)
+    (`src/mcp/McpClient.cpp`).
+  - `send_request()`/`read_response()` returned `{}` on every failure
+    path (EOF, timeout, write/poll/read error) while all three callers
+    (`initialize()`, `list_tools()`, `call_tool()`) test `is_null()` for
+    failure. A server that crashed during startup therefore produced a
+    phantom success: `initialize()` returned true, `connect()` reported
+    the server healthy with 0 tools, and no circuit-breaker entry or log
+    line was ever emitted. Failure paths now return null json, so a dead
+    server fails `connect()` with a real reason (e.g. "Server closed
+    connection") (`src/mcp/McpClient.cpp`).
+  - The circuit-breaker log line now includes the failure reason:
+    `[MCP] server 'x' failed (count=N), retrying in Ys — <reason>`
+    (`src/mcp/McpServerManager.cpp`).
+
 - **Infinite HTTP 400 loop from misplaced tool results** (§fix 2026-07-30):
   the agent could get stuck re-sending a chain the provider rejects with
   "messages with role 'tool' must be a response to a preceeding message
