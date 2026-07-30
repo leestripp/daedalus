@@ -1118,6 +1118,21 @@ target_link_libraries(daedalus_provider_moonshot_plugin_tests PRIVATE
 )
 add_test(NAME provider_moonshot_plugin_tests COMMAND daedalus_provider_moonshot_plugin_tests)
 
+# §ProviderPlugins Phase 5: LmStudioPlugin hooks.
+add_executable(daedalus_provider_lmstudio_plugin_tests
+    test_provider_lmstudio_plugin.cpp
+)
+target_include_directories(daedalus_provider_lmstudio_plugin_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_provider_lmstudio_plugin_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME provider_lmstudio_plugin_tests COMMAND daedalus_provider_lmstudio_plugin_tests)
+
 add_executable(daedalus_mcp_load_from_store_tests
     test_mcp_load_from_store.cpp
     ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp

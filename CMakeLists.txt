@@ -267,6 +267,7 @@ set(API_SOURCES
 	src/api/providers/OpenAiCompatiblePlugin.cpp # §ProviderPlugins
 	src/api/providers/MiniMaxPlugin.cpp        # §ProviderPlugins Phase 3
 	src/api/providers/MoonshotPlugin.cpp       # §ProviderPlugins Phase 4
+	src/api/providers/LmStudioPlugin.cpp       # §ProviderPlugins Phase 5
 )
 
 set(MCP_SOURCES

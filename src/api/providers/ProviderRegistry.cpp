@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "api/providers/LmStudioPlugin.h"
 #include "api/providers/MiniMaxPlugin.h"
 #include "api/providers/MoonshotPlugin.h"
 #include "api/providers/OpenAiCompatiblePlugin.h"
@@ -48,6 +49,7 @@ void ensure_builtins() {
         plugins().push_back(std::make_shared<OpenAiCompatiblePlugin>());
         plugins().push_back(std::make_shared<MiniMaxPlugin>());
         plugins().push_back(std::make_shared<MoonshotPlugin>());
+        plugins().push_back(std::make_shared<LmStudioPlugin>());
         return true;
     }();
     (void)done;

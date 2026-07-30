@@ -1,0 +1,38 @@
+// SPDX-License-Identifier: BSL-1.0
+// src/api/providers/LmStudioPlugin.h
+//
+// Provider plugin for LM Studio (and other local OpenAI-compatible
+// servers) at http://localhost:1234.
+//
+// Local servers differ from hosted providers:
+//   - No API key is required (requires_auth() = false).
+//   - Model ids are whatever the user loaded — there is no meaningful
+//     static model table, so known_models() stays empty and discovery
+//     (/v1/models) is the source of truth.
+//   - The payload must stay minimal: LM Studio builds reject unknown
+//     request fields (stream_options, reasoning_split, ...) depending
+//     on version, so mutate_chat_payload() strips everything the
+//     generic plugin would have added instead of adding more.
+//
+// Internal header — not part of the public libdaedalus API.
+
+#pragma once
+
+#include "api/providers/OpenAiCompatiblePlugin.h"
+
+namespace daedalus {
+
+class LmStudioPlugin : public OpenAiCompatiblePlugin {
+public:
+    std::string name() const override { return "lmstudio"; }
+    std::string default_base_url() const override { return "http://localhost:1234"; }
+
+    bool matches(std::string_view host) const override;
+
+    bool requires_auth() const override { return false; }
+
+    void mutate_chat_payload(nlohmann::json& payload,
+                             const ProviderChatContext& ctx) const override;
+};
+
+} // namespace daedalus
