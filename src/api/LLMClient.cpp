@@ -842,6 +842,12 @@ nlohmann::json MiniMaxSseParser::synthesized_message() const {
     if (!accumulated_tool_calls_.empty()) {
         m["tool_calls"] = accumulated_tool_calls_;
     }
+    // §ProviderPlugins Phase 4: preserve thinking text for providers
+    // (Kimi) that require reasoning_content back in the history during
+    // multi-step tool calling.
+    if (!accumulated_reasoning_.empty()) {
+        m["reasoning_content"] = accumulated_reasoning_;
+    }
     if (!accumulated_finish_reason_.empty()) {
         m["finish_reason"] = accumulated_finish_reason_;
     }
@@ -893,6 +899,17 @@ void MiniMaxSseParser::parse_line(const std::string& line) {
                 // Role (typically "assistant"; MiniMax also puts name here).
                 if (delta.contains("role") && delta["role"].is_string()) {
                     accumulated_role_ = delta["role"].get<std::string>();
+                }
+
+                // §ProviderPlugins Phase 4: thinking text. Kimi/Moonshot
+                // streams `reasoning_content` string fragments alongside
+                // `content`; accumulate them for the synthesized message
+                // (Kimi rejects tool-loop histories without it). Inert
+                // for providers that never send the field.
+                const nlohmann::json& reasoning =
+                    delta.value("reasoning_content", nlohmann::json());
+                if (reasoning.is_string() && !reasoning.get<std::string>().empty()) {
+                    accumulated_reasoning_ += reasoning.get_ref<const std::string&>();
                 }
 
                 // Text content streaming — the basic case.
@@ -1088,16 +1105,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     };
 
     // §ProviderPlugins: provider-specific request shaping. The default
-    // OpenAI-compatible plugin applies the classic behavior
-    // (reasoning_split + stream_options.include_usage/continuous_usage_
-    // stats — see §BUG-MINIMAX-105 and §Phase 9.10); provider plugins
-    // add their own parameters here (thinking switches, cache keys,
-    // clamps).
+    // OpenAiCompatiblePlugin adds stream_options.include_usage when
+    // streaming (§Phase 9.10); provider plugins add their own parameters
+    // here (thinking switches, cache keys, clamps — e.g. MiniMax's
+    // reasoning_split, §BUG-MINIMAX-105).
     {
         daedalus::ProviderChatContext pctx;
         pctx.model_id    = config_.model;
         pctx.model_name  = config_.model_name;
         pctx.provider    = config_.provider;
+        pctx.cache_key   = config_.agent_name;
         pctx.stream      = config_.stream;
         pctx.temperature = config_.temperature;
         plugin_->mutate_chat_payload(request_payload, pctx);

@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "api/providers/MiniMaxPlugin.h"
+#include "api/providers/MoonshotPlugin.h"
 #include "api/providers/OpenAiCompatiblePlugin.h"
 #include "core/Logger.h"
 #include "daedalus/ProviderPlugin.h"
@@ -46,6 +47,7 @@ void ensure_builtins() {
         // registered after it win host matching over its catch-all.
         plugins().push_back(std::make_shared<OpenAiCompatiblePlugin>());
         plugins().push_back(std::make_shared<MiniMaxPlugin>());
+        plugins().push_back(std::make_shared<MoonshotPlugin>());
         return true;
     }();
     (void)done;

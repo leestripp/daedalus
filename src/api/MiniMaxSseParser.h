@@ -82,6 +82,11 @@ private:
     std::string accumulated_text_;           /// Complete assistant text from deltas.
     std::string accumulated_role_;           /// "assistant" usually; set from delta.role.
     std::string accumulated_finish_reason_;  /// "stop", "tool_calls", "length" — set once.
+    /// §ProviderPlugins Phase 4: thinking text from `reasoning_content`
+    /// delta fragments (Kimi/Moonshot). Round-trips into
+    /// synthesized_message() because Kimi's tool loop rejects histories
+    /// where the assistant turn lost its reasoning_content.
+    std::string accumulated_reasoning_;
     nlohmann::json accumulated_tool_calls_ = nlohmann::json::array();  /// Rebuilt by tool_calls streaming.
     nlohmann::json final_event_;             /// Last SSE event with usage/finish_reason.
 };

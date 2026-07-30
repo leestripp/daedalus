@@ -56,6 +56,9 @@ struct ProviderChatContext {
     std::string model_id;     ///< model id sent in the payload
     std::string model_name;   ///< settings-store key for the model
     std::string provider;     ///< provider label from the store row
+    std::string cache_key;    ///< stable per-agent key for server-side prompt
+                              ///< caches (e.g. Moonshot prompt_cache_key);
+                              ///< empty = don't send one
     bool        stream = true;
     double      temperature = 0.0;
 };
