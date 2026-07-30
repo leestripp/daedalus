@@ -124,7 +124,7 @@ Component FormRow(const std::string& label,
 
 int RunApp(daedalus::SettingsStore store)
 {
-    AppContext ctx{std::move(store), {}};
+    AppContext ctx{std::move(store), {}, {}, {}};
 
     static const std::vector<std::string> kTitles = {
         "Providers", "Models", "MCP Servers", "Agent",

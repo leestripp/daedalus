@@ -634,7 +634,8 @@ bool Messages::validate_message_for_recovery(const json& msg) const {
                     if (fn["arguments"].is_string()) {
                         // Try to parse — if it's malformed JSON, drop.
                         try {
-                            (void)json::parse(fn["arguments"].get<std::string>());
+                            [[maybe_unused]] const auto parsed =
+                                json::parse(fn["arguments"].get<std::string>());
                         } catch (...) {
                             return false;
                         }
@@ -814,7 +815,11 @@ void Messages::save_impl() const {
         // crash handler has the latest contents even if a save()
         // happened after the fd was opened.
         ::lseek(crash_fd_, 0, SEEK_SET);
-        ::ftruncate(crash_fd_, 0);
+        if (::ftruncate(crash_fd_, 0) != 0) {
+            // Best-effort: if the truncate fails the write below still
+            // overwrites from offset 0; a stale tail is preferable to
+            // skipping the mirror update entirely.
+        }
         signal_safe_write(crash_fd_, contents.data(), contents.size());
         ::fsync(crash_fd_);
         ::lseek(crash_fd_, 0, SEEK_SET);

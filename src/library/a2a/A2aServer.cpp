@@ -117,8 +117,7 @@ struct StreamingHandler : IA2aEventHandler {
 // backend starts emitting events. StreamingResponse::write() drops chunks
 // while client_connected() is false (attach happens after the HTTP handler
 // returns), so we poll briefly rather than losing the first events.
-void wait_for_stream_attach(const std::shared_ptr<OmniNet::HTTP::StreamingResponse>& writer,
-                            StreamingHandler& handler) {
+void wait_for_stream_attach(const std::shared_ptr<OmniNet::HTTP::StreamingResponse>& writer) {
     for (int i = 0; i < 200; ++i) {
         if (writer->client_connected()) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -358,7 +357,7 @@ private:
         std::thread([cfg = cfg_, request = *request, writer]() mutable {
             StreamingHandler handler(writer);
             try {
-                wait_for_stream_attach(writer, handler);
+                wait_for_stream_attach(writer);
                 auto result = cfg.backend->send_streaming_message(request, handler);
                 if (!result) {
                     handler.on_error(result.error());
@@ -407,7 +406,7 @@ private:
         std::thread([cfg = cfg_, request = std::move(request), writer]() mutable {
             StreamingHandler handler(writer);
             try {
-                wait_for_stream_attach(writer, handler);
+                wait_for_stream_attach(writer);
                 auto result = cfg.backend->subscribe_to_task(request, handler);
                 if (!result) {
                     handler.on_error(result.error());

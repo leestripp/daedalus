@@ -116,7 +116,9 @@ public:
         // would hang until the user pressed Enter.
         if (wake_pipe_[1] >= 0) {
             char c = 1;
-            ::write(wake_pipe_[1], &c, 1);
+            // Best-effort wake: if the write fails the join below simply
+            // waits for the next stdin byte instead of returning instantly.
+            [[maybe_unused]] ssize_t written = ::write(wake_pipe_[1], &c, 1);
         }
         if (th_.joinable()) th_.join();
         restore_terminal_mode();
@@ -277,7 +279,8 @@ private:
 
             if (wake_pipe_[0] >= 0 && FD_ISSET(wake_pipe_[0], &fds)) {
                 char dummy = 0;
-                ::read(wake_pipe_[0], &dummy, 1);
+                // Drain the wake byte; the loop exits via stop_ regardless.
+                [[maybe_unused]] ssize_t drained = ::read(wake_pipe_[0], &dummy, 1);
                 continue;  // loop will see stop_ == true and exit
             }
 
@@ -314,7 +317,8 @@ private:
 
         if (wake_pipe_[0] >= 0 && FD_ISSET(wake_pipe_[0], &fds)) {
             char dummy = 0;
-            ::read(wake_pipe_[0], &dummy, 1);
+            // Drain the wake byte; the loop exits via stop_ regardless.
+            [[maybe_unused]] ssize_t drained = ::read(wake_pipe_[0], &dummy, 1);
             return false;  // stop requested
         }
         if (!FD_ISSET(STDIN_FILENO, &fds)) return false;
