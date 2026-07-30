@@ -49,29 +49,27 @@ ErrorKind ProviderPlugin::classify_api_error_type(std::string_view) const {
 
 void OpenAiCompatiblePlugin::mutate_chat_payload(nlohmann::json& payload,
                                                  const ProviderChatContext& ctx) const {
-    // §ProviderPlugins Phase 1: verbatim move of the classic request
-    // shaping from LLMClient::run_agent_cycle().
+    // Generic request shaping. The MiniMax-specific quirks
+    // (reasoning_split, continuous_usage_stats) moved to MiniMaxPlugin in
+    // §ProviderPlugins Phase 3 — behavior for MiniMax is unchanged
+    // because its provider row resolves to the MiniMax plugin.
     //
-    // reasoning_split (§BUG-MINIMAX-105): separates thinking content into
-    // `reasoning_details` instead of a "(think)\n..." content prefix.
-    // Providers that don't know the parameter ignore it.
-    payload["reasoning_split"] = true;
-
     // §Phase 9.10: request usage stats in streaming mode so token
     // accounting (and therefore compression triggering) works.
     if (ctx.stream) {
         payload["stream_options"] = {
-            {"include_usage", true},
-            {"continuous_usage_stats", true}
+            {"include_usage", true}
         };
     }
 }
 
 std::unique_ptr<ProviderStreamParser>
 OpenAiCompatiblePlugin::create_stream_parser(std::weak_ptr<AgentSink> sink) const {
-    // §ProviderPlugins Phase 1: the classic parser is still
-    // MiniMaxSseParser; it becomes the MiniMax plugin's parser in
-    // Phase 3 and a lean OpenAI parser takes its place here.
+    // MiniMaxSseParser is the only SSE parser in the tree and handles the
+    // plain OpenAI dialect too (its MiniMax-only extensions are inert
+    // unless the server sends them). MiniMaxPlugin returns the same
+    // parser explicitly; splitting a lean OpenAI-only parser out is
+    // deferred future work.
     return std::make_unique<MiniMaxSseParser>(std::move(sink));
 }
 

@@ -265,6 +265,7 @@ set(API_SOURCES
 	src/api/HttpSession.cpp
 	src/api/providers/ProviderRegistry.cpp     # §ProviderPlugins
 	src/api/providers/OpenAiCompatiblePlugin.cpp # §ProviderPlugins
+	src/api/providers/MiniMaxPlugin.cpp        # §ProviderPlugins Phase 3
 )
 
 set(MCP_SOURCES

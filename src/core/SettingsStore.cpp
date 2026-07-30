@@ -39,6 +39,8 @@
 #include <sqlite3.h>          // sqlite3_errcode / sqlite3_errmsg for step checks
 
 #include "daedalus/paths.h"   // Paths::global() for the default DB path
+#include "daedalus/ProviderPlugin.h"
+#include "daedalus/ProviderRegistry.h"
 #include "core/Logger.h"
 
 namespace fs = std::filesystem;
@@ -914,11 +916,36 @@ int SettingsStore::get_max_context_size_for_model(std::string_view model_name) c
         return m->max_context_size;
     }
 
-    // 2. Fall back to the built-in default for known models.
+    // 2. §ProviderPlugins Phase 3: ask the provider's plugin — its static
+    //    model table is the source of truth for its own models. An explicit
+    //    `plugin` hint on the provider row wins; otherwise auto-detect from
+    //    the provider name / host.
+    if (m.has_value()) {
+        if (auto p = get_provider(m->provider)) {
+            std::shared_ptr<ProviderPlugin> plugin;
+            if (!p->plugin.empty()) {
+                plugin = ProviderRegistry::plugin_for_name(p->plugin);
+            }
+            if (!plugin) {
+                plugin = ProviderRegistry::resolve(m->provider, p->host);
+            }
+            if (plugin) {
+                if (const auto n = plugin->context_size_for(m->model_id); n > 0) {
+                    return static_cast<int>(n);
+                }
+                if (const auto n = plugin->context_size_for(model_name); n > 0) {
+                    return static_cast<int>(n);
+                }
+            }
+        }
+    }
+
+    // 3. Fall back to the built-in default for known models (covers
+    //    plugin-less providers: OpenAI / Anthropic / DeepSeek).
     int builtin = builtin_max_context_size(model_name);
     if (builtin > 0) return builtin;
 
-    // 3. Ultimate fallback: 1M tokens (generous for unknown models).
+    // 4. Ultimate fallback: 1M tokens (generous for unknown models).
     return 1000000;
 }
 

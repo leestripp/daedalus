@@ -11,6 +11,7 @@
 #include <mutex>
 #include <vector>
 
+#include "api/providers/MiniMaxPlugin.h"
 #include "api/providers/OpenAiCompatiblePlugin.h"
 #include "core/Logger.h"
 #include "daedalus/ProviderPlugin.h"
@@ -40,7 +41,11 @@ bool iequals(std::string_view a, std::string_view b) {
 // Registers the built-in plugins exactly once.
 void ensure_builtins() {
     static bool done = [] {
+        // Order matters: the OpenAI-compatible default stays first so
+        // default_plugin() finds it by name, and specific plugins
+        // registered after it win host matching over its catch-all.
         plugins().push_back(std::make_shared<OpenAiCompatiblePlugin>());
+        plugins().push_back(std::make_shared<MiniMaxPlugin>());
         return true;
     }();
     (void)done;

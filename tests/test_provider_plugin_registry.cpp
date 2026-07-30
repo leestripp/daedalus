@@ -8,7 +8,8 @@
 //   PR4. Re-registering the same name replaces the previous plugin.
 //   PR5. plugin_for_host() uses the plugin's matches() hook.
 //   PR6. resolve() prefers explicit name over host matching.
-//   PR7. Default plugin hooks are behavior-preserving (payload shaping).
+//   PR7. Default plugin hooks shape generic payloads (stream_options
+//        only when streaming; MiniMax quirks moved to MiniMaxPlugin).
 
 #include <iostream>
 #include <memory>
@@ -111,17 +112,19 @@ void test_pr7_default_payload_shaping() {
     ctx.model_id = "x";
     ctx.stream = true;
     def->mutate_chat_payload(payload, ctx);
-    // Classic behavior: reasoning_split always on; stream_options only
-    // when streaming.
-    EXPECT(payload.value("reasoning_split", false) == true);
+    // §ProviderPlugins Phase 3: the generic default no longer adds the
+    // MiniMax quirks (reasoning_split, continuous_usage_stats) — those
+    // live in MiniMaxPlugin now. Generic shaping is stream_options only,
+    // and only when streaming.
+    EXPECT(!payload.contains("reasoning_split"));
     EXPECT(payload.contains("stream_options"));
     EXPECT(payload["stream_options"].value("include_usage", false) == true);
-    EXPECT(payload["stream_options"].value("continuous_usage_stats", false) == true);
+    EXPECT(!payload["stream_options"].contains("continuous_usage_stats"));
 
     json payload2 = {{"model", "x"}, {"messages", json::array()}, {"stream", false}};
     ctx.stream = false;
     def->mutate_chat_payload(payload2, ctx);
-    EXPECT(payload2.value("reasoning_split", false) == true);
+    EXPECT(!payload2.contains("reasoning_split"));
     EXPECT(!payload2.contains("stream_options"));
 
     // Default clamps/sanitizers are no-ops.
