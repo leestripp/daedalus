@@ -5,6 +5,8 @@
 
 #include "daedalus/model_discovery.h"
 #include "daedalus/settings.h"
+#include "daedalus/ProviderPlugin.h"    // §ProviderPlugins
+#include "daedalus/ProviderRegistry.h"  // §ProviderPlugins
 
 #include "api/HttpSession.h"
 
@@ -78,46 +80,20 @@ ModelDiscoveryResult discover_models(std::string_view host,
     try {
         const json doc = json::parse(response->body);
 
-        if (doc.value("object", "") != "list") {
-            result.error_message = "Model discovery failed: response object is not 'list'";
+        // §ProviderPlugins: parsing is delegated to the provider's
+        // plugin (auto-detected from the host; the OpenAI-compatible
+        // default handles the classic {"object":"list","data":[...]}
+        // shape). Providers with a different models-endpoint dialect
+        // override parse_models_response().
+        auto plugin = ProviderRegistry::resolve("", host_str);
+        auto parsed = plugin->parse_models_response(doc);
+
+        if (!parsed.error.empty()) {
+            result.error_message = "Model discovery failed: " + parsed.error;
             return result;
         }
 
-        if (!doc.contains("data") || !doc["data"].is_array()) {
-            result.error_message = "Model discovery failed: missing or invalid 'data' array";
-            return result;
-        }
-
-        for (const auto& item : doc["data"]) {
-            if (!item.is_object() || !item.contains("id")) {
-                continue;  // skip malformed entries
-            }
-
-            DiscoveredModel model;
-            model.id = item.value("id", "");
-            model.owned_by = item.value("owned_by", "");
-            if (item.contains("created") && item["created"].is_number()) {
-                model.created = item["created"].get<std::int64_t>();
-            }
-            if (item.contains("context_length") && item["context_length"].is_number()) {
-                model.context_length = item["context_length"].get<std::int64_t>();
-            }
-
-            // Kimi returns separate image/video flags; treat either as vision.
-            if (item.contains("supports_image_in") && item["supports_image_in"].is_boolean()) {
-                model.supports_vision = model.supports_vision || item["supports_image_in"].get<bool>();
-            }
-            if (item.contains("supports_video_in") && item["supports_video_in"].is_boolean()) {
-                model.supports_vision = model.supports_vision || item["supports_video_in"].get<bool>();
-            }
-            // Some providers use a generic vision flag.
-            if (item.contains("supports_vision") && item["supports_vision"].is_boolean()) {
-                model.supports_vision = model.supports_vision || item["supports_vision"].get<bool>();
-            }
-            if (item.contains("supports_reasoning") && item["supports_reasoning"].is_boolean()) {
-                model.supports_reasoning = item["supports_reasoning"].get<bool>();
-            }
-
+        for (auto& model : parsed.models) {
             if (!model.id.empty()) {
                 result.models.push_back(std::move(model));
             }

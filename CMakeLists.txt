@@ -263,6 +263,8 @@ set(CORE_SOURCES
 set(API_SOURCES
 	src/api/LLMClient.cpp
 	src/api/HttpSession.cpp
+	src/api/providers/ProviderRegistry.cpp     # §ProviderPlugins
+	src/api/providers/OpenAiCompatiblePlugin.cpp # §ProviderPlugins
 )
 
 set(MCP_SOURCES

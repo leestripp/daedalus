@@ -22,6 +22,7 @@ class SkillManager;                        // §Phase 16: per-agent skill manage
 #include "tools/ToolFilter.h"
 
 #include "daedalus/AgentSink.h"
+#include "daedalus/ProviderPlugin.h"   // §ProviderPlugins
 #include "daedalus/settings.h"   // §v0.5.0: SettingsStore* replaces SettingsManager*
 #include "daedalus/types/AgentState.h"  // §State Machine: public state for the change callback
 
@@ -32,6 +33,7 @@ struct AppConfig {
     std::string api_key;
     std::string model;            // model_id (sent to API), e.g. "MiniMax-M2.7"
     std::string model_name;       // settings.json key, e.g. "minimax-m2.7"
+    std::string provider;         // §ProviderPlugins: provider label (plugin selection)
     std::string chat_endpoint;
     std::filesystem::path target_directory;
     std::string agent_name;        // §Phase 8.8 — per-agent runtime-state namespace
@@ -93,6 +95,10 @@ using StateChangeCallback = std::function<void(daedalus::AgentState)>;
 class LLMClient {
 private:
     AppConfig config_;
+    // §ProviderPlugins: resolved from config_.provider/base_url via
+    // ProviderRegistry in the ctor and set_config(). Never null after
+    // resolution — falls back to the OpenAI-compatible default plugin.
+    std::shared_ptr<daedalus::ProviderPlugin> plugin_;
     std::shared_ptr<daedalus::AgentSink> sink_;  // §Phase 3: routes all I/O + streaming
     std::unique_ptr<FileIO> file_io_;
     daedalus::SettingsStore* settings_store_ = nullptr;  // §v0.5.0: wired directly to SettingsStore

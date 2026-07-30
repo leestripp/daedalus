@@ -1,5 +1,6 @@
 #include "api/LLMClient.h"
 #include "api/MiniMaxSseParser.h"   // §BUG-001: exposed for tests
+#include "daedalus/ProviderRegistry.h"   // §ProviderPlugins
 #include "api/ErrorMapping.h"       // §on_error: HTTP status / error-type → ErrorKind
 #include "core/version.h"
 #include "core/FileIO.h"
@@ -195,6 +196,13 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
     skill_manager_(skill_manager),   // §Phase 16: per-agent skill manager
     tool_filter_(tool_filter)        // §Phase 16: per-agent tool filter
 {
+    // §ProviderPlugins: resolve this client's provider plugin once per
+    // config. Falls back to the OpenAI-compatible default when the
+    // provider label/host names no registered plugin.
+    plugin_ = daedalus::ProviderRegistry::resolve(config_.provider, config_.base_url);
+    LOG_INFO(std::string("[ProviderPlugin] active plugin: ") + plugin_->name() +
+             " (provider='" + config_.provider + "', model='" + config_.model + "')");
+
     // Load persisted command approvals
     ToolHandler::load_persisted_approvals(config.target_directory, config.agent_name);
     // Initialize current working directory tracker with project root
@@ -332,6 +340,10 @@ void LLMClient::refresh_mcp_tools() {
 // compression config when the host switches models.
 void LLMClient::set_config(const AppConfig& config) {
     config_ = config;
+    // §ProviderPlugins: a model switch may cross providers — re-resolve.
+    plugin_ = daedalus::ProviderRegistry::resolve(config_.provider, config_.base_url);
+    LOG_INFO(std::string("[ProviderPlugin] active plugin: ") + plugin_->name() +
+             " (provider='" + config_.provider + "', model='" + config_.model + "')");
     if (!messages_) return;
 
     MessageCompressionConfig mc = messages_->get_config();
@@ -1050,44 +1062,35 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                                           bool& compress_after_done) {
     warned_no_usage_this_turn_ = false;  // §B32: reset per-turn
 
+    // §ProviderPlugins: enforce provider conversation rules on the
+    // history before it goes on the wire (default plugin: no-op).
+    plugin_->sanitize_history(messages);
+
     // Build the request payload
     json request_payload = {
         {"model",     config_.model},
         {"messages",  messages},
         {"tools",     tool_defs},
         {"stream",    config_.stream},  // §Phase 9.8: true = SSE tokens, false = buffered JSON
-        {"temperature", config_.temperature}
+        {"temperature", plugin_->clamp_temperature(config_.model, config_.temperature)}
     };
 
-    // §BUG-MINIMAX-105 (2026-07-17): MiniMax's streaming mode mixes
-    // thinking content into the `content` field as a literal prefix
-    // like "(think)\nThe user wants me to...". This breaks clients that
-    // display the streamed content directly. The official fix
-    // (per MiniMax's own response on issue #105 in MiniMax-M2) is to
-    // send `reasoning_split: true` in the request body, which causes
-    // the API to put thinking into a separate `reasoning_details`
-    // field and keep `content` clean. Reference:
-    //   https://github.com/MiniMax-AI/MiniMax-M2/issues/105
-    //   https://platform.minimax.io/docs/api-reference/text-openai-api
-    request_payload["reasoning_split"] = true;
-
-    // §Phase 9.10: When streaming, always request usage stats via
-    // `stream_options: {include_usage: true, continuous_usage_stats: true}`.
-    // MiniMax (confirmed by live test on 2026-07-11) sends a separate
-    // final chunk with `{"choices":[],"usage":{...}}` only when this flag
-    // is set. Without it, every chunk has `"usage": null` and token
-    // counts are 0 for the whole session — making context-compression
-    // triggering impossible.  `continuous_usage_stats` additionally tells
-    // the server to emit usage on every chunk (not just the final one),
-    // which gives live per-chunk token counts for the session.  OpenAI
-    // added these in May 2024; MiniMax supports both identically.
-    if (config_.stream) {
-        request_payload["stream_options"] = {
-            {"include_usage", true},
-            {"continuous_usage_stats", true}
-        };
+    // §ProviderPlugins: provider-specific request shaping. The default
+    // OpenAI-compatible plugin applies the classic behavior
+    // (reasoning_split + stream_options.include_usage/continuous_usage_
+    // stats — see §BUG-MINIMAX-105 and §Phase 9.10); provider plugins
+    // add their own parameters here (thinking switches, cache keys,
+    // clamps).
+    {
+        daedalus::ProviderChatContext pctx;
+        pctx.model_id    = config_.model;
+        pctx.model_name  = config_.model_name;
+        pctx.provider    = config_.provider;
+        pctx.stream      = config_.stream;
+        pctx.temperature = config_.temperature;
+        plugin_->mutate_chat_payload(request_payload, pctx);
     }
-    
+
     // Validate JSON serialization before sending
     std::string payload_str;
     try {
@@ -1242,7 +1245,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
     // §Phase 9.8: SSE streaming — only wired when config_.stream is true.
     // When false the existing buffered JSON path is used unchanged.
-    MiniMaxSseParser sse_parser{std::weak_ptr<daedalus::AgentSink>(sink_)};
+    // §ProviderPlugins: the parser comes from the active provider plugin
+    // (default: the classic MiniMaxSseParser behavior).
+    auto sse_parser_holder = plugin_->create_stream_parser(
+        std::weak_ptr<daedalus::AgentSink>(sink_));
+    daedalus::ProviderStreamParser& sse_parser = *sse_parser_holder;
     std::function<void(std::string_view)> streaming_callback;
     // Lifecycle hooks for host UI spinners. started/finished guard ensures
     // on_llm_request_finished always fires once even on cancellation or
@@ -1548,7 +1555,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // the truncation below is only for the conversation-injected copy.
         const std::string full_error_message = error_message;
         const daedalus::ErrorKind error_kind =
-            daedalus::error_kind_from_api_type(error_type);
+            plugin_->classify_api_error_type(error_type);
 
         // Remove provider-specific text from the error message (URLs, help text)
         // Find the first period followed by space, or " at ", or " You " and cut there
@@ -1682,7 +1689,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         // §on_error: was LOG-only — the host never saw the
                         // fatal classification, only the earlier transient
                         // warning.
-                        const auto retry_kind = daedalus::error_kind_from_api_type(retry_error_type);
+                        const auto retry_kind = plugin_->classify_api_error_type(retry_error_type);
                         emit_error(retry_kind,
                                    retry_error_type + ": " + retry_error_msg,
                                    /*will_retry=*/false);
@@ -1709,7 +1716,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     }
                     std::ostringstream persist_msg;
                     persist_msg << "Error persisted: " << retry_error_type;
-                    emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                    emit_error(plugin_->classify_api_error_type(retry_error_type),
                                persist_msg.str(), /*will_retry=*/true);
                 }
             } catch (const std::exception& e) {
@@ -1824,12 +1831,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     std::string retry_error_msg = retry_error.value("message", "Unknown error");
                     std::ostringstream got_err_msg;
                     got_err_msg << "Got error: " << retry_error_type << ": " << retry_error_msg;
-                    emit_error(daedalus::error_kind_from_api_type(retry_error_type),
+                    emit_error(plugin_->classify_api_error_type(retry_error_type),
                                got_err_msg.str(), /*will_retry=*/true);
                     
                     if (classify_api_error(retry_error_type) == ErrorCategory::FATAL) {
                         LOG_ERROR("Fatal error: " + retry_error_type);
-                        const auto nochoices_kind = daedalus::error_kind_from_api_type(retry_error_type);
+                        const auto nochoices_kind = plugin_->classify_api_error_type(retry_error_type);
                         emit_error(nochoices_kind,
                                    retry_error_type + ": " + retry_error_msg,
                                    /*will_retry=*/false);

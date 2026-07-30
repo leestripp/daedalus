@@ -76,6 +76,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
             out.api_key       = m->api_key;
             out.model         = m->model_id;
             out.model_name    = cfg.model_name;     // settings key
+            out.provider      = m->provider;        // §ProviderPlugins
             out.chat_endpoint = m->chat_endpoint;
             out.temperature   = m->temperature;  // §Phase 8.7
         }

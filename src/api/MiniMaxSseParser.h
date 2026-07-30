@@ -18,11 +18,9 @@
 #include <string>
 #include <string_view>
 
-namespace daedalus {
-    class AgentSink;
-}
+#include "daedalus/ProviderPlugin.h"  // §ProviderPlugins: ProviderStreamParser interface
 
-class MiniMaxSseParser {
+class MiniMaxSseParser : public daedalus::ProviderStreamParser {
 public:
     /// Sink is used to fire `on_assistant_delta` callbacks as text
     /// streams in. May be a `std::weak_ptr` (typical — sink lifetime
@@ -31,10 +29,10 @@ public:
         : weak_sink_(std::move(sink)) {}
 
     /// Called for each raw HTTP chunk; SSE lines are buffered and parsed.
-    void on_chunk(std::string_view data);
+    void on_chunk(std::string_view data) override;
 
     /// Flush any incomplete line after the stream ends.
-    void finish();
+    void finish() override;
 
     /// Returns all text accumulated from delta events. Used for display.
     const std::string& text() const noexcept { return accumulated_text_; }
@@ -43,7 +41,7 @@ public:
     /// response metadata (id, model, usage, finish_reason) needed for
     /// token tracking and downstream JSON parsing.
     /// Returns a null json::object() if no valid event was received.
-    const nlohmann::json& final_event() const noexcept { return final_event_; }
+    const nlohmann::json& final_event() const noexcept override { return final_event_; }
 
     /// Reconstruct the assistant's message in the standard non-streaming
     /// format.  When the server streams `delta`-shaped chunks, the
@@ -59,20 +57,20 @@ public:
     /// carries the final `finish_reason` and `usage` but only the trailing
     /// `delta` text fragment.  All reassembly has to come from the deltas
     /// we buffered as they arrived.
-    nlohmann::json synthesized_message() const;
+    nlohmann::json synthesized_message() const override;
 
     /// §Phase 9.11: Did the SSE stream emit any text via `on_assistant_delta`
     /// during this turn?  Used by the downstream pipeline to decide whether
     /// to re-emit the synthesized message's content (which would duplicate
     /// every fragment the user already saw streaming live).
-    bool had_text_deltas() const noexcept { return !accumulated_text_.empty(); }
+    bool had_text_deltas() const noexcept override { return !accumulated_text_.empty(); }
 
     /// §BUG-001 (2026-07-17): did the SSE stream accumulate any tool calls?
     /// Returns the (possibly-empty) array of accumulated tool-call objects.
     /// Used by the gate condition that decides whether a final SSE chunk
     /// with `choices: []` is a usage-only trailer (recover via
     /// `synthesized_message()`) vs. an actual empty response (retry).
-    const nlohmann::json& accumulated_tool_calls() const noexcept {
+    const nlohmann::json& accumulated_tool_calls() const noexcept override {
         return accumulated_tool_calls_;
     }
 
@@ -105,10 +103,12 @@ private:
 // This helper centralizes the new logic so unit tests can verify the
 // truth table directly.
 // ============================================================================
+// §ProviderPlugins: keyed on the ProviderStreamParser interface so any
+// provider plugin's parser works with the gate.
 inline bool is_usage_only_chunk(
     bool stream_enabled,
     const nlohmann::json& response,
-    const MiniMaxSseParser& parser) noexcept
+    const daedalus::ProviderStreamParser& parser) noexcept
 {
     if (!stream_enabled) return false;
     if (response.contains("choices") && !response["choices"].empty()) {
