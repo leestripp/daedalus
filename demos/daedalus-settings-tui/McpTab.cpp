@@ -12,6 +12,10 @@
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include <nlohmann/json.hpp>
+
+#include <expected>
+
 namespace settings_tui {
 
 using namespace ftxui;
@@ -19,6 +23,75 @@ using namespace ftxui;
 namespace {
 
 const std::vector<std::string> kTransports = {"stdio", "streamable-http"};
+
+/// Parse a provider-style MCP JSON snippet into McpServer rows. Accepts
+/// either the full `{ "mcpServers": { ... } }` wrapper or a bare
+/// `{ "<name>": { ... } }` map. Each server object may carry
+/// command/args/env (stdio) or url/headers (streamable-http); an
+/// "Authorization: Bearer <token>" header maps to bearer_token.
+std::expected<std::vector<daedalus::SettingsStore::McpServer>, std::string>
+ParseMcpJson(const std::string& text)
+{
+    using McpServer = daedalus::SettingsStore::McpServer;
+
+    const nlohmann::json root = nlohmann::json::parse(text, nullptr, false);
+    if (root.is_discarded() || !root.is_object())
+        return std::unexpected("invalid JSON object");
+
+    const nlohmann::json* servers = &root;
+    if (root.contains("mcpServers")) {
+        servers = &root.at("mcpServers");
+        if (!servers->is_object())
+            return std::unexpected("\"mcpServers\" must be an object");
+    }
+    if (servers->empty())
+        return std::unexpected("no servers found in JSON");
+
+    std::vector<McpServer> out;
+    for (const auto& [name, def] : servers->items()) {
+        if (!def.is_object())
+            return std::unexpected("server '" + name + "' must be an object");
+
+        McpServer s;
+        s.name = name;
+        const bool has_url = def.contains("url") && def.at("url").is_string();
+        if (def.contains("transport") && def.at("transport").is_string())
+            s.transport = def.at("transport").get<std::string>();
+        else
+            s.transport = has_url ? "streamable-http" : "stdio";
+        if (def.contains("command") && def.at("command").is_string())
+            s.command = def.at("command").get<std::string>();
+        if (def.contains("args") && def.at("args").is_array())
+            for (const auto& a : def.at("args"))
+                if (a.is_string()) s.args.push_back(a.get<std::string>());
+        if (def.contains("env") && def.at("env").is_object())
+            for (const auto& [k, v] : def.at("env").items())
+                if (v.is_string()) s.env[k] = v.get<std::string>();
+        if (has_url)
+            s.url = def.at("url").get<std::string>();
+        if (def.contains("description") && def.at("description").is_string())
+            s.description = def.at("description").get<std::string>();
+        if (def.contains("headers") && def.at("headers").is_object()) {
+            const auto& headers = def.at("headers");
+            if (headers.contains("Authorization") &&
+                headers.at("Authorization").is_string()) {
+                const std::string auth =
+                    headers.at("Authorization").get<std::string>();
+                constexpr std::string_view kBearer = "Bearer ";
+                if (auth.starts_with(kBearer))
+                    s.bearer_token = auth.substr(kBearer.size());
+            }
+        }
+        if (s.transport == "stdio" && s.command.empty())
+            return std::unexpected(
+                "server '" + name + "': stdio transport needs a \"command\"");
+        if (s.transport != "stdio" && s.url.empty())
+            return std::unexpected(
+                "server '" + name + "': http transport needs a \"url\"");
+        out.push_back(std::move(s));
+    }
+    return out;
+}
 
 struct McpState
 {
@@ -39,6 +112,11 @@ struct McpState
     std::string f_description;
     bool f_enabled = true;
     std::string form_error;
+
+    // JSON import modal.
+    bool show_json = false;
+    std::string f_json;
+    std::string json_error;
 
     // Delete confirmation.
     bool confirm_delete = false;
@@ -131,6 +209,27 @@ Component MakeMcpTab(AppContext& ctx)
         st->confirm_delete = false;
     };
 
+    // -- JSON import --------------------------------------------------------
+    auto open_json = [st] {
+        st->f_json.clear();
+        st->json_error.clear();
+        st->show_json = true;
+    };
+
+    auto do_import = [&ctx, st, refresh] {
+        auto parsed = ParseMcpJson(st->f_json);
+        if (!parsed) {
+            st->json_error = parsed.error();
+            return;
+        }
+        for (const auto& s : *parsed)
+            ctx.store.upsert_mcp_server(s);
+        refresh();
+        ctx.set_status("imported " + std::to_string(parsed->size()) +
+                       " MCP server(s) from JSON");
+        st->show_json = false;
+    };
+
     // -- components ---------------------------------------------------------
     MenuOption menu_opt = MenuOption::Vertical();
     menu_opt.entries    = &st->names;
@@ -139,15 +238,16 @@ Component MakeMcpTab(AppContext& ctx)
     auto menu = Menu(menu_opt);
 
     auto btn_add  = Button(" Add (a) ", open_add, ButtonOption::Border());
+    auto btn_json = Button(" Add JSON (j) ", open_json, ButtonOption::Border());
     auto btn_edit = Button(" Edit (e) ", open_edit, ButtonOption::Border());
     auto btn_del  = Button(" Delete (d) ",
                            [st] { if (!st->names.empty()) st->confirm_delete = true; },
                            ButtonOption::Border());
-    auto buttons = Container::Horizontal({btn_add, btn_edit, btn_del});
+    auto buttons = Container::Horizontal({btn_add, btn_json, btn_edit, btn_del});
 
     auto body = Container::Vertical({menu, buttons});
 
-    auto body_renderer = Renderer(body, [&ctx, st, menu, btn_add, btn_edit, btn_del] {
+    auto body_renderer = Renderer(body, [&ctx, st, menu, btn_add, btn_json, btn_edit, btn_del] {
         Elements detail;
         detail.push_back(text("MCP server details") | bold);
         detail.push_back(separator());
@@ -178,7 +278,7 @@ Component MakeMcpTab(AppContext& ctx)
             vbox({
                 vbox(std::move(detail)) | flex,
                 separator(),
-                hbox({btn_add->Render(), btn_edit->Render(), btn_del->Render()}),
+                hbox({btn_add->Render(), btn_json->Render(), btn_edit->Render(), btn_del->Render()}),
             }) | border | flex,
         });
     });
@@ -242,6 +342,42 @@ Component MakeMcpTab(AppContext& ctx)
             return false;
         });
 
+    // -- JSON import modal ---------------------------------------------------
+    InputOption json_opt;
+    json_opt.content   = StringRef(&st->f_json);
+    json_opt.multiline = true;
+    auto json_input = Input(json_opt);
+
+    auto btn_import = Button(" Import ", do_import, ButtonOption::Border());
+    auto btn_cancel_json = Button(" Cancel ", [st] { st->show_json = false; },
+                                  ButtonOption::Border());
+    auto json_form = Container::Vertical({
+        json_input,
+        Container::Horizontal({btn_import, btn_cancel_json}),
+    });
+
+    auto json_modal = Renderer(json_form,
+        [st, json_input, btn_import, btn_cancel_json] {
+            Elements rows;
+            rows.push_back(text(" Add MCP server(s) from JSON ") | bold);
+            rows.push_back(separator());
+            rows.push_back(text("Paste a provider snippet, e.g.:"));
+            rows.push_back(text("  { \"mcpServers\": { \"name\": { \"command\": ... } } }") | dim);
+            rows.push_back(json_input->Render() | frame |
+                           size(HEIGHT, EQUAL, 12));
+            if (!st->json_error.empty())
+                rows.push_back(text(" " + st->json_error) | color(Color::Red));
+            rows.push_back(separator());
+            rows.push_back(hbox({btn_import->Render(), btn_cancel_json->Render()}) | center);
+            return vbox(std::move(rows)) | border | size(WIDTH, GREATER_THAN, 72) | clear_under;
+        }) | CatchEvent([st](Event e) {
+            if (e == Event::Escape) {
+                st->show_json = false;
+                return true;
+            }
+            return false;
+        });
+
     // -- delete confirmation modal ------------------------------------------
     auto btn_yes = Button(" Delete ", do_delete, ButtonOption::Border());
     auto btn_no  = Button(" Cancel ", [st] { st->confirm_delete = false; }, ButtonOption::Border());
@@ -267,9 +403,10 @@ Component MakeMcpTab(AppContext& ctx)
     // -- keyboard shortcuts (only when no modal is open) --------------------
     // Registered on the shared context; the root CatchEvent routes events
     // for the active tab here (see SettingsApp.h).
-    ctx.key_handlers.emplace_back([st, open_add, open_edit](Event e) {
-        if (st->show_form || st->confirm_delete) return false;
+    ctx.key_handlers.emplace_back([st, open_add, open_json, open_edit](Event e) {
+        if (st->show_form || st->show_json || st->confirm_delete) return false;
         if (e == Event::Character('a')) { open_add(); return true; }
+        if (e == Event::Character('j')) { open_json(); return true; }
         if (e == Event::Character('e')) { open_edit(); return true; }
         if (e == Event::Character('d')) {
             if (!st->names.empty()) st->confirm_delete = true;
@@ -278,11 +415,12 @@ Component MakeMcpTab(AppContext& ctx)
         return false;
     });
     ctx.modal_checks.emplace_back([st] {
-        return st->show_form || st->confirm_delete;
+        return st->show_form || st->show_json || st->confirm_delete;
     });
 
     return body_renderer
          | Modal(form_modal, &st->show_form)
+         | Modal(json_modal, &st->show_json)
          | Modal(confirm_modal, &st->confirm_delete);
 }
 

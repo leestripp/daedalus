@@ -60,7 +60,7 @@ Environment overrides honoured by the store itself (`DAEDALUS_HOME`,
 |-----|-------------------|
 | **Providers** | `ProviderConfig` rows: name, host, api_key (masked input), chat/discovery endpoints, timeout. Add / edit / delete. |
 | **Models** | `ModelConfig` rows: name, provider (dropdown of configured providers), model_id, max_context_size, temperature. Add / edit / delete, mark the **default model**, and **Discover** model ids from the provider's OpenAI-compatible `/v1/models` endpoint. |
-| **MCP Servers** | `McpServer` rows: name, transport (`stdio` / `streamable-http`), command, args, env (`KEY=VALUE` lines), url, bearer_token (masked), description, enabled switch. |
+| **MCP Servers** | `McpServer` rows: name, transport (`stdio` / `streamable-http`), command, args, env (`KEY=VALUE` lines), url, bearer_token (masked), description, enabled switch. Also **Add JSON**: paste a provider-style snippet (`{ "mcpServers": { ... } }` or a bare `{ "<name>": { ... } }` map) to import one or more servers in one go; an `Authorization: Bearer …` header maps to `bearer_token`. |
 | **Agent** | kv-backed agent options: auto_approve, current_provider, max_agent_iterations, max_tool_result_size, max_request_size, max_response_size, MCP schema soft-cap percent, Serper API key (masked), and the `server_error` retry group (enabled, initial/max wait, backoff multiplier, max retries). |
 
 ## 5. Key bindings
@@ -70,6 +70,7 @@ Environment overrides honoured by the store itself (`DAEDALUS_HOME`,
 | `←` / `→` | Switch section (Providers / Models / MCP Servers / Agent) |
 | `↑` / `↓` | Navigate lists and form fields |
 | `a` | Add a new entry (entity tabs) |
+| `j` | Add MCP server(s) by pasting a provider JSON snippet (MCP Servers tab) |
 | `e` | Edit the selected entry |
 | `Enter` | Edit the selected entry; inside a form field, save the form |
 | `d` | Delete the selected entry (asks for confirmation) |
