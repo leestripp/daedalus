@@ -110,6 +110,13 @@ private:
     // §B32: suppresses duplicate "no usage" warnings per turn.
     bool warned_no_usage_this_turn_ = false;
 
+    // §fix (2026-07-30): circuit breaker for repeated identical FATAL API
+    // errors. When the same error signature fires on consecutive cycles we
+    // stop returning ACT (which just re-sends the same doomed request) and
+    // end the turn instead. Reset on any successful API response.
+    std::string last_fatal_signature_;
+    int consecutive_fatal_count_ = 0;
+
     // §State Machine: LLM-driven transitions (via the `set_status` tool)
     // are reported through this callback so the owning AgentImpl can keep
     // its atomic public state as the single source of truth (Agent::state()

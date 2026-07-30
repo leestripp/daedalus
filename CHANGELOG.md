@@ -58,6 +58,33 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **Infinite HTTP 400 loop from misplaced tool results** (§fix 2026-07-30):
+  the agent could get stuck re-sending a chain the provider rejects with
+  "messages with role 'tool' must be a response to a preceeding message
+  with 'tool_calls'", growing the history by two messages per cycle.
+  - Root cause 1: the FATAL-error recovery in `run_agent_cycle()` appended
+    a synthetic tool result for the last tool_call found *anywhere* in
+    history — including already-answered mid-history calls — producing a
+    tool message that does not follow its parent assistant. All four
+    recovery sites now use the guarded
+    `Messages::append_tool_results_if_pending()`, which injects results
+    only for a genuinely pending tail block (multi-tool safe, never
+    duplicates) (`src/api/LLMClient.cpp`, `src/core/Messages.cpp`).
+  - Root cause 2: `Messages::sanitize_message_chain()` only checked that a
+    tool result's `tool_call_id` existed somewhere in history. It is now
+    **position-aware**: tool results are kept only in the contiguous block
+    directly after their parent assistant, duplicates are dropped, and
+    tool_calls without an adjacent result are pruned.
+  - Root cause 3: `truncate_if_needed()` ran after sanitization and its
+    `stopped_early` path could keep tool results while dropping their
+    parent assistant (plus a duplicate-push bug). Block retention is now
+    all-or-nothing, orphan results are dropped during truncation, and the
+    chain is re-sanitized before the payload is rebuilt.
+  - Safety net: a circuit breaker ends the turn when the identical FATAL
+    API error repeats on consecutive cycles instead of returning `ACT`
+    forever (`LLMClient::consecutive_fatal_count_`).
+  - Covered by `tests/test_message_chain_validity.cpp` (15 cases).
+
 - **Auto-approve could not be forced OFF by hosts** (§BUG-006/007/008,
   reported via MonkeyByte):
   - `AgentImpl::auto_approve()` returned

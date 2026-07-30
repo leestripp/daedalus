@@ -32,6 +32,7 @@
 #include <future>
 #include <filesystem>
 #include <set>
+#include <vector>
 #include <sys/select.h>
 #include <iconv.h>
 #include <pwd.h>
@@ -1213,7 +1214,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
     // Check if request payload exceeds max size and truncate if needed
     messages_->truncate_if_needed(max_request_size_);
-    
+
+    // §fix (2026-07-30): re-sanitize after truncation. Truncation rewrites
+    // the chain, so the payload must be rebuilt from a structurally valid
+    // chain even if a truncation edge case ever drops a parent assistant.
+    {
+        json truncated_sanitized = messages_->sanitize_message_chain(messages);
+        messages_->set_messages(truncated_sanitized);
+        messages = messages_->get_messages();
+    }
+
     // Rebuild payload after truncation
     request_payload["messages"] = messages;
 
@@ -1580,17 +1590,36 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 return AgentState::DONE;
             }
 
-            // CRITICAL FIX: Add a tool result for the failed call so the
-            // conversation state stays valid. Without this, the assistant's
-            // tool_call is orphaned (no matching tool result) and the LLM
-            // gets stuck retrying the same call in an infinite loop.
-            if (!last_tool_call_id.empty() && last_tool_call_id != "UNKNOWN") {
-                messages.push_back({
-                    {"role", "tool"},
-                    {"tool_call_id", last_tool_call_id},
-                    {"content", "[API ERROR] This tool call was REJECTED by the API server with: " + error_type + " - " + error_message + ".\n\nThe arguments you provided were:\n" + last_tool_args + "\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call. Read the tool description and the error carefully, then use different arguments or a different tool."}
-                });
+            // §fix (2026-07-30): circuit breaker — if the SAME fatal error
+            // fires on consecutive cycles, the injected recovery context did
+            // not help and returning ACT would just re-send the same doomed
+            // request forever (the infinite HTTP 400 loop this fix
+            // eliminates). End the turn instead; the host has already seen
+            // every error via emit_error above.
+            const std::string fatal_signature = error_type + "|" + full_error_message;
+            if (fatal_signature == last_fatal_signature_) {
+                consecutive_fatal_count_++;
+            } else {
+                last_fatal_signature_ = fatal_signature;
+                consecutive_fatal_count_ = 1;
             }
+            if (consecutive_fatal_count_ >= 2) {
+                LOG_ERROR("Identical FATAL API error repeated " +
+                          std::to_string(consecutive_fatal_count_) +
+                          " times consecutively - ending turn instead of looping.");
+                emit_error(error_kind,
+                           "Unrecoverable repeated API error (" + error_type +
+                           ") - turn ended to avoid an infinite retry loop.",
+                           /*will_retry=*/false);
+                return AgentState::DONE;
+            }
+
+            // §fix (2026-07-30): add a tool result for the failed call ONLY
+            // when it is genuinely pending at the tail. Injecting a result
+            // for a mid-history call creates a misplaced tool message that
+            // the provider rejects and the loop never escapes.
+            Messages::append_tool_results_if_pending(messages,
+                "[API ERROR] This tool call was REJECTED by the API server with: " + error_type + " - " + error_message + ".\n\nThe arguments you provided were:\n" + last_tool_args + "\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call. Read the tool description and the error carefully, then use different arguments or a different tool.");
 
             // Also add a user message for additional context
             messages.push_back({
@@ -1668,15 +1697,10 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         LastToolCall last_retry = find_last_tool_call(messages);
                         const std::string& last_tool_id   = last_retry.id;
                         const std::string& last_tool_name = last_retry.name;
-                        // CRITICAL FIX: Add a tool result for the failed call
-                        // to keep conversation state valid (no orphan tool_calls)
-                        if (!last_tool_id.empty() && last_tool_id != "UNKNOWN") {
-                            messages.push_back({
-                                {"role", "tool"},
-                                {"tool_call_id", last_tool_id},
-                                {"content", "[API ERROR] This tool call was REJECTED by the API server with: " + retry_error_type + " - " + retry_error_msg + ".\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call."}
-                            });
-                        }
+                        // §fix (2026-07-30): guarded injection only (see
+                        // append_tool_results_if_pending).
+                        Messages::append_tool_results_if_pending(messages,
+                            "[API ERROR] This tool call was REJECTED by the API server with: " + retry_error_type + " - " + retry_error_msg + ".\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call.");
                         messages.push_back({
                             {"role", "user"},
                             {"content", "[SYSTEM ERROR] API error: " + retry_error_type + " - " + retry_error_msg + "\n\nLast tool: " + last_tool_name + " (id=" + last_tool_id + ")\n\nPlease try a DIFFERENT approach - do NOT repeat the same call."}
@@ -1700,15 +1724,10 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::ostringstream failed_msg;
             failed_msg << "All API retries failed. Adding error to conversation and continuing.";
             emit_error(error_kind, failed_msg.str(), /*will_retry=*/false);
-            // CRITICAL FIX: Add a tool result for the failed call
-            // to keep conversation state valid (no orphan tool_calls)
-            if (!last_tool_call_id.empty() && last_tool_call_id != "UNKNOWN") {
-                messages.push_back({
-                    {"role", "tool"},
-                    {"tool_call_id", last_tool_call_id},
-                    {"content", "[API ERROR] All " + std::to_string(max_retries) + " retries failed.\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call."}
-                });
-            }
+            // §fix (2026-07-30): guarded injection only (see
+            // append_tool_results_if_pending).
+            Messages::append_tool_results_if_pending(messages,
+                "[API ERROR] All " + std::to_string(max_retries) + " retries failed.\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call.");
             messages.push_back({
                 {"role", "user"},
                 {"content", "[SYSTEM ERROR] API error after " + std::to_string(max_retries) + " retries. Please try a DIFFERENT approach - do NOT repeat the same tool call."}
@@ -1862,27 +1881,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                        "API returned empty response (no choices) after "
                            + std::to_string(max_retries) + " retries",
                        /*will_retry=*/false);
-            // CRITICAL FIX: Find the last tool_call_id and add a tool result
-            // to keep conversation state valid (no orphan tool_calls)
-            std::string orphan_tc_id = "UNKNOWN";
-            try {
-                for (int i = static_cast<int>(messages.size()) - 1; i >= 0; i--) {
-                    if (!messages[i].is_object()) continue;
-                    if (messages[i].value("role", "") != "assistant") continue;
-                    if (!messages[i].contains("tool_calls") || !messages[i]["tool_calls"].is_array()) continue;
-                    auto& tcs = messages[i]["tool_calls"];
-                    if (tcs.empty() || !tcs[tcs.size()-1].is_object()) continue;
-                    orphan_tc_id = tcs[tcs.size()-1].value("id", "UNKNOWN");
-                    break;
-                }
-            } catch (...) {}
-            if (!orphan_tc_id.empty() && orphan_tc_id != "UNKNOWN") {
-                messages.push_back({
-                    {"role", "tool"},
-                    {"tool_call_id", orphan_tc_id},
-                    {"content", "[API ERROR] All " + std::to_string(max_retries) + " retries failed - API returned empty response.\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call."}
-                });
-            }
+            // §fix (2026-07-30): guarded injection only (see
+            // append_tool_results_if_pending) — replaces the ad-hoc
+            // backward walk + unconditional push that could inject a
+            // misplaced tool result for an already-answered call.
+            Messages::append_tool_results_if_pending(messages,
+                "[API ERROR] All " + std::to_string(max_retries) + " retries failed - API returned empty response.\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call.");
             messages.push_back({
                 {"role", "user"},
                 {"content", "[SYSTEM ERROR] API returned empty response after " + std::to_string(max_retries) + " retries. Please try a DIFFERENT approach - do NOT repeat the same tool call."}
@@ -1893,6 +1897,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // If api_success is true, we have a valid response_json, continue processing
         }
     }
+
+    // §fix (2026-07-30): a usable response resets the fatal-error circuit
+    // breaker — the conversation is making progress again.
+    last_fatal_signature_.clear();
+    consecutive_fatal_count_ = 0;
 
     json choice = response_json["choices"][0];
     json message = choice["message"];

@@ -452,19 +452,48 @@ public:
     std::vector<std::string> get_pending_tool_ids() const;
     
     /**
-     * @brief Sanitize an assistant message (validate tool_calls arguments)
+     * @brief Sanitize an assistant message (validate tool_calls arguments,
+     *        prune tool_calls without a matching result in tool_result_ids)
      * @param assistant_msg assistant message to sanitize
+     * @param tool_result_ids ids of tool results available to answer the
+     *        calls (sanitize_message_chain passes only ADJACENT results)
      * @return sanitized assistant message
      */
     json sanitize_assistant_message(const json& assistant_msg,
                                         const std::unordered_set<std::string>& tool_result_ids = {}) const;
     
     /**
-     * @brief Validate and sanitize entire message array
+     * @brief Validate and sanitize entire message array (position-aware)
+     *
+     * Enforces the provider's tool-call contract: a tool result must sit in
+     * the contiguous block directly after its parent assistant, may appear
+     * only once, and every surviving tool_call must have an adjacent result.
+     * Orphaned, misplaced, and duplicate tool results — and unanswered
+     * tool_calls — are removed.
+     *
      * @param messages message array to sanitize
-     * @return sanitized message array (removes orphans)
+     * @return sanitized message array
      */
     json sanitize_message_chain(const json& messages) const;
+
+    /**
+     * @brief Append synthetic tool results ONLY for a genuinely pending call
+     *
+     * §fix (2026-07-30): error-recovery paths use this to close an orphaned
+     * tool_call. It injects results ONLY when the last assistant-with-
+     * tool_calls is pending at the tail (every later message is a tool
+     * result of the same block). Missing results are appended contiguously
+     * (multi-tool safe); ids that already have a result are never
+     * duplicated. A mid-history (already answered) call is left untouched,
+     * because appending a tool result there would create the misplaced
+     * tool message the provider rejects with HTTP 400.
+     *
+     * @param messages live chain (modified in place)
+     * @param content content for any injected tool result
+     * @return true if at least one tool result was appended
+     */
+    static bool append_tool_results_if_pending(json& messages,
+                                               const std::string& content);
     
     /**
      * @brief Clear executing markers (called during compression)

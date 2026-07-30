@@ -1123,6 +1123,29 @@ target_link_libraries(daedalus_messages_tests PRIVATE
 )
 add_test(NAME messages_tests COMMAND daedalus_messages_tests)
 
+# §fix (2026-07-30): position-aware chain validity tests (sanitize,
+# guarded tool-result injection, truncation block retention)
+add_executable(daedalus_message_chain_validity_tests
+    test_message_chain_validity.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Messages.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+)
+target_include_directories(daedalus_message_chain_validity_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_message_chain_validity_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+
+    pthread
+)
+add_test(NAME message_chain_validity_tests COMMAND daedalus_message_chain_validity_tests)
+
 # §Phase 14: SystemPromptBuilder compose() tests (replaces the legacy
 # test_system_prompt_builder.cpp which exercised the now-deleted identity /
 # rules / workflow prose build path).

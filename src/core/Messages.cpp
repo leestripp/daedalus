@@ -1602,10 +1602,11 @@ json Messages::sanitize_assistant_message(const json& msg,
             
             // Remove ORPHAN tool_calls (those with no matching tool result).
             // These cause API 400 errors and infinite retry loops.
-            // When tool_result_ids is empty the collection pass hasn't run yet
-            // (e.g. truncate_if_needed during compression), so we skip orphan
-            // detection and keep all tool_calls. When non-empty, we did collect
-            // tool results and should discard any without a matching entry.
+            // §fix (2026-07-30): the set passed in now contains only the
+            // results ADJACENT to this assistant (sanitize_message_chain is
+            // position-aware), so a call whose result exists only elsewhere
+            // in history is pruned here as well. An empty set prunes all
+            // tool_calls — a pending call without results is not sendable.
             bool has_result = !tool_result_ids.empty() &&
                               tool_result_ids.count(tc_id) > 0;
             if (!has_result) {
@@ -1632,80 +1633,149 @@ json Messages::sanitize_assistant_message(const json& msg,
 
 json Messages::sanitize_message_chain(const json& msgs) const {
     if (!msgs.is_array()) return msgs;
-    
-    json result = json::array();
-    
-    // First pass: collect valid tool call IDs (those with proper structure)
-    std::unordered_set<std::string> valid_tool_ids;
-    for (const auto& msg : msgs) {
-        if (msg.value("role", "") == "assistant" && msg.contains("tool_calls")) {
-            for (const auto& tc : msg["tool_calls"]) {
-                std::string tc_id = tc.value("id", "");
-                if (!tc_id.empty()) {
-                    // Validate arguments
-                    bool valid = true;
-                    if (tc.contains("function") && tc["function"].contains("arguments")) {
-                        const auto& args_val = tc["function"]["arguments"];
-                        if (args_val.is_string()) {
-                            // Use json::accept() for efficient validation without creating parse tree
-                            valid = json::accept(args_val.get<std::string>());
-                        }
-                    }
-                    if (valid) {
-                        valid_tool_ids.insert(tc_id);
-                    }
-                }
-            }
-        }
-    }
-    
-    // Second pass (NEW): collect tool_call_ids that HAVE matching tool results
-    // This is used to detect ORPHAN tool_calls (assistant tool_calls with
-    // no matching tool result) - these cause the API to return 400 errors
-    // and create infinite retry loops in the agent.
-    std::unordered_set<std::string> tool_result_ids;
-    for (const auto& msg : msgs) {
-        if (msg.value("role", "") == "tool") {
-            std::string tc_id = msg.value("tool_call_id", "");
-            if (!tc_id.empty()) {
-                tool_result_ids.insert(tc_id);
-            }
-        }
-    }
 
-    // Third pass: build sanitized chain
-    for (const auto& msg : msgs) {
+    json result = json::array();
+
+    // §fix (2026-07-30): position-aware validation.
+    //
+    // The provider requires a `role:"tool"` message to DIRECTLY follow the
+    // assistant message carrying its `tool_calls` (or a sibling tool result
+    // in the same contiguous block). The previous implementation only checked
+    // that the `tool_call_id` existed SOMEWHERE in history, so a misplaced or
+    // duplicated tool result survived sanitization and the API rejected the
+    // whole request on every retry (infinite HTTP 400 loop).
+    //
+    // New model: an assistant with tool_calls OPENS a block; the contiguous
+    // run of tool messages immediately after it may answer those calls; any
+    // non-tool message CLOSES the block. Tool results that arrive outside
+    // their block (misplaced), or twice (duplicate), are dropped. Assistant
+    // tool_calls without an adjacent result are pruned (they are equally
+    // invalid for the API).
+    std::unordered_set<std::string> open_block;        // ids answerable now
+    std::unordered_set<std::string> answered_in_block; // ids already answered
+
+    for (size_t i = 0; i < msgs.size(); i++) {
+        const auto& msg = msgs[i];
         std::string role = msg.value("role", "");
-        
+
         if (role == "tool") {
             std::string tc_id = msg.value("tool_call_id", "");
-            // Only drop tool results that are truly orphaned:
-            // - tool_call_id is empty (malformed)
-            // - OR tool_call_id is orphaned (no matching tool call in any assistant message)
             if (tc_id.empty()) {
                 LOG_CERR(INFO,  "[Messages] Removed malformed tool result (empty tool_call_id)" << '\n');
-                continue;  // Drop tool results with empty/missing tool_call_id
-            }
-            // Drop orphaned tool results - they cause API errors
-            if (valid_tool_ids.find(tc_id) == valid_tool_ids.end()) {
-                LOG_CERR(INFO,  "[Messages] Removed orphaned tool result (no matching tool call for id: " << tc_id << ")" << '\n');
                 continue;
             }
-            // This tool result is valid - has matching tool call
+            if (open_block.count(tc_id) == 0) {
+                // Orphaned (no matching tool call) OR misplaced (its parent
+                // assistant is not the immediately preceding message).
+                LOG_CERR(INFO,  "[Messages] Removed orphaned/misplaced tool result (no open block for id: " << tc_id << ")" << '\n');
+                continue;
+            }
+            if (answered_in_block.count(tc_id) > 0) {
+                LOG_CERR(INFO,  "[Messages] Removed duplicate tool result (id: " << tc_id << ")" << '\n');
+                continue;
+            }
+            answered_in_block.insert(tc_id);
             result.push_back(msg);
-        } else if (role == "assistant") {
-            // CRITICAL FIX: Pass tool_result_ids so orphan tool_calls (no
-            // matching result) are removed - prevents API 400 errors
-            json sanitized = sanitize_assistant_message(msg, tool_result_ids);
+            continue;
+        }
+
+        // Any non-tool message closes the current block.
+        open_block.clear();
+        answered_in_block.clear();
+
+        if (role == "assistant" && msg.contains("tool_calls")
+            && msg["tool_calls"].is_array()) {
+            // Collect the ids answered by the contiguous run of tool
+            // messages immediately following this assistant. Results
+            // elsewhere in history do NOT count (position-aware).
+            std::unordered_set<std::string> adjacent_result_ids;
+            for (size_t j = i + 1; j < msgs.size(); j++) {
+                if (msgs[j].value("role", "") != "tool") break;
+                std::string id = msgs[j].value("tool_call_id", "");
+                if (!id.empty()) adjacent_result_ids.insert(id);
+            }
+            // Prune tool_calls that have no adjacent result or invalid args.
+            json sanitized = sanitize_assistant_message(msg, adjacent_result_ids);
             if (sanitized.contains("content") || sanitized.contains("tool_calls")) {
                 result.push_back(sanitized);
+                if (sanitized.contains("tool_calls")) {
+                    for (const auto& tc : sanitized["tool_calls"]) {
+                        std::string id = tc.value("id", "");
+                        if (!id.empty()) open_block.insert(id);
+                    }
+                }
             }
         } else {
             result.push_back(msg);
         }
     }
-    
+
     return result;
+}
+
+// §fix (2026-07-30): guarded synthetic tool-result injection.
+// The previous "CRITICAL FIX" recovery in LLMClient appended a tool result
+// for the last tool_call found ANYWHERE in history — including calls that
+// were already answered mid-conversation. The appended tool message then
+// followed a user/assistant message instead of its parent assistant, which
+// the provider rejects ("messages with role 'tool' must be a response to a
+// preceeding message with 'tool_calls'"). Worse, the old sanitizer only
+// checked that the id existed somewhere, so the bogus message survived
+// every retry and the recovery re-fired — an infinite HTTP 400 loop that
+// grew the chain by two messages per cycle.
+bool Messages::append_tool_results_if_pending(json& messages,
+                                              const std::string& content) {
+    if (!messages.is_array() || messages.empty()) return false;
+
+    // Locate the last assistant message that carries tool_calls.
+    int k = -1;
+    for (int i = static_cast<int>(messages.size()) - 1; i >= 0; i--) {
+        if (!messages[i].is_object()) continue;
+        if (messages[i].value("role", "") != "assistant") continue;
+        if (messages[i].contains("tool_calls") &&
+            messages[i]["tool_calls"].is_array() &&
+            !messages[i]["tool_calls"].empty()) {
+            k = i;
+            break;
+        }
+    }
+    if (k < 0) return false;
+
+    // Collect the block's tool_call ids (in order).
+    std::vector<std::string> block_ids;
+    for (const auto& tc : messages[k]["tool_calls"]) {
+        std::string id = tc.value("id", "");
+        if (!id.empty()) block_ids.push_back(id);
+    }
+    if (block_ids.empty()) return false;
+
+    // Every message after k must be a tool result of this block —
+    // otherwise the call is already closed mid-history and injecting a
+    // tool result at the tail would create an invalid sequence.
+    std::unordered_set<std::string> answered;
+    for (size_t i = static_cast<size_t>(k) + 1; i < messages.size(); i++) {
+        if (!messages[i].is_object()) return false;
+        if (messages[i].value("role", "") != "tool") return false;
+        std::string id = messages[i].value("tool_call_id", "");
+        if (id.empty() ||
+            std::find(block_ids.begin(), block_ids.end(), id) == block_ids.end()) {
+            return false;
+        }
+        answered.insert(id);
+    }
+
+    // Append results for the ids that are still missing, in block order.
+    bool appended = false;
+    for (const auto& id : block_ids) {
+        if (answered.count(id) > 0) continue;
+        messages.push_back({
+            {"role", "tool"},
+            {"tool_call_id", id},
+            {"content", content}
+        });
+        appended = true;
+    }
+    return appended;
 }
 
 void Messages::clear_executing_markers() {
@@ -1934,26 +2004,40 @@ json Messages::truncate_if_needed(size_t max_size) {
                 find_parent_assistant_for_tool_result(tool_call_id);
 
             if (parent == std::string::npos || parent < 1 || parent >= i) {
+                // §fix (2026-07-30): orphan tool results are unsendable —
+                // drop them here instead of letting the generic path below
+                // push them into the truncated chain.
                 LOG_CERR(WARNING, "[WARNING] Truncating orphan tool "
                           "result (tool_call_id='" << tool_call_id
                           << "')" << '\n');
+                continue;
             } else {
-                bool stopped_early = false;
-                for (size_t j = i; j >= parent + 1; --j) {
-                    std::string msg_str = messages_[j].dump();
-                    if (current_size + msg_str.size() > target_size) {
-                        LOG_CERR(WARNING, "[WARNING] Cannot keep complete "
-                                  "tool call chain - stopping here." << '\n');
-                        stopped_early = true;
-                        break;
+                // §fix (2026-07-30): all-or-nothing block retention.
+                // Pre-fix: the tool results in [parent+1, i] were pushed
+                // first and the parent assistant was left to the generic
+                // path — if it did not fit, the truncated chain kept tool
+                // results without their parent assistant (which the API
+                // rejects), and the stopped_early fall-through also pushed
+                // messages_[i] a second time (duplicate). Now the whole
+                // block [parent, i] is kept only when it fits complete;
+                // otherwise it is dropped as a unit.
+                size_t block_size = 0;
+                for (size_t j = parent; j <= i; j++) {
+                    block_size += messages_[j].dump().size();
+                }
+                if (current_size + block_size > target_size) {
+                    LOG_CERR(WARNING, "[WARNING] Cannot keep complete "
+                              "tool call chain - dropping it as a unit." << '\n');
+                } else {
+                    for (size_t j = i; j > parent; --j) {
+                        truncated_messages.push_back(messages_[j]);
                     }
-                    truncated_messages.push_back(messages_[j]);
-                    current_size += msg_str.size();
+                    truncated_messages.push_back(messages_[parent]);
+                    current_size += block_size;
                 }
-                if (!stopped_early) {
-                    i = parent + 1;
-                    continue;
-                }
+                // Skip the whole block; the for-update i-- moves past it.
+                i = parent;
+                continue;
             }
         }
 
