@@ -28,6 +28,7 @@
 
 #include "daedalus/types/ErrorKind.h"
 #include "daedalus/types/LogLevel.h"
+#include "daedalus/types/ApprovalSource.h"
 
 namespace daedalus {
 
@@ -200,6 +201,19 @@ public:
     {
         (void)command;
         return false;
+    }
+
+    /// @brief §BUG-008: a command was approved WITHOUT calling
+    ///        request_command_approval() — via auto-approve mode or one of
+    ///        the approval caches. Purely informational; the command will
+    ///        run regardless. Default: no-op, so existing hosts are
+    ///        unaffected. Override to render the bypass in your UI or to
+    ///        audit it.
+    virtual void on_command_auto_approved(
+        std::string_view command,
+        daedalus::ApprovalSource source) noexcept
+    {
+        (void)command; (void)source;
     }
 };
 

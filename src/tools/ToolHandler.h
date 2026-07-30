@@ -27,6 +27,12 @@ namespace ToolHandler {
     void set_auto_mode(bool enabled);
     bool is_auto_mode_enabled();
 
+    // §BUG-008 — opt out of auto-recording approved commands into the
+    // session-approved cache. Default true (legacy behaviour: every
+    // host-approved command is remembered for the rest of the process).
+    void set_remember_approvals(bool enabled);
+    bool remember_approvals_enabled();
+
     // §Phase 3 — set the AgentSink that tools (e.g. execute_bash) use
     // for blocking I/O like command approval. Pass nullptr to clear.
     // ToolHandler keeps a weak_ptr so the sink lifetime is owned by the host.

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <set>
 #include <string>
 #include <vector>
@@ -84,7 +85,13 @@ struct AgentConfig {
     // `daedalus_home`.
 
     // ----- Behaviour flags -----
-    bool auto_approve = false;
+    // §BUG-006: auto_approve is now tri-state. Unset (std::nullopt) = legacy
+    // behaviour: fall back to the SettingsStore `auto_approve` row. Set =
+    // the host is authoritative: the store value is ignored entirely, so a
+    // host can force approval prompts ON even when another front-end left
+    // `auto_approve=true` in the shared store. (Previously this was a plain
+    // bool that could only ever *widen* auto-approve, never restrict it.)
+    std::optional<bool> auto_approve;
     bool memory_enabled = true;
     bool clear_memory = false;
 

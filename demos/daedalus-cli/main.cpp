@@ -203,7 +203,10 @@ int main(int argc, char* argv[]) {
     daedalus::AgentConfig cfg;
     cfg.project_root         = target_path;
     cfg.model_name          = args.model_override;
-    cfg.auto_approve        = args.auto_mode;
+    // §BUG-006: cfg.auto_approve is std::optional and authoritative when
+    // set. Only set it when --auto was actually passed, otherwise leave it
+    // unset so the persisted SettingsStore value still applies.
+    if (args.auto_mode) cfg.auto_approve = true;
     cfg.memory_enabled       = !args.no_memory;
     cfg.clear_memory         = args.clear_memory_flag;
     cfg.worker_threads       = args.thread_count_override;

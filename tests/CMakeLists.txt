@@ -1600,3 +1600,22 @@ target_link_libraries(daedalus_logger_tests PRIVATE
     pthread
 )
 add_test(NAME logger_tests COMMAND daedalus_logger_tests)
+
+# ============================================================================
+# §BUG-006/007/008: tool-approval control — authoritative auto_approve
+# config, unconditional ToolHandler flag application, approval-cache
+# host controls, and on_command_auto_approved sink visibility.
+# ============================================================================
+add_executable(daedalus_approval_control_tests
+    test_approval_control.cpp
+)
+target_include_directories(daedalus_approval_control_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_approval_control_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME approval_control_tests COMMAND daedalus_approval_control_tests)

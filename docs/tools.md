@@ -582,7 +582,10 @@ Result:
   fork bombs, privilege escalation (`sudo`, `su -`, ...), etc.
 - Session approval option (e.g. the CLI's `s` reply) saves a wildcard pattern to
   `.daedalus/daedalus[-<agent_name>]/approvals.json`; matching commands bypass
-  the sink in future sessions.
+  the sink in future sessions. Hosts can manage this via
+  `Agent::clear_session_approvals()`, `Agent::clear_persisted_approvals()`,
+  and `Agent::set_remember_approvals(false)`, and are notified of every
+  cache bypass via `AgentSink::on_command_auto_approved()`.
 - Binary output is detected and truncated to prevent JSON parsing errors.
 - **Chained commands supported**: `&&`, `||`, and `;` operators with conditional
   execution.
@@ -594,8 +597,11 @@ Result:
   until they exit on their own.
 
 ### Auto Mode
-- Set `AgentConfig::auto_approve = true` (or the equivalent setting in the
-  SQLite store) to skip `request_command_approval` entirely.
+- Set `AgentConfig::auto_approve = true` (std::optional — when set it is
+  authoritative; when unset the SQLite store value applies as a legacy
+  fallback), or call `Agent::set_auto_approve(true)` at runtime, to skip
+  `request_command_approval` entirely. Auto-approved commands are reported
+  to the sink via `on_command_auto_approved(command, ApprovalSource::AutoApprove)`.
 - Security checks still apply; only the host callback is skipped.
 
 ---

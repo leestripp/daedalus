@@ -67,6 +67,12 @@ std::vector<std::string> Agent::mcp_configured_servers() const
 
 ModelInfo Agent::active_model() const noexcept { return impl_->active_model(); }
 bool        Agent::auto_approve() const noexcept { return impl_->auto_approve(); }
+
+// §BUG-006/007/008: approval control
+void Agent::set_auto_approve(bool enabled)        { impl_->set_auto_approve(enabled); }
+void Agent::clear_session_approvals()             { impl_->clear_session_approvals(); }
+void Agent::clear_persisted_approvals()           { impl_->clear_persisted_approvals(); }
+void Agent::set_remember_approvals(bool enabled)  { impl_->set_remember_approvals(enabled); }
 std::string Agent::library_version() noexcept   { return detail::AgentImpl::library_version(); }
 
 ModelDiscoveryResult Agent::discover_models(

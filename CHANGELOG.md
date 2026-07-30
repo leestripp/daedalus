@@ -29,6 +29,26 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   - Covered by `tests/test_on_error_callback.cpp`; documented in
     `docs/embedding.md`.
 
+- **Host-controlled tool approval** (§BUG-006/007/008):
+  - `AgentConfig::auto_approve` is now `std::optional<bool>`: set = the
+    host is authoritative (the SettingsStore row is ignored, so hosts can
+    force approval prompts ON); unset = legacy store fallback.
+    (`include/daedalus/types/AgentConfig.h`)
+  - New runtime controls on `Agent`: `set_auto_approve(bool)`,
+    `clear_session_approvals()`, `clear_persisted_approvals()`,
+    `set_remember_approvals(bool)` (opt out of auto-recording approved
+    commands — "ask every time" semantics).
+    (`include/daedalus/Agent.h`)
+  - New sink callback
+    `AgentSink::on_command_auto_approved(command, source)` with the new
+    `daedalus::ApprovalSource` enum (`AutoApprove` / `SessionCache` /
+    `PersistedCache`): hosts are notified whenever a command is approved
+    by auto-approve mode or an approval cache instead of by
+    `request_command_approval()`. Default no-op; existing hosts unaffected.
+    (`include/daedalus/AgentSink.h`, `include/daedalus/types/ApprovalSource.h`)
+  - Covered by `tests/test_approval_control.cpp`; documented in
+    `docs/embedding.md`.
+
 - **`Agent::delete_model()`** (`include/daedalus/Agent.h`,
   `src/library/Agent.{cpp,h}`): public-API passthrough to
   `SettingsStore::delete_model()`, symmetric with the existing
@@ -37,6 +57,30 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   Covered by `tests/test_delete_model.cpp`.
 
 ### Fixed
+
+- **Auto-approve could not be forced OFF by hosts** (§BUG-006/007/008,
+  reported via MonkeyByte):
+  - `AgentImpl::auto_approve()` returned
+    `cfg.auto_approve || store.get_auto_approve()`, so a stale
+    `auto_approve=true` row in the shared SettingsStore silently overrode
+    a host explicitly asking for approval prompts — the config field could
+    only widen auto-approve, never restrict it. The config is now
+    authoritative when set (`src/library/AgentImpl.cpp`).
+  - `ToolHandler`'s process-global auto-mode flag was only ever set ON —
+    `AgentImpl::initialize()`, `AgentImpl::execute_tool()`, and the
+    `LLMClient` ctor each called `set_auto_mode(true)` conditionally and
+    nothing ever reset it, so toggling auto-approve ON→OFF within one
+    process left approvals bypassed. The flag is now applied
+    **unconditionally** from the single authority
+    (`AgentImpl::auto_approve()`), and the `LLMClient` ctor honours the
+    previously unread `AppConfig::auto_mode` field instead of reading the
+    store directly (`src/api/LLMClient.cpp`).
+  - Approved commands bypassed the sink via the session/persisted caches
+    with no host control or visibility; see the new host-control API in
+    **Added** above.
+  - `demos/daedalus-cli` now only sets `cfg.auto_approve` when `--auto` is
+    actually passed, so the persisted store setting still applies
+    otherwise.
 
 - **LLM errors that never reached the host** (`src/api/LLMClient.cpp`):
   - `run_agent_cycle()` never called `api_future.get()`: the async

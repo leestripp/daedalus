@@ -311,6 +311,13 @@ See `docs/embedding.md` for the complete sink contract and lifecycle.
 - The agent runs as an unprivileged user; OS permissions are the primary
   security boundary.
 - Bash commands require user approval unless `auto_approve` is enabled.
+  `AgentConfig::auto_approve` is `std::optional<bool>`: when set it is
+  authoritative (the SettingsStore row is ignored); when unset the store
+  value applies as a legacy fallback. Hosts can toggle at runtime
+  (`Agent::set_auto_approve()`), manage the approval caches
+  (`clear_session_approvals()`, `clear_persisted_approvals()`,
+  `set_remember_approvals()`), and observe cache/auto-mode bypasses via
+  `AgentSink::on_command_auto_approved()`.
 - Privilege escalation commands (`sudo`, `su -`, `pkexec`, `doas`, `dzdo`,
   `run0`) are blocked.
 - Credential files (`*.pem`, `*.key`, `*.crt`, `*.p12`, `*.pfx`, `*id_rsa*`,

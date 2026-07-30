@@ -175,7 +175,11 @@ json BashTool::execute(const json& args, FileIO& file_io, ToolProgressFn progres
                     {"message", "Command denied by host."}
                 });
             }
-            ToolHandler::add_session_approved_command_internal(command);
+            // §BUG-008: hosts can opt out of auto-recording approvals
+            // ("ask every time" semantics) via set_remember_approvals(false).
+            if (ToolHandler::remember_approvals_enabled()) {
+                ToolHandler::add_session_approved_command_internal(command);
+            }
         }
 
         // ===== Dispatch =====

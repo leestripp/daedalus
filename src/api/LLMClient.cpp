@@ -230,10 +230,11 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
         max_request_size_ = settings_store->get_max_request_size();
         max_response_size_ = settings_store->get_max_response_size();
 
-        // Apply auto_approve setting (already displayed at startup if enabled)
-        if (settings_store->get_auto_approve()) {
-            ToolHandler::set_auto_mode(true);
-        }
+        // §BUG-007 fix: honour AppConfig::auto_mode (computed by AgentImpl,
+        // the single authority) unconditionally. Previously this only ever
+        // set the global flag ON from the settings store, so a host-forced
+        // OFF was silently re-enabled when the LLMClient was constructed.
+        ToolHandler::set_auto_mode(config_.auto_mode);
         
         // Initialize Messages with settings
         MessageCompressionConfig messages_config;

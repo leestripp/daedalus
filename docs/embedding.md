@@ -126,6 +126,8 @@ struct daedalus::AgentSink {
     // Optional notifications
     virtual void on_bell() noexcept;
     virtual void on_compaction(std::size_t before, std::size_t after) noexcept;
+    virtual void on_command_auto_approved(std::string_view command,
+                                          daedalus::ApprovalSource source) noexcept;
 };
 ```
 
@@ -173,6 +175,7 @@ in what format, and what it means for your host application.
 | `on_compaction` | `before` + `after` (size_t) | **Context compression stats** |
 | `on_bell` | none | **Notification signal** — ring the bell |
 | `request_command_approval` | `command` (string) | **Bash approval** — return true/false |
+| `on_command_auto_approved` | `command` (string) + `source` (enum) | **Approval-bypass visibility** — command approved by auto-approve or a cache, not by the user |
 
 ---
 
@@ -661,14 +664,40 @@ rejects privilege escalation (`sudo`, `su -`, ...), dangerous patterns
 (`rm -rf /`, fork bombs, ...), and standalone background operators (`&`).
 The sink is responsible for the final user/policy approval.
 
-**Session/persisted approvals:** If the user approves with a session save
-(e.g. the CLI's `s` option), `BashTool` stores the pattern in
-`<project>/.daedalus/daedalus[-<name>]/approvals.json` and future matching
+**Session/persisted approvals:** Approved commands are remembered in an
+in-memory session cache (and can be persisted to
+`<project>/.daedalus/daedalus[-<name>]/approvals.json`); future matching
 commands bypass the sink. The sink only sees commands that are not already
-approved.
+approved. Hosts can manage this: `Agent::clear_session_approvals()`,
+`Agent::clear_persisted_approvals()`, and
+`Agent::set_remember_approvals(false)` ("ask every time" semantics).
+Whenever a command is approved by a cache instead of this callback, the
+sink is notified via `on_command_auto_approved(command, source)`.
 
-**Auto-approve:** If `AgentConfig::auto_approve` is `true` (OR'd with
-`SettingsStore::get_auto_approve()`), this callback is **never called**.
+**Auto-approve:** `AgentConfig::auto_approve` is `std::optional<bool>`.
+When set, it is **authoritative** — `true` skips this callback entirely,
+`false` forces prompts even if the SettingsStore row says `true`. When
+unset, the effective value falls back to
+`SettingsStore::get_auto_approve()` (legacy behaviour). Hosts can also
+toggle it at runtime via `Agent::set_auto_approve(bool)`. When a command
+is auto-approved this way, the sink receives
+`on_command_auto_approved(command, ApprovalSource::AutoApprove)`.
+
+---
+
+### `on_command_auto_approved(command, source)` — Bypass Visibility
+
+```cpp
+virtual void on_command_auto_approved(std::string_view command,
+                                      daedalus::ApprovalSource source) noexcept;
+```
+
+**Called when:** a command was approved **without** calling
+`request_command_approval()` — via auto-approve mode
+(`ApprovalSource::AutoApprove`), the in-memory session cache
+(`ApprovalSource::SessionCache`), or the persisted approvals.json cache
+(`ApprovalSource::PersistedCache`). Purely informational: the command runs
+regardless. Default: no-op. Override to render or audit the bypass.
 
 ---
 
@@ -864,7 +893,7 @@ for the full field list. The most-used fields:
 | `daedalus_home` | Base directory for the SQLite settings store (and any per-Agent data). |
 | `model_name` | Looked up in `SettingsStore` → model references provider → host / key / endpoint / model id. |
 | `api_key`, `api_host`, `chat_endpoint` | Optional overrides (skip settings lookup entirely). |
-| `auto_approve` | If true, `request_command_approval` is never called. OR'd with `SettingsStore::get_auto_approve()`. |
+| `auto_approve` | `std::optional<bool>`. Set: authoritative — `true` skips `request_command_approval`, `false` forces prompts (store ignored). Unset: legacy fallback to `SettingsStore::get_auto_approve()`. Runtime toggle: `Agent::set_auto_approve()`. |
 | `max_agent_iterations` | Hard cap. The agent stops when this is reached. |
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
 | `session_id` | Opaque correlation id (logged, surfaced to sinks). |

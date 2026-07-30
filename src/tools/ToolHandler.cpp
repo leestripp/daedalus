@@ -19,6 +19,7 @@
 #include <cctype>
 #include <atomic>
 #include <mutex>
+#include <optional>
 
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
@@ -52,6 +53,11 @@ namespace ToolHandler {
 
     // Auto mode - automatically approve tool executions
     std::atomic<bool> auto_mode_enabled{false};
+
+    // §BUG-008 — when false, BashTool does not record host-approved
+    // commands into the session-approved cache (hosts that want
+    // "ask every time" semantics). Default true = legacy behaviour.
+    std::atomic<bool> remember_approvals{true};
 
     // §Phase 3 — sink set by LLMClient::set_sink(). Tools use this for
     // blocking I/O like execute_bash approval. weak_ptr because the host
@@ -178,6 +184,15 @@ namespace ToolHandler {
         return auto_mode_enabled.load();
     }
 
+    // §BUG-008 — remember-approvals switch
+    void set_remember_approvals(bool enabled) {
+        remember_approvals = enabled;
+    }
+
+    bool remember_approvals_enabled() {
+        return remember_approvals.load();
+    }
+
     // §Phase 3 — sink storage. Tools (e.g. execute_bash approval) use this
     // to call back into the host. weak_ptr because the sink lifetime is
     // owned by the host (LLMClient keeps a shared_ptr internally).
@@ -186,13 +201,49 @@ namespace ToolHandler {
         g_sink = sink;
     }
 
+    // §BUG-008 — report which cache approved a command (or nullopt when no
+    // cache matched). Same matching rules as is_command_session_approved().
+    std::optional<daedalus::ApprovalSource> approval_cache_source(
+        const std::string& command) {
+        std::lock_guard<std::mutex> lock(g_state_mutex);
+        for (const auto& approved : session_approved_commands) {
+            if (matches_pattern(command, approved)) {
+                return daedalus::ApprovalSource::SessionCache;
+            }
+        }
+        for (const auto& approved : persisted_approved_commands) {
+            if (matches_pattern(command, approved)) {
+                return daedalus::ApprovalSource::PersistedCache;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // §BUG-008 — notify the host that a command was approved without a
+    // prompt. Best-effort: a throwing sink must not block execution.
+    void notify_auto_approved(const std::string& command,
+                              daedalus::ApprovalSource source) {
+        if (auto s = g_sink.lock()) {
+            try {
+                s->on_command_auto_approved(command, source);
+            } catch (...) { /* informational only */ }
+        }
+    }
+
     bool request_command_approval(const std::string& command) {
         // Auto mode always approves.
-        if (auto_mode_enabled) return true;
+        if (auto_mode_enabled) {
+            notify_auto_approved(command, daedalus::ApprovalSource::AutoApprove);
+            return true;
+        }
 
         // If the command is already in the session or persisted approved
         // set, approve without prompting. (Backward-compatible behaviour.)
-        if (is_command_session_approved(command)) return true;
+        // §BUG-008: the host is told WHICH cache bypassed its prompt.
+        if (auto source = approval_cache_source(command)) {
+            notify_auto_approved(command, *source);
+            return true;
+        }
 
         // Otherwise, ask the host via the sink.
         if (auto s = g_sink.lock()) {
@@ -341,19 +392,7 @@ namespace ToolHandler {
     bool is_command_session_approved(const std::string& command) {
         // Note: Chained commands are handled specially in BashTool::execute
         // This function checks individual commands only
-
-        std::lock_guard<std::mutex> lock(g_state_mutex);
-        for (const auto& approved : session_approved_commands) {
-            if (matches_pattern(command, approved)) {
-                return true;
-            }
-        }
-        for (const auto& approved : persisted_approved_commands) {
-            if (matches_pattern(command, approved)) {
-                return true;
-            }
-        }
-        return false;
+        return approval_cache_source(command).has_value();
     }
 
     // Escape shell argument
