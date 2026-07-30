@@ -34,6 +34,8 @@ struct AppConfig {
     std::string model;            // model_id (sent to API), e.g. "MiniMax-M2.7"
     std::string model_name;       // settings.json key, e.g. "minimax-m2.7"
     std::string provider;         // §ProviderPlugins: provider label (plugin selection)
+    std::string plugin;           // §ProviderPlugins: explicit plugin name from the
+                                  // providers row; empty = auto-detect
     std::string chat_endpoint;
     std::filesystem::path target_directory;
     std::string agent_name;        // §Phase 8.8 — per-agent runtime-state namespace
@@ -215,6 +217,12 @@ public:
                        mcp::McpServerManager* mcp_manager = nullptr,
                        SkillManager* skill_manager = nullptr,
                        const ToolFilter* tool_filter = nullptr);
+
+    /// @brief Name of the resolved provider plugin (§ProviderPlugins).
+    ///        Empty only before the ctor resolves it.
+    std::string provider_plugin_name() const {
+        return plugin_ ? plugin_->name() : std::string();
+    }
 
     /// @brief Attach a sink. Call this after construction and before
     ///        initialize(). Required for streaming output, log routing, and

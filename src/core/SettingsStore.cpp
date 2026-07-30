@@ -135,7 +135,7 @@ int builtin_max_context_size(std::string_view model_name)
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -148,7 +148,10 @@ CREATE TABLE IF NOT EXISTS providers (
     api_key            TEXT NOT NULL,
     chat_endpoint      TEXT NOT NULL DEFAULT '/v1/chat/completions',
     discovery_endpoint TEXT NOT NULL DEFAULT '/v1/models',
-    timeout_seconds    INTEGER NOT NULL DEFAULT 30
+    timeout_seconds    INTEGER NOT NULL DEFAULT 30,
+    -- §ProviderPlugins: registered provider-plugin name; '' = auto-detect
+    -- from provider name/host at runtime.
+    plugin             TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS models (
@@ -319,6 +322,18 @@ void migrate_to_v4(OmniNet::DB::Database& db)
     }
 }
 
+void migrate_to_v5(OmniNet::DB::Database& db)
+{
+    // v5 (§ProviderPlugins): providers.plugin — registered provider-plugin
+    // name. '' = auto-detect from provider name/host at runtime, so
+    // existing rows automatically pick up built-in plugins as they ship.
+    try {
+        db.execute("ALTER TABLE providers ADD COLUMN plugin TEXT NOT NULL DEFAULT ''");
+    } catch (...) {
+        // Column already exists — fine.
+    }
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -343,6 +358,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version < 2) migrate_to_v2(db);
     if (current_version < 3) migrate_to_v3(db);
     if (current_version < 4) migrate_to_v4(db);
+    if (current_version < 5) migrate_to_v5(db);
 
     // Update the stored version if it advanced.
     if (current_version != kSchemaVersion) {
@@ -356,7 +372,7 @@ void ensure_schema(OmniNet::DB::Database& db)
 ProviderConfig row_to_provider(const std::vector<std::string>& r)
 {
     // SELECT order: name, host, api_key, chat_endpoint, discovery_endpoint,
-    // timeout_seconds
+    // timeout_seconds, plugin
     ProviderConfig p;
     if (r.size() < 6) return p;
     p.name               = r[0];
@@ -369,6 +385,7 @@ ProviderConfig row_to_provider(const std::vector<std::string>& r)
     } catch (...) {
         p.timeout_seconds = 30;
     }
+    if (r.size() >= 7) p.plugin = r[6];  // §ProviderPlugins
     return p;
 }
 
@@ -574,7 +591,7 @@ std::optional<ProviderConfig> SettingsStore::get_provider(std::string_view name)
         *mutex_,
         *db_,
         "SELECT name, host, api_key, chat_endpoint, discovery_endpoint, "
-        "timeout_seconds FROM providers WHERE name = ?",
+        "timeout_seconds, plugin FROM providers WHERE name = ?",
         std::string(name));
     if (!row.has_value()) return std::nullopt;
     return row_to_provider(*row);
@@ -587,7 +604,7 @@ std::vector<ProviderConfig> SettingsStore::list_providers_detailed() const
         *mutex_,
         *db_,
         "SELECT name, host, api_key, chat_endpoint, discovery_endpoint, "
-        "timeout_seconds FROM providers ORDER BY name");
+        "timeout_seconds, plugin FROM providers ORDER BY name");
     out.reserve(rows.size());
     for (const auto& row : rows) {
         out.push_back(row_to_provider(row));
@@ -640,6 +657,7 @@ std::optional<ResolvedModelConfig> SettingsStore::resolve_model(std::string_view
     out.timeout_seconds    = p->timeout_seconds;
     out.max_context_size   = m->max_context_size;
     out.temperature        = m->temperature;
+    out.plugin             = p->plugin;  // §ProviderPlugins
     return out;
 }
 
@@ -677,14 +695,15 @@ void SettingsStore::upsert_provider(const ProviderConfig& p)
         *mutex_,
         *db_,
         "INSERT INTO providers(name, host, api_key, chat_endpoint, discovery_endpoint, "
-        "timeout_seconds) VALUES(?, ?, ?, ?, ?, ?) "
+        "timeout_seconds, plugin) VALUES(?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(name) DO UPDATE SET "
         "host=excluded.host, api_key=excluded.api_key, "
         "chat_endpoint=excluded.chat_endpoint, "
         "discovery_endpoint=excluded.discovery_endpoint, "
-        "timeout_seconds=excluded.timeout_seconds",
+        "timeout_seconds=excluded.timeout_seconds, "
+        "plugin=excluded.plugin",
         p.name, p.host, p.api_key, p.chat_endpoint, p.discovery_endpoint,
-        static_cast<int64_t>(p.timeout_seconds));
+        static_cast<int64_t>(p.timeout_seconds), p.plugin);
 }
 
 void SettingsStore::delete_provider(std::string_view name)

@@ -1057,6 +1057,37 @@ target_link_libraries(daedalus_mcp_servers_store_tests PRIVATE
     pthread
 )
 add_test(NAME mcp_servers_store_tests COMMAND daedalus_mcp_servers_store_tests)
+
+# §ProviderPlugins Phase 1: ProviderRegistry behavior.
+add_executable(daedalus_provider_plugin_registry_tests
+    test_provider_plugin_registry.cpp
+)
+target_include_directories(daedalus_provider_plugin_registry_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_provider_plugin_registry_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME provider_plugin_registry_tests COMMAND daedalus_provider_plugin_registry_tests)
+
+# §ProviderPlugins Phase 2: providers.plugin column + v4->v5 migration.
+add_executable(daedalus_provider_settings_migration_tests
+    test_provider_settings_migration.cpp
+)
+target_include_directories(daedalus_provider_settings_migration_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_provider_settings_migration_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME provider_settings_migration_tests COMMAND daedalus_provider_settings_migration_tests)
+
 add_executable(daedalus_mcp_load_from_store_tests
     test_mcp_load_from_store.cpp
     ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp

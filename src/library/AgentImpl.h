@@ -124,6 +124,8 @@ public:
     [[nodiscard]] std::vector<ProviderConfig> list_providers_detailed() const;
     bool upsert_provider(const ProviderConfig& provider);
     bool delete_provider(const std::string& provider);
+    /// §ProviderPlugins: resolved plugin name for the active session.
+    std::string active_provider_plugin() const;
     bool upsert_model(const ModelConfig& model);
     bool delete_model(const std::string& name);
     bool switch_provider(const std::string& provider);

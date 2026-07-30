@@ -77,6 +77,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
             out.model         = m->model_id;
             out.model_name    = cfg.model_name;     // settings key
             out.provider      = m->provider;        // §ProviderPlugins
+            out.plugin        = m->plugin;          // §ProviderPlugins
             out.chat_endpoint = m->chat_endpoint;
             out.temperature   = m->temperature;  // §Phase 8.7
         }
@@ -1413,6 +1414,13 @@ std::vector<std::string> AgentImpl::disabled_mcp_servers() const
     if (!body_->mcp) return {};
     const auto disabled = body_->mcp->get_disabled_servers();
     return std::vector<std::string>(disabled.begin(), disabled.end());
+}
+
+// §ProviderPlugins
+std::string AgentImpl::active_provider_plugin() const
+{
+    if (!body_ || !body_->client) return {};
+    return body_->client->provider_plugin_name();
 }
 
 bool AgentImpl::set_tool_enabled(const std::string& name, bool enabled)

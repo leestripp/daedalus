@@ -21,6 +21,8 @@ struct ProviderConfig
     std::string chat_endpoint;      // default "/v1/chat/completions"
     std::string discovery_endpoint; // default "/v1/models"
     int         timeout_seconds = 30;
+    std::string plugin;             // §ProviderPlugins: registered plugin name;
+                                    // empty = auto-detect from name/host
 };
 
 /// One configured model. References a ProviderConfig for host/api_key/endpoints
@@ -47,6 +49,7 @@ struct ResolvedModelConfig
     int    timeout_seconds  = 30;
     int    max_context_size = 0;
     double temperature     = 0.0;
+    std::string plugin;             // §ProviderPlugins: provider row's plugin hint
 };
 
 }  // namespace daedalus

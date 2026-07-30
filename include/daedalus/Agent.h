@@ -255,6 +255,10 @@ public:
     /// @brief Delete a provider and all models that reference it.
     bool delete_provider(const std::string& provider);
 
+    /// @brief Name of the provider plugin active for this session
+    ///        (§ProviderPlugins). Empty when no LLM client exists yet.
+    [[nodiscard]] std::string active_provider_plugin() const;
+
     /// @brief Add or update a model configuration.
     bool upsert_model(const ModelConfig& model);
 

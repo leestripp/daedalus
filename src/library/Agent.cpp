@@ -161,6 +161,11 @@ bool Agent::delete_provider(const std::string& provider)
     return impl_->delete_provider(provider);
 }
 
+std::string Agent::active_provider_plugin() const
+{
+    return impl_->active_provider_plugin();
+}
+
 bool Agent::upsert_model(const ModelConfig& model)
 {
     return impl_->upsert_model(model);

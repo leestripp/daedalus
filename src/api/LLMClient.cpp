@@ -183,6 +183,18 @@ static LastToolCall find_last_tool_call(const json& messages,
 
 
 
+// §ProviderPlugins: resolve the plugin for a config. An explicit plugin
+// name from the providers row wins; empty = auto-detect from provider
+// label/host; unknown names fall back to auto-detect with a warning.
+static std::shared_ptr<daedalus::ProviderPlugin> resolve_provider_plugin(const AppConfig& c) {
+    if (!c.plugin.empty()) {
+        if (auto p = daedalus::ProviderRegistry::plugin_for_name(c.plugin)) return p;
+        LOG_WARNING("[ProviderPlugin] providers row names unknown plugin '" + c.plugin +
+                    "' — falling back to auto-detect");
+    }
+    return daedalus::ProviderRegistry::resolve(c.provider, c.base_url);
+}
+
 // Implementation of LLMClient methods
 LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_store,
                        mcp::McpServerManager* mcp_manager,
@@ -199,7 +211,7 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
     // §ProviderPlugins: resolve this client's provider plugin once per
     // config. Falls back to the OpenAI-compatible default when the
     // provider label/host names no registered plugin.
-    plugin_ = daedalus::ProviderRegistry::resolve(config_.provider, config_.base_url);
+    plugin_ = resolve_provider_plugin(config_);
     LOG_INFO(std::string("[ProviderPlugin] active plugin: ") + plugin_->name() +
              " (provider='" + config_.provider + "', model='" + config_.model + "')");
 
@@ -341,7 +353,7 @@ void LLMClient::refresh_mcp_tools() {
 void LLMClient::set_config(const AppConfig& config) {
     config_ = config;
     // §ProviderPlugins: a model switch may cross providers — re-resolve.
-    plugin_ = daedalus::ProviderRegistry::resolve(config_.provider, config_.base_url);
+    plugin_ = resolve_provider_plugin(config_);
     LOG_INFO(std::string("[ProviderPlugin] active plugin: ") + plugin_->name() +
              " (provider='" + config_.provider + "', model='" + config_.model + "')");
     if (!messages_) return;
