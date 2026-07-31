@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: BSL-1.0
 // src/api/providers/MoonshotPlugin.h
 //
-// Provider plugin for Moonshot AI's Kimi platform
-// (https://api.moonshot.ai / https://api.moonshot.cn).
+// Provider plugin for Moonshot AI's Kimi APIs:
+//   - Kimi Platform (pay-as-you-go): https://api.moonshot.ai /
+//     https://api.moonshot.cn
+//   - Kimi Code (membership subscription): https://api.kimi.com/coding/v1
+//     (own model IDs: k3, k3-256k, kimi-for-coding[-highspeed])
 //
 // Encapsulates the Kimi quirks:
 //   - kimi-k2.7-code rejects any temperature other than 1.0 (fixed

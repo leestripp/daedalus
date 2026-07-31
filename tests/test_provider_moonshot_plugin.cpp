@@ -39,6 +39,7 @@ void test_ms1_resolution() {
 
     for (const char* host : {"https://api.moonshot.ai",
                              "https://api.moonshot.cn",
+                             "https://api.kimi.com/coding",
                              "https://api.kimi.example.com"}) {
         auto p = daedalus::ProviderRegistry::plugin_for_host(host);
         EXPECT(p != nullptr);
@@ -99,6 +100,15 @@ void test_ms4_context_sizes() {
     EXPECT(p->context_size_for("moonshot-v1-8k") == 8192);
     EXPECT(p->context_size_for("moonshot-v1-128k") == 131072);
     EXPECT(p->context_size_for("no-such-model") == 0);
+
+    // Kimi Code subscription endpoint model IDs (api.kimi.com/coding/v1).
+    EXPECT(p->context_size_for("k3") == 1000000);
+    EXPECT(p->context_size_for("k3-256k") == 262144);
+    EXPECT(p->context_size_for("kimi-for-coding") == 262144);
+    EXPECT(p->context_size_for("kimi-for-coding-highspeed") == 262144);
+    // The temperature clamp is documented for the platform k2.7-code IDs
+    // only; the Kimi Code IDs pass through (no documented restriction).
+    EXPECT(p->clamp_temperature("kimi-for-coding", 0.7) == 0.7);
 
     const auto models = p->known_models();
     EXPECT(!models.empty());
