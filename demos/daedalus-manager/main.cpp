@@ -239,6 +239,20 @@ int main(int argc, char* argv[]) {
                   << " iterations. Last feedback: " << feedback << "\n";
     }
 
+    // §ContextCache: surface provider prompt-cache hits (MiniMax/Kimi).
+    // Quiet for cache-less providers so the demo output is unchanged.
+    auto print_cache_line = [](const char* tag, auto& agent) {
+        const auto st = agent->stats();
+        if (st.cached_tokens <= 0) return;
+        std::cout << "[host] " << tag << " tokens=" << st.total_tokens
+                  << " (prompt=" << st.prompt_tokens
+                  << ", completion=" << st.completion_tokens
+                  << ", cached=" << st.cached_tokens << ")\n";
+    };
+    print_cache_line("planner",   planner);
+    print_cache_line("actor",     actor);
+    print_cache_line("validator", validator);
+
     planner->shutdown();
     actor->shutdown();
     validator->shutdown();

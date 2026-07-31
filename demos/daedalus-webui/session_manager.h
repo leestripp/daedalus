@@ -269,6 +269,7 @@ public:
         json j = {
             {"name",            m.name},
             {"id",              m.model_id},
+            {"provider",        m.provider},
             {"host",            m.host},
             {"max_context_size",m.max_context_size},
         };
@@ -287,6 +288,12 @@ public:
             {"prompt_tokens",       st.prompt_tokens},
             {"completion_tokens",   st.completion_tokens},
             {"total_tokens",        st.total_tokens},
+            // §ContextCache: prompt tokens served from the provider's
+            // context cache on the last response (0 = miss/unsupported).
+            {"cached_tokens",       st.cached_tokens},
+            // §ProviderPlugins: the plugin the session's provider
+            // resolved to (e.g. "minimax", "moonshot", "lmstudio").
+            {"provider_plugin",     it->second->agent->active_provider_plugin()},
             {"max_context_size",    st.max_context_size},
             {"message_count",       st.message_count},
             {"pending_tool_calls",  st.pending_tool_calls},

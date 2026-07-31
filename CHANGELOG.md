@@ -118,6 +118,10 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   - Covered by `tests/test_context_cache.cpp`; documented in
     `docs/provider-plugins.md` (per-provider caching matrix + best
     settings) and `docs/agent_system_prompts.md` §2.6.
+  - Demo surface: webui's stats JSON + usage HUD show `cached_tokens`
+    and the resolved provider plugin (`daedalus-webui`);
+    daedalus-manager and daedalus-subagent print a final cached-token
+    line for cache-capable providers.
 
 ### Fixed
 

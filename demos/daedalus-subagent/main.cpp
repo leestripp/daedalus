@@ -246,6 +246,17 @@ int main(int argc, char* argv[]) {
         parent.run_one_turn();
         std::cout << "\n";
     }
+    // §ContextCache: surface provider prompt-cache hits (MiniMax/Kimi).
+    // Quiet for cache-less providers so the demo output is unchanged.
+    {
+        const auto st = parent.stats();
+        if (st.cached_tokens > 0) {
+            std::cout << "\n[host] parent tokens=" << st.total_tokens
+                      << " (prompt=" << st.prompt_tokens
+                      << ", completion=" << st.completion_tokens
+                      << ", cached=" << st.cached_tokens << ")\n";
+        }
+    }
     parent.shutdown();
     return 0;
 }

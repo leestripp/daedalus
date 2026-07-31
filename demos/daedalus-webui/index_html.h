@@ -1003,13 +1003,28 @@ function renderUsageHud(st) {
                   ? Math.min(100, Math.round(st.iteration / st.max_iterations * 100))
                   : 0;
   const barClass = pct >= 95 ? "danger" : pct >= 80 ? "warn" : "";
+  // §ContextCache: show provider prompt-cache hits when the provider
+  // reports them (MiniMax / Kimi), plus the resolved provider plugin
+  // (§ProviderPlugins) so the HUD reflects the plugin system.
+  const cachePct = st.prompt_tokens > 0
+                   ? Math.round(st.cached_tokens / st.prompt_tokens * 100)
+                   : 0;
+  const cacheSpan = st.cached_tokens > 0
+    ? '<span title="prompt tokens served from the provider\'s context cache (' +
+      cachePct + '% of last prompt)">cache ' + st.cached_tokens + '</span>'
+    : "";
+  const pluginSpan = st.provider_plugin
+    ? '<span title="provider plugin" style="opacity:.6">' +
+      st.provider_plugin + '</span>'
+    : "";
   usageHudEl.innerHTML =
     '<span title="tokens">tk ' + st.total_tokens + '/' + st.max_context_size +
     ' (' + pct + '%)</span>' +
     '<span class="bar"><span class="bar-fill ' + barClass +
     '" style="width:' + pct + '%"></span></span>' +
     '<span title="iterations">it ' + st.iteration + '/' + st.max_iterations +
-    ' (' + iterPct + '%)</span>';
+    ' (' + iterPct + '%)</span>' +
+    cacheSpan + pluginSpan;
 }
 function startStatsPolling() {
   if (statsInterval) clearInterval(statsInterval);
