@@ -21,9 +21,10 @@ namespace {
 // underlying models, different names:
 //   k3 / k3-256k                 Kimi K3 (1M / 256K context)
 //   kimi-for-coding(-highspeed)  Kimi K2.7 Code (256K context)
-// NOTE: the platform's "temperature fixed at 1.0" rule is documented for
-// the kimi-k2.7-code platform IDs only; the Kimi Code docs state no such
-// restriction for kimi-for-coding, so clamp_temperature() leaves it alone.
+// NOTE: the platform documents the "temperature fixed at 1.0" rule for
+// the kimi-k2.7-code IDs; the Kimi Code endpoint enforces the same rule
+// for kimi-for-coding (confirmed against the live server 2026-07-31), so
+// clamp_temperature() covers both.
 const ProviderModelInfo kModels[] = {
     {"kimi-k3",                     1000000, 1.0, true,  true},
     {"k3",                          1000000, 1.0, true,  true},
@@ -72,8 +73,13 @@ bool MoonshotPlugin::matches(std::string_view host) const {
 double MoonshotPlugin::clamp_temperature(std::string_view model_id, double t) const {
     // kimi-k2.7-code(-highspeed) uses a fixed temperature of 1.0 — any
     // other value is a hard API error (platform docs, "Parameters
-    // Differences in Request Body").
-    if (icontains(model_id, "k2.7-code")) return 1.0;
+    // Differences in Request Body"). The Kimi Code endpoint's
+    // kimi-for-coding IDs are the same K2.7 Code model and enforce the
+    // same rule (confirmed empirically 2026-07-31: the server rejects
+    // with "invalid temperature: only 1 is allowed for this model").
+    if (icontains(model_id, "k2.7-code") || icontains(model_id, "kimi-for-coding")) {
+        return 1.0;
+    }
     return t;
 }
 

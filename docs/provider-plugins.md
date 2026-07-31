@@ -36,7 +36,7 @@ The active plugin for a running session is logged
 |--------|---------|--------------|
 | `openai-compatible` (default) | — (fallback) | `stream_options.include_usage` when streaming; classic SSE parser; classic error mapping. |
 | `minimax` | name `minimax`, host containing `minimax` | Adds `reasoning_split: true` (§BUG-MINIMAX-105) and `stream_options.continuous_usage_stats`; static M3/M2.x context-size table. |
-| `moonshot` | name `moonshot`, host containing `moonshot` or `kimi` | Forces `temperature = 1.0` for `kimi-k2.7-code` (server rejects other values); sends `prompt_cache_key` from the agent name; static table for the pay-as-you-go platform (`api.moonshot.ai`/`api.moonshot.cn`: kimi-k3, k2.x, moonshot-v1) **and** the Kimi Code subscription endpoint (`api.kimi.com/coding/v1`: `k3`, `k3-256k`, `kimi-for-coding[-highspeed]`). |
+| `moonshot` | name `moonshot`, host containing `moonshot` or `kimi` | Forces `temperature = 1.0` for `kimi-k2.7-code` **and** the Kimi Code endpoint's `kimi-for-coding` IDs (the server rejects other values); sends `prompt_cache_key` from the agent name; static table for the pay-as-you-go platform (`api.moonshot.ai`/`api.moonshot.cn`: kimi-k3, k2.x, moonshot-v1) **and** the Kimi Code subscription endpoint (`api.kimi.com/coding/v1`: `k3`, `k3-256k`, `kimi-for-coding[-highspeed]`). |
 | `lmstudio` | name `lmstudio`, loopback hosts (`localhost`, `127.0.0.1`) | `requires_auth() = false`; strips `stream_options`/extension fields so local servers get a plain OpenAI payload; no static model table (discovery is the source of truth). |
 
 ## The hook interface

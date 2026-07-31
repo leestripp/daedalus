@@ -60,6 +60,10 @@ void test_ms2_temperature_clamp() {
     EXPECT(p->clamp_temperature("kimi-k2.6", 0.7) == 0.7);
     EXPECT(p->clamp_temperature("kimi-k3", 0.2) == 0.2);
     EXPECT(p->clamp_temperature("moonshot-v1-8k", 0.5) == 0.5);
+    // Kimi Code endpoint IDs are the same K2.7 Code model — same clamp
+    // (the live server rejects other temperatures).
+    EXPECT(p->clamp_temperature("kimi-for-coding", 0.0) == 1.0);
+    EXPECT(p->clamp_temperature("kimi-for-coding-highspeed", 0.5) == 1.0);
     std::cout << "[ok] MS2: Moonshot temperature clamp\n";
 }
 
@@ -106,9 +110,6 @@ void test_ms4_context_sizes() {
     EXPECT(p->context_size_for("k3-256k") == 262144);
     EXPECT(p->context_size_for("kimi-for-coding") == 262144);
     EXPECT(p->context_size_for("kimi-for-coding-highspeed") == 262144);
-    // The temperature clamp is documented for the platform k2.7-code IDs
-    // only; the Kimi Code IDs pass through (no documented restriction).
-    EXPECT(p->clamp_temperature("kimi-for-coding", 0.7) == 0.7);
 
     const auto models = p->known_models();
     EXPECT(!models.empty());
