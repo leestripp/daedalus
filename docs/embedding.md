@@ -938,6 +938,31 @@ store.upsert_model(daedalus::ModelConfig{
 });
 ```
 
+### Provider plugins (§ProviderPlugins)
+
+Provider-specific behavior (endpoints, request quirks, model tables,
+SSE dialects, error types) is encapsulated in `ProviderPlugin`
+implementations resolved through `daedalus::ProviderRegistry`. The
+`plugin` column on a provider row pins one explicitly; empty means
+auto-detect from the provider name/host. Built-ins: `openai-compatible`
+(default), `minimax`, `moonshot`, `lmstudio`.
+
+```cpp
+#include <daedalus/ProviderRegistry.h>
+
+// Which plugin handles a provider row?
+auto p = daedalus::ProviderRegistry::resolve("MiniMax", "https://api.minimax.io");
+
+// Teach the library a new provider without forking it:
+daedalus::ProviderRegistry::register_plugin(std::make_shared<MyPlugin>());
+
+// The plugin active for a running session:
+std::string name = agent.active_provider_plugin();
+```
+
+See `docs/provider-plugins.md` for the full hook contract and a
+custom-plugin walkthrough.
+
 ### Streaming vs buffered responses (§Phase 9.8)
 
 The `stream` field controls how the assistant's reply is delivered:

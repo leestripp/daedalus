@@ -93,7 +93,7 @@ into `build/_deps/` on first build.
 | `src/library` | `Agent*.cpp`, `paths.cpp`, `project_paths.cpp`, ... | Public facade and PIMPL internals |
 | `src/library/a2a` | `A2aClient.cpp`, `A2aServer.cpp` | A2A (Agent2Agent Protocol) HTTP+JSON client + server |
 | `src/core` | `SettingsStore.cpp`, `Messages.cpp`, `Logger.cpp`, `SystemPromptBuilder.cpp`, ... | Settings, persistence, logging, compression, thread pool, metrics |
-| `src/api` | `LLMClient.cpp`, `HttpSession.cpp` | Provider-agnostic HTTP/SSE chat client |
+| `src/api` | `LLMClient.cpp`, `HttpSession.cpp`, `providers/*.cpp` | Provider-agnostic HTTP/SSE chat client + provider plugins (`ProviderPlugin` hook implementations: OpenAI-compatible default, MiniMax, Moonshot, LM Studio; see `docs/provider-plugins.md`) |
 | `src/tools` | `ToolFactory.cpp`, `BashTool.cpp`, `SkillTool.cpp`, `MemoryTool.cpp`, ... | Core tool implementations registered by default |
 | `demos/example-tools` | `GitTool.cpp`, `NetworkTool.cpp`, `SearchTool.cpp`, `PDFTool.cpp`, `SystemInfoTool.cpp`, `BackgroundTool.cpp`, ... | Optional example / reference tool implementations |
 | `src/mcp` | `McpClient.cpp`, `McpServerManager.cpp`, `StdioMcpTransport.cpp`, `HttpMcpTransport.cpp` | MCP server integration |
@@ -335,6 +335,7 @@ See `Readme.md` §Security for the full access-by-operation matrix.
 | Embedding and sink contract | `docs/embedding.md` |
 | Storage layout and env vars | `docs/storage.md` |
 | Settings API | `docs/settings.md` |
+| Provider plugins | `docs/provider-plugins.md` |
 | Settings TUI editor | `docs/settings-tui.md` |
 | Tool specifications | `docs/tools.md` |
 | Context compression | `docs/how_compress_works.md` |

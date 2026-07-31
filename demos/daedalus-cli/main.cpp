@@ -393,26 +393,47 @@ int main(int argc, char* argv[]) {
                 continue;
             }
             if (line == "/providers") {
-                auto providers = agent.list_providers();
+                auto providers = agent.list_providers_detailed();
                 std::cout << "Configured providers:\n";
                 if (providers.empty()) std::cout << "  (none)\n";
-                else for (const auto& p : providers)
-                    std::cout << "  " << p << "\n";
+                else for (const auto& p : providers) {
+                    // §ProviderPlugins: show the effective plugin — the
+                    // explicit row value, or the auto-detected match.
+                    std::string plugin = p.plugin;
+                    if (plugin.empty()) {
+                        auto resolved = daedalus::ProviderRegistry::resolve(p.name, p.host);
+                        plugin = resolved ? "(auto: " + resolved->name() + ")" : "(auto: ?)";
+                    }
+                    std::cout << "  " << p.name
+                              << "  host=" << p.host
+                              << "  plugin=" << plugin << "\n";
+                }
                 continue;
             }
             if (line.rfind("/provider-add ", 0) == 0) {
                 std::istringstream iss(line.substr(14));
-                std::string name, host, api_key;
-                iss >> name >> host >> api_key;
-                if (name.empty() || host.empty() || api_key.empty()) {
-                    std::cout << "Usage: /provider-add <name> <host> <api_key>\n";
+                std::string name, host, api_key, plugin;
+                iss >> name >> host >> api_key >> plugin;
+                // §ProviderPlugins: PLUGIN is optional (auto-detected from
+                // the host when omitted); api_key may be "-" for providers
+                // that need no key (e.g. LM Studio).
+                if (api_key == "-") api_key.clear();
+                if (name.empty() || host.empty()) {
+                    std::cout << "Usage: /provider-add <name> <host> <api_key|-> [plugin]\n";
                 } else {
                     daedalus::ProviderConfig p;
                     p.name = name;
                     p.host = host;
                     p.api_key = api_key;
+                    p.plugin = plugin;
                     if (agent.upsert_provider(p)) {
-                        std::cout << "[PROVIDER] Added/updated " << name << "\n";
+                        auto resolved = daedalus::ProviderRegistry::resolve(p.name, p.host);
+                        const std::string auto_name =
+                            resolved ? resolved->name() + " [auto]" : "?";
+                        std::cout << "[PROVIDER] Added/updated " << name
+                                  << " (plugin: "
+                                  << (plugin.empty() ? auto_name : plugin)
+                                  << ")\n";
                     } else {
                         std::cout << "[PROVIDER] Failed to add " << name << "\n";
                     }

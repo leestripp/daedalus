@@ -56,6 +56,41 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   missing SettingsStore; deleting an unknown name is idempotent.
   Covered by `tests/test_delete_model.cpp`.
 
+- **Provider plugin system** (§ProviderPlugins): providers and their
+  models are now described by `ProviderPlugin` hook implementations
+  instead of hardcoded quirks in `LLMClient`/`SettingsStore`.
+  - New public interface `include/daedalus/ProviderPlugin.h` (request
+    shaping via `mutate_chat_payload()`, `clamp_temperature()`,
+    `sanitize_history()`, `create_stream_parser()`,
+    `parse_models_response()`, `classify_api_error_type()`, model
+    knowledge via `known_models()`/`context_size_for()`, endpoint and
+    auth metadata) plus `include/daedalus/ProviderRegistry.h` for
+    registration and name/host resolution. Hosts can register custom
+    plugins without forking the library.
+  - Built-in plugins under `src/api/providers/`: `openai-compatible`
+    (default, classic behavior), `minimax` (reasoning_split,
+    continuous_usage_stats, M3/M2.x table), `moonshot`
+    (kimi-k2.7-code temperature forced to 1.0, `prompt_cache_key`,
+    kimi-k3/k2.x/moonshot-v1 table), `lmstudio` (auth-less, loopback
+    hosts, minimal payloads, discovery-driven).
+  - Settings schema v5: `providers.plugin` column (empty =
+    auto-detect from name/host); `SettingsStore::
+    get_max_context_size_for_model()` consults the plugin's model table
+    before the legacy built-in map.
+  - The shared SSE parser now accumulates `reasoning_content` fragments
+    into the synthesized assistant message — Kimi rejects tool-loop
+    histories that drop it.
+  - New `Agent::active_provider_plugin()` accessor; CLI `/providers`
+    shows the effective plugin and `/provider-add` takes an optional
+    plugin argument (`-` key for auth-less providers); settings TUI
+    provider editor gains a validated plugin field.
+  - Covered by `tests/test_provider_plugin_registry.cpp`,
+    `test_provider_minimax_plugin.cpp`,
+    `test_provider_moonshot_plugin.cpp`,
+    `test_provider_lmstudio_plugin.cpp`, and
+    `test_provider_settings_migration.cpp`; documented in
+    `docs/provider-plugins.md`.
+
 ### Fixed
 
 - **MCP stdio servers died silently on shell metacharacters + dead

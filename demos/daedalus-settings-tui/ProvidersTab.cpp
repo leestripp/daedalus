@@ -7,6 +7,9 @@
 
 #include "SettingsApp.h"
 
+#include <daedalus/ProviderPlugin.h>    // §ProviderPlugins: plugin name()
+#include <daedalus/ProviderRegistry.h>  // §ProviderPlugins: auto-detect display
+
 #include <ftxui/component/component_options.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
@@ -32,6 +35,7 @@ struct ProvidersState
     std::string f_chat_endpoint;
     std::string f_discovery_endpoint;
     std::string f_timeout;
+    std::string f_plugin;   // §ProviderPlugins: empty = auto-detect
     std::string form_error;
 
     // Delete confirmation.
@@ -61,6 +65,7 @@ Component MakeProvidersTab(AppContext& ctx)
         st->f_chat_endpoint      = "/v1/chat/completions";
         st->f_discovery_endpoint = "/v1/models";
         st->f_timeout            = "30";
+        st->f_plugin.clear();
         st->form_error.clear();
         st->show_form = true;
     };
@@ -77,6 +82,7 @@ Component MakeProvidersTab(AppContext& ctx)
         st->f_chat_endpoint    = p->chat_endpoint;
         st->f_discovery_endpoint = p->discovery_endpoint;
         st->f_timeout          = std::to_string(p->timeout_seconds);
+        st->f_plugin           = p->plugin;
         st->form_error.clear();
         st->show_form = true;
     };
@@ -92,6 +98,12 @@ Component MakeProvidersTab(AppContext& ctx)
             st->form_error = "timeout must be a positive integer";
             return;
         }
+        // §ProviderPlugins: an explicit plugin must name a registered one.
+        if (!st->f_plugin.empty() &&
+            !daedalus::ProviderRegistry::plugin_for_name(st->f_plugin)) {
+            st->form_error = "unknown plugin '" + st->f_plugin + "'";
+            return;
+        }
         daedalus::ProviderConfig p;
         p.name               = st->f_name;
         p.host               = st->f_host;
@@ -99,6 +111,7 @@ Component MakeProvidersTab(AppContext& ctx)
         p.chat_endpoint      = st->f_chat_endpoint;
         p.discovery_endpoint = st->f_discovery_endpoint;
         p.timeout_seconds    = timeout;
+        p.plugin             = st->f_plugin;
 
         ctx.store.upsert_provider(p);
         if (st->editing && st->original_name != p.name)
@@ -148,6 +161,14 @@ Component MakeProvidersTab(AppContext& ctx)
             detail.push_back(hbox({text("chat_endpoint      : "), text(p->chat_endpoint)}));
             detail.push_back(hbox({text("discovery_endpoint : "), text(p->discovery_endpoint)}));
             detail.push_back(hbox({text("timeout_seconds    : "), text(std::to_string(p->timeout_seconds))}));
+            // §ProviderPlugins: show the effective plugin — explicit row
+            // value, or the auto-detected match for name/host.
+            std::string plugin = p->plugin;
+            if (plugin.empty()) {
+                if (auto r = daedalus::ProviderRegistry::resolve(p->name, p->host))
+                    plugin = "(auto: " + r->name() + ")";
+            }
+            detail.push_back(hbox({text("plugin             : "), text(plugin)}));
         }
         return hbox({
             vbox({
@@ -170,7 +191,8 @@ Component MakeProvidersTab(AppContext& ctx)
     auto row_chat      = FormRow("chat_endpoint", &st->f_chat_endpoint, false, save);
     auto row_discovery = FormRow("discovery_endpoint", &st->f_discovery_endpoint, false, save);
     auto row_timeout   = FormRow("timeout_seconds", &st->f_timeout, false, save);
-    Components rows = {row_name, row_host, row_api_key, row_chat, row_discovery, row_timeout};
+    auto row_plugin    = FormRow("plugin (blank=auto)", &st->f_plugin, false, save);
+    Components rows = {row_name, row_host, row_api_key, row_chat, row_discovery, row_timeout, row_plugin};
 
     auto btn_save   = Button(" Save ", save, ButtonOption::Border());
     auto btn_cancel = Button(" Cancel ", [st] { st->show_form = false; }, ButtonOption::Border());

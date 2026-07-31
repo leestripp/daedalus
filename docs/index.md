@@ -43,6 +43,7 @@ embedding `libdaedalus.a` and for core contributors.
 |------|----------|-------------|
 | [`storage.md`](storage.md) | **Host developers / users** | Two-tier rule (XDG user vs project-per-agent), all env vars, migration recipes for laptop / systemd / Podman / Docker / nix, FAQ. Source of truth if other docs conflict. |
 | [`settings.md`](settings.md) | **Host developers** | Complete reference for `daedalus::SettingsStore`: SQLite-backed API, provider/model config, kv_settings, model discovery, auto-migration from JSON, `SettingsManager` deprecation guide. |
+| [`provider-plugins.md`](provider-plugins.md) | **Host developers** | Provider plugin system: `ProviderPlugin` hook contract, registry, built-ins (MiniMax, Moonshot, LM Studio), writing custom plugins. |
 | [`settings-tui.md`](settings-tui.md) | **Host developers / users** | `demos/daedalus-settings-tui` reference: FTXUI settings editor for the `SettingsStore` — build, flags, tabs, key bindings, `--dump` mode. |
 
 ## Integrations

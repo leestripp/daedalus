@@ -68,6 +68,8 @@ struct ProviderConfig {
     std::string chat_endpoint;      // default "/v1/chat/completions"
     std::string discovery_endpoint; // default "/v1/models"
     int         timeout_seconds = 30;
+    std::string plugin;             // provider plugin name; empty = auto-detect
+                                    // from name/host (see docs/provider-plugins.md)
 };
 
 // One configured model; references a ProviderConfig for host/key/endpoints
@@ -91,6 +93,8 @@ store.upsert_provider(ProviderConfig{
     .chat_endpoint      = "/v1/chat/completions",
     .discovery_endpoint = "/v1/models",
     .timeout_seconds    = 30,
+    // .plugin          = "minimax",  // optional; auto-detected from
+                                     // name/host when left empty
 });
 
 // Read

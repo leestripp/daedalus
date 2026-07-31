@@ -187,8 +187,9 @@ inline void print_help(const char* program_name) {
     std::cout << "\nIn-session commands:\n";
     std::cout << "  /quit, /exit           Exit\n";
     std::cout << "  /clear                 Clear session state\n";
-    std::cout << "  /providers             List configured providers\n";
-    std::cout << "  /provider-add N H K    Add provider: name, host, api_key\n";
+    std::cout << "  /providers             List configured providers (with plugin)\n";
+    std::cout << "  /provider-add N H K [P]  Add provider: name, host, api_key ('-' = none),\n";
+    std::cout << "                           optional plugin (auto-detected when omitted)\n";
     std::cout << "  /provider NAME         Switch to provider NAME\n";
     std::cout << "  /models                Discover models for current provider\n";
     std::cout << "  /model-add N P M       Add model: name, provider, model_id\n";

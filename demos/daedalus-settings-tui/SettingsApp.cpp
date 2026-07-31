@@ -224,7 +224,8 @@ int DumpSettings(daedalus::SettingsStore& store, std::ostream& out)
             << "    api_key            = " << MaskSecret(p.api_key) << "\n"
             << "    chat_endpoint      = " << p.chat_endpoint << "\n"
             << "    discovery_endpoint = " << p.discovery_endpoint << "\n"
-            << "    timeout_seconds    = " << p.timeout_seconds << "\n";
+            << "    timeout_seconds    = " << p.timeout_seconds << "\n"
+            << "    plugin             = " << (p.plugin.empty() ? "(auto)" : p.plugin) << "\n";
     }
 
     out << "\n[models]\n";
