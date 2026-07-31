@@ -64,6 +64,11 @@ void test_ms2_temperature_clamp() {
     // (the live server rejects other temperatures).
     EXPECT(p->clamp_temperature("kimi-for-coding", 0.0) == 1.0);
     EXPECT(p->clamp_temperature("kimi-for-coding-highspeed", 0.5) == 1.0);
+    // The Kimi Code k3 IDs enforce temperature=1.0 too (live server);
+    // the platform's kimi-k3 is deliberately NOT clamped (no evidence).
+    EXPECT(p->clamp_temperature("k3", 0.0) == 1.0);
+    EXPECT(p->clamp_temperature("k3-256k", 0.3) == 1.0);
+    EXPECT(p->clamp_temperature("kimi-k3", 0.2) == 0.2);
     std::cout << "[ok] MS2: Moonshot temperature clamp\n";
 }
 

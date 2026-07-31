@@ -62,6 +62,10 @@ bool icontains(std::string_view haystack, std::string_view needle) {
                        }) != haystack.end();
 }
 
+bool istarts_with(std::string_view s, std::string_view prefix) {
+    return s.size() >= prefix.size() && iequals(s.substr(0, prefix.size()), prefix);
+}
+
 } // namespace
 
 bool MoonshotPlugin::matches(std::string_view host) const {
@@ -75,9 +79,15 @@ double MoonshotPlugin::clamp_temperature(std::string_view model_id, double t) co
     // other value is a hard API error (platform docs, "Parameters
     // Differences in Request Body"). The Kimi Code endpoint's
     // kimi-for-coding IDs are the same K2.7 Code model and enforce the
-    // same rule (confirmed empirically 2026-07-31: the server rejects
-    // with "invalid temperature: only 1 is allowed for this model").
-    if (icontains(model_id, "k2.7-code") || icontains(model_id, "kimi-for-coding")) {
+    // same rule; its k3/k3-256k IDs enforce it too (both confirmed
+    // empirically against the live server 2026-07-31: "invalid
+    // temperature: only 1 is allowed for this model"). Scoped to the
+    // exact Kimi Code k3 IDs so the platform's kimi-k3 (no documented
+    // or observed restriction) is left alone.
+    if (icontains(model_id, "k2.7-code") ||
+        icontains(model_id, "kimi-for-coding") ||
+        iequals(model_id, "k3") ||
+        istarts_with(model_id, "k3-")) {
         return 1.0;
     }
     return t;
