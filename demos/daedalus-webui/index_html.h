@@ -715,6 +715,8 @@ inline constexpr const char* kIndexHtml = R"HTML(<html lang="en">
       <input type="text" id="provider-discovery-endpoint" value="/v1/models">
       <label for="provider-timeout">Timeout (seconds)</label>
       <input type="number" id="provider-timeout" min="1" value="30">
+      <label for="provider-plugin">Plugin (blank = auto-detect)</label>
+      <input type="text" id="provider-plugin" placeholder="minimax | moonshot | lmstudio | …">
       <div class="settings-actions">
         <button type="button" id="provider-clear" class="cancel">Clear</button>
         <button type="submit">Save Provider</button>
@@ -1910,7 +1912,8 @@ function renderProvidersList() {
     meta.textContent = p.host +
                        " | chat=" + p.chat_endpoint +
                        " | discover=" + p.discovery_endpoint +
-                       " | timeout=" + p.timeout_seconds + "s";
+                       " | timeout=" + p.timeout_seconds + "s" +
+                       " | plugin=" + (p.plugin || ("auto:" + (p.plugin_effective || "?")));
     card.appendChild(meta);
     const actions = document.createElement("div");
     actions.className = "actions";
@@ -1949,6 +1952,7 @@ function populateProviderForm(p) {
   $("provider-chat-endpoint").value = p.chat_endpoint || "/v1/chat/completions";
   $("provider-discovery-endpoint").value = p.discovery_endpoint || "/v1/models";
   $("provider-timeout").value = p.timeout_seconds || 30;
+  $("provider-plugin").value = p.plugin || "";   // blank = auto-detect
   openProviderModal("Edit Provider");
 }
 
@@ -1980,6 +1984,7 @@ $("provider-form").addEventListener("submit", async (ev) => {
     chat_endpoint: $("provider-chat-endpoint").value.trim() || "/v1/chat/completions",
     discovery_endpoint: $("provider-discovery-endpoint").value.trim() || "/v1/models",
     timeout_seconds: parseInt($("provider-timeout").value, 10) || 30,
+    plugin: $("provider-plugin").value.trim(),   // "" = auto-detect
   };
   try {
     const r = await fetch("/settings/providers", {

@@ -56,7 +56,7 @@ in the same SQLite `daedalus.db` that the library reads.
 | Tab | What you can do |
 |-----|-----------------|
 | **Models** | List configured models. Add/edit a model by selecting a **Provider** and filling in the model id, context size, and temperature. Discover models from a configured model or provider and add them with one click. |
-| **Providers** | List configured providers. Add/edit a provider (name, host URL, API key, chat endpoint, discovery endpoint, timeout). |
+| **Providers** | List configured providers. Add/edit a provider (name, host URL, API key, chat endpoint, discovery endpoint, timeout, **plugin** — blank = auto-detect; the list shows the effective plugin as `auto:<name>`). |
 | **General** | Default model, auto-approve bash, iteration/size limits, MCP schema soft cap. |
 | **MCP Servers** | List, add, edit, and delete MCP servers (stdio or streamable-http). |
 
@@ -74,7 +74,7 @@ blank when editing preserves the existing secret.
 | `POST` | `/sessions/<id>/cancel` | Cancel the current turn. |
 | `POST` | `/sessions/<id>/approve` | Approve/deny a pending bash command. Body: `{approved: bool, sticky?: bool}`. |
 | `GET`  | `/sessions/<id>/state` | Current `AgentState` as JSON. |
-| `GET`  | `/sessions/<id>/stats` | `AgentStats` (tokens, iterations). |
+| `GET`  | `/sessions/<id>/stats` | `AgentStats` (tokens, iterations) plus `cached_tokens` (provider prompt-cache hits, §ContextCache) and `provider_plugin` (the resolved `ProviderPlugin` name). The usage HUD renders both. |
 | `GET`  | `/sessions/<id>/events` | SSE stream of agent events. |
 
 ### Settings

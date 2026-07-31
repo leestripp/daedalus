@@ -34,6 +34,10 @@ LLMClient reads:
   → builds synthesized_message() if the final event had no choices
    ↓
 LLMClient::update_token_usage(response_json) updates last_total_tokens_
+  (and, §ContextCache, last_cached_tokens_ — folded from either the
+   top-level usage.cached_tokens (Moonshot/Kimi) or the nested
+   usage.prompt_tokens_details.cached_tokens (MiniMax/OpenAI); see
+   src/api/ContextStatus.h)
 ```
 
 A response contains, in order, typically:

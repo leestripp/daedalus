@@ -610,7 +610,8 @@ Underlying infrastructure:
 ## Features
 
 
-- **Multi-Provider Support**: OpenAI, Anthropic, MiniMax, DeepSeek, LM Studio
+- **Provider Plugin System**: MiniMax, Moonshot AI/Kimi (pay-as-you-go platform **and** the Kimi Code subscription endpoint `api.kimi.com/coding`), LM Studio, and generic OpenAI-compatible providers — each described by a `ProviderPlugin` hook implementation (base URL, endpoints, model tables, payload shaping, temperature clamps, SSE dialect). Hosts can register custom plugins without forking the library. See [docs/provider-plugins.md](docs/provider-plugins.md).
+- **Provider Context Caching**: prompt-cache hit capture for MiniMax (nested `prompt_tokens_details.cached_tokens`) and Moonshot/Kimi (top-level `cached_tokens` + `prompt_cache_key` affinity) surfaced via `AgentStats::cached_tokens`; the system prompt is byte-static per session and per-iteration stats ride as a transient trailing message so provider prefix caches keep matching. See [docs/provider-plugins.md](docs/provider-plugins.md).
 - **Agent Skills**: Extensible capabilities via Anthropic's Agent Skills standard
 - **40+ Tools**: File operations, Git, shell commands, search, images, PDFs, code analysis
 - **Network Tools (OmniNet-backed)**: `http_request` (HTTP/HTTPS), `dns_lookup`, `tcp_check`, `tls_inspect`, plus 4 WebSocket tools (`websocket_connect/send/recv/close`). Replaces Bash `curl` + `python3 -c "import urllib"`. See [docs/network-tools.md](docs/network-tools.md).
@@ -769,8 +770,11 @@ See `demos/daedalus-manager/main.cpp` for the implementation.
 1. Download [LM Studio](https://lmstudio.ai/)
 2. Download a model (e.g., Llama 3, Mistral)
 3. Click "Start Server" (default port: 1234)
-4. Configure API key in LM Studio (any string works)
-5. Use `/models` in daedalus to switch to LM Studio
+4. No API key needed — the `lmstudio` provider plugin is auth-less and
+   auto-detected on loopback hosts (for a remote server, name the provider
+   `lmstudio` or set its plugin explicitly)
+5. Add it in the CLI: `/provider-add LMStudio http://localhost:1234 -`,
+   then `/models` to discover and `/model <name>` to switch
 
 ---
 
@@ -782,6 +786,7 @@ See `demos/daedalus-manager/main.cpp` for the implementation.
 - [docs/library_design.md](docs/library_design.md) — permanent invariants for `libdaedalus.a` (no-stdio, output channels)
 - [docs/storage.md](docs/storage.md) — XDG-compliant storage layout
 - [docs/tools.md](docs/tools.md) — tool specifications
+- [docs/provider-plugins.md](docs/provider-plugins.md) — provider plugin system + context caching
 - [docs/skills.md](docs/skills.md) — Agent Skills
 - [docs/mcp_server.md](docs/mcp_server.md) — MCP server integration
 - [docs/network-tools.md](docs/network-tools.md) — OmniNet-backed network tools

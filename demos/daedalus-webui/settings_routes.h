@@ -22,6 +22,7 @@
 #include <daedalus/settings.h>
 #include <daedalus/Agent.h>
 #include <daedalus/model_discovery.h>
+#include <daedalus/ProviderRegistry.h>  // §ProviderPlugins: effective-plugin display
 
 namespace websse {
 using namespace OmniNet;
@@ -70,6 +71,16 @@ inline std::string mask_secret(std::string_view s) {
 }
 
 inline json provider_to_json(const daedalus::ProviderConfig& p) {
+    // §ProviderPlugins: "plugin" is the explicit row value ("" = auto);
+    // "plugin_effective" resolves auto-detection the same way the CLI
+    // and settings TUI display it.
+    std::string effective = p.plugin;
+    if (effective.empty()) {
+        if (auto r = daedalus::ProviderRegistry::plugin_for_host(p.host))
+            effective = r->name();
+        else
+            effective = "openai-compatible";
+    }
     return json{
         {"name",               p.name},
         {"host",               p.host},
@@ -77,6 +88,8 @@ inline json provider_to_json(const daedalus::ProviderConfig& p) {
         {"chat_endpoint",      p.chat_endpoint},
         {"discovery_endpoint", p.discovery_endpoint},
         {"timeout_seconds",    p.timeout_seconds},
+        {"plugin",             p.plugin},
+        {"plugin_effective",   effective},
     };
 }
 
@@ -89,6 +102,9 @@ inline std::optional<daedalus::ProviderConfig> json_to_provider(const json& j) {
     p.chat_endpoint      = j.value("chat_endpoint", "/v1/chat/completions");
     p.discovery_endpoint = j.value("discovery_endpoint", "/v1/models");
     p.timeout_seconds    = j.value("timeout_seconds", 30);
+    // §ProviderPlugins: "" is meaningful (auto-detect) — no preserve
+    // semantics needed, unlike the masked api_key.
+    p.plugin             = j.value("plugin", "");
     return p;
 }
 
