@@ -115,6 +115,56 @@ wire format like Anthropic `/v1/messages`), its plugin overrides the
 parser + payload hooks to translate both directions rather than forking
 `LLMClient`.
 
+## Context caching (§ContextCache, 2026-07)
+
+All three built-in providers support **server-side prompt caching**, but
+with different mechanics. The library's job is to (a) keep the request
+prefix byte-stable and (b) report cache hits; no provider needs explicit
+cache management for an agent loop.
+
+| Provider | Mechanism | What the library sends | Hit reporting |
+|----------|-----------|------------------------|---------------|
+| MiniMax | **Automatic** prefix cache (≥ 512 input tokens; prefix order tools → system → messages; load-adjusted expiry). Cache reads bill at ~0.1× input. | Nothing extra — eligibility is automatic. | `usage.prompt_tokens_details.cached_tokens` |
+| Moonshot / Kimi | Automatic cache-hit/miss pricing + **cache affinity key**. On the Kimi Code Plan endpoint (`api.kimi.com/coding`) `prompt_cache_key` is *required* for good hit rates; use a stable per-session value that survives resume. | `prompt_cache_key` = agent name, falling back to `AgentConfig::session_id` (MoonshotPlugin). | top-level `usage.cached_tokens` |
+| LM Studio (local) | Engine-level KV reuse (llama.cpp/MLX) for shared prefixes. No billing — the win is prefill latency. | Nothing (plugin strips extension fields). | Not reported over the wire |
+
+Both usage shapes are folded into `AgentStats::cached_tokens` (and the
+CLI `/stats` + `/usage` displays) by
+`context_status::extract_cached_tokens()` (`src/api/ContextStatus.h`).
+
+### Prefix-stability rules the library enforces
+
+A cache match ends at the **first differing byte**, so anything that
+changes per iteration must live at the very end of the request:
+
+- The composed system prompt (`SystemPromptBuilder::compose`) is
+  **byte-static for the whole session** — no token counters, no clocks.
+- The per-iteration *Context Status* block (token usage, iteration
+  counter, current time, last-turn cache-hit count) is carried as a
+  **transient trailing system message** (`context_status::
+  upsert_context_status_message`), replaced every iteration. Legacy
+  sessions with the block embedded in the system message are cleaned
+  automatically on the next turn.
+- Tool definitions and message history are append-only within a turn,
+  so turn N+1's request shares its entire prefix with turn N.
+
+### Best settings per provider
+
+- **MiniMax**: nothing to configure. Keep ≥ 512 tokens of stable prefix
+  (the tool schema alone usually qualifies). Explicit `cache_control`
+  breakpoints exist only on MiniMax's Anthropic-compatible endpoint —
+  deliberately unused (we speak the OpenAI-compatible protocol).
+- **Moonshot / Kimi**: set a stable agent name or `session_id`; both
+  flow into `prompt_cache_key`. The platform's explicit Context Cache
+  API (`/v1/caching`, per-minute storage billing) targets static
+  document sets and is deliberately unused.
+- **LM Studio**: keep one model loaded (disable idle-evict / "auto
+  unload"), avoid engine/model switching mid-session. Cache reuse shows
+  up as a prompt-processing speedup in the server log from the second
+  turn onward. Note: some hybrid-architecture models (e.g. Qwen3.5-35B
+  on the MLX engine) have broken KV reuse upstream — verify with the
+  server logs if prefill time never drops.
+
 ## CLI / TUI surface
 
 - `/providers` shows each provider's effective plugin (`(auto: X)` when

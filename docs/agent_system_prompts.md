@@ -29,13 +29,13 @@ The system prompt is a **composite document** assembled by
 │  6. available_skills       ← daedalus (catalog of skills the │
 │                                agent can load_skill)         │
 │  7. session_memory         ← daedalus (fact dump, opt-in)    │
-│  8. context_status         ← daedalus (token usage /         │
-│                                iteration, every turn)        │
-│  9. State Machine          ← daedalus (ALWAYS appended —     │
+│  8. State Machine          ← daedalus (ALWAYS appended —     │
 │                                see §2.7)                     │
-│ 10. Reserved Agent Dirs    ← daedalus (ALWAYS appended —     │
+│  9. Reserved Agent Dirs    ← daedalus (ALWAYS appended —     │
 │                                see §2.8)                     │
 └─────────────────────────────────────────────────────────────┘
+│  ~ Context Status          ← transient trailing message, NOT │
+│                                part of the prompt (§2.6)     │
 ```
 
 **You** write everything the agent needs to *know about its role and
@@ -115,11 +115,11 @@ These are daedalus's job — the library will write them for you:
 | **MCP server list** | Library appends live status in slot 3 — your copy goes stale |
 | **Skill catalog / active-skill lists** | Library appends live data in slots 5–6 — your copy goes stale |
 | **Session-memory fact dump** | Library appends live facts in slot 7 |
-| **Token-usage / iteration table** | Library appends live table in slot 8 |
-| **`# State Machine` instructions** | Library appends its own version in slot 9 — your copy duplicates |
-| **`# Reserved Agent Directories` instructions** | Library appends its own version in slot 10 — your copy duplicates |
+| **Token-usage / iteration table** | Library sends a live transient trailing message every turn — your copy goes stale and breaks prompt caches |
+| **`# State Machine` instructions** | Library appends its own version in slot 8 — your copy duplicates |
+| **`# Reserved Agent Directories` instructions** | Library appends its own version in slot 9 — your copy duplicates |
 
-If you want to *augment* the library's slots 9 and 10 with extra
+If you want to *augment* the library's slots 8 and 9 with extra
 domain-specific rules (e.g. "in this project, the agent must always
 run `pytest` before `Done`"), put those *prose* rules in your
 `system_prompt` — the library sections are appended **after** yours
@@ -252,9 +252,9 @@ store:
 `SessionMemory::get_system_prompt_addition()`. To opt out, set
 `include_session_memory = false` or leave the field empty.
 
-### 2.6 Context Status (per-turn)
+### 2.6 Context Status (per-turn, transient trailing message)
 
-daedalus appends a token-usage and iteration table on every turn:
+daedalus reports a token-usage and iteration table on every turn:
 
 ```
 # Context Status
@@ -263,14 +263,23 @@ daedalus appends a token-usage and iteration table on every turn:
 |--------|-------|
 | Token Usage | 12,345 / 200,000 (6%) |
 | Iterations | 3 / 300 |
-| Messages | (tracked in messages array) |
+| Messages | 42 |
+| Date/Time | 2026-07-31 02:16:56 UTC |
+| Prompt Cache | 9,800/12,345 prompt tokens cached |
 ```
 
 The agent reads this to decide when to compact context.
 
-**You don't write this.** The library constructs it from
-`current_tokens`, `max_context_size`, `iteration`, `max_iterations`
-in `SystemPromptOptions`. Disable via `include_context_stats = false`.
+**You don't write this — and it is NOT part of the system prompt.**
+§ContextCache (2026-07): the block changes every iteration, so it is
+carried as a transient **trailing system message** appended to the wire
+messages (and replaced on the next iteration) by
+`LLMClient::inject_context_stats` / `context_status::
+upsert_context_status_message` (`src/api/ContextStatus.h`). Embedding it
+in the static system prompt invalidated provider prompt caches
+(MiniMax / Kimi match on a stable tools → system → messages prefix) for
+the entire conversation history. Sessions persisted before this change
+have the legacy embedded block stripped automatically on the next turn.
 
 ### 2.7 State Machine — **ALWAYS APPENDED** ✋
 
@@ -422,9 +431,11 @@ Agent::run_one_turn(user_message)
        5. active_skills          (live, name + desc)
        6. available_skills       (live catalog, excluding active)
        7. session_memory         (live, if include_session_memory)
-       8. context_status         (live token + iteration table)
-       9. State Machine          (ALWAYS — slot §2.7)
-      10. Reserved Agent Dirs    (ALWAYS — slot §2.8)
+       8. State Machine          (ALWAYS — slot §2.7)
+       9. Reserved Agent Dirs    (ALWAYS — slot §2.8)
+
+  (the per-iteration Context Status table is sent separately as a
+   transient trailing message — §2.6 / §ContextCache)
 
   → final_prompt = composed string
   → messages.add(role="system", content=final_prompt)
@@ -529,9 +540,12 @@ DO NOT modify code that is unrelated to the user's request.
 5. active skills
 6. available skills catalog
 7. *(omitted if `memory_enabled = false`)*
-8. context status table
-9. `# State Machine` (mandatory)
-10. `# Reserved Agent Directories` (mandatory)
+8. `# State Machine` (mandatory)
+9. `# Reserved Agent Directories` (mandatory)
+
+*(The per-iteration context-status table is no longer a compose slot —
+it rides as a transient trailing message so the static prompt stays
+byte-stable for provider prompt caches. See §2.6.)*
 
 ### Manager — orchestrates sub-agents
 
@@ -626,14 +640,12 @@ Every field maps 1:1 to a slot in the contract diagram.
 | `available_skills` | 6 | `""` | Catalog of available skills; empty = skipped |
 | `session_memory` | 7 | `""` | Pre-formatted fact dump |
 | `include_session_memory` | 7 | `true` | Master switch for slot 7 |
-| `current_tokens` | 8 | `0` | Token counter for slot 8 |
-| `max_context_size` | 8 | `200000` | Context window cap |
-| `iteration` | 8 | `0` | Current iteration |
-| `max_iterations` | 8 | `100` | Iteration cap |
-| `include_context_stats` | 8 | `true` | Master switch for slot 8 |
 
-Slots 9 (`# State Machine`) and 10 (`# Reserved Agent Directories`)
-are library-owned and **not configurable** — see §2.7 and §2.8.
+Slots 8 (`# State Machine`) and 9 (`# Reserved Agent Directories`)
+are library-owned and **not configurable** — see §2.7 and §2.8. The
+per-iteration Context Status block (§2.6) is deliberately NOT a compose
+slot: it lives outside the static system prompt so provider prompt
+caches keep matching (§ContextCache).
 
 For ergonomic setup, prefer filling an `AgentConfig` (`cfg.system_prompt`,
 `cfg.mcp_enabled`, etc.) and letting `Agent::initialize()` populate the

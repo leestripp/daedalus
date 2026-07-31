@@ -246,8 +246,12 @@ inline void print_usage(std::ostream& out, const daedalus::AgentStats& st) {
         << " (" << std::fixed << std::setprecision(1) << token_percent << "%)\n"
         << "  " << bar.str() << "\n"
         << "  Prompt:     " << st.prompt_tokens << "\n"
-        << "  Completion: " << st.completion_tokens << "\n"
-        << "  Messages:   " << st.message_count << "\n"
+        << "  Completion: " << st.completion_tokens << "\n";
+    if (st.cached_tokens > 0) {
+        msg << "  Cached:     " << st.cached_tokens
+            << " prompt tokens served from the provider's context cache\n";
+    }
+    msg << "  Messages:   " << st.message_count << "\n"
         << "  Iterations: " << st.iteration << " / " << st.max_iterations
         << " (" << std::fixed << std::setprecision(1) << iter_percent << "%)\n";
     out << msg.str();

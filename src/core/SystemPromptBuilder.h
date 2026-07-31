@@ -12,7 +12,12 @@
  *   3. Append the active-skills list (names + short info).
  *   4. Append the available-skills catalog (names + descriptions).
  *   5. Append the session memory fact dump (opt-in).
- *   6. Append the per-iteration context-stats table (token usage / iter).
+ *
+ * §ContextCache: the composed prompt is deliberately BYTE-STATIC for
+ * the whole session — MiniMax / Kimi server-side prompt caches match
+ * on a stable prefix. Per-iteration runtime stats (token usage,
+ * iteration counter, clock) are NOT part of this prompt; they are
+ * carried as a transient trailing message (src/api/ContextStatus.h).
  *
  * Anything the library can't generate itself (the host's prose) is the
  * host's job. See Agent.md Phase 14 for the full plan and rationale.
@@ -60,15 +65,8 @@ struct SystemPromptOptions {
     // Fact dump from SessionMemory (SessionMemory::get_system_prompt_addition()).
     std::string session_memory;
 
-    // Per-iteration runtime stats for the # Context Status section.
-    size_t current_tokens    = 0;
-    size_t max_context_size  = 200000;
-    size_t iteration         = 0;
-    size_t max_iterations    = 100;
-
     // Feature flags.
     bool include_session_memory = true;
-    bool include_context_stats  = true;
     bool include_system_info_note = true;  // applies when system_info_note is non-empty
 
     SystemPromptOptions() = default;
@@ -119,12 +117,6 @@ public:
     /// or moved by the model.  Returns a static, non-empty string —
     /// there is no host option to disable it.
     static std::string getReservedAgentDirsSection();
-
-    /// `# Context Status\n` + token-usage markdown table.
-    static std::string getContextStatsSection(size_t current_tokens,
-                                              size_t max_tokens,
-                                              size_t iteration,
-                                              size_t max_iterations);
 
     // ---- utility ----
 

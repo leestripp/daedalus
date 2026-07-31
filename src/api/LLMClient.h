@@ -39,6 +39,11 @@ struct AppConfig {
     std::string chat_endpoint;
     std::filesystem::path target_directory;
     std::string agent_name;        // §Phase 8.8 — per-agent runtime-state namespace
+    // §ContextCache: stable session id (from AgentConfig::session_id).
+    // Fallback for the server-side prompt-cache key (e.g. Moonshot's
+    // prompt_cache_key, which Kimi Code Plan requires for good hit
+    // rates) when agent_name is empty (the default agent).
+    std::string session_id;
     bool auto_mode = false;  // Automatically approve tool executions
     bool memory_disabled = false;  // Disable session memory
     // §Phase 9.8: SSE streaming. Default = true (progressive tokens).
@@ -114,6 +119,9 @@ private:
     int last_total_tokens_ = 0;
     int last_prompt_tokens_ = 0;
     int last_completion_tokens_ = 0;
+    // §ContextCache: prompt tokens served from the provider's server-side
+    // context cache on the last response (0 = miss / unsupported).
+    int last_cached_tokens_ = 0;
 
     // §B32: suppresses duplicate "no usage" warnings per turn.
     bool warned_no_usage_this_turn_ = false;
@@ -360,6 +368,11 @@ public:
     int get_total_tokens() const { return last_total_tokens_; }
     int get_prompt_tokens() const { return last_prompt_tokens_; }
     int get_completion_tokens() const { return last_completion_tokens_; }
+    // §ContextCache: tokens served from the provider's prompt cache on
+    // the last response. Both wire shapes are folded into this one
+    // counter: Moonshot's top-level usage.cached_tokens and the
+    // OpenAI-style usage.prompt_tokens_details.cached_tokens (MiniMax).
+    int get_cached_tokens() const { return last_cached_tokens_; }
     int get_max_context_size() const {
         if (messages_) {
             return static_cast<int>(messages_->get_config().max_context_size);

@@ -8,7 +8,8 @@
  *   2. Tool definitions appear as a fenced JSON block (not prose).
  *   3. Skills appear as a catalog (names + descriptions), NOT full SKILL.md.
  *   4. Session memory is included when set, omitted when disabled.
- *   5. Context stats appear in the expected markdown table format.
+ *   5. §ContextCache: NO per-iteration Context Status block — the composed
+ *      prompt stays byte-static so provider prompt caches can match it.
  *   6. The library NEVER injects hard-coded "daedalus" / "autonomous coding
  *      agent" / "Task Focus" / "agent identity" prose.
  */
@@ -28,18 +29,22 @@ TEST_SUITE("Host prompt passes through verbatim") {
 
     TEST_CASE("Empty system_prompt produces library-owned-blocks-only output") {
         // §Phase 14 + §State Machine + §Reserved Agent Dirs: compose()
-        // with empty host text produces the context stats, state
-        // machine, and reserved-dirs sections (the library-owned
-        // blocks). The library never invents host prose.
+        // with empty host text produces the state machine and
+        // reserved-dirs sections (the library-owned blocks). The
+        // library never invents host prose.
         SystemPromptOptions options;
         std::string prompt = SystemPromptBuilder::compose(options);
 
         // The library never invents identity / rules / workflow.
         CHECK(prompt.find("autonomous coding agent") == std::string::npos);
-        // Context stats, state machine, reserved-dirs all appear.
-        CHECK(prompt.find("# Context Status")             != std::string::npos);
+        // State machine and reserved-dirs appear.
         CHECK(prompt.find("# State Machine")              != std::string::npos);
         CHECK(prompt.find("# Reserved Agent Directories") != std::string::npos);
+        // §ContextCache: NO per-iteration Context Status block — the
+        // composed prompt must stay byte-static across the session so
+        // provider prompt caches (MiniMax / Kimi) can match the prefix.
+        // The stats ride as a transient trailing message instead.
+        CHECK(prompt.find("# Context Status") == std::string::npos);
     }
 
     TEST_CASE("Host prompt appears verbatim, first section") {
@@ -149,30 +154,16 @@ TEST_SUITE("Dynamic adders") {
         CHECK(prompt.find("# Session Memory") == std::string::npos);
     }
 
-    TEST_CASE("Context stats appear in markdown table format") {
+    TEST_CASE("Context stats are never part of the composed prompt") {
+        // §ContextCache: per-iteration stats used to be section 8 of the
+        // composed prompt. They moved to a transient trailing message
+        // (LLMClient::inject_context_stats) because a changing block in
+        // the static prompt breaks provider prompt-cache prefix matching.
         SystemPromptOptions options;
         options.system_prompt = "Host text.";
-        options.include_context_stats = true;
-        options.current_tokens = 50000;
-        options.max_context_size = 200000;
-        options.iteration = 10;
-        options.max_iterations = 100;
-
         std::string prompt = SystemPromptBuilder::compose(options);
-        CHECK(prompt.find("# Context Status") != std::string::npos);
-        CHECK(prompt.find("50000") != std::string::npos);
-        CHECK(prompt.find("200000") != std::string::npos);
-        CHECK(prompt.find("| Metric |") != std::string::npos);
-    }
-
-    TEST_CASE("Context stats excluded when flag is false") {
-        SystemPromptOptions options;
-        options.system_prompt = "Host text.";
-        options.include_context_stats = false;
-        options.current_tokens = 999999;
-        std::string prompt = SystemPromptBuilder::compose(options);
-        CHECK(prompt.find("999999") == std::string::npos);
         CHECK(prompt.find("# Context Status") == std::string::npos);
+        CHECK(prompt.find("Token Usage") == std::string::npos);
     }
 
     TEST_CASE("system_info_note appended when set") {
@@ -199,9 +190,6 @@ TEST_SUITE("Section order") {
         options.active_skills = "- **z**: zzz\n";
         options.available_skills = "- **y**: yyy\n";
         options.session_memory = "SESSION_MEMORY";
-        options.include_context_stats = true;
-        options.current_tokens = 1;
-        options.iteration = 1;
 
         std::string prompt = SystemPromptBuilder::compose(options);
 
@@ -211,14 +199,12 @@ TEST_SUITE("Section order") {
         size_t act_pos   = prompt.find("# Active Skills");
         size_t avail_pos = prompt.find("# Available Skills");
         size_t mem_pos   = prompt.find("# Session Memory");
-        size_t stat_pos  = prompt.find("# Context Status");
 
         CHECK(host_pos == 0);
         CHECK(host_pos < tools_pos);
         CHECK(tools_pos < act_pos);
         CHECK(act_pos < avail_pos);
         CHECK(avail_pos < mem_pos);
-        CHECK(mem_pos < stat_pos);
     }
 }
 
@@ -332,7 +318,7 @@ TEST_SUITE("State machine section") {
 
     TEST_CASE("Section is appended when all other sections are populated") {
         // Even with every other section populated, the state-machine
-        // section still comes after the context-stats block.
+        // section is present along with all the host-supplied adders.
         SystemPromptOptions options;
         options.system_prompt = "host prompt";
         options.tool_definitions = R"([{"name":"x"}])";
@@ -346,29 +332,29 @@ TEST_SUITE("State machine section") {
         CHECK(prompt.find("# Active Skills")              != std::string::npos);
         CHECK(prompt.find("# Available Skills (catalog)") != std::string::npos);
         CHECK(prompt.find("# Session Memory")             != std::string::npos);
-        CHECK(prompt.find("# Context Status")             != std::string::npos);
         CHECK(prompt.find("# State Machine")              != std::string::npos);
         CHECK(prompt.find("# Reserved Agent Directories") != std::string::npos);
 
-        // State-machine comes after context-status (not last overall —
-        // reserved-dirs comes after — but it IS last among the
+        // §ContextCache: no per-iteration stats block in the static prompt.
+        CHECK(prompt.find("# Context Status") == std::string::npos);
+
+        // State-machine comes after the session-memory section (not last
+        // overall — reserved-dirs comes after — but it IS last among the
         // "thinking/process" sections).
         auto sm_pos  = prompt.find("# State Machine");
-        auto ctx_pos = prompt.find("# Context Status");
+        auto mem_pos = prompt.find("# Session Memory");
         REQUIRE(sm_pos  != std::string::npos);
-        REQUIRE(ctx_pos != std::string::npos);
-        CHECK(ctx_pos < sm_pos);
+        REQUIRE(mem_pos != std::string::npos);
+        CHECK(mem_pos < sm_pos);
     }
 
-    TEST_CASE("Section survives even when context stats are disabled") {
-        // §Phase 14: include_context_stats is an option.  The state-
-        // machine section MUST still be appended (it has no flag).
+    TEST_CASE("State machine section survives with default options") {
+        // The state-machine section MUST always be appended (it has no
+        // flag), even when nothing else is populated.
         SystemPromptOptions options;
-        options.include_context_stats = false;
         std::string prompt = SystemPromptBuilder::compose(options);
 
-        CHECK(prompt.find("# Context Status") == std::string::npos);  // disabled
-        CHECK(prompt.find("# State Machine")  != std::string::npos); // still here
+        CHECK(prompt.find("# State Machine") != std::string::npos);
     }
 }
 

@@ -1133,6 +1133,21 @@ target_link_libraries(daedalus_provider_lmstudio_plugin_tests PRIVATE
 )
 add_test(NAME provider_lmstudio_plugin_tests COMMAND daedalus_provider_lmstudio_plugin_tests)
 
+# §ContextCache: prompt-cache usage parsing + cache-safe status message.
+add_executable(daedalus_context_cache_tests
+    test_context_cache.cpp
+)
+target_include_directories(daedalus_context_cache_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_context_cache_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME context_cache_tests COMMAND daedalus_context_cache_tests)
+
 add_executable(daedalus_mcp_load_from_store_tests
     test_mcp_load_from_store.cpp
     ${PROJECT_SOURCE_DIR}/src/mcp/McpServerManager.cpp

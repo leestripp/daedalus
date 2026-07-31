@@ -157,24 +157,6 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "   host UI will leave the stage chips stuck.\n";
 }
 
-std::string SystemPromptBuilder::getContextStatsSection(size_t current_tokens,
-                                                        size_t max_tokens,
-                                                        size_t iteration,
-                                                        size_t max_iterations) {
-    std::ostringstream oss;
-    int pct = max_tokens == 0 ? 0
-             : static_cast<int>(static_cast<float>(current_tokens) / max_tokens * 100);
-    oss << "# Context Status\n"
-        << "<!-- Auto-updated each iteration -->\n"
-        << "| Metric | Value |\n"
-        << "|--------|-------|\n"
-        << "| Token Usage | " << current_tokens << "/" << max_tokens
-        << " (" << pct << "%)\n"
-        << "| Iterations | " << iteration << "/" << max_iterations << " |\n"
-        << "| Messages | (tracked in messages array) |\n";
-    return oss.str();
-}
-
 std::string SystemPromptBuilder::getReservedAgentDirsSection() {
     // §Reserved Agent Dirs: ALWAYS appended last.  Tells the agent
     // that .daedalus* folders are reserved runtime state — same
@@ -270,24 +252,22 @@ std::string SystemPromptBuilder::compose(const SystemPromptOptions& options) {
         sections.push_back(getSessionMemorySection(options.session_memory));
     }
 
-    // 8. Context stats (token usage / iteration counter).
-    if (options.include_context_stats) {
-        sections.push_back(getContextStatsSection(
-            options.current_tokens,
-            options.max_context_size,
-            options.iteration,
-            options.max_iterations));
-    }
-
-    // 9. State machine — ALWAYS appended. Non-empty by construction;
+    // 8. State machine — ALWAYS appended. Non-empty by construction;
     //    there is no host option to disable it.  This is so the host
     //    can be sure the prompt always explains the state machine and
     //    the agent is instructed to set it as it works.
     sections.push_back(getStateMachineSection());
 
-    // 10. Reserved agent directories — ALWAYS last.  Tells the agent
+    // 9. Reserved agent directories — ALWAYS last.  Tells the agent
     //     that .daedalus* folders are owned by the runtime and must
     //     never be deleted / renamed / edited.
+    //
+    // §ContextCache: the composed prompt must stay BYTE-STATIC across
+    // the whole session — MiniMax / Kimi server-side prompt caches
+    // match on a stable prefix, so no per-iteration data (token
+    // counters, timestamps) may live here. The per-iteration Context
+    // Status block is carried as a transient trailing message instead
+    // (see src/api/ContextStatus.h and LLMClient::inject_context_stats).
     sections.push_back(getReservedAgentDirsSection());
 
     return combineSections(sections);

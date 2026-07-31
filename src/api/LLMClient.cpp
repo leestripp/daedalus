@@ -1,5 +1,6 @@
 #include "api/LLMClient.h"
 #include "api/MiniMaxSseParser.h"   // §BUG-001: exposed for tests
+#include "api/ContextStatus.h"      // §ContextCache: prompt-cache helpers
 #include "daedalus/ProviderRegistry.h"   // §ProviderPlugins
 #include "api/ErrorMapping.h"       // §on_error: HTTP status / error-type → ErrorKind
 #include "core/version.h"
@@ -800,6 +801,15 @@ void LLMClient::update_token_usage(const json& response_json) {
         last_prompt_tokens_ = usage.value("prompt_tokens", 0);
         last_completion_tokens_ = usage.value("completion_tokens", 0);
         last_total_tokens_ = usage.value("total_tokens", 0);
+
+        // §ContextCache: provider prompt-cache hit count (both wire
+        // shapes folded in daedalus::context_status::extract_cached_tokens).
+        last_cached_tokens_ = daedalus::context_status::extract_cached_tokens(usage);
+        if (last_cached_tokens_ > 0) {
+            LOG_INFO("[LLM] prompt cache hit: " +
+                     std::to_string(last_cached_tokens_) + "/" +
+                     std::to_string(last_prompt_tokens_) + " prompt tokens cached");
+        }
     } catch (...) {
         // Ignore parsing errors - usage is best-effort
     }
@@ -1114,7 +1124,14 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         pctx.model_id    = config_.model;
         pctx.model_name  = config_.model_name;
         pctx.provider    = config_.provider;
-        pctx.cache_key   = config_.agent_name;
+        // §ContextCache: the prompt-cache key must be stable across a
+        // session (Kimi docs: "session id ... if the session is exited
+        // and later resumed, this value should remain the same"; Kimi
+        // Code Plan *requires* it for good hit rates). Agent namespace
+        // wins when set; otherwise fall back to the session id so the
+        // default (unnamed) agent doesn't silently opt out.
+        pctx.cache_key   = !config_.agent_name.empty()
+                               ? config_.agent_name : config_.session_id;
         pctx.stream      = config_.stream;
         pctx.temperature = config_.temperature;
         plugin_->mutate_chat_payload(request_payload, pctx);
@@ -2324,6 +2341,15 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 }
 
 void LLMClient::inject_context_stats(json& messages) {
+    // §ContextCache (2026-07-31): this block changes EVERY iteration.
+    // It used to be embedded near the top of the system message, which
+    // invalidated server-side prompt caches (MiniMax / Kimi match on a
+    // stable tools → system → messages prefix) for the rest of the
+    // system prompt AND the entire conversation history. The stats now
+    // ride as a transient TRAILING system message, so the static prefix
+    // (system prompt + conversation history) stays byte-identical
+    // between requests. See src/api/ContextStatus.h for the mechanism.
+
     // Build context statistics string
     std::ostringstream stats;
 
@@ -2351,6 +2377,25 @@ void LLMClient::inject_context_stats(json& messages) {
           << " (" << std::fixed << std::setprecision(1) << token_percent << "%) |\n";
     stats << "| Messages | " << messages.size() << " |\n";
     stats << "| Iterations | " << iteration_count_ << "/" << max_iterations_ << " |\n";
+
+    // §ContextCache: current time moved here from the static prompt
+    // header — a per-session timestamp in the system prompt defeats
+    // cross-session prefix-cache reuse.
+    {
+        std::time_t now = std::time(nullptr);
+        std::tm* local_tm = std::localtime(&now);
+        std::ostringstream dt;
+        dt << std::put_time(local_tm, "%Y-%m-%d %H:%M:%S %Z");
+        stats << "| Date/Time | " << dt.str() << " |\n";
+    }
+
+    // §ContextCache: last-turn prompt-cache hit count, when the provider
+    // reports it (Moonshot / MiniMax). Lets the model (and log readers)
+    // see cache health without a UI.
+    if (last_cached_tokens_ > 0) {
+        stats << "| Prompt Cache | " << last_cached_tokens_ << "/"
+              << last_prompt_tokens_ << " prompt tokens cached |\n";
+    }
 
     // Compression status
     if (messages_) {
@@ -2380,76 +2425,9 @@ void LLMClient::inject_context_stats(json& messages) {
         }
     }
 
-    // §B8 fix: terminator sentinel. The block always ends with this
-    // unique line so we can find and erase exactly what we wrote
-    // instead of walking forward to the next same-level heading
-    // (which over-truncated the trailing tail of the system prompt
-    // when the stats block was the LAST section).
-    constexpr const char* kEndSentinel = "<!-- /daedalus-context-status -->\n";
-    stats << kEndSentinel;
-
-    std::string context_stats = stats.str();
-
-    // Update or add the context stats to the system message
-    if (messages.empty()) {
-        return;  // No messages yet
-    }
-
-    json& system_msg = messages[0];
-    if (system_msg.value("role", "") != "system") {
-        return;  // First message is not system
-    }
-
-    std::string content = system_msg.value("content", "");
-
-    // §B8 fix: locate the previous stats block by its sentinel and
-    // erase exactly that block (from `# Context Status` to the
-    // sentinel, inclusive). If the sentinel is missing — e.g. a
-    // leftover from an earlier pre-fix write — fall back to the old
-    // heading-based search so we don't leak the stats forever.
-    size_t context_start = content.find("# Context Status");
-    bool is_h2 = false;
-    if (context_start == std::string::npos) {
-        context_start = content.find("## Context Status");
-        is_h2 = true;
-    }
-    if (context_start != std::string::npos) {
-        // Try the new sentinel first (the precise block we wrote).
-        size_t sentinel_pos = content.find(kEndSentinel, context_start);
-        size_t context_end;
-        if (sentinel_pos != std::string::npos) {
-            // Sentinel found — erase inclusive of it.
-            context_end = sentinel_pos + std::strlen(kEndSentinel);
-        } else {
-            // Fallback: pre-fix compatibility. Find the next same-level
-            // heading or the next blank line, but never erase past
-            // the end of the content (the previous code did that
-            // and dropped the trailing tail of the prompt).
-            std::string end_marker = is_h2 ? "\n## " : "\n# ";
-            size_t next_heading = content.find(end_marker, context_start + 1);
-            if (next_heading != std::string::npos) {
-                context_end = next_heading;
-            } else {
-                // No same-level heading after. Erase to the next
-                // blank line (the stats block always ends with one).
-                // If none, just erase to end of string.
-                size_t blank = content.find("\n\n", context_start);
-                context_end = (blank != std::string::npos) ? blank + 2
-                                                           : content.size();
-            }
-        }
-        content.erase(context_start, context_end - context_start);
-    }
-
-    // Append the new context stats before the first "\n# " or at the end
-    size_t first_heading = content.find("\n# ");
-    if (first_heading != std::string::npos) {
-        content.insert(first_heading, context_stats);
-    } else {
-        content += context_stats;
-    }
-
-    system_msg["content"] = content;
+    // Strip any legacy embedded block, drop the previous transient
+    // status message, and append this one last.
+    daedalus::context_status::upsert_context_status_message(messages, stats.str());
 }
 
 // Format: ![alt text](path_or_url)
@@ -2700,23 +2678,20 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
 
     std::string api_url = config_.base_url + config_.chat_endpoint;
 
-    // Get current user and datetime for system prompt
+    // Get current user for the system prompt header
     std::string username = "unknown";
     struct passwd* pw = getpwuid(getuid());
     if (pw && pw->pw_name) {
         username = pw->pw_name;
     }
 
-    // Get current date/time in human-readable format
-    std::time_t now = std::time(nullptr);
-    std::tm* local_tm = std::localtime(&now);
-    std::ostringstream datetime;
-    datetime << std::put_time(local_tm, "%Y-%m-%d %H:%M:%S %Z");
-
-    // Build header with user and datetime
+    // Build header with user. §ContextCache: the Date/Time line was
+    // moved OUT of the static system prompt into the transient
+    // context-status message — a per-session timestamp here makes the
+    // whole prompt unique per session and defeats cross-session
+    // prefix-cache reuse (MiniMax / Kimi match on a stable prefix).
     std::string prompt_header = "# Session Info\n";
-    prompt_header += "- **User**: " + username + "\n";
-    prompt_header += "- **Date/Time**: " + datetime.str() + "\n\n";
+    prompt_header += "- **User**: " + username + "\n\n";
 
     // Build base system instruction using SystemPromptBuilder
     // §Phase 11: removed AgentMode from SystemPromptOptions.
@@ -2858,6 +2833,7 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // Reset per-turn state
     iteration_count_ = 0;
     last_total_tokens_ = 0;
+    last_cached_tokens_ = 0;
 
     bool agent_running = true;
     bool compress_after_done = false;
@@ -2926,6 +2902,7 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             }
             iteration_count_ = 0;
             last_total_tokens_ = 0;
+            last_cached_tokens_ = 0;
             continue;
         }
 

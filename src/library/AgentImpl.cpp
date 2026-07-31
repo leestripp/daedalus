@@ -71,6 +71,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
                             ? std::filesystem::current_path()
                             : cfg.project_root;
     out.agent_name = cfg.agent_name;        // §Phase 8.8
+    out.session_id = cfg.session_id;        // §ContextCache: prompt-cache key fallback
     if (!cfg.model_name.empty()) {
         auto m = store.resolve_model(cfg.model_name);
         if (m.has_value()) {
@@ -723,6 +724,7 @@ AgentStats AgentImpl::stats() const noexcept
         s.max_iterations    = body_->client->get_max_iterations();
         s.prompt_tokens     = body_->client->get_prompt_tokens();
         s.completion_tokens = body_->client->get_completion_tokens();
+        s.cached_tokens     = body_->client->get_cached_tokens();
         s.total_tokens      = body_->client->get_total_tokens();
         s.max_context_size  = body_->client->get_max_context_size();
         s.message_count     = body_->client->get_message_count();

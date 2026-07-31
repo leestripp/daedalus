@@ -529,7 +529,10 @@ int main(int argc, char* argv[]) {
                           << " / " << st.max_iterations
                           << " | tokens=" << st.total_tokens
                           << " (prompt=" << st.prompt_tokens
-                          << ", completion=" << st.completion_tokens << ")"
+                          << ", completion=" << st.completion_tokens;
+                if (st.cached_tokens > 0)
+                    std::cout << ", cached=" << st.cached_tokens;
+                std::cout << ")"
                           << " | ctx=" << st.total_tokens << "/" << st.max_context_size << "\n";
                 continue;
             }

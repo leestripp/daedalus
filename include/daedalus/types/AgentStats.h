@@ -16,6 +16,9 @@ struct AgentStats {
     int  prompt_tokens = 0;
     int  completion_tokens = 0;
     int  total_tokens = 0;
+    // Prompt tokens served from the provider's server-side context cache
+    // on the last response (0 = miss or provider doesn't report it).
+    int  cached_tokens = 0;
     int  max_context_size = 0;
     int  message_count = 0;
     int  pending_tool_calls = 0;

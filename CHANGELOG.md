@@ -91,6 +91,34 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     `test_provider_settings_migration.cpp`; documented in
     `docs/provider-plugins.md`.
 
+- **Provider context-cache support** (§ContextCache, 2026-07-31):
+  - Cache-hit usage is now captured for every provider:
+    `LLMClient::update_token_usage()` folds Moonshot/Kimi's top-level
+    `usage.cached_tokens` and MiniMax/OpenAI's nested
+    `usage.prompt_tokens_details.cached_tokens` into one counter,
+    exposed via `LLMClient::get_cached_tokens()` and the new
+    `AgentStats::cached_tokens` field (CLI `/stats` and `/usage`
+    displays show it when > 0).
+  - Moonshot's `prompt_cache_key` (required by the Kimi Code Plan for
+    good hit rates) now falls back to `AgentConfig::session_id` when no
+    agent name is set, so the default agent no longer silently opts out
+    (`AppConfig::session_id`).
+  - The per-iteration *Context Status* block moved out of the system
+    prompt into a **transient trailing system message**
+    (`src/api/ContextStatus.h`,
+    `LLMClient::inject_context_stats`). MiniMax and Kimi match
+    server-side prompt caches on a stable tools → system → messages
+    prefix; a stats block that changes every iteration near the top of
+    the system message invalidated the entire conversation history for
+    caching. The composed system prompt is now byte-static for the
+    whole session (per-session Date/Time moved into the trailing
+    message; `SystemPromptOptions`' context-stats fields removed), and
+    legacy sessions with an embedded stats block are cleaned
+    automatically on the next turn.
+  - Covered by `tests/test_context_cache.cpp`; documented in
+    `docs/provider-plugins.md` (per-provider caching matrix + best
+    settings) and `docs/agent_system_prompts.md` §2.6.
+
 ### Fixed
 
 - **MCP stdio servers died silently on shell metacharacters + dead
