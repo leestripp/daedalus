@@ -130,6 +130,20 @@ int builtin_max_context_size(std::string_view model_name)
     }
     return 0;  // 0 means "unknown" — caller applies the 1M fallback
 }
+
+// §ProviderPlugins: resolve the plugin for a provider row. The explicit
+// `plugin` hint wins; otherwise auto-detect from name/host (resolve()
+// always falls back to the OpenAI-compatible default, so this never
+// returns nullptr).
+std::shared_ptr<ProviderPlugin> plugin_for_row(std::string_view hint,
+                                               std::string_view name,
+                                               std::string_view host)
+{
+    if (!hint.empty()) {
+        if (auto pl = ProviderRegistry::plugin_for_name(hint)) return pl;
+    }
+    return ProviderRegistry::resolve(name, host);
+}
 }  // anonymous namespace
 
 // ============================================================================
@@ -654,8 +668,14 @@ std::optional<ResolvedModelConfig> SettingsStore::resolve_model(std::string_view
     out.model_id           = m->model_id;
     out.host               = p->host;
     out.api_key            = p->api_key;
-    out.chat_endpoint      = p->chat_endpoint;
-    out.discovery_endpoint = p->discovery_endpoint;
+    // §ProviderPlugins: rows written before endpoint defaults were
+    // enforced (or by hosts that leave the fields blank) inherit the
+    // plugin's endpoints instead of breaking the request URL.
+    const auto plugin = plugin_for_row(p->plugin, p->name, p->host);
+    out.chat_endpoint      = p->chat_endpoint.empty()
+                                 ? plugin->chat_endpoint() : p->chat_endpoint;
+    out.discovery_endpoint = p->discovery_endpoint.empty()
+                                 ? plugin->models_endpoint() : p->discovery_endpoint;
     out.timeout_seconds    = p->timeout_seconds;
     out.max_context_size   = m->max_context_size;
     out.temperature        = m->temperature;
@@ -693,6 +713,15 @@ int SettingsStore::get_int(std::string_view key, int def) const
 // ============================================================================
 void SettingsStore::upsert_provider(const ProviderConfig& p)
 {
+    // §ProviderPlugins: empty endpoint fields inherit the plugin's
+    // defaults. The SQL column DEFAULTs only apply to omitted columns —
+    // hosts legitimately leave these blank (e.g. CLI /provider-add), and
+    // storing "" would break request URLs downstream.
+    const auto plugin = plugin_for_row(p.plugin, p.name, p.host);
+    const std::string chat = p.chat_endpoint.empty()
+                                 ? plugin->chat_endpoint() : p.chat_endpoint;
+    const std::string disc = p.discovery_endpoint.empty()
+                                 ? plugin->models_endpoint() : p.discovery_endpoint;
     exec_prepared(
         *mutex_,
         *db_,
@@ -704,7 +733,7 @@ void SettingsStore::upsert_provider(const ProviderConfig& p)
         "discovery_endpoint=excluded.discovery_endpoint, "
         "timeout_seconds=excluded.timeout_seconds, "
         "plugin=excluded.plugin",
-        p.name, p.host, p.api_key, p.chat_endpoint, p.discovery_endpoint,
+        p.name, p.host, p.api_key, chat, disc,
         static_cast<int64_t>(p.timeout_seconds), p.plugin);
 }
 
@@ -922,20 +951,12 @@ int SettingsStore::get_max_context_size_for_model(std::string_view model_name) c
     //    the provider name / host.
     if (m.has_value()) {
         if (auto p = get_provider(m->provider)) {
-            std::shared_ptr<ProviderPlugin> plugin;
-            if (!p->plugin.empty()) {
-                plugin = ProviderRegistry::plugin_for_name(p->plugin);
+            const auto plugin = plugin_for_row(p->plugin, p->name, p->host);
+            if (const auto n = plugin->context_size_for(m->model_id); n > 0) {
+                return static_cast<int>(n);
             }
-            if (!plugin) {
-                plugin = ProviderRegistry::resolve(m->provider, p->host);
-            }
-            if (plugin) {
-                if (const auto n = plugin->context_size_for(m->model_id); n > 0) {
-                    return static_cast<int>(n);
-                }
-                if (const auto n = plugin->context_size_for(model_name); n > 0) {
-                    return static_cast<int>(n);
-                }
+            if (const auto n = plugin->context_size_for(model_name); n > 0) {
+                return static_cast<int>(n);
             }
         }
     }

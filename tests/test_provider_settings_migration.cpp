@@ -111,8 +111,7 @@ void test_pm3_resolve_model_passthrough() {
     std::cout << "[ok] PM3: resolve_model passes plugin through\n";
 }
 
-void test_pm4_v4_to_v5_migration() {
-    TmpHome home("mig");
+void test_pm4_v4_to_v5_migration() {    TmpHome home("mig");
     const auto db_path = (home.path / "daedalus.db").string();
 
     // Hand-build a v4-shaped database: providers WITHOUT the plugin
@@ -151,6 +150,39 @@ void test_pm4_v4_to_v5_migration() {
     std::cout << "[ok] PM4: v4 -> v5 migration adds plugin column\n";
 }
 
+void test_pm5_endpoint_defaults() {
+    TmpHome home("ep");
+    auto store = daedalus::SettingsStore::for_home(home.path);
+
+    // Write path: upserting with blank endpoints stores the plugin's
+    // defaults instead of "".
+    daedalus::ProviderConfig p;
+    p.name = "blank-ep"; p.host = "https://h"; p.api_key = "k";
+    store.upsert_provider(p);
+    auto got = store.get_provider("blank-ep");
+    EXPECT(got.has_value());
+    EXPECT(got->chat_endpoint == "/v1/chat/completions");
+    EXPECT(got->discovery_endpoint == "/v1/models");
+
+    // Read path: a legacy row with empty endpoints (pre-fix writes) must
+    // still resolve to the plugin's endpoints.
+    {
+        OmniNet::DB::Database db;
+        db.open((home.path / "daedalus.db").string());
+        db.execute("UPDATE providers SET chat_endpoint='', discovery_endpoint='' "
+                   "WHERE name='blank-ep'");
+        db.close();
+    }
+    daedalus::ModelConfig m;
+    m.name = "ep-mod"; m.provider = "blank-ep"; m.model_id = "m-1";
+    store.upsert_model(m);
+    auto r = store.resolve_model("ep-mod");
+    EXPECT(r.has_value());
+    EXPECT(r->chat_endpoint == "/v1/chat/completions");
+    EXPECT(r->discovery_endpoint == "/v1/models");
+    std::cout << "[ok] PM5: empty endpoints fall back to plugin defaults\n";
+}
+
 } // namespace
 
 int main() {
@@ -158,12 +190,13 @@ int main() {
     test_pm2_default_empty();
     test_pm3_resolve_model_passthrough();
     test_pm4_v4_to_v5_migration();
+    test_pm5_endpoint_defaults();
 
     if (failures) {
         std::cerr << "\ntest_provider_settings_migration: " << failures
-                  << " FAILED (of 4 tests)\n";
+                  << " FAILED (of 5 tests)\n";
         return 1;
     }
-    std::cout << "\ntest_provider_settings_migration: 4 tests passed\n";
+    std::cout << "\ntest_provider_settings_migration: 5 tests passed\n";
     return 0;
 }

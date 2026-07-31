@@ -22,6 +22,8 @@
 #include "daedalus/model_discovery.h"
 #include "daedalus/paths.h"
 #include "daedalus/settings.h"
+#include "daedalus/ProviderPlugin.h"    // §ProviderPlugins: endpoint fallback
+#include "daedalus/ProviderRegistry.h"  // §ProviderPlugins
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
 #include "core/FileIO.h"             // for execute_tool FileIO construction
 #include "core/Logger.h"             // LOG_ERROR for on_error file logging
@@ -1278,8 +1280,23 @@ ModelDiscoveryResult AgentImpl::discover_provider_models() const
         return result;
     }
 
+    // §ProviderPlugins: rows with an empty discovery_endpoint (written
+    // before endpoint defaults were enforced) inherit the plugin's
+    // models endpoint.
+    std::string discovery = provider->discovery_endpoint;
+    if (discovery.empty()) {
+        std::shared_ptr<daedalus::ProviderPlugin> plugin;
+        if (!provider->plugin.empty()) {
+            plugin = daedalus::ProviderRegistry::plugin_for_name(provider->plugin);
+        }
+        if (!plugin) {
+            plugin = daedalus::ProviderRegistry::resolve(provider->name, provider->host);
+        }
+        discovery = plugin->models_endpoint();
+    }
+
     return daedalus::discover_models(
-        provider->host, provider->api_key, provider->discovery_endpoint);
+        provider->host, provider->api_key, discovery);
 }
 
 std::string AgentImpl::last_assistant_text() const
