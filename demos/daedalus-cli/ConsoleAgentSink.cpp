@@ -76,6 +76,10 @@ void ConsoleAgentSink::print_field_lines(const nlohmann::json& j) {
 
 void ConsoleAgentSink::on_tool_call(std::string_view name,
                                     const nlohmann::json& args) noexcept {
+    // Flush any buffered assistant text first so it appears before the
+    // tool header (deltas buffer until newline/threshold — see
+    // on_assistant_delta).
+    flush_delta_buffer();
     // Simple header + one line per argument. String values are printed
     // verbatim (real newlines, no JSON escaping) so the developer sees
     // exactly what the tool receives.
@@ -148,6 +152,13 @@ void ConsoleAgentSink::on_llm_request_finished() noexcept {
     // Safety net: ensure the spinner is stopped for non-streaming paths,
     // cancellations, or any other case where response_started did not fire.
     spinner_.notify_llm_request_finished();
+    // §fix (2026-07-31): flush the delta buffer at end of the LLM
+    // response (after the spinner stops so the line is clean). Short
+    // assistant replies that contain no newline never hit the flush
+    // threshold in on_assistant_delta() and stayed invisible (e.g. a
+    // one-line "OK" answer). The §Phase 9.11 re-emit path is unaffected
+    // — it only fires when no deltas streamed.
+    flush_delta_buffer();
 }
 
 void ConsoleAgentSink::on_compaction(std::size_t before_tokens,
