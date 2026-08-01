@@ -134,6 +134,11 @@ public:
     ///        Hosts use this to build per-model pickers for
     ///        AgentConfig::thinking_level. Empty when the model has no
     ///        thinking control or no model is configured yet.
+    ///        Default is never included: it is always a valid selection
+    ///        meaning "provider default" (nothing is sent), so hosts
+    ///        rendering pickers should show it alongside these entries —
+    ///        e.g. on/off models like MiniMax-M3 return {None} and rely
+    ///        on Default to represent "thinking on".
     [[nodiscard]] std::vector<ThinkingLevel> supported_thinking_levels() const;
 
     /// @brief Change the thinking level at runtime. Takes effect on the
