@@ -57,7 +57,11 @@ namespace {
 // ---------------------------------------------------------------------------
 class CompressionFakeServer {
 public:
-    CompressionFakeServer() {
+    // first_total/later_total: usage.total_tokens reported for the first
+    // main-turn response and all later ones. Defaults trip the 90%
+    // threshold of a 10000-token context on cycle 1.
+    explicit CompressionFakeServer(int first_total = 9500, int later_total = 100)
+        : first_total_(first_total), later_total_(later_total) {
         listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
         int yes = 1;
@@ -165,18 +169,19 @@ private:
             return;
         }
 
-        // Main agent turn: first cycle reports 9500/10000 tokens (95%,
-        // trips the 90% threshold); later cycles report a small context.
+        // Main agent turn: configured usage for cycle 1 vs. later cycles.
         const int seq = main_requests_.fetch_add(1);
         if (seq == 0) {
-            send_json(cfd, chat_body("Hi there!", 9500));
+            send_json(cfd, chat_body("Hi there!", first_total_));
         } else {
-            send_json(cfd, chat_body("All done.", 100));
+            send_json(cfd, chat_body("All done.", later_total_));
         }
     }
 
     int listen_fd_ = -1;
     int port_ = 0;
+    int first_total_ = 9500;
+    int later_total_ = 100;
     std::atomic<bool> running_{false};
     std::atomic<int> main_requests_{0};
     std::atomic<int> compression_requests_{0};
@@ -493,6 +498,71 @@ TEST_CASE("auto-compress at 90% fires AgentSink::on_compaction end-to-end") {
         CHECK(history[0].value("role", "") == "system");
         CHECK(history[1].value("role", "") == "user");
     }
+
+    fs::remove_all(home);
+}
+
+
+TEST_CASE("Agent::request_context_compression triggers compression below threshold") {
+    // §AutoCompress: host-facing trigger. Usage stays LOW (100/100000), so
+    // the 90% auto-trigger can never fire — compression happens only
+    // because the host asked for it.
+    CompressionFakeServer server(/*first_total=*/100, /*later_total=*/100);
+    fs::path home = make_temp_home("host-trigger");
+
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "openai-compatible";
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "big";
+        m.provider         = "fake";
+        m.model_id         = "fake-model";
+        m.max_context_size = 100000;   // 100 tokens = 0.1% — far below 90%
+        m.temperature      = 0.0;
+        store.upsert_model(m);
+        store.set_default_model_name("big");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "host-trigger-e2e";
+    cfg.stream         = false;
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+
+    auto sink = std::make_shared<CompactionSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    // Set the flag before the turn: it is consumed at the compression
+    // checkpoint at the end of the turn's first cycle.
+    agent.request_context_compression();
+
+    agent.submit_user_message("hello");
+    agent.run_one_turn();
+    agent.shutdown();
+
+    // Compression fired exactly once despite usage far below the 90%
+    // threshold; before_tokens reflects the low reported usage.
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        REQUIRE(sink->compactions.size() == 1);
+        CHECK(sink->compactions[0].before == 100);
+        CHECK(sink->errors.empty());
+    }
+    CHECK(server.compression_requests() == 1);
+    CHECK(server.main_requests() == 2);   // cycle 1 → compress → cycle 2 (DONE)
 
     fs::remove_all(home);
 }

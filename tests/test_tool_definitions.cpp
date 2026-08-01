@@ -50,23 +50,24 @@ TEST_SUITE("ToolDefinitions") {
         // Check for core tools we expect
         bool has_execute_bash = false;
         bool has_tell_user = false;
-        bool has_compress_context = false;
         bool has_stop = false;
         bool has_set_status = false;
 
         for (const auto& name : tool_names) {
             if (name == "execute_bash") has_execute_bash = true;
             if (name == "tell_user") has_tell_user = true;
-            if (name == "compress_context") has_compress_context = true;
             if (name == "stop") has_stop = true;
             if (name == "set_status") has_set_status = true;
         }
 
         CHECK(has_execute_bash);
         CHECK(has_tell_user);
-        CHECK(has_compress_context);
         CHECK(has_stop);
         CHECK(has_set_status);
+
+        // compress_context was removed: compression is host/system
+        // driven (90% threshold or Agent::request_context_compression()).
+        CHECK(std::find(tool_names.begin(), tool_names.end(), "compress_context") == tool_names.end());
 
         // Non-core tools are NOT in the default set.
         CHECK(std::find(tool_names.begin(), tool_names.end(), "read_file") == tool_names.end());

@@ -130,6 +130,11 @@ private:
     // §B32: suppresses duplicate "no usage" warnings per turn.
     bool warned_no_usage_this_turn_ = false;
 
+    // §AutoCompress: host-requested compression flag. Set via
+    // request_context_compression() (any thread), consumed at the
+    // compression checkpoint at the end of an agent cycle.
+    std::atomic<bool> compress_requested_{false};
+
     // §fix (2026-07-30, hardened 2026-08-01): circuit breaker for repeated
     // FATAL API errors. EVERY fatal-classified cycle increments the counter
     // (not just identical signatures — alternating 400 shapes each inject a
@@ -187,7 +192,7 @@ private:
     // State machine methods
     // §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
     // path now uses OmniNet::HTTP::Client internally.
-    AgentState run_agent_cycle(const std::string& api_url, json& messages, const json& tool_defs, bool& compress_after_done);
+    AgentState run_agent_cycle(const std::string& api_url, json& messages, const json& tool_defs);
     [[nodiscard]] std::string get_state_name(AgentState state) const;
     [[nodiscard]] std::string extract_error_message(const std::string& response) const;
 
@@ -266,6 +271,14 @@ public:
     /// @brief Currently configured thinking level.
     daedalus::ThinkingLevel thinking_level() const {
         return config_.thinking_level;
+    }
+
+    /// @brief Host-requested context compression (§AutoCompress). Sets a
+    ///        flag consumed at the compression checkpoint at the end of
+    ///        the current/next agent cycle — the same path the automatic
+    ///        90%-threshold trigger uses. Thread-safe.
+    void request_context_compression() noexcept {
+        compress_requested_.store(true, std::memory_order_relaxed);
     }
 
     /// @brief Attach a sink. Call this after construction and before

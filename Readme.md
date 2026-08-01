@@ -663,9 +663,11 @@ BEFORE: [system, msg1, msg2, ..., msgN*0.7, msgN*0.7+1, ..., msgN]
                        ↓
                   GET SUMMARY
                        ↓
-AFTER:  [system, assistant(compress_context), tool(summary), msgN*0.7+1, ..., msgN]
-            ───────   ─────────────────────────────────   ─────────────────
-            SYSTEM    FIRST 70% SUMMARIZED (replaced)     LAST 30% KEPT
+AFTER:  [system, user(summary), msgN*0.7+1, ..., msgN]
+            ───────   ──────────────   ─────────────────
+            SYSTEM    FIRST 70%        LAST 30% KEPT
+                      SUMMARIZED
+                      (replaced)
 ```
 
 **Key insight:** By keeping the newest 30% intact, the Agent retains recent context including tool call chains. This prevents the "strange behavior" that occurred when context was lost. The split NEVER breaks tool call pairs - whole chains are included in the compressed region.
@@ -683,7 +685,7 @@ AFTER:  [system, assistant(compress_context), tool(summary), msgN*0.7+1, ..., ms
 - **Manual**: User types `/compress` command for on-demand compression
 - **70/30 Split**: Oldest 70% summarized via LLM, newest 30% kept intact
 - **Safe Split**: Split NEVER breaks tool call pairs - if a tool result would be orphaned, the whole chain is included in compression
-- **Result Structure**: `system + assistant(compress_context tool call) + tool(summary) + suffix(last 30%)`
+- **Result Structure**: `system + user(summary) + suffix(last 30%)`
 - **Seamless Continuation**: Agent continues with recent context preserved
 - **Delete First**: First 70% deleted BEFORE compression - context reduced even if LLM fails
 
@@ -708,9 +710,11 @@ registered example tools under `demos/example-tools/`.
 
 ### User Interaction
 - `tell_user` - informational message from the agent to the user
-- `compress_context` - trigger context compression
 - `set_status` - declare the agent's current state
 - `stop` - finish the current turn with a summary
+
+Context compression is host/system driven (90% threshold or
+`Agent::request_context_compression()`), not model-facing.
 
 ### Memory
 - `remember`, `forget`, `memories`, `memory_stats`

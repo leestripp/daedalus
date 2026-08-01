@@ -89,6 +89,10 @@ public:
     // next chat request; no agent rebuild needed.
     void set_thinking_level(daedalus::ThinkingLevel level) noexcept;
 
+    // Host-requested context compression (§AutoCompress). Flags the
+    // LLMClient to compress at the end of the current/next agent cycle.
+    void request_context_compression() noexcept;
+
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
     ///        `mcp/servers.json` merged in as a fallback). Empty when

@@ -17,7 +17,6 @@ functional autonomous agent are registered automatically:
 | `execute_bash` | Run shell commands in the project root |
 | `tell_user` | Send text back to the host / user |
 | `set_status` | Declare the agent's own state mid-turn |
-| `compress_context` | Request conversation compression |
 | `stop` | End the agent loop cleanly |
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
@@ -293,7 +292,9 @@ Tool call chains in the suffix remain complete because we never cut through them
 
 ### Fix 5: Compression Only After Complete Iteration
 
-The `compress_after_done` flag ensures compression only happens:
+Compression is triggered at the cycle boundary (90% context threshold, or
+`Agent::request_context_compression()` from the host), which ensures it
+only happens:
 - After all tool calls in an iteration have been resolved
 - After tool results have been added to messages
 - When the message chain is complete and valid
@@ -641,31 +642,7 @@ re-render the status chip.
 
 ---
 
-## 4. `compress_context`
-
-### Purpose
-Allows the agent to request context compression when it no longer needs older parts of the conversation. The agent knows best when it has gathered all the information it needs.
-
-### Parameters
-
-| Name   | Type   | Required | Description                                        |
-|--------|--------|----------|----------------------------------------------------|
-| reason | string | Yes      | Brief explanation of why context can be compressed |
-
-### Example Usage
-
-```json
-{
-  "name": "compress_context",
-  "arguments": {
-    "reason": "Completed code research, no longer need early grep_search results"
-  }
-}
-```
-
----
-
-## 5. `stop`
+## 4. `stop`
 
 ### Purpose
 Signals that the task is complete. The agent calls this tool when it has finished the user's request - all research, planning, edits, and verification are done. This ends the autonomous agent loop.
@@ -689,7 +666,7 @@ Signals that the task is complete. The agent calls this tool when it has finishe
 
 ---
 
-## 6. `git_status`
+## 5. `git_status`
 
 ### Purpose
 Shows the working tree status. Displays which files have been modified, staged, or are untracked.
@@ -717,7 +694,7 @@ None required.
 
 ---
 
-## 7. `git_branch`
+## 6. `git_branch`
 
 ### Purpose
 Lists all branches in the repository. Shows both local and remote branches.
@@ -736,7 +713,7 @@ None required.
 
 ---
 
-## 8. `git_commit`
+## 7. `git_commit`
 
 ### Purpose
 Commits staged changes to the repository. Automatically stages all modified files before committing.
@@ -760,7 +737,7 @@ Commits staged changes to the repository. Automatically stages all modified file
 
 ---
 
-## 9. `git_add`
+## 8. `git_add`
 
 ### Purpose
 Stages files for commit. Adds files to the Git staging area.
@@ -784,7 +761,7 @@ Stages files for commit. Adds files to the Git staging area.
 
 ---
 
-## 10. `git_switch`
+## 9. `git_switch`
 
 ### Purpose
 Switches to a different branch. Supports creating new branches with the optional `create` parameter.
@@ -847,7 +824,7 @@ The tool returns a JSON response with these fields:
 
 ---
 
-## 11. `git_push`
+## 10. `git_push`
 
 ### Purpose
 Pushes commits to the remote repository. Supports force push and upstream tracking options.
@@ -908,7 +885,7 @@ Pushes commits to the remote repository. Supports force push and upstream tracki
 
 ---
 
-## 12. `git_diff`
+## 11. `git_diff`
 
 ### Purpose
 Shows changes between the working tree and the staging area. Displays differences in files.
@@ -952,7 +929,7 @@ Shows changes between the working tree and the staging area. Displays difference
 
 ---
 
-## 13. `git_merge`
+## 12. `git_merge`
 
 ### Purpose
 Merge a branch into the current branch. Supports regular merges, --no-ff merges, squash merges, and aborting a merge in progress.
@@ -1045,7 +1022,7 @@ Merge a branch into the current branch. Supports regular merges, --no-ff merges,
 ---
 
 
-## 14. `mcp` - Unified MCP Tool
+## 13. `mcp` - Unified MCP Tool
 
 ### Purpose
 Call a tool from any configured MCP server. Routes to any MCP server's tools dynamically based on the server and tool parameters. MCP servers are read from the SQLite `SettingsStore` (`$XDG_DATA_HOME/daedalus/daedalus.db`, overridable with `cfg.daedalus_home`); legacy `~/.daedalus/mcp/servers.json` is honoured as a read fallback.
@@ -1170,7 +1147,7 @@ Environment variables are stored in `$XDG_CONFIG_HOME/daedalus/mcp/.env` (overri
 
 ---
 
-## 15. `read_pdf`
+## 14. `read_pdf`
 
 Extract text content from a PDF file.
 
@@ -1245,7 +1222,7 @@ Extract text content from a PDF file.
 
 ---
 
-## 16. Skill Management Tools
+## 15. Skill Management Tools
 
 daedalus supports the Anthropic Agent Skills open standard for extending agent capabilities. Skills are packages of instructions, scripts, and resources that agents can discover and use to perform tasks more accurately and efficiently.
 
@@ -1458,7 +1435,7 @@ None required.
 
 ---
 
-## 17. `background_process`
+## 16. `background_process`
 
 Manage background processes for server applications. Start processes in background, send input, poll output, and stop processes. Use this when you need to run a server or long-running process and communicate with it while continuing the reasoning loop.
 

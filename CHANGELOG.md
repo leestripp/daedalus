@@ -11,6 +11,18 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
+- **`Agent::request_context_compression()`** (§AutoCompress, 2026-08-01):
+  host-facing compression trigger. Until now compression could only start
+  via the automatic 90%-of-context threshold — hosts could observe
+  (`on_compaction`, `AgentStats`, `Compressing` state) but not steer. The
+  new call sets a thread-safe flag on the `LLMClient` that is consumed at
+  the end of the current/next agent cycle (the same code path as the
+  threshold trigger), so it is safe mid-turn and never interrupts
+  in-flight tool calls. The result is reported via
+  `AgentSink::on_compaction()` as usual. Covered by a below-threshold
+  end-to-end case in `tests/test_auto_compress.cpp`; documented in
+  `docs/embedding.md`.
+
 - **User-selectable thinking levels** (§ThinkingLevel, 2026-08-01):
   - New `daedalus::ThinkingLevel` enum (`Default`/`None`/`Low`/`High`/
     `Max`) with string helpers (`include/daedalus/types/ThinkingLevel.h`)
@@ -177,7 +189,7 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   query found in messages` even when a user message exists later), so
   every post-compression request failed and the turn died on the
   fatal-error breaker. The rebuild now always inserts a synthetic user
-  message right after the system message, ahead of the compression pair
+  message right after the system message, carrying the summary
   (`src/core/Messages.cpp`). Covered by `tests/test_auto_compress.cpp`.
 
 - **Stray `</think>` tags leaked into host UIs** (§ThinkTagFilter,
@@ -528,6 +540,19 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   consuming receiver memory.
 
 ### Removed
+
+- **Model-facing `compress_context` tool removed** (2026-08-01): the
+  agent never called it — compression effectively only ever ran via the
+  automatic 90%-of-context threshold. `CompressContextTool`
+  (`src/tools/UserTool.h/.cpp`), its `ToolFactory` registration, the
+  `LLMClient` result handler, and the now-dead `compress_after_done`
+  plumbing (`run_agent_cycle` by-ref param) are all gone. Compression is
+  triggered by the 90% threshold or by the host via
+  `Agent::request_context_compression()`. As part of the removal the
+  compressed-history rebuild no longer emits a synthetic
+  assistant(`compress_context`) + tool(summary) pair — the summary now
+  rides inside the leading synthetic user message, so the rebuilt chain
+  is valid for every provider (`src/core/Messages.cpp`).
 
 - **libcurl dependency completely removed** from the build system.
   `find_package(CURL)` and `CURL::libcurl` links gone from

@@ -1135,8 +1135,7 @@ std::string LLMClient::extract_error_message(const std::string& response) const 
 // §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
 // path now uses OmniNet::HTTP::Client internally.
 AgentState LLMClient::run_agent_cycle(const std::string& api_url,
-                                          json& messages, const json& tool_defs,
-                                          bool& compress_after_done) {
+                                          json& messages, const json& tool_defs) {
     warned_no_usage_this_turn_ = false;  // §B32: reset per-turn
 
     // §ProviderPlugins: enforce provider conversation rules on the
@@ -2365,13 +2364,6 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 return AgentState::DONE;
             }
 
-            // Check if agent requested context compression
-            // Set flag to compress at end of agent cycle, not immediately
-            if (function_name == "compress_context" && result.value("status", "") == "compress_context") {
-                // Set flag to compress after agent completes
-                compress_after_done = true;
-            }
-
         }
 
         // Add tool results to message history
@@ -2945,7 +2937,6 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     last_cached_tokens_ = 0;
 
     bool agent_running = true;
-    bool compress_after_done = false;
     AgentState final_state = AgentState::DONE;
 
     // Live tool definitions (re-fetched when MCP dirty flag flips).
@@ -2983,15 +2974,16 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             tool_defs = json::parse(ToolHandler::get_tool_definitions());
         }
 
-        AgentState result_state = run_agent_cycle(api_url, messages, tool_defs, compress_after_done);
+        AgentState result_state = run_agent_cycle(api_url, messages, tool_defs);
 
-        // Auto-compress at 90% threshold OR if the agent explicitly requested it
-        // via the compress_context tool (B7 fix)
+        // Auto-compress at 90% threshold OR when the host asked for it via
+        // Agent::request_context_compression() (§AutoCompress).
         bool at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
-        if (at_threshold || compress_after_done) {
-            if (compress_after_done) {
-                LOG_INFO("[COMPRESS] Agent requested context compression...");
-                compress_after_done = false;
+        const bool host_requested =
+            compress_requested_.exchange(false, std::memory_order_relaxed);
+        if (at_threshold || host_requested) {
+            if (host_requested) {
+                LOG_INFO("[COMPRESS] Host requested context compression...");
             } else {
                 LOG_INFO("[COMPRESS] Auto-triggering context compression at 90% threshold...");
             }

@@ -620,6 +620,19 @@ on_compaction(8000, 4200)
 // Context was compressed from 8000 tokens down to 4200 tokens
 ```
 
+**Triggering compression from the host:** compression runs automatically
+at the 90%-of-context threshold, but hosts can also request it directly:
+
+```cpp
+agent.request_context_compression();
+```
+
+This sets a flag (thread-safe) that is consumed at the end of the current
+agent cycle — the same code path as the automatic 90%-threshold trigger —
+so it is safe to call mid-turn; in-flight tool calls are never
+interrupted. If the agent is idle, compression applies at the end of the
+next turn's first cycle. The result arrives via `on_compaction()`.
+
 ---
 
 ### `on_bell()` — Notification Signal

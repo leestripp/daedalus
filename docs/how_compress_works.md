@@ -33,9 +33,11 @@ BEFORE: [system, msg1, msg2, ..., msgN*0.7, msgN*0.7+1, ..., msgN]
                        ↓
                   GET SUMMARY
                        ↓
-AFTER:  [system, assistant(compress_context), tool(summary), msgN*0.7+1, ..., msgN]
-            ───────   ─────────────────────────────────   ─────────────────
-            SYSTEM    FIRST 70% SUMMARIZED (replaced)     LAST 30% KEPT
+AFTER:  [system, user(summary), msgN*0.7+1, ..., msgN]
+            ───────   ──────────────   ─────────────────
+            SYSTEM    FIRST 70%        LAST 30% KEPT
+                      SUMMARIZED
+                      (replaced)
 ```
 
 | Region | Action | Why |
@@ -49,7 +51,7 @@ AFTER:  [system, assistant(compress_context), tool(summary), msgN*0.7+1, ..., ms
 1. **No orphaned tool_calls**: The split is at a SAFE point (after a completed tool call chain or after any non-tool message)
 2. **Summary captures the past**: The LLM summary condenses the bulk of old context
 3. **Recent context preserved**: The last 30% gives the agent a tight window to continue work
-4. **Clean message chain**: `[system, compress_context pair, suffix]` - valid tool chain structure
+4. **Clean message chain**: `[system, user(summary), suffix]` - the first message after system is a user message, which strict chat templates require
 
 ---
 
@@ -124,7 +126,7 @@ If the first valid safe split point is too far from the 70% target (e.g., a huge
 
 5. IF LLM SUCCEEDS → Add summary
    │
-   └── Rebuild: [system, assistant(compress_context), tool(summary), ...suffix]
+   └── Rebuild: [system, user(summary), ...suffix]
 
 6. IF LLM FAILS → Continue anyway
    │
@@ -275,7 +277,7 @@ compress():
         return nullopt;  // LLM failed, but context already reduced
     }
     
-    // Rebuild: system + compress_context pair + last 30%
+    // Rebuild: system + user(summary) + last 30%
     ...
 ```
 
@@ -333,10 +335,10 @@ messages = [
 ```
 messages = [
     {role: "system", content: "You are a coding agent..."},       // Kept
-    {role: "assistant", tool_calls: [{id: "compress_internal",   // Summary
-                                       function: {name: "compress_context"}}]}
-    {role: "tool", tool_call_id: "compress_internal",            // Summary
-     content: "Context was compressed. Summary of first 70%:\nKEY EVENTS: ...\nFILES: ...\nNEXT: ..."},
+    {role: "user", content: "[Context compressed — the earlier    // Summary
+     conversation was summarized. Summary of the removed messages:
+     KEY EVENTS: ...\nFILES: ...\nNEXT: ...
+     Continue the current task.]"},
     {role: "assistant", content: "Making changes..."},             // Last 30% (kept)
     {role: "tool", content: "Result..."}                            // Last 30% (kept)
 ]
@@ -344,13 +346,14 @@ messages = [
 
 ### Why This Structure?
 
-The `compress_context` tool call pair is added to maintain message chain consistency. The API expects:
-- assistant with tool_calls → tool result
-
-By using a synthetic tool call pair, we:
-1. Maintain valid message chain structure
-2. Include the summary in a queryable format
-3. Allow future debugging by checking tool results
+The summary rides inside a synthetic leading **user** message:
+1. Strict chat templates (e.g. qwen3's jinja) require the first message
+   after `system` to be a `user` message — assistant/tool-first
+   histories are rejected.
+2. No assistant/tool pair is emitted, so the rebuilt chain stays valid
+   for every provider regardless of tool-call chaining rules.
+3. The summary remains in a queryable, debuggable position at the head
+   of the history.
 
 ---
 

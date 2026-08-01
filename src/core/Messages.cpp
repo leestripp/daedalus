@@ -1429,7 +1429,7 @@ std::optional<std::string> Messages::compress() {
                   << start_idx << "-" << end_idx << ")");
 
         // SUCCESS: Rebuild messages in correct order
-        // Structure: system + compress_context pair + suffix (last 50%)
+        // Structure: system + user(summary) + suffix (last 50%)
         new_messages = json::array();
 
         // 1. Add system message (must be first)
@@ -1442,39 +1442,19 @@ std::optional<std::string> Messages::compress() {
         //    messages") require the FIRST message after system to be a
         //    user message — verified empirically: assistant/tool-first
         //    histories are rejected even when a user message exists
-        //    later. Insert a synthetic user message ahead of the
-        //    compression pair so the rebuilt history is always valid.
+        //    later. The summary rides inside this synthetic user
+        //    message: no assistant/tool pair is emitted (the
+        //    model-facing compress_context tool was removed), so the
+        //    rebuilt chain stays valid for every provider.
         new_messages.push_back({
             {"role", "user"},
             {"content", "[Context compressed — the earlier conversation "
-                        "was summarized into the compress_context result "
-                        "below. Continue the current task.]"}
+                        "was summarized. Summary of the removed messages:\n"
+                        + summary +
+                        "\nContinue the current task.]"}
         });
 
-        // 3. Add assistant message with compress_context tool call
-        std::string summary_content = "Context was compressed. Summary of first half:\n" + summary;
-        new_messages.push_back({
-            {"role", "assistant"},
-            {"tool_calls", json::array({
-                {
-                    {"id", "compress_internal"},
-                    {"type", "function"},
-                    {"function", {
-                        {"name", "compress_context"},
-                        {"arguments", "{}"}
-                    }}
-                }
-            })}
-        });
-
-        // 4. Add tool result with the summary (completes the tool call pair)
-        new_messages.push_back({
-            {"role", "tool"},
-            {"tool_call_id", "compress_internal"},
-            {"content", summary_content}
-        });
-
-        // 5. Add suffix messages (last remaining messages already in messages_ after deletion)
+        // 3. Add suffix messages (last remaining messages already in messages_ after deletion)
         //    These are the messages AFTER the given messages we just deleted
         //    (messages_ currently has: system + suffix)
         for (size_t i = 1; i < messages_.size(); ++i) {  // Start at 1 to skip system
@@ -1489,7 +1469,7 @@ std::optional<std::string> Messages::compress() {
 
     // §Phase 5.1: route through Logger instead of std::cout.
     LOG_CERR(INFO, "\n[CONTEXT] Compressed " << before_count << " messages to " << after_count << " messages.");
-    LOG_CERR(INFO, "[CONTEXT] Structure: system + compress_context pair + suffix(last 50%)");
+    LOG_CERR(INFO, "[CONTEXT] Structure: system + user(summary) + suffix(last 50%)");
     LOG_CERR(INFO, "[CONTEXT] Messages summarized: " << middle_count << " messages -> 1 summary");
 
     std::string result = new_messages.dump();

@@ -172,6 +172,17 @@ public:
     ///        banner showed only the cfg value, missing settings.)
     [[nodiscard]] bool auto_approve() const noexcept;
 
+    /// @brief Ask the agent to compress its conversation context at the
+    ///        end of the current agent cycle — the same code path the
+    ///        automatic 90%-threshold trigger uses (70/30 split +
+    ///        LLM summary, see docs/how_compress_works.md). Safe to call
+    ///        mid-turn from any thread: compression happens at the cycle
+    ///        boundary, never mid-tool-call. If the agent is idle, it
+    ///        applies at the end of the next turn's first cycle.
+    ///        The result is reported via AgentSink::on_compaction().
+    ///        No-op when no model is configured (no LLMClient yet).
+    void request_context_compression() noexcept;
+
     // ------------------------------------------------------------------
     // Approval control (§BUG-006/007/008)
     // ------------------------------------------------------------------
