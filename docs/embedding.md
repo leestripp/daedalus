@@ -624,7 +624,7 @@ on_compaction(8000, 4200)
 at the 90%-of-context threshold, but hosts can also request it directly:
 
 ```cpp
-agent.request_context_compression();
+agent.compress_context();
 ```
 
 This sets a flag (thread-safe) that is consumed at the end of the current

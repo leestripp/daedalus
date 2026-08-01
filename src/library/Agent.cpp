@@ -69,7 +69,7 @@ std::vector<std::string> Agent::mcp_configured_servers() const
 
 ModelInfo Agent::active_model() const noexcept { return impl_->active_model(); }
 bool        Agent::auto_approve() const noexcept { return impl_->auto_approve(); }
-void        Agent::request_context_compression() noexcept { impl_->request_context_compression(); }
+void        Agent::compress_context() noexcept { impl_->compress_context(); }
 void        Agent::set_thinking_level(ThinkingLevel level) { impl_->set_thinking_level(level); }
 
 // §BUG-006/007/008: approval control

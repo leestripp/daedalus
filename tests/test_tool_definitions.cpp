@@ -66,7 +66,7 @@ TEST_SUITE("ToolDefinitions") {
         CHECK(has_set_status);
 
         // compress_context was removed: compression is host/system
-        // driven (90% threshold or Agent::request_context_compression()).
+        // driven (90% threshold or Agent::compress_context()).
         CHECK(std::find(tool_names.begin(), tool_names.end(), "compress_context") == tool_names.end());
 
         // Non-core tools are NOT in the default set.

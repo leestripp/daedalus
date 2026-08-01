@@ -861,12 +861,12 @@ void AgentImpl::set_thinking_level(daedalus::ThinkingLevel level) noexcept
     if (body_ && body_->client) body_->client->set_thinking_level(level);
 }
 
-void AgentImpl::request_context_compression() noexcept
+void AgentImpl::compress_context() noexcept
 {
     // §AutoCompress: host-facing trigger. Sets the LLMClient's request
     // flag; compression runs at the end of the current/next agent cycle
     // via the same path as the automatic 90%-threshold trigger.
-    if (body_ && body_->client) body_->client->request_context_compression();
+    if (body_ && body_->client) body_->client->compress_context();
 }
 
 ModelInfo AgentImpl::active_model() const noexcept

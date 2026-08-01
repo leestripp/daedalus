@@ -2977,7 +2977,7 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         AgentState result_state = run_agent_cycle(api_url, messages, tool_defs);
 
         // Auto-compress at 90% threshold OR when the host asked for it via
-        // Agent::request_context_compression() (§AutoCompress).
+        // Agent::compress_context() (§AutoCompress).
         bool at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
         const bool host_requested =
             compress_requested_.exchange(false, std::memory_order_relaxed);

@@ -91,7 +91,7 @@ public:
 
     // Host-requested context compression (§AutoCompress). Flags the
     // LLMClient to compress at the end of the current/next agent cycle.
-    void request_context_compression() noexcept;
+    void compress_context() noexcept;
 
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy

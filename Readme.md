@@ -714,7 +714,7 @@ registered example tools under `demos/example-tools/`.
 - `stop` - finish the current turn with a summary
 
 Context compression is host/system driven (90% threshold or
-`Agent::request_context_compression()`), not model-facing.
+`Agent::compress_context()`), not model-facing.
 
 ### Memory
 - `remember`, `forget`, `memories`, `memory_stats`

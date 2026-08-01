@@ -11,7 +11,7 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
-- **`Agent::request_context_compression()`** (§AutoCompress, 2026-08-01):
+- **`Agent::compress_context()`** (§AutoCompress, 2026-08-01):
   host-facing compression trigger. Until now compression could only start
   via the automatic 90%-of-context threshold — hosts could observe
   (`on_compaction`, `AgentStats`, `Compressing` state) but not steer. The
@@ -548,7 +548,7 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
   `LLMClient` result handler, and the now-dead `compress_after_done`
   plumbing (`run_agent_cycle` by-ref param) are all gone. Compression is
   triggered by the 90% threshold or by the host via
-  `Agent::request_context_compression()`. As part of the removal the
+  `Agent::compress_context()`. As part of the removal the
   compressed-history rebuild no longer emits a synthetic
   assistant(`compress_context`) + tool(summary) pair — the summary now
   rides inside the leading synthetic user message, so the rebuilt chain

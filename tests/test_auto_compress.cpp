@@ -503,7 +503,7 @@ TEST_CASE("auto-compress at 90% fires AgentSink::on_compaction end-to-end") {
 }
 
 
-TEST_CASE("Agent::request_context_compression triggers compression below threshold") {
+TEST_CASE("Agent::compress_context triggers compression below threshold") {
     // §AutoCompress: host-facing trigger. Usage stays LOW (100/100000), so
     // the 90% auto-trigger can never fire — compression happens only
     // because the host asked for it.
@@ -547,7 +547,7 @@ TEST_CASE("Agent::request_context_compression triggers compression below thresho
 
     // Set the flag before the turn: it is consumed at the compression
     // checkpoint at the end of the turn's first cycle.
-    agent.request_context_compression();
+    agent.compress_context();
 
     agent.submit_user_message("hello");
     agent.run_one_turn();

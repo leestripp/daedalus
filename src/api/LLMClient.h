@@ -131,7 +131,7 @@ private:
     bool warned_no_usage_this_turn_ = false;
 
     // §AutoCompress: host-requested compression flag. Set via
-    // request_context_compression() (any thread), consumed at the
+    // compress_context() (any thread), consumed at the
     // compression checkpoint at the end of an agent cycle.
     std::atomic<bool> compress_requested_{false};
 
@@ -277,7 +277,7 @@ public:
     ///        flag consumed at the compression checkpoint at the end of
     ///        the current/next agent cycle — the same path the automatic
     ///        90%-threshold trigger uses. Thread-safe.
-    void request_context_compression() noexcept {
+    void compress_context() noexcept {
         compress_requested_.store(true, std::memory_order_relaxed);
     }
 
