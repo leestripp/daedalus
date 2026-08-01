@@ -542,6 +542,23 @@ target_link_libraries(daedalus_minimax_sse_parser_tests PRIVATE
 )
 add_test(NAME minimax_sse_parser_tests COMMAND daedalus_minimax_sse_parser_tests)
 
+# §ThinkTagFilter (2026-08-01): unit tests for the stream-safe inline
+# <think>...</think> stripper (src/api/ThinkTagFilter.h). Header-only,
+# but links daedalus for consistency with the other parser tests.
+add_executable(daedalus_think_tag_filter_tests
+    test_think_tag_filter.cpp
+)
+target_include_directories(daedalus_think_tag_filter_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_think_tag_filter_tests PRIVATE
+    doctest::doctest
+    nlohmann_json::nlohmann_json
+    daedalus
+)
+add_test(NAME think_tag_filter_tests COMMAND daedalus_think_tag_filter_tests)
+
 # §TOKEN-COUNT-GRACEFUL (2026-07-17): Verifies the contract that
 # missing/null/malformed `usage` in an LLM response does NOT crash
 # the agent loop. The agent continues with a warning (per turn) and

@@ -153,6 +153,24 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **Stray `</think>` tags leaked into host UIs** (§ThinkTagFilter,
+  2026-08-01): the shared SSE parser only handled reasoning sent as the
+  `reasoning_content` *field* (Kimi/Moonshot). Models that embed
+  `<think>...</think>` inline in `content` (qwen3-family, MiniMax when
+  `reasoning_split` is not honored, deepseek-style) had every delta —
+  tags included — passed verbatim to `on_assistant_delta` and persisted
+  into history, and chunk-split tags defeat host-side string replacement.
+  New stream-safe `ThinkTagFilter` (`src/api/ThinkTagFilter.h`) strips
+  inline think blocks at the parser level: tags split across SSE chunks
+  are held until disambiguated, stray `</think>` closers strip just the
+  tag, unterminated blocks drop their tail at `finish()`, and
+  never-confirmed tag prefixes are re-emitted as literal text. The
+  buffered (non-streaming) path gets a one-shot `strip()` before the
+  message enters history. Reasoning sent via the `reasoning_content`
+  field is untouched and still round-trips for Kimi's tool loop.
+  Covered by `tests/test_think_tag_filter.cpp` and new cases in
+  `tests/test_minimax_sse_parser.cpp`.
+
 - **LM Studio: token counts were always 0, so auto-compression never
   triggered** (2026-08-01): `LmStudioPlugin::mutate_chat_payload()` stripped
   `stream_options` outright, so LM Studio never sent the usage-only final

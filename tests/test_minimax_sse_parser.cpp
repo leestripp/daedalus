@@ -289,3 +289,51 @@ TEST_CASE("non-object choice entries are skipped without throwing") {
     p.finish();
     CHECK(p.had_text_deltas());
 }
+
+// =====================================================================
+// §ThinkTagFilter (2026-08-01): inline <think>...</think> stripping
+// =====================================================================
+// Models that embed reasoning inline in `content` (qwen3-family, MiniMax
+// without honored reasoning_split, deepseek-style) had their tags passed
+// verbatim to the sink and into history. The parser now strips them —
+// including tags split across SSE chunks and stray closing tags.
+
+TEST_CASE("ThinkTagFilter: inline think block stripped from text and history") {
+    MiniMaxSseParser p = make_parser();
+    feed_text_delta(p, "<think>secret reasoning</think>The answer is 42.");
+    p.finish();
+    CHECK(p.text() == "The answer is 42.");
+    CHECK(p.synthesized_message()["content"] == "The answer is 42.");
+}
+
+TEST_CASE("ThinkTagFilter: tags split across SSE chunks") {
+    MiniMaxSseParser p = make_parser();
+    feed_text_delta(p, "<th");
+    feed_text_delta(p, "ink>hidden</th");
+    feed_text_delta(p, "ink>visible");
+    p.finish();
+    CHECK(p.text() == "visible");
+}
+
+TEST_CASE("ThinkTagFilter: stray </think> closer is stripped") {
+    MiniMaxSseParser p = make_parser();
+    feed_text_delta(p, "reasoning leaked");
+    feed_text_delta(p, "</think>The reply.");
+    p.finish();
+    // Text streamed before the stray closer was already delivered live —
+    // only the tag itself is stripped.
+    CHECK(p.text() == "reasoning leakedThe reply.");
+}
+
+TEST_CASE("ThinkTagFilter: reasoning_content field channel is untouched") {
+    // Kimi-style reasoning via the dedicated field must still round-trip
+    // into synthesized_message() — the inline filter must not eat it.
+    MiniMaxSseParser p = make_parser();
+    feed(p, json::parse(
+        "{\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":"
+        "{\"role\":\"assistant\",\"reasoning_content\":\"field thinking\","
+        "\"content\":\"reply\"}}]}"));
+    p.finish();
+    CHECK(p.text() == "reply");
+    CHECK(p.synthesized_message()["reasoning_content"] == "field thinking");
+}

@@ -106,6 +106,12 @@ during multi-step tool calling). All built-in plugins currently return it
 from `create_stream_parser()`; plugins for a genuinely different wire
 format supply their own implementation.
 
+Inline `<think>...</think>` blocks that some models embed in `content`
+(qwen3-family, MiniMax without honored `reasoning_split`, deepseek-style)
+are stripped before text reaches the sink or history by the stream-safe
+`ThinkTagFilter` (§ThinkTagFilter; chunk-split tags and stray closers
+included). Reasoning sent as the `reasoning_content` field is unaffected.
+
 ## Writing a custom plugin
 
 ```cpp

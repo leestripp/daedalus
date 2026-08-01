@@ -1,5 +1,6 @@
 #include "api/LLMClient.h"
 #include "api/MiniMaxSseParser.h"   // §BUG-001: exposed for tests
+#include "api/ThinkTagFilter.h"     // inline <think>...</think> stripping
 #include "api/ContextStatus.h"      // §ContextCache: prompt-cache helpers
 #include "daedalus/ProviderRegistry.h"   // §ProviderPlugins
 #include "api/ErrorMapping.h"       // §on_error: HTTP status / error-type → ErrorKind
@@ -842,6 +843,13 @@ void MiniMaxSseParser::finish() {
         parse_line(buffer_);
         buffer_.clear();
     }
+    // §ThinkTagFilter: flush bytes held for tag disambiguation. Literal
+    // text is re-emitted; an unterminated think block's tail is dropped.
+    const std::string tail = think_filter_.flush();
+    if (!tail.empty()) {
+        accumulated_text_ += tail;
+        if (auto w = weak_sink_.lock()) w->on_assistant_delta(tail);
+    }
 }
 
 nlohmann::json MiniMaxSseParser::synthesized_message() const {
@@ -923,20 +931,30 @@ void MiniMaxSseParser::parse_line(const std::string& line) {
                 }
 
                 // Text content streaming — the basic case.
+                // §ThinkTagFilter: feed deltas through the think-block
+                // stripper so inline <think>...</think> never reaches the
+                // sink or history (tags split across chunks are held).
                 const nlohmann::json& content = delta.value("content", nlohmann::json());
                 if (content.is_string() && !content.get<std::string>().empty()) {
-                    const std::string& s = content.get_ref<const std::string&>();
-                    accumulated_text_ += s;
-                    if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
+                    const std::string s =
+                        think_filter_.feed(content.get_ref<const std::string&>());
+                    if (!s.empty()) {
+                        accumulated_text_ += s;
+                        if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
+                    }
                 } else if (content.is_array()) {
                     // MiniMax sometimes sends content as an array of parts.
                     for (const auto& part : content) {
                         if (part.is_string()) {
-                            const std::string& s = part.get_ref<const std::string&>();
-                            accumulated_text_ += s;
-                            if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
+                            const std::string s =
+                                think_filter_.feed(part.get_ref<const std::string&>());
+                            if (!s.empty()) {
+                                accumulated_text_ += s;
+                                if (auto w = weak_sink_.lock()) w->on_assistant_delta(s);
+                            }
                         } else if (part.is_object() && part.value("type", "") == "text") {
-                            const std::string& txt = part.value("text", std::string{});
+                            const std::string& raw = part.value("text", std::string{});
+                            const std::string txt = think_filter_.feed(raw);
                             if (!txt.empty()) {
                                 accumulated_text_ += txt;
                                 if (auto w = weak_sink_.lock()) w->on_assistant_delta(txt);
@@ -2033,6 +2051,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // uniformly.  `response_json` itself keeps its full metadata
         // (usage, model, id, ...) for token tracking.
         response_json["choices"][0]["message"] = message;
+    }
+
+    // §ThinkTagFilter: strip inline <think>...</think> blocks from the
+    // buffered (non-streaming) path so neither history nor the display
+    // path below carries them. Streamed content was already filtered
+    // delta-by-delta in the SSE parser — strip() on clean text is the
+    // identity, so both paths converge here.
+    if (message.contains("content") && message["content"].is_string()) {
+        message["content"] =
+            ThinkTagFilter::strip(message["content"].get<std::string>());
     }
 
     // Add the assistant's message to history

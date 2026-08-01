@@ -19,6 +19,7 @@
 #include <string_view>
 
 #include "daedalus/ProviderPlugin.h"  // §ProviderPlugins: ProviderStreamParser interface
+#include "api/ThinkTagFilter.h"       // inline <think>...</think> stripping
 
 class MiniMaxSseParser : public daedalus::ProviderStreamParser {
 public:
@@ -80,6 +81,12 @@ private:
     std::weak_ptr<daedalus::AgentSink> weak_sink_;
     std::string buffer_;
     std::string accumulated_text_;           /// Complete assistant text from deltas.
+    /// §ThinkTagFilter: strips inline <think>...</think> blocks models
+    /// embed in `content` (qwen3, MiniMax without honored reasoning_split,
+    /// deepseek-style). Stream-safe across chunk boundaries; flushed in
+    /// finish(). Reasoning sent as the `reasoning_content` field never
+    /// touches this.
+    ThinkTagFilter think_filter_;
     std::string accumulated_role_;           /// "assistant" usually; set from delta.role.
     std::string accumulated_finish_reason_;  /// "stop", "tool_calls", "length" — set once.
     /// §ProviderPlugins Phase 4: thinking text from `reasoning_content`
