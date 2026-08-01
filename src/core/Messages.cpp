@@ -1437,7 +1437,21 @@ std::optional<std::string> Messages::compress() {
             new_messages.push_back(messages_[0]);
         }
 
-        // 2. Add assistant message with compress_context tool call
+        // 2. §COMPRESS-USER-MSG (2026-08-01): strict chat templates
+        //    (qwen3's jinja on LM Studio: "No user query found in
+        //    messages") require the FIRST message after system to be a
+        //    user message — verified empirically: assistant/tool-first
+        //    histories are rejected even when a user message exists
+        //    later. Insert a synthetic user message ahead of the
+        //    compression pair so the rebuilt history is always valid.
+        new_messages.push_back({
+            {"role", "user"},
+            {"content", "[Context compressed — the earlier conversation "
+                        "was summarized into the compress_context result "
+                        "below. Continue the current task.]"}
+        });
+
+        // 3. Add assistant message with compress_context tool call
         std::string summary_content = "Context was compressed. Summary of first half:\n" + summary;
         new_messages.push_back({
             {"role", "assistant"},
@@ -1453,14 +1467,14 @@ std::optional<std::string> Messages::compress() {
             })}
         });
 
-        // 3. Add tool result with the summary (completes the tool call pair)
+        // 4. Add tool result with the summary (completes the tool call pair)
         new_messages.push_back({
             {"role", "tool"},
             {"tool_call_id", "compress_internal"},
             {"content", summary_content}
         });
 
-        // 4. Add suffix messages (last remaining messages already in messages_ after deletion)
+        // 5. Add suffix messages (last remaining messages already in messages_ after deletion)
         //    These are the messages AFTER the given messages we just deleted
         //    (messages_ currently has: system + suffix)
         for (size_t i = 1; i < messages_.size(); ++i) {  // Start at 1 to skip system

@@ -58,7 +58,11 @@ struct MessageCompressionConfig {
     
     // What to keep intact (messages, not including system at index 0)
     // Note: keep_head_count and keep_tail_count are DEPRECATED - we now compress ALL non-system messages
-    // The new compression rebuilds as: system + user(instruction) + summary
+    // The compressed history rebuilds as:
+    //   system + user(synthetic compression note — §COMPRESS-USER-MSG:
+    //   strict templates require the first message after system to be a
+    //   user msg) + assistant(compress_context tool call) + tool(summary)
+    //   + suffix(newest 30%)
     // Keeping these as placeholders (not used) for backward compatibility with tests
     int keep_head_count = 2;                  // DEPRECATED - not used anymore
     int keep_tail_count = 2;                 // DEPRECATED - not used anymore

@@ -1,0 +1,498 @@
+// SPDX-License-Identifier: BSL-1.0
+// tests/test_auto_compress.cpp
+//
+// §AutoCompress (2026-08-01): end-to-end proof that the context-compression
+// loop in LLMClient actually fires and is observable through the PUBLIC
+// API — the gap left by the unit tests, which only cover
+// Messages::should_compress() thresholds and Messages::compress() mechanics
+// in isolation.
+//
+// Drives a full daedalus::Agent against an in-process HTTP server:
+//   - The model row's max_context_size is tiny (10000), and the fake
+//     server's first chat response reports usage.total_tokens = 9500,
+//     tripping the 90% auto-compress threshold after cycle 1.
+//   - The compression summary request (distinguishable by the
+//     "max_tokens" field Messages::call_llm_for_summary adds) gets a
+//     summary completion back.
+//   - The second cycle reports low usage, so the loop ends DONE.
+//
+// Asserts the host-visible contract: AgentSink::on_compaction(before,
+// after) fired exactly once with after < before, the fake server saw the
+// compression request, and Agent::stats() reflects the post-compression
+// turn.
+
+#define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
+#include <doctest/doctest.h>
+
+#include <atomic>
+#include <chrono>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <daedalus.h>
+#include <daedalus/settings.h>
+#include <nlohmann/json.hpp>
+
+namespace fs = std::filesystem;
+using json = nlohmann::json;
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// In-process HTTP server. Answers POSTs with chat-completion JSON:
+//   - body contains "max_tokens"  → compression summary request
+//   - otherwise                   → main agent turn (high usage on the first,
+//                                   low usage afterwards)
+// ---------------------------------------------------------------------------
+class CompressionFakeServer {
+public:
+    CompressionFakeServer() {
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
+        int yes = 1;
+        ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(listen_fd_, (sockaddr*)&addr, sizeof(addr)) < 0)
+            throw std::runtime_error("bind failed");
+        if (::listen(listen_fd_, 4) < 0)
+            throw std::runtime_error("listen failed");
+
+        socklen_t len = sizeof(addr);
+        ::getsockname(listen_fd_, (sockaddr*)&addr, &len);
+        port_ = ntohs(addr.sin_port);
+
+        running_.store(true);
+        thread_ = std::thread([this] { loop(); });
+    }
+
+    ~CompressionFakeServer() {
+        running_.store(false);
+        ::shutdown(listen_fd_, SHUT_RDWR);
+        ::close(listen_fd_);
+        if (thread_.joinable()) thread_.join();
+    }
+
+    std::string base_url() const {
+        return "http://127.0.0.1:" + std::to_string(port_);
+    }
+    int main_requests() const        { return main_requests_.load(); }
+    int compression_requests() const { return compression_requests_.load(); }
+
+private:
+    static void send_json(int cfd, const std::string& body) {
+        const std::string resp =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json\r\n"
+            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+            "Connection: close\r\n\r\n" + body;
+        ::send(cfd, resp.data(), resp.size(), 0);
+    }
+
+    static std::string chat_body(const std::string& content, int total_tokens) {
+        json j = {
+            {"id", "cmpl-fake"},
+            {"object", "chat.completion"},
+            {"choices", json::array({{
+                {"index", 0},
+                {"message", {{"role", "assistant"}, {"content", content}}},
+                {"finish_reason", "stop"},
+            }})},
+            {"usage", {{"prompt_tokens", total_tokens - 10},
+                       {"completion_tokens", 10},
+                       {"total_tokens", total_tokens}}},
+        };
+        return j.dump();
+    }
+
+    void loop() {
+        while (running_.load()) {
+            sockaddr_in caddr{};
+            socklen_t clen = sizeof(caddr);
+            int cfd = ::accept(listen_fd_, (sockaddr*)&caddr, &clen);
+            if (cfd < 0) break;
+            handle_one(cfd);
+            ::close(cfd);
+        }
+    }
+
+    void handle_one(int cfd) {
+        // Read headers, then drain the body per Content-Length.
+        std::string in;
+        char buf[8192];
+        size_t content_length = 0;
+        size_t body_start = std::string::npos;
+        while (true) {
+            ssize_t n = ::recv(cfd, buf, sizeof(buf), 0);
+            if (n <= 0) return;
+            in.append(buf, static_cast<size_t>(n));
+            body_start = in.find("\r\n\r\n");
+            if (body_start != std::string::npos) {
+                auto cl = in.find("Content-Length:");
+                if (cl != std::string::npos) {
+                    content_length = static_cast<size_t>(
+                        std::strtoul(in.c_str() + cl + 15, nullptr, 10));
+                }
+                break;
+            }
+            if (in.size() > 1024 * 1024) return;
+        }
+        while (in.size() - (body_start + 4) < content_length) {
+            ssize_t n = ::recv(cfd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            in.append(buf, static_cast<size_t>(n));
+        }
+        const std::string body = in.substr(body_start + 4);
+
+        if (body.find("\"max_tokens\"") != std::string::npos) {
+            // Messages::call_llm_for_summary — the compression request.
+            compression_requests_.fetch_add(1);
+            send_json(cfd, chat_body("Summary: the user greeted the agent.", 520));
+            return;
+        }
+
+        // Main agent turn: first cycle reports 9500/10000 tokens (95%,
+        // trips the 90% threshold); later cycles report a small context.
+        const int seq = main_requests_.fetch_add(1);
+        if (seq == 0) {
+            send_json(cfd, chat_body("Hi there!", 9500));
+        } else {
+            send_json(cfd, chat_body("All done.", 100));
+        }
+    }
+
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::atomic<int> main_requests_{0};
+    std::atomic<int> compression_requests_{0};
+    std::thread thread_;
+};
+
+// ---------------------------------------------------------------------------
+struct CompactionSink : daedalus::AgentSink {
+    struct Event { std::size_t before, after; };
+    std::mutex mu;
+    std::vector<Event> compactions;
+    std::vector<std::string> errors;
+
+    void on_compaction(std::size_t before, std::size_t after) noexcept override {
+        std::lock_guard<std::mutex> lk(mu);
+        compactions.push_back({before, after});
+    }
+    void on_error(daedalus::ErrorKind, std::string_view message,
+                  bool) noexcept override {
+        std::lock_guard<std::mutex> lk(mu);
+        errors.emplace_back(message);
+    }
+};
+
+fs::path make_temp_home(const std::string& tag) {
+    fs::path p = fs::temp_directory_path() /
+        ("daedalus_test_auto_compress_" + tag + "_" +
+         std::to_string(
+             std::chrono::system_clock::now().time_since_epoch().count()));
+    fs::remove_all(p);
+    fs::create_directories(p);
+    return p;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// §SYNC-FALLBACK-STREAM (2026-08-01): fake server for the sync-fallback
+// regression test. Request 1 gets HTTP 200 with a structured TRANSIENT
+// error body (internal_error) — this bypasses the request layer's own
+// retry (2xx returns immediately) and drops the agent cycle into its
+// "Transient error - retry with backoff" loop, which re-posts via the
+// non-streaming sync fallback. Any later request that still carries
+// "stream":true means the fallback forgot to force stream off — the old
+// bug, where the server answered with SSE and json::parse failed on
+// "data: ..." ('d'). (A 429 would not work here: the request layer
+// retries those itself, legitimately, via the SSE-capable path.)
+// ---------------------------------------------------------------------------
+namespace {
+
+class TransientErrorServer {
+public:
+    TransientErrorServer() {
+        listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
+        int yes = 1;
+        ::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        addr.sin_port = 0;
+        if (::bind(listen_fd_, (sockaddr*)&addr, sizeof(addr)) < 0)
+            throw std::runtime_error("bind failed");
+        if (::listen(listen_fd_, 4) < 0)
+            throw std::runtime_error("listen failed");
+
+        socklen_t len = sizeof(addr);
+        ::getsockname(listen_fd_, (sockaddr*)&addr, &len);
+        port_ = ntohs(addr.sin_port);
+
+        running_.store(true);
+        thread_ = std::thread([this] { loop(); });
+    }
+
+    ~TransientErrorServer() {
+        running_.store(false);
+        ::shutdown(listen_fd_, SHUT_RDWR);
+        ::close(listen_fd_);
+        if (thread_.joinable()) thread_.join();
+    }
+
+    std::string base_url() const {
+        return "http://127.0.0.1:" + std::to_string(port_);
+    }
+    int requests() const              { return requests_.load(); }
+    int stream_violations() const     { return stream_violations_.load(); }
+
+private:
+    void send_raw(int cfd, int code, const std::string& status,
+                  const std::string& body, const std::string& content_type) {
+        const std::string resp =
+            "HTTP/1.1 " + std::to_string(code) + " " + status + "\r\n"
+            "Content-Type: " + content_type + "\r\n"
+            "Content-Length: " + std::to_string(body.size()) + "\r\n"
+            "Connection: close\r\n\r\n" + body;
+        ::send(cfd, resp.data(), resp.size(), 0);
+    }
+
+    void loop() {
+        while (running_.load()) {
+            sockaddr_in caddr{};
+            socklen_t clen = sizeof(caddr);
+            int cfd = ::accept(listen_fd_, (sockaddr*)&caddr, &clen);
+            if (cfd < 0) break;
+            handle_one(cfd);
+            ::close(cfd);
+        }
+    }
+
+    void handle_one(int cfd) {
+        std::string in;
+        char buf[8192];
+        size_t content_length = 0;
+        size_t body_start = std::string::npos;
+        while (true) {
+            ssize_t n = ::recv(cfd, buf, sizeof(buf), 0);
+            if (n <= 0) return;
+            in.append(buf, static_cast<size_t>(n));
+            body_start = in.find("\r\n\r\n");
+            if (body_start != std::string::npos) {
+                auto cl = in.find("Content-Length:");
+                if (cl != std::string::npos) {
+                    content_length = static_cast<size_t>(
+                        std::strtoul(in.c_str() + cl + 15, nullptr, 10));
+                }
+                break;
+            }
+            if (in.size() > 1024 * 1024) return;
+        }
+        while (in.size() - (body_start + 4) < content_length) {
+            ssize_t n = ::recv(cfd, buf, sizeof(buf), 0);
+            if (n <= 0) break;
+            in.append(buf, static_cast<size_t>(n));
+        }
+        const std::string body = in.substr(body_start + 4);
+
+        const int seq = requests_.fetch_add(1);
+        if (seq == 0) {
+            // HTTP 200 + structured TRANSIENT error → the agent cycle's
+            // "retry with backoff" loop re-posts via the sync fallback.
+            send_raw(cfd, 200, "OK",
+                     R"({"error":{"type":"internal_error","message":"temporary blip"}})",
+                     "application/json");
+            return;
+        }
+
+        // The retry must NOT still ask for SSE — nlohmann dumps the flag
+        // as "stream":true (no space).
+        if (body.find("\"stream\":true") != std::string::npos) {
+            stream_violations_.fetch_add(1);
+            // Mimic the old failure: an SSE body that json::parse chokes on.
+            send_raw(cfd, 200, "OK",
+                     "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n",
+                     "text/event-stream");
+            return;
+        }
+        send_raw(cfd, 200, "OK",
+                 R"({"id":"cmpl-fake","choices":[{"index":0,"message":)"
+                 R"({"role":"assistant","content":"recovered"},"finish_reason":"stop"}],)"
+                 R"("usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}})",
+                 "application/json");
+    }
+
+    int listen_fd_ = -1;
+    int port_ = 0;
+    std::atomic<bool> running_{false};
+    std::atomic<int> requests_{0};
+    std::atomic<int> stream_violations_{0};
+    std::thread thread_;
+};
+
+} // namespace
+
+TEST_CASE("streaming retry fallback forces stream off (no SSE parse crash)") {
+    TransientErrorServer server;
+    fs::path home = make_temp_home("sync-fallback");
+
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "openai-compatible";
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "tiny";
+        m.provider         = "fake";
+        m.model_id         = "fake-model";
+        m.max_context_size = 100000;
+        m.temperature      = 0.0;
+        store.upsert_model(m);
+        store.set_default_model_name("tiny");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "sync-fallback-e2e";
+    cfg.stream         = true;    // the bug only bites in streaming mode
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+
+    auto sink = std::make_shared<CompactionSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    agent.submit_user_message("hello");
+    agent.run_one_turn();
+    agent.shutdown();
+
+    // The retry recovered through the sync fallback: no request after the
+    // structured-error 200 still carried "stream":true, and the turn
+    // completed without surfacing a fatal error.
+    CHECK(server.stream_violations() == 0);
+    CHECK(server.requests() >= 2);
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        for (const auto& e : sink->errors) {
+            CHECK(e.find("parse error") == std::string::npos);
+        }
+    }
+
+    fs::remove_all(home);
+}
+
+TEST_CASE("auto-compress at 90% fires AgentSink::on_compaction end-to-end") {
+    CompressionFakeServer server;
+    fs::path home = make_temp_home("e2e");
+
+    // Seed the store: provider pointing at the fake server, one model with
+    // a tiny 10000-token context so 9500 reported tokens trips the 90%
+    // threshold. plugin pinned to openai-compatible (loopback hosts
+    // auto-detect as lmstudio).
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "openai-compatible";
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "tiny";
+        m.provider         = "fake";
+        m.model_id         = "fake-model";
+        m.max_context_size = 10000;
+        m.temperature      = 0.0;
+        store.upsert_model(m);
+        store.set_default_model_name("tiny");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "auto-compress-e2e";
+    cfg.stream         = false;   // buffered JSON keeps the fake server simple
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+
+    auto sink = std::make_shared<CompactionSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    agent.submit_user_message("hello");
+    agent.run_one_turn();
+
+    // The host-visible compression event fired exactly once, and the
+    // post-compression estimate is smaller than the pre-compression count.
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        REQUIRE(sink->compactions.size() == 1);
+        CHECK(sink->compactions[0].before == 9500);
+        CHECK(sink->compactions[0].after < sink->compactions[0].before);
+        CHECK(sink->errors.empty());
+    }
+
+    // The server saw: cycle 1 (high usage) → compression summary request →
+    // cycle 2 (low usage, DONE).
+    CHECK(server.compression_requests() == 1);
+    CHECK(server.main_requests() == 2);
+
+    // Post-compression the loop ran one more cycle whose low usage is what
+    // AgentStats now reports — proof the counters reset through compression
+    // instead of accumulating the discarded 9500.
+    CHECK(agent.stats().total_tokens == 100);
+
+    // §COMPRESS-USER-MSG: the first message after system in the compressed
+    // history must be a user message — strict chat templates (qwen3 jinja
+    // on LM Studio) reject assistant/tool-first histories with "No user
+    // query found in messages". Checked after shutdown() — the flush
+    // worker does its final save on destruction, so the transcript isn't
+    // on disk mid-run.
+    agent.shutdown();
+
+    {
+        const fs::path transcript =
+            project / ".daedalus" / "daedalus" / "messages.json";
+        REQUIRE(fs::is_regular_file(transcript));
+        std::ifstream f(transcript);
+        const json history = json::parse(f);
+        REQUIRE(history.size() >= 2);
+        CHECK(history[0].value("role", "") == "system");
+        CHECK(history[1].value("role", "") == "user");
+    }
+
+    fs::remove_all(home);
+}

@@ -153,6 +153,33 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **Streaming retry/fallback re-posts asked for SSE and crashed on
+  `json::parse("data: ...")`** (§SYNC-FALLBACK-STREAM, 2026-08-01, found
+  by live LM Studio verification): all four non-streaming fallback sites
+  in `run_agent_cycle` (`src/api/LLMClient.cpp`) re-posted the original
+  `request_payload` unchanged — in streaming mode that payload still
+  carried `"stream": true` + `stream_options`, so the server answered
+  with SSE and the sync path's `json::parse(response_body)` threw
+  `parse error ... last read: 'd'` on every retry until the turn died.
+  Triggered by any transient mid-turn error while streaming (the
+  post-compression first request timing out on a slow local model was
+  the live repro). Each fallback now posts a copy with `"stream": false`
+  and no `stream_options`. Covered by the `TransientErrorServer` case in
+  `tests/test_auto_compress.cpp`.
+
+- **Compressed history started with an assistant tool call → strict chat
+  templates hard-error every later cycle** (§COMPRESS-USER-MSG,
+  2026-08-01, found by live LM Studio verification): `Messages::compress()`
+  rebuilt history as `system + assistant(compress_context tool call) +
+  tool(summary) + suffix`. qwen3's jinja template on LM Studio requires
+  the FIRST message after system to be a user message (verified
+  empirically — assistant/tool-first histories are rejected with `No user
+  query found in messages` even when a user message exists later), so
+  every post-compression request failed and the turn died on the
+  fatal-error breaker. The rebuild now always inserts a synthetic user
+  message right after the system message, ahead of the compression pair
+  (`src/core/Messages.cpp`). Covered by `tests/test_auto_compress.cpp`.
+
 - **Stray `</think>` tags leaked into host UIs** (§ThinkTagFilter,
   2026-08-01): the shared SSE parser only handled reasoning sent as the
   `reasoning_content` *field* (Kimi/Moonshot). Models that embed

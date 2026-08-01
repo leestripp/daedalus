@@ -1538,8 +1538,14 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // retry instead of trying to json::parse an empty response_body.
         if (retry >= 2 && config_.stream && sse_parser.final_event().is_null()) {
             try {
+                // §SYNC-FALLBACK-STREAM (2026-08-01): the sync fallback
+                // cannot consume SSE — force a buffered response or the
+                // server streams "data: ..." and json::parse fails on 'd'.
+                json sync_payload = request_payload;
+                sync_payload["stream"] = false;
+                sync_payload.erase("stream_options");
                 api_response = make_http_request_with_retry( api_url,
-                    request_payload.dump());
+                    sync_payload.dump());
                 response_body = api_response.body;
                 // §robust-client: the fallback may itself return an HTTP
                 // error status — handle it by status, not by parse luck.
@@ -1579,8 +1585,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
                 // Try to get a fresh response from the API (non-streaming fallback)
                 try {
+                    // §SYNC-FALLBACK-STREAM: see above — force stream off.
+                    json sync_payload = request_payload;
+                    sync_payload["stream"] = false;
+                    sync_payload.erase("stream_options");
                     api_response = make_http_request_with_retry( api_url,
-                        request_payload.dump());
+                        sync_payload.dump());
                     response_body = api_response.body;
                     // §robust-client: the fallback may itself return an HTTP
                     // error status — handle it by status, not by parse luck.
@@ -1733,7 +1743,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                api_response = make_http_request_with_retry( api_url, request_payload.dump());
+                // §SYNC-FALLBACK-STREAM: see above — force stream off.
+                json sync_payload = request_payload;
+                sync_payload["stream"] = false;
+                sync_payload.erase("stream_options");
+                api_response = make_http_request_with_retry( api_url, sync_payload.dump());
                 response_body = api_response.body;
                 // §robust-client: status first — a terminal HTTP error
                 // (auth / 5xx / unstructured body) ends the turn here.
@@ -1908,7 +1922,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::this_thread::sleep_for(std::chrono::seconds(delay));
             
             try {
-                api_response = make_http_request_with_retry( api_url, request_payload.dump());
+                // §SYNC-FALLBACK-STREAM: see above — force stream off.
+                json sync_payload = request_payload;
+                sync_payload["stream"] = false;
+                sync_payload.erase("stream_options");
+                api_response = make_http_request_with_retry( api_url, sync_payload.dump());
                 response_body = api_response.body;
                 // §robust-client: status first — a terminal HTTP error
                 // (auth / 5xx / unstructured body) ends the turn here.

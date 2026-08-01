@@ -559,6 +559,24 @@ target_link_libraries(daedalus_think_tag_filter_tests PRIVATE
 )
 add_test(NAME think_tag_filter_tests COMMAND daedalus_think_tag_filter_tests)
 
+# §AutoCompress (2026-08-01): end-to-end proof that the 90% auto-compress
+# loop fires AgentSink::on_compaction through the public Agent API, driven
+# against an in-process fake LLM server (see test_auto_compress.cpp).
+add_executable(daedalus_auto_compress_tests
+    test_auto_compress.cpp
+)
+target_include_directories(daedalus_auto_compress_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_auto_compress_tests PRIVATE
+    doctest::doctest
+    nlohmann_json::nlohmann_json
+    daedalus
+    pthread
+)
+add_test(NAME auto_compress_tests COMMAND daedalus_auto_compress_tests)
+
 # §TOKEN-COUNT-GRACEFUL (2026-07-17): Verifies the contract that
 # missing/null/malformed `usage` in an LLM response does NOT crash
 # the agent loop. The agent continues with a warning (per turn) and
