@@ -25,7 +25,10 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     the provider would reject. LM Studio strips both fields.
   - New `ProviderPlugin::supported_thinking_levels(model_id)` virtual and
     `Agent::supported_thinking_levels()` so hosts can build per-model
-    pickers showing only valid levels.
+    pickers showing only valid levels. Runtime switching is possible via
+    `Agent::set_thinking_level()` — the payload hook reads the level per
+    request, so a mid-session change applies from the very next turn
+    (no agent rebuild needed).
   - Covered by `tests/test_thinking_levels.cpp`; documented in
     `docs/provider-plugins.md` and `docs/embedding.md`.
 

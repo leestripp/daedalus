@@ -85,6 +85,10 @@ public:
     [[nodiscard]] std::vector<daedalus::ThinkingLevel>
         supported_thinking_levels() const;
 
+    // Runtime thinking-level toggle (§ThinkingLevel). Applies from the
+    // next chat request; no agent rebuild needed.
+    void set_thinking_level(daedalus::ThinkingLevel level) noexcept;
+
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
     ///        `mcp/servers.json` merged in as a fallback). Empty when

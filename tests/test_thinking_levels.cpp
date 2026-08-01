@@ -11,7 +11,10 @@
 //   T5. LmStudio strips thinking/reasoning_effort.
 //   T6. supported_thinking_levels() capability matrix; default plugin
 //       reports none.
+//   T7. Runtime toggle: LLMClient::set_thinking_level() applies without
+//       rebuilding the client.
 
+#include <filesystem>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -21,6 +24,8 @@
 #include <daedalus/ProviderPlugin.h>
 #include <daedalus/ProviderRegistry.h>
 #include <daedalus/types/ThinkingLevel.h>
+
+#include "api/LLMClient.h"
 
 using json = nlohmann::json;
 using daedalus::ThinkingLevel;
@@ -209,6 +214,34 @@ void test_t6_capability_query() {
     std::cout << "[ok] T6: supported_thinking_levels capability matrix\n";
 }
 
+void test_t7_runtime_toggle() {
+    // Hosts flip the level mid-session via Agent::set_thinking_level(),
+    // which forwards to LLMClient::set_thinking_level(). The payload hook
+    // reads config_.thinking_level per request, so no rebuild is needed.
+    const auto scratch = std::filesystem::temp_directory_path() /
+                         "thinking-levels-t7";
+    std::filesystem::create_directories(scratch);
+
+    AppConfig cfg;
+    cfg.model            = "kimi-k3";
+    cfg.provider         = "moonshot";
+    cfg.base_url         = "https://api.moonshot.ai";
+    cfg.plugin           = "moonshot";
+    cfg.memory_disabled  = true;
+    cfg.target_directory = scratch.string();
+
+    LLMClient client(cfg);
+    EXPECT(client.thinking_level() == ThinkingLevel::Default);
+    client.set_thinking_level(ThinkingLevel::Max);
+    EXPECT(client.thinking_level() == ThinkingLevel::Max);
+    client.set_thinking_level(ThinkingLevel::None);
+    EXPECT(client.thinking_level() == ThinkingLevel::None);
+
+    std::error_code ec;
+    std::filesystem::remove_all(scratch, ec);
+    std::cout << "[ok] T7: runtime thinking-level toggle\n";
+}
+
 } // namespace
 
 int main() {
@@ -218,6 +251,7 @@ int main() {
     test_t4_minimax();
     test_t5_lmstudio_strips();
     test_t6_capability_query();
+    test_t7_runtime_toggle();
     if (failures > 0) {
         std::cerr << failures << " failure(s)\n";
         return 1;

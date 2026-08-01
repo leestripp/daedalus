@@ -851,6 +851,16 @@ std::vector<daedalus::ThinkingLevel> AgentImpl::supported_thinking_levels() cons
     return body_->client->supported_thinking_levels();
 }
 
+void AgentImpl::set_thinking_level(daedalus::ThinkingLevel level) noexcept
+{
+    // §ThinkingLevel: runtime toggle. Store in cfg_ so rebuilds/model
+    // switches keep the selection, and forward to the live LLMClient —
+    // the payload hook reads config_.thinking_level per request, so the
+    // very next turn uses the new level.
+    cfg_.thinking_level = level;
+    if (body_ && body_->client) body_->client->set_thinking_level(level);
+}
+
 ModelInfo AgentImpl::active_model() const noexcept
 {
     // §Phase 8.5+: report the model that's actually loaded for this

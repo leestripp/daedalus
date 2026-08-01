@@ -136,6 +136,15 @@ public:
     ///        thinking control or no model is configured yet.
     [[nodiscard]] std::vector<ThinkingLevel> supported_thinking_levels() const;
 
+    /// @brief Change the thinking level at runtime. Takes effect on the
+    ///        very next chat request — the provider plugin maps the level
+    ///        into each outgoing payload, so no agent rebuild is needed.
+    ///        Also updates the stored config so later model switches keep
+    ///        the selection. Levels outside supported_thinking_levels()
+    ///        are silently ignored by the plugin (nothing invalid is sent).
+    ///        Does NOT persist anything.
+    void set_thinking_level(ThinkingLevel level);
+
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
     ///        `mcp/servers.json` merged in as a fallback). Empty when

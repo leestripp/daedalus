@@ -84,8 +84,11 @@ reject (Kimi answers unknown/invalid fields with HTTP 400):
 
 `Agent::supported_thinking_levels()` returns the current model's row from
 this table (empty when the model has no thinking control), so host UIs
-can show only valid picker entries. LM Studio's plugin strips `thinking`
-and `reasoning_effort` since local servers reject unknown fields.
+can show only valid picker entries. `Agent::set_thinking_level()` switches
+the level mid-session — the payload hook reads it per request, so the
+change applies from the next turn with no agent rebuild. LM Studio's
+plugin strips `thinking` and `reasoning_effort` since local servers
+reject unknown fields.
 
 
 ## Streaming parsers

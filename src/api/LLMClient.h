@@ -255,6 +255,19 @@ public:
                        : std::vector<daedalus::ThinkingLevel>{};
     }
 
+    /// @brief Runtime thinking-level toggle (§ThinkingLevel). The payload
+    ///        hook reads config_.thinking_level on every chat request, so
+    ///        the new level applies from the next turn — call between
+    ///        turns, not mid-request.
+    void set_thinking_level(daedalus::ThinkingLevel level) {
+        config_.thinking_level = level;
+    }
+
+    /// @brief Currently configured thinking level.
+    daedalus::ThinkingLevel thinking_level() const {
+        return config_.thinking_level;
+    }
+
     /// @brief Attach a sink. Call this after construction and before
     ///        initialize(). Required for streaming output, log routing, and
     ///        blocking I/O (bash approval).
