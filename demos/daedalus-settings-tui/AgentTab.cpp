@@ -2,15 +2,20 @@
 // demos/daedalus-settings-tui/AgentTab.cpp
 //
 // Agent tab: typed form over the kv_settings-backed agent options
-// (auto_approve, size limits, MCP soft cap, Serper key, current provider)
-// plus the server_error retry/backoff group. Values are loaded on open
-// and written back with the "Save" button.
+// (auto_approve, thinking_level, size limits, MCP soft cap, Serper key,
+// current provider) plus the server_error retry/backoff group. Values
+// are loaded on open and written back with the "Save" button.
 
 #include "SettingsApp.h"
+
+#include <daedalus/types/ThinkingLevel.h>
 
 #include <ftxui/component/component_options.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/elements.hpp>
+
+#include <algorithm>
+#include <cctype>
 
 namespace settings_tui {
 
@@ -22,6 +27,7 @@ struct AgentState
 {
     bool auto_approve = false;
     std::string current_provider;
+    std::string thinking_level;
     std::string max_agent_iterations;
     std::string max_tool_result_size;
     std::string max_request_size;
@@ -53,6 +59,7 @@ Component MakeAgentTab(AppContext& ctx)
     auto load = [&ctx, st] {
         st->auto_approve         = ctx.store.get_auto_approve();
         st->current_provider     = ctx.store.get_current_provider();
+        st->thinking_level       = ctx.store.get_string("thinking_level", "default");
         st->max_agent_iterations = std::to_string(ctx.store.get_max_agent_iterations());
         st->max_tool_result_size = std::to_string(ctx.store.get_max_tool_result_size());
         st->max_request_size     = std::to_string(ctx.store.get_max_request_size());
@@ -86,6 +93,16 @@ Component MakeAgentTab(AppContext& ctx)
             { st->form_error = "max_response_size must be a non-negative integer"; return; }
         if (!ParseInt(st->soft_cap_percent, soft_cap) || soft_cap < 0 || soft_cap > 100)
             { st->form_error = "soft cap percent must be an integer in [0, 100]"; return; }
+
+        // thinking_level_from_string() maps anything unrecognized to
+        // Default, so validate by membership instead of round-trip.
+        std::string thinking_level = st->thinking_level;
+        std::transform(thinking_level.begin(), thinking_level.end(),
+                       thinking_level.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        if (thinking_level != "default" &&
+            daedalus::thinking_level_from_string(thinking_level) == daedalus::ThinkingLevel::Default)
+            { st->form_error = "thinking_level must be one of: default, none, low, high, max"; return; }
         if (!ParseInt(st->se_initial_wait, se_initial) || se_initial < 0)
             { st->form_error = "server_error initial_wait_seconds must be a non-negative integer"; return; }
         if (!ParseInt(st->se_max_wait, se_max) || se_max < 0)
@@ -97,6 +114,13 @@ Component MakeAgentTab(AppContext& ctx)
 
         ctx.store.set_auto_approve(st->auto_approve);
         ctx.store.set_current_provider(st->current_provider);
+
+        // thinking_level has no typed setter and the library never reads
+        // this key — it is a host-side convention: hosts read it back and
+        // pass it to AgentConfig::thinking_level / Agent::set_thinking_level()
+        // (which deliberately persists nothing itself). Same pattern as the
+        // server_error kv keys below.
+        ctx.store.set_string("thinking_level", thinking_level);
         ctx.store.set_max_agent_iterations(max_iter);
         ctx.store.set_max_tool_result_size(tool_result);
         ctx.store.set_max_request_size(request);
@@ -118,6 +142,7 @@ Component MakeAgentTab(AppContext& ctx)
 
     // -- components ---------------------------------------------------------
     auto row_provider   = FormRow("current_provider", &st->current_provider, false, save);
+    auto row_thinking   = FormRow("thinking_level (default/none/low/high/max)", &st->thinking_level, false, save);
     auto row_max_iter   = FormRow("max_agent_iterations", &st->max_agent_iterations, false, save);
     auto row_tool_size  = FormRow("max_tool_result_size", &st->max_tool_result_size, false, save);
     auto row_req_size   = FormRow("max_request_size", &st->max_request_size, false, save);
@@ -137,14 +162,14 @@ Component MakeAgentTab(AppContext& ctx)
 
     auto form = Container::Vertical({
         approve_check,
-        row_provider, row_max_iter, row_tool_size, row_req_size, row_res_size,
+        row_provider, row_thinking, row_max_iter, row_tool_size, row_req_size, row_res_size,
         row_soft_cap, row_serper,
         se_enabled_check, row_se_initial, row_se_max, row_se_backoff, row_se_retries,
         Container::Horizontal({btn_save, btn_reload}),
     });
 
     return Renderer(form,
-        [st, approve_check, row_provider, row_max_iter, row_tool_size, row_req_size,
+        [st, approve_check, row_provider, row_thinking, row_max_iter, row_tool_size, row_req_size,
          row_res_size, row_soft_cap, row_serper, se_enabled_check, row_se_initial,
          row_se_max, row_se_backoff, row_se_retries, btn_save, btn_reload] {
             Elements rows;
@@ -152,6 +177,7 @@ Component MakeAgentTab(AppContext& ctx)
             rows.push_back(separator());
             rows.push_back(approve_check->Render());
             rows.push_back(row_provider->Render());
+            rows.push_back(row_thinking->Render());
             rows.push_back(row_max_iter->Render());
             rows.push_back(row_tool_size->Render());
             rows.push_back(row_req_size->Render());

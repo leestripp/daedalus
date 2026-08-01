@@ -44,6 +44,12 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     (no agent rebuild needed).
   - Covered by `tests/test_thinking_levels.cpp`; documented in
     `docs/provider-plugins.md` and `docs/embedding.md`.
+  - The `daedalus-settings-tui` demo Agent tab now edits a persisted
+    `thinking_level` kv row (`default`/`none`/`low`/`high`/`max`),
+    demonstrating the documented host-side persistence pattern — the
+    library deliberately persists nothing itself, so hosts own the
+    SettingsStore row and feed it to `AgentConfig::thinking_level` /
+    `Agent::set_thinking_level()`.
 
 - **`Agent::pending_count()`** (`include/daedalus/Agent.h`): number of
   submitted user messages not yet consumed by `run_one_turn()`. Makes the
