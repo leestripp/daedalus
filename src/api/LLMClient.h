@@ -57,6 +57,10 @@ struct AppConfig {
     //   3. 0.0 (deterministic default)
     double temperature = 0.0;
 
+    // Host-selected thinking level (2026-08-01). Passed through to the
+    // provider plugin via ProviderChatContext; Default = send nothing.
+    daedalus::ThinkingLevel thinking_level = daedalus::ThinkingLevel::Default;
+
     // §Phase 6: host-supplied role prompt (from AgentConfig::system_prompt).
     // The library prepends it to the composed system prompt so the host
     // can fully control the agent's persona. Empty = library default role.
@@ -242,6 +246,13 @@ public:
     ///        Empty only before the ctor resolves it.
     std::string provider_plugin_name() const {
         return plugin_ ? plugin_->name() : std::string();
+    }
+
+    /// @brief Thinking levels the current model honors, per the resolved
+    ///        plugin. Empty = no thinking control (or no plugin yet).
+    std::vector<daedalus::ThinkingLevel> supported_thinking_levels() const {
+        return plugin_ ? plugin_->supported_thinking_levels(config_.model)
+                       : std::vector<daedalus::ThinkingLevel>{};
     }
 
     /// @brief Attach a sink. Call this after construction and before

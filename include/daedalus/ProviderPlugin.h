@@ -31,6 +31,7 @@
 
 #include "daedalus/types/DiscoveredModel.h"
 #include "daedalus/types/ErrorKind.h"
+#include "daedalus/types/ThinkingLevel.h"
 
 namespace daedalus {
 
@@ -56,11 +57,16 @@ struct ProviderChatContext {
     std::string model_id;     ///< model id sent in the payload
     std::string model_name;   ///< settings-store key for the model
     std::string provider;     ///< provider label from the store row
+    std::string base_url;     ///< API base URL (plugins may branch on host,
+                              ///< e.g. Kimi platform vs Kimi Code endpoint)
     std::string cache_key;    ///< stable per-agent key for server-side prompt
                               ///< caches (e.g. Moonshot prompt_cache_key);
                               ///< empty = don't send one
     bool        stream = true;
     double      temperature = 0.0;
+    /// Host-selected thinking level. Default = send nothing. Plugins map
+    /// supported levels to provider parameters and ignore the rest.
+    ThinkingLevel thinking_level = ThinkingLevel::Default;
 };
 
 /// Streaming (SSE) response parser interface. One instance per request.
@@ -126,6 +132,12 @@ public:
     /// Context size for a model id, 0 = unknown (caller falls back to
     /// the store value, then the global default).
     virtual int64_t context_size_for(std::string_view model_id) const;
+
+    /// Thinking levels this model actually honors (subset of
+    /// {None, Low, High, Max}). Empty = no thinking control; hosts use
+    /// this to build per-model pickers. Default: empty.
+    virtual std::vector<ThinkingLevel>
+        supported_thinking_levels(std::string_view model_id) const;
 
     // -- Request shaping -----------------------------------------------------
 

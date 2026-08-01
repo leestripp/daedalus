@@ -43,6 +43,9 @@ ErrorKind ProviderPlugin::classify_api_error_type(std::string_view) const {
     return ErrorKind::ApiError;
 }
 
+std::vector<ThinkingLevel>
+ProviderPlugin::supported_thinking_levels(std::string_view) const { return {}; }
+
 // ---------------------------------------------------------------------------
 // OpenAiCompatiblePlugin — classic generic behavior
 // ---------------------------------------------------------------------------

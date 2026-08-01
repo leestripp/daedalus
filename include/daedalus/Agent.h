@@ -129,6 +129,13 @@ public:
     [[nodiscard]] std::vector<SkillInfo> list_skills() const;
     [[nodiscard]] std::vector<ModelInfo> list_models() const;
 
+    /// @brief Thinking levels the current model actually honors
+    ///        (subset of None/Low/High/Max; see ThinkingLevel.h).
+    ///        Hosts use this to build per-model pickers for
+    ///        AgentConfig::thinking_level. Empty when the model has no
+    ///        thinking control or no model is configured yet.
+    [[nodiscard]] std::vector<ThinkingLevel> supported_thinking_levels() const;
+
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
     ///        `mcp/servers.json` merged in as a fallback). Empty when

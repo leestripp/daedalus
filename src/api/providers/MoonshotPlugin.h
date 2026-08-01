@@ -41,6 +41,9 @@ public:
 
     std::vector<ProviderModelInfo> known_models() const override;
     int64_t context_size_for(std::string_view model_id) const override;
+
+    std::vector<ThinkingLevel>
+        supported_thinking_levels(std::string_view model_id) const override;
 };
 
 } // namespace daedalus

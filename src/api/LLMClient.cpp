@@ -1144,6 +1144,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         pctx.model_id    = config_.model;
         pctx.model_name  = config_.model_name;
         pctx.provider    = config_.provider;
+        pctx.base_url    = config_.base_url;
         // §ContextCache: the prompt-cache key must be stable across a
         // session (Kimi docs: "session id ... if the session is exited
         // and later resumed, this value should remain the same"; Kimi
@@ -1154,6 +1155,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                                ? config_.agent_name : config_.session_id;
         pctx.stream      = config_.stream;
         pctx.temperature = config_.temperature;
+        pctx.thinking_level = config_.thinking_level;
         plugin_->mutate_chat_payload(request_payload, pctx);
     }
 

@@ -111,6 +111,9 @@ AppConfig make_app_config(const AgentConfig& cfg,
     if (cfg.temperature >= 0.0) {
         out.temperature = cfg.temperature;
     }
+    // Thinking level (2026-08-01): host selection is passed through
+    // verbatim; plugins decide per-model whether to honor it.
+    out.thinking_level = cfg.thinking_level;
     return out;
 }
 
@@ -840,6 +843,12 @@ std::vector<ModelInfo> AgentImpl::list_models() const
         out.push_back(to_model_info(cfg, *body_->store));
     }
     return out;
+}
+
+std::vector<daedalus::ThinkingLevel> AgentImpl::supported_thinking_levels() const
+{
+    if (!body_->client) return {};
+    return body_->client->supported_thinking_levels();
 }
 
 ModelInfo AgentImpl::active_model() const noexcept

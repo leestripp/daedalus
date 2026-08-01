@@ -79,6 +79,12 @@ public:
     [[nodiscard]] std::vector<SkillInfo> list_skills() const;
     [[nodiscard]] std::vector<ModelInfo> list_models() const;
 
+    // Thinking levels the current model honors (§ThinkingLevel).
+    // Empty when the model has no thinking control or no LLMClient
+    // exists yet (no model configured).
+    [[nodiscard]] std::vector<daedalus::ThinkingLevel>
+        supported_thinking_levels() const;
+
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
     ///        `mcp/servers.json` merged in as a fallback). Empty when

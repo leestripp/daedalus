@@ -4,6 +4,7 @@
 #include "api/providers/MoonshotPlugin.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace daedalus {
 namespace {
@@ -103,6 +104,52 @@ void MoonshotPlugin::mutate_chat_payload(nlohmann::json& payload,
     if (!ctx.cache_key.empty()) {
         payload["prompt_cache_key"] = ctx.cache_key;
     }
+
+    // §ThinkingLevel (2026-08-01): host-selected thinking level. Mapping
+    // (https://platform.kimi.ai/docs/guide/use-thinking-models):
+    //   - K3 ids: reasoning effort low/high/max. The Kimi Code
+    //     subscription endpoint (api.kimi.com/coding/v1) takes it as
+    //     thinking.effort (empirically verified, oh-my-pi #5893); the
+    //     platform endpoint takes top-level reasoning_effort and must NOT
+    //     receive a `thinking` object. None is ignored — K3 always thinks.
+    //   - kimi-k2.5 / kimi-k2.6: on/off only (thinking.type). Effort
+    //     levels are ignored.
+    //   - kimi-k2.7-code / kimi-for-coding: always thinks, no control —
+    //     never send anything (passing disabled is a hard error).
+    if (ctx.thinking_level != ThinkingLevel::Default) {
+        const std::string& id = ctx.model_id;
+        const bool is_k3 = istarts_with(id, "kimi-k3") ||
+                           iequals(id, "k3") || istarts_with(id, "k3-");
+        const bool is_k25_k26 = icontains(id, "k2.5") || icontains(id, "k2.6");
+        if (is_k3 &&
+            (ctx.thinking_level == ThinkingLevel::Low ||
+             ctx.thinking_level == ThinkingLevel::High ||
+             ctx.thinking_level == ThinkingLevel::Max)) {
+            std::string effort = to_string(ctx.thinking_level);
+            for (auto& c : effort) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            if (icontains(ctx.base_url, "kimi.com")) {
+                payload["thinking"] = {{"type", "enabled"}, {"effort", effort}};
+            } else {
+                payload["reasoning_effort"] = effort;
+            }
+        } else if (is_k25_k26 && ctx.thinking_level == ThinkingLevel::None) {
+            payload["thinking"] = {{"type", "disabled"}};
+        }
+    }
+}
+
+std::vector<ThinkingLevel>
+MoonshotPlugin::supported_thinking_levels(std::string_view model_id) const {
+    if (istarts_with(model_id, "kimi-k3") ||
+        iequals(model_id, "k3") || istarts_with(model_id, "k3-")) {
+        return {ThinkingLevel::Low, ThinkingLevel::High, ThinkingLevel::Max};
+    }
+    if (icontains(model_id, "k2.5") || icontains(model_id, "k2.6")) {
+        return {ThinkingLevel::None};
+    }
+    return {};
 }
 
 std::vector<ProviderModelInfo> MoonshotPlugin::known_models() const {

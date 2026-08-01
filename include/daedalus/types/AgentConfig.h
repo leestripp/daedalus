@@ -16,6 +16,8 @@
 #include <string>
 #include <vector>
 
+#include "daedalus/types/ThinkingLevel.h"
+
 namespace daedalus {
 
 struct AgentConfig {
@@ -111,6 +113,14 @@ struct AgentConfig {
     // model's temperature from settings.json". Explicit values (0.0–2.0)
     // override the model.  0.0 = deterministic (right for code agents).
     double temperature = -1.0;
+
+    // Thinking/reasoning level selection (2026-08-01). Default = send
+    // nothing and keep the provider/model default. Support is per-model:
+    // Kimi K3 ids accept Low/High/Max, kimi-k2.5/k2.6 and MiniMax-M3
+    // accept None (thinking off); every other model ignores the setting.
+    // Unsupported selections are never sent to the provider. See
+    // Agent::supported_thinking_levels() for a per-model capability query.
+    ThinkingLevel thinking_level = ThinkingLevel::Default;
 
     // §Phase 9.8: SSE streaming. Default = true (token-by-token,
     // webui / CLI REPL get progressive text). Set to false for

@@ -67,6 +67,25 @@ void MiniMaxPlugin::mutate_chat_payload(nlohmann::json& payload,
             {"continuous_usage_stats", true}
         };
     }
+
+    // §ThinkingLevel (2026-08-01): thinking on/off exists only on
+    // MiniMax-M3 (`thinking.type` = "disabled"|"adaptive"; omitted = on).
+    // M2.x cannot disable thinking ("disabled" is accepted but ignored),
+    // and no effort levels exist on any MiniMax model — so the only
+    // mapping is M3 + None. Everything else sends nothing.
+    // (https://platform.minimax.io/docs/api-reference/text-openai-api)
+    if (ctx.thinking_level == ThinkingLevel::None &&
+        iequals(ctx.model_id, "MiniMax-M3")) {
+        payload["thinking"] = {{"type", "disabled"}};
+    }
+}
+
+std::vector<ThinkingLevel>
+MiniMaxPlugin::supported_thinking_levels(std::string_view model_id) const {
+    if (iequals(model_id, "MiniMax-M3")) {
+        return {ThinkingLevel::None};
+    }
+    return {};
 }
 
 std::unique_ptr<ProviderStreamParser>

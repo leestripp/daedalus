@@ -37,7 +37,7 @@ The active plugin for a running session is logged
 | `openai-compatible` (default) | — (fallback) | `stream_options.include_usage` when streaming; classic SSE parser; classic error mapping. |
 | `minimax` | name `minimax`, host containing `minimax` | Adds `reasoning_split: true` (§BUG-MINIMAX-105) and `stream_options.continuous_usage_stats`; static M3/M2.x context-size table. |
 | `moonshot` | name `moonshot`, host containing `moonshot` or `kimi` | Forces `temperature = 1.0` for `kimi-k2.7-code` **and** the Kimi Code endpoint's `kimi-for-coding` IDs (the server rejects other values); sends `prompt_cache_key` from the agent name; static table for the pay-as-you-go platform (`api.moonshot.ai`/`api.moonshot.cn`: kimi-k3, k2.x, moonshot-v1) **and** the Kimi Code subscription endpoint (`api.kimi.com/coding/v1`: `k3`, `k3-256k`, `kimi-for-coding[-highspeed]`). |
-| `lmstudio` | name `lmstudio`, loopback hosts (`localhost`, `127.0.0.1`) | `requires_auth() = false`; strips `stream_options`/extension fields so local servers get a plain OpenAI payload; no static model table (discovery is the source of truth). |
+| `lmstudio` | name `lmstudio`, loopback hosts (`localhost`, `127.0.0.1`) | `requires_auth() = false`; strips extension fields (`reasoning_split`, `prompt_cache_key`, `thinking`, `reasoning_effort`) so local servers get a plain OpenAI payload, **but** forces `stream_options.include_usage` when streaming — token accounting and auto-compression depend on the usage chunk; no static model table (discovery is the source of truth). |
 
 ## The hook interface
 
@@ -53,16 +53,40 @@ The active plugin for a running session is logged
 | `requires_auth()` | `true` | `false` for key-less providers (e.g. local LM Studio). |
 | `known_models()` | `{}` | Static model table; empty = discovery is the source of truth. |
 | `context_size_for(model_id)` | `0` (unknown) | Context window lookup; consulted by `SettingsStore::get_max_context_size_for_model()` after the user-set value and before the legacy built-in map. |
-| `mutate_chat_payload(payload, ctx)` | no-op | Shape the request before send (thinking switches, cache keys, stripping). `ctx` carries model id/name, provider, `cache_key` (agent name), stream flag, temperature. |
+| `mutate_chat_payload(payload, ctx)` | no-op | Shape the request before send (thinking switches, cache keys, stripping). `ctx` carries model id/name, provider, base URL, `cache_key` (agent name), stream flag, temperature, and the host-selected `thinking_level`. |
 | `clamp_temperature(model_id, t)` | `t` | Force model-specific sampling constraints. |
 | `sanitize_history(messages)` | no-op | Enforce conversation rules before send. |
 | `create_stream_parser(sink)` | `nullptr` | SSE parser for streaming requests (see below). |
 | `parse_models_response(body)` | `{}` | Parse the models-endpoint dialect for discovery. |
 | `classify_api_error_type(type)` | `ApiError` | Map provider error-type strings to `ErrorKind`. |
+| `supported_thinking_levels(model_id)` | `{}` | Thinking levels the model honors (subset of `None`/`Low`/`High`/`Max`); hosts use it to build per-model pickers. |
 
 The shipped `OpenAiCompatiblePlugin` implements every hook with the
 library's classic generic behavior and is the recommended base class for
 custom plugins.
+
+## Thinking levels (§ThinkingLevel, 2026-08)
+
+Hosts select a `daedalus::ThinkingLevel` (`Default`/`None`/`Low`/`High`/
+`Max`) via `AgentConfig::thinking_level`. `Default` sends nothing and
+keeps the provider default. Each plugin maps supported levels to its
+provider's parameter inside `mutate_chat_payload()` and silently ignores
+unsupported ones — the library never sends a parameter the model would
+reject (Kimi answers unknown/invalid fields with HTTP 400):
+
+| Model | Wire parameter | Supported levels |
+|-------|----------------|------------------|
+| `kimi-k3`, `k3`, `k3-*` | `reasoning_effort` (platform: `api.moonshot.*`) / `thinking: {"type":"enabled","effort":...}` (Kimi Code: `api.kimi.com`) | `Low`, `High`, `Max` (default `Max`; `None` ignored — K3 always thinks) |
+| `kimi-k2.5`, `kimi-k2.6` | `thinking: {"type":"disabled"}` | `None` only |
+| `kimi-k2.7-code`, `kimi-for-coding*` | — (always thinks; `disabled` is a hard error) | none |
+| `MiniMax-M3` | `thinking: {"type":"disabled"}` | `None` only |
+| MiniMax M2.x | — (cannot disable thinking) | none |
+
+`Agent::supported_thinking_levels()` returns the current model's row from
+this table (empty when the model has no thinking control), so host UIs
+can show only valid picker entries. LM Studio's plugin strips `thinking`
+and `reasoning_effort` since local servers reject unknown fields.
+
 
 ## Streaming parsers
 
@@ -126,7 +150,7 @@ cache management for an agent loop.
 |----------|-----------|------------------------|---------------|
 | MiniMax | **Automatic** prefix cache (≥ 512 input tokens; prefix order tools → system → messages; load-adjusted expiry). Cache reads bill at ~0.1× input. | Nothing extra — eligibility is automatic. | `usage.prompt_tokens_details.cached_tokens` |
 | Moonshot / Kimi | Automatic cache-hit/miss pricing + **cache affinity key**. On the Kimi Code Plan endpoint (`api.kimi.com/coding`) `prompt_cache_key` is *required* for good hit rates; use a stable per-session value that survives resume. | `prompt_cache_key` = agent name, falling back to `AgentConfig::session_id` (MoonshotPlugin). | top-level `usage.cached_tokens` |
-| LM Studio (local) | Engine-level KV reuse (llama.cpp/MLX) for shared prefixes. No billing — the win is prefill latency. | Nothing (plugin strips extension fields). | Not reported over the wire |
+| LM Studio (local) | Engine-level KV reuse (llama.cpp/MLX) for shared prefixes. No billing — the win is prefill latency. | Nothing extra (plugin strips extension fields); `stream_options.include_usage` **is** sent so token counts flow. | Cache hits not reported; prompt/completion/total tokens are |
 
 Both usage shapes are folded into `AgentStats::cached_tokens` (and the
 CLI `/stats` + `/usage` displays) by

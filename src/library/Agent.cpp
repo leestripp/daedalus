@@ -55,6 +55,7 @@ std::string_view Agent::agent_name() const noexcept { return impl_->agent_name()
 std::vector<ToolInfo>  Agent::list_tools()  const { return impl_->list_tools(); }
 std::vector<SkillInfo> Agent::list_skills() const { return impl_->list_skills(); }
 std::vector<ModelInfo> Agent::list_models() const { return impl_->list_models(); }
+std::vector<ThinkingLevel> Agent::supported_thinking_levels() const { return impl_->supported_thinking_levels(); }
 
 std::vector<std::string> Agent::mcp_configured_servers() const
 {

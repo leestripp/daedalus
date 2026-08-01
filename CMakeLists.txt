@@ -302,6 +302,7 @@ set(LIBRARY_PUBLIC_SOURCES
 	src/library/AgentSink.cpp
 	src/library/AgentState.cpp
 	src/library/ErrorKind.cpp
+	src/library/ThinkingLevel.cpp
 	src/library/LogLevel.cpp
 	src/library/LibraryToolContext.cpp
 	src/library/default_paths.cpp

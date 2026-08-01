@@ -10,9 +10,12 @@
 //     static model table, so known_models() stays empty and discovery
 //     (/v1/models) is the source of truth.
 //   - The payload must stay minimal: LM Studio builds reject unknown
-//     request fields (stream_options, reasoning_split, ...) depending
-//     on version, so mutate_chat_payload() strips everything the
-//     generic plugin would have added instead of adding more.
+//     request fields (reasoning_split, prompt_cache_key, thinking, ...)
+//     depending on version, so mutate_chat_payload() strips those
+//     provider extensions. The one exception is
+//     stream_options.include_usage, which IS sent in streaming mode —
+//     LM Studio accepts it and token accounting (and therefore the
+//     auto-compression trigger) depends on it.
 //
 // Internal header — not part of the public libdaedalus API.
 

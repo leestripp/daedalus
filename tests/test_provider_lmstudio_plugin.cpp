@@ -71,13 +71,24 @@ void test_ls3_payload_stripping() {
         {"prompt_cache_key", "agent-42"},
     };
     p->mutate_chat_payload(payload, ctx);
-    EXPECT(!payload.contains("stream_options"));
+    // Streaming: stream_options.include_usage is forced ON so token
+    // accounting / auto-compression work against LM Studio.
+    EXPECT(payload.contains("stream_options"));
+    EXPECT(payload["stream_options"].value("include_usage", false) == true);
     EXPECT(!payload.contains("reasoning_split"));
     EXPECT(!payload.contains("prompt_cache_key"));
-    // Core fields untouched, nothing new added.
+    // Core fields untouched.
     EXPECT(payload.value("model", "") == "qwen3-8b");
     EXPECT(payload.value("stream", false) == true);
-    EXPECT(payload.size() == 3);
+    EXPECT(payload.size() == 4);
+
+    // Non-streaming: stream_options is stripped entirely.
+    json payload2 = {{"model", "qwen3-8b"},
+                     {"messages", json::array()},
+                     {"stream_options", {{"include_usage", true}}}};
+    ctx.stream = false;
+    p->mutate_chat_payload(payload2, ctx);
+    EXPECT(!payload2.contains("stream_options"));
     std::cout << "[ok] LS3: LM Studio payload stripping\n";
 }
 

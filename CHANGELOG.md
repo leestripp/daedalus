@@ -11,6 +11,24 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
+- **User-selectable thinking levels** (§ThinkingLevel, 2026-08-01):
+  - New `daedalus::ThinkingLevel` enum (`Default`/`None`/`Low`/`High`/
+    `Max`) with string helpers (`include/daedalus/types/ThinkingLevel.h`)
+    and `AgentConfig::thinking_level` (default `Default` = send nothing).
+  - Plumbed through `AppConfig` → `ProviderChatContext` (which also gains
+    `base_url`) into each plugin's `mutate_chat_payload()`. Mapping:
+    Kimi K3 ids get `reasoning_effort` on the platform endpoint or
+    `thinking: {"type":"enabled","effort":...}` on the Kimi Code
+    subscription endpoint (`api.kimi.com`); `kimi-k2.5`/`k2.6` and
+    `MiniMax-M3` get `thinking: {"type":"disabled"}` for `None`. All
+    other models/levels are silently ignored — nothing is ever sent that
+    the provider would reject. LM Studio strips both fields.
+  - New `ProviderPlugin::supported_thinking_levels(model_id)` virtual and
+    `Agent::supported_thinking_levels()` so hosts can build per-model
+    pickers showing only valid levels.
+  - Covered by `tests/test_thinking_levels.cpp`; documented in
+    `docs/provider-plugins.md` and `docs/embedding.md`.
+
 - **`Agent::pending_count()`** (`include/daedalus/Agent.h`): number of
   submitted user messages not yet consumed by `run_one_turn()`. Makes the
   submit/run pairing visible to hosts — submitting without a matching
@@ -131,6 +149,20 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     line for cache-capable providers.
 
 ### Fixed
+
+- **LM Studio: token counts were always 0, so auto-compression never
+  triggered** (2026-08-01): `LmStudioPlugin::mutate_chat_payload()` stripped
+  `stream_options` outright, so LM Studio never sent the usage-only final
+  SSE chunk; `last_total_tokens_` stayed 0 and
+  `Messages::should_compress()` could never reach the 90%-of-context
+  threshold. The plugin now forces
+  `stream_options: {"include_usage": true}` in streaming mode (still
+  stripped in non-streaming mode) while continuing to strip the provider
+  extensions LM Studio rejects (`reasoning_split`, `prompt_cache_key`,
+  `thinking`, `reasoning_effort`). Verified live against LM Studio
+  (`tokens=16175 | ctx=16175/128000` after one turn).
+  Updated `tests/test_provider_lmstudio_plugin.cpp` and
+  `tests/test_thinking_levels.cpp`.
 
 - **Duplicate tool definitions → provider HTTP 400 "function name X is
   duplicated"** (2026-08-01, reported via MonkeyByte):
