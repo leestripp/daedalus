@@ -7,6 +7,7 @@
 #include <memory>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <stop_token>
 
 #include "api/HttpSession.h"
@@ -131,9 +132,22 @@ private:
     bool warned_no_usage_this_turn_ = false;
 
     // §AutoCompress: host-requested compression flag. Set via
-    // compress_context() (any thread), consumed at the
-    // compression checkpoint at the end of an agent cycle.
+    // compress_context() (any thread) when a turn is running, consumed at
+    // the compression checkpoint at the end of an agent cycle (and on the
+    // cancelled-turn path).
     std::atomic<bool> compress_requested_{false};
+
+    // §AutoCompress: turn guard. run_one_turn() holds turn_mutex_ for the
+    // whole turn; turn_active_ mirrors that for same-thread checks so
+    // compress_context() can compress immediately when idle without
+    // try_lock UB on the turn's own thread.
+    std::mutex turn_mutex_;
+    std::atomic<bool> turn_active_{false};
+
+    /// @brief Compress immediately on the caller's thread. Caller must
+    ///        hold turn_mutex_ (or be inside a turn). Returns true when
+    ///        compression succeeded and on_compaction was fired.
+    bool compress_now_unlocked();
 
     // §fix (2026-07-30, hardened 2026-08-01): circuit breaker for repeated
     // FATAL API errors. EVERY fatal-classified cycle increments the counter
@@ -273,13 +287,15 @@ public:
         return config_.thinking_level;
     }
 
-    /// @brief Host-requested context compression (§AutoCompress). Sets a
-    ///        flag consumed at the compression checkpoint at the end of
-    ///        the current/next agent cycle — the same path the automatic
-    ///        90%-threshold trigger uses. Thread-safe.
-    void compress_context() noexcept {
-        compress_requested_.store(true, std::memory_order_relaxed);
-    }
+    /// @brief Host-facing context compression (§AutoCompress). When no
+    ///        turn is running, compresses immediately (synchronously on
+    ///        the caller's thread; on_compaction fires from that thread).
+    ///        When a turn is running, sets a flag consumed at the
+    ///        compression checkpoint at the end of the current agent
+    ///        cycle — honored even if the turn is cancelled. If there is
+    ///        nothing to compress yet, the request carries over to the
+    ///        next turn's first cycle. Thread-safe.
+    void compress_context() noexcept;
 
     /// @brief Attach a sink. Call this after construction and before
     ///        initialize(). Required for streaming output, log routing, and

@@ -621,17 +621,22 @@ on_compaction(8000, 4200)
 ```
 
 **Triggering compression from the host:** compression runs automatically
-at the 90%-of-context threshold, but hosts can also request it directly:
+at the 90%-of-context threshold, but hosts can also trigger it directly:
 
 ```cpp
 agent.compress_context();
 ```
 
-This sets a flag (thread-safe) that is consumed at the end of the current
-agent cycle — the same code path as the automatic 90%-threshold trigger —
-so it is safe to call mid-turn; in-flight tool calls are never
-interrupted. If the agent is idle, compression applies at the end of the
-next turn's first cycle. The result arrives via `on_compaction()`.
+Thread-safe, with two modes depending on agent activity:
+
+- **Idle (no turn running):** compression happens immediately —
+  synchronously on the caller's thread, and `on_compaction()` fires from
+  that thread. If there is nothing to compress yet (empty/tiny history),
+  the request carries over to the next turn's first cycle.
+- **Busy (turn running):** the request is deferred to the end of the
+  current agent cycle — the same checkpoint as the automatic threshold
+  trigger — so in-flight tool calls are never interrupted. The request
+  is honored even if the turn ends up cancelled.
 
 ---
 

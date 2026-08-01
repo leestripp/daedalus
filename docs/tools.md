@@ -292,9 +292,9 @@ Tool call chains in the suffix remain complete because we never cut through them
 
 ### Fix 5: Compression Only After Complete Iteration
 
-Compression is triggered at the cycle boundary (90% context threshold, or
-`Agent::compress_context()` from the host), which ensures it
-only happens:
+In-turn compression is triggered at the cycle boundary (90% context
+threshold, or a deferred `Agent::compress_context()` request from the
+host), which ensures it only happens:
 - After all tool calls in an iteration have been resolved
 - After tool results have been added to messages
 - When the message chain is complete and valid

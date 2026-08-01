@@ -14,14 +14,15 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 - **`Agent::compress_context()`** (§AutoCompress, 2026-08-01):
   host-facing compression trigger. Until now compression could only start
   via the automatic 90%-of-context threshold — hosts could observe
-  (`on_compaction`, `AgentStats`, `Compressing` state) but not steer. The
-  new call sets a thread-safe flag on the `LLMClient` that is consumed at
-  the end of the current/next agent cycle (the same code path as the
-  threshold trigger), so it is safe mid-turn and never interrupts
-  in-flight tool calls. The result is reported via
-  `AgentSink::on_compaction()` as usual. Covered by a below-threshold
-  end-to-end case in `tests/test_auto_compress.cpp`; documented in
-  `docs/embedding.md`.
+  (`on_compaction`, `AgentStats`, `Compressing` state) but not steer.
+  When no turn is running the call compresses immediately on the
+  caller's thread; when a turn is running it sets a thread-safe flag
+  consumed at the end of the current/next agent cycle (the same code
+  path as the threshold trigger), so it is safe mid-turn and never
+  interrupts in-flight tool calls. The result is reported via
+  `AgentSink::on_compaction()` as usual. Covered by below-threshold and
+  idle-immediate end-to-end cases in `tests/test_auto_compress.cpp`;
+  documented in `docs/embedding.md`.
 
 - **User-selectable thinking levels** (§ThinkingLevel, 2026-08-01):
   - New `daedalus::ThinkingLevel` enum (`Default`/`None`/`Low`/`High`/
@@ -517,6 +518,23 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     documented in `Readme.md`.
 
 ### Changed
+
+- **`Agent::compress_context()` semantics: immediate when idle, honored
+  on cancel** (§AutoCompress, 2026-08-01): previously the call only ever
+  set a flag consumed after a *completed* agent cycle — an idle call did
+  nothing visible until some future turn, and a turn cancelled before
+  its first cycle (the loop-top interrupt break skips the checkpoint)
+  stranded the request entirely: "just Cancelled, didn't even try to
+  compress". Now, when no turn is running, compression happens
+  immediately and synchronously on the caller's thread (`on_compaction`
+  fires from that thread); a turn guard (`turn_mutex_` +
+  `turn_active_`) makes this race-free against turn startup and safe
+  from sink callbacks on the agent's own thread. When a turn is running
+  the request still defers to the end-of-cycle checkpoint, and the
+  cancelled-turn path now consumes a pending request before returning
+  `CANCELLED`. If there is nothing to compress yet, the request carries
+  over to the next turn's first cycle (unchanged). Covered by a new
+  idle-immediate end-to-end case in `tests/test_auto_compress.cpp`.
 
 - **`CurlMultiSession` → `HttpSession`** rename (12 files, ~172
   references). The class still wraps an HTTP client; the new name

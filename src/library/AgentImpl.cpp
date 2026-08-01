@@ -863,9 +863,10 @@ void AgentImpl::set_thinking_level(daedalus::ThinkingLevel level) noexcept
 
 void AgentImpl::compress_context() noexcept
 {
-    // §AutoCompress: host-facing trigger. Sets the LLMClient's request
-    // flag; compression runs at the end of the current/next agent cycle
-    // via the same path as the automatic 90%-threshold trigger.
+    // §AutoCompress: host-facing trigger. The LLMClient compresses
+    // immediately when no turn is running; otherwise the request is
+    // consumed at the end-of-cycle checkpoint (also on the cancelled-turn
+    // path) — same code path as the automatic 90%-threshold trigger.
     if (body_ && body_->client) body_->client->compress_context();
 }
 

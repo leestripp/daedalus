@@ -141,16 +141,25 @@ If the first valid safe split point is too far from the 70% target (e.g., a huge
 
 ## Trigger Methods
 
-### Method 1: Manual Compression (`/compress` Command)
+### Method 1: Host-Triggered Compression (`Agent::compress_context()`)
 
 **When to use:**
 - Context is getting large but not yet at 90% threshold
-- User wants to clear history and start fresh with a summary
+- Host wants to clear history and start fresh with a summary
 - After completing a major task milestone
+
+**Semantics:**
+- **Idle (no turn running):** compresses immediately, synchronously on
+  the caller's thread; `on_compaction()` fires from that thread. If
+  there is nothing to compress yet, the request carries over to the
+  next turn's first cycle.
+- **Busy (turn running):** deferred to the end of the current agent
+  cycle (the same checkpoint as the 90% trigger) — honored even if the
+  turn is cancelled.
 
 **Flow:**
 ```
-User types "/compress"
+Host calls agent.compress_context()
     │
     ▼
 ┌─────────────────────────────────────────┐
@@ -166,7 +175,7 @@ User types "/compress"
 ┌─────────────────────────────────────────┐
 │ If LLM succeeds:                        │
 │ → Rebuild with summary                  │
-│ → messages_ = [system, compress_pair, suffix(last 30%)]
+│ → messages_ = [system, user(summary), suffix(last 30%)]
 │                                         │
 │ If LLM fails:                           │
 │ → messages_ already reduced             │
@@ -443,11 +452,11 @@ If LLM fails during compression:
 
 ---
 
-## Key Differences: Manual vs Automatic
+## Key Differences: Host-Triggered vs Automatic
 
-| Aspect | `/compress` | Auto (90%) |
-|--------|-------------|------------|
-| **Trigger** | User command | Token threshold |
+| Aspect | `compress_context()` | Auto (90%) |
+|--------|----------------------|------------|
+| **Trigger** | Host API call | Token threshold |
 | **Continuation** | Continue main loop | Continue main loop |
 | **Message** | "Context compressed..." | "Context compressed..." |
 | **Use case** | Fresh start | Prevent context overflow |

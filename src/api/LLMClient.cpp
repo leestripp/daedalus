@@ -2732,6 +2732,49 @@ void LLMClient::cancel() noexcept {
     }
 }
 
+// §AutoCompress: compress immediately on the caller's thread. Caller must
+// hold turn_mutex_ (or be inside a turn): run_one_turn() caches a
+// reference to messages_' array across cycles, so an unguarded compress
+// would dangle it.
+bool LLMClient::compress_now_unlocked() {
+    if (!messages_) return false;
+    const size_t before_tokens = messages_->estimate_tokens();
+    auto compressed = messages_->compress();
+    if (!compressed) return false;
+    messages_->replace_messages(*compressed);
+    const size_t after_tokens = messages_->estimate_tokens();
+    if (sink_) sink_->on_compaction(before_tokens, after_tokens);
+    LOG_INFO("[CONTEXT] Compressed successfully (host request).");
+    return true;
+}
+
+// §AutoCompress: host-facing trigger. Idle → compress right now on the
+// caller's thread. Busy → flag consumed at the end-of-cycle checkpoint
+// (also honored on the cancelled-turn path). Nothing to compress yet →
+// carry the request over to the next turn's first cycle.
+void LLMClient::compress_context() noexcept {
+    if (turn_active_.load(std::memory_order_acquire)) {
+        compress_requested_.store(true, std::memory_order_relaxed);
+        return;
+    }
+    std::unique_lock lk(turn_mutex_, std::try_to_lock);
+    if (!lk.owns_lock()) {
+        // A turn is just starting — defer to its first checkpoint.
+        compress_requested_.store(true, std::memory_order_relaxed);
+        return;
+    }
+    try {
+        if (!compress_now_unlocked()) {
+            // Nothing to compress yet (or the summary call failed) —
+            // carry the request over to the next turn's first checkpoint.
+            compress_requested_.store(true, std::memory_order_relaxed);
+        }
+    } catch (...) {
+        // noexcept contract: a failed immediate compress is dropped, the
+        // host can retry.
+    }
+}
+
 // §CRASH-4 (2026-07-16): forward to Messages::install_crash_handlers.
 // No-op if messages_ hasn't been initialized yet (which would only
 // happen if a host calls install_crash_handlers before initialize()).
@@ -2759,6 +2802,16 @@ void LLMClient::uninstall_crash_handlers() {
     // ===================================================================
 
 AgentState LLMClient::run_one_turn(const std::string& user_message) {
+    // §AutoCompress: hold the turn guard for the whole turn so
+    // compress_context() can compress immediately when (and only when) no
+    // turn is running. Also serializes concurrent turns.
+    std::lock_guard<std::mutex> turn_lock(turn_mutex_);
+    turn_active_.store(true, std::memory_order_release);
+    struct TurnActiveGuard {
+        std::atomic<bool>& flag;
+        ~TurnActiveGuard() { flag.store(false, std::memory_order_release); }
+    } active_guard{turn_active_};
+
     // §fix (2026-07-18): reseat the cancel source. A std::stop_source
     // can never be un-stopped, so after cancel() fired once, every
     // subsequent turn saw stop_requested() on its first iteration and
@@ -2951,6 +3004,18 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             std::ostringstream msg;
             msg << "\n[INTERRUPTED] Agent execution halted by user.";
             if (sink_) sink_->on_log(daedalus::LogLevel::Info, msg.str());
+            // §AutoCompress: honor a pending host compress request even
+            // though the turn ends CANCELLED before any cycle ran —
+            // otherwise a "cancel current work → compress_context()" host
+            // flow strands the request. We hold turn_mutex_, so the
+            // history is stable.
+            if (compress_requested_.exchange(false, std::memory_order_relaxed)) {
+                LOG_INFO("[COMPRESS] Host requested context compression (cancelled turn)...");
+                if (messages_) {
+                    messages_->set_messages(messages);
+                    (void)compress_now_unlocked();
+                }
+            }
             final_state = AgentState::CANCELLED;
             break;
         }

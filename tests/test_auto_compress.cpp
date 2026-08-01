@@ -566,3 +566,88 @@ TEST_CASE("Agent::compress_context triggers compression below threshold") {
 
     fs::remove_all(home);
 }
+
+
+TEST_CASE("Agent::compress_context compresses immediately when idle") {
+    // §AutoCompress (immediate-when-idle): with no turn running, the host
+    // call must compress synchronously on the caller's thread — no extra
+    // turn, no waiting for a future cycle. Usage stays LOW (100/100000)
+    // so the 90% auto-trigger can never fire.
+    CompressionFakeServer server(/*first_total=*/100, /*later_total=*/100);
+    fs::path home = make_temp_home("idle-immediate");
+
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "openai-compatible";
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "big";
+        m.provider         = "fake";
+        m.model_id         = "fake-model";
+        m.max_context_size = 100000;
+        m.temperature      = 0.0;
+        store.upsert_model(m);
+        store.set_default_model_name("big");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "idle-immediate-e2e";
+    cfg.stream         = false;
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+
+    auto sink = std::make_shared<CompactionSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    // Build a real history: 3 turns → system + 3x(user+assistant) = 7
+    // messages, so the 70/30 split has a non-empty middle.
+    for (int i = 0; i < 3; ++i) {
+        agent.submit_user_message("hello " + std::to_string(i));
+        agent.run_one_turn();
+    }
+    CHECK(server.main_requests() == 3);
+    CHECK(server.compression_requests() == 0);
+
+    // Idle: compression must happen NOW, synchronously on this thread.
+    agent.compress_context();
+
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        REQUIRE(sink->compactions.size() == 1);
+        // Note: no after<before token assertion — on tiny test histories
+        // the rough token estimate can grow (the summary wrapper text
+        // outweighs the removed stub messages). Message-count shrink is
+        // asserted on the transcript below.
+        CHECK(sink->errors.empty());
+    }
+    CHECK(server.compression_requests() == 1);
+    CHECK(server.main_requests() == 3);   // no extra turn was run
+
+    // Transcript rebuilt as system + user(summary) + suffix.
+    agent.shutdown();
+    {
+        const fs::path transcript =
+            project / ".daedalus" / "daedalus" / "messages.json";
+        REQUIRE(fs::is_regular_file(transcript));
+        std::ifstream f(transcript);
+        const json history = json::parse(f);
+        REQUIRE(history.size() >= 2);
+        CHECK(history.size() < 7);   // first 70% collapsed into the summary
+        CHECK(history[0].value("role", "") == "system");
+        CHECK(history[1].value("role", "") == "user");
+    }
+
+    fs::remove_all(home);
+}
