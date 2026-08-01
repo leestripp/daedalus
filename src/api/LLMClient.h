@@ -126,12 +126,24 @@ private:
     // §B32: suppresses duplicate "no usage" warnings per turn.
     bool warned_no_usage_this_turn_ = false;
 
-    // §fix (2026-07-30): circuit breaker for repeated identical FATAL API
-    // errors. When the same error signature fires on consecutive cycles we
-    // stop returning ACT (which just re-sends the same doomed request) and
-    // end the turn instead. Reset on any successful API response.
-    std::string last_fatal_signature_;
+    // §fix (2026-07-30, hardened 2026-08-01): circuit breaker for repeated
+    // FATAL API errors. EVERY fatal-classified cycle increments the counter
+    // (not just identical signatures — alternating 400 shapes each inject a
+    // recovery message that corrupts the history into the next error shape,
+    // so a same-signature check never tripped). Once the count reaches 2 we
+    // stop returning ACT (which just re-sends the same doomed request and
+    // appends another [SYSTEM ERROR] user message) and end the turn instead.
+    // Reset on any successful API response.
+    std::string last_fatal_signature_;  // kept for logging
     int consecutive_fatal_count_ = 0;
+
+    /**
+     * Record a FATAL-classified API error and decide whether the turn must
+     * end. Returns true once the same turn has hit kMaxConsecutiveFatal
+     * consecutive fatal errors — callers then emit a terminal on_error and
+     * return AgentState::DONE WITHOUT injecting another recovery message.
+     */
+    bool fatal_breaker_should_end_turn(const std::string& signature);
 
     // §State Machine: LLM-driven transitions (via the `set_status` tool)
     // are reported through this callback so the owning AgentImpl can keep

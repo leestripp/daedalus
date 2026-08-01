@@ -1733,3 +1733,43 @@ target_link_libraries(daedalus_approval_control_tests PRIVATE
     pthread
 )
 add_test(NAME approval_control_tests COMMAND daedalus_approval_control_tests)
+
+# ============================================================================
+# daedalus_bugs.md §1: ToolFactory::register_tool() replace-by-name dedup
+# (duplicate function definitions → provider HTTP 400) + unregister_tool().
+# ============================================================================
+add_executable(daedalus_tool_factory_dedup_tests
+    test_tool_factory_dedup.cpp
+)
+target_include_directories(daedalus_tool_factory_dedup_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_tool_factory_dedup_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME tool_factory_dedup_tests COMMAND daedalus_tool_factory_dedup_tests)
+
+# ============================================================================
+# daedalus_bugs.md §2: fatal API error circuit breaker — alternating 400
+# error shapes must end the turn after 2 cycles instead of looping and
+# flooding the history with [SYSTEM ERROR] messages. Drives LLMClient
+# against an in-process HTTP server.
+# ============================================================================
+add_executable(daedalus_fatal_breaker_tests
+    test_fatal_breaker.cpp
+)
+target_include_directories(daedalus_fatal_breaker_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_fatal_breaker_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME fatal_breaker_tests COMMAND daedalus_fatal_breaker_tests)

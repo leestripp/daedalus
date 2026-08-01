@@ -91,8 +91,22 @@ public:
      * §Phase 6: register an external tool (e.g. a HostTool adapter).
      * Public so the Agent facade can hand host-registered tools down
      * here after the factory is constructed.
+     *
+     * §fix (2026-08-01): registration is replace-by-name — if a tool with
+     * the same get_name() is already registered it is replaced in place
+     * (preserving order) instead of appended. Hosts that rebuild their
+     * Agent (model switch, workspace change, session reset) re-register
+     * their tools per build; without dedup the factory accumulated
+     * duplicate function definitions and strict providers rejected every
+     * request with HTTP 400 "function name X is duplicated".
      */
     void register_tool(std::shared_ptr<BaseTool> tool);
+
+    /**
+     * Remove the first tool registered under `tool_name`.
+     * @return true when a tool was removed, false if the name is unknown.
+     */
+    bool unregister_tool(const std::string& tool_name);
 
     // §Phase 11: inject McpServerManager*. Must be called before
     // refresh_mcp_tools(). nullptr = MCP disabled.

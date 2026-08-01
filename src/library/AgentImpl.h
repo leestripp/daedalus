@@ -63,6 +63,7 @@ public:
     void submit_user_message(std::string text);
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> images);
+    [[nodiscard]] size_t pending_count() const noexcept { return pending_user_messages_.size(); }
     void cancel() noexcept;
 
     // Read-only views

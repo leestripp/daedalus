@@ -441,13 +441,13 @@ void AgentImpl::initialize()
         body_->client->initialize();
     }
 
-    // §Phase 6: register any host tools that haven't been registered with
-    // the ToolFactory yet. We only register each tool once, so calling
+    // §Phase 6: register any host tools with the ToolFactory.
+    // ToolFactory::register_tool() is replace-by-name, so calling
     // initialize() multiple times (or after register_tool() before init)
-    // doesn't double-register.
+    // doesn't double-register — it refreshes the adapter, which also
+    // replaces stale adapters left by a previous Agent instance.
     if (auto factory = ToolHandler::get_tool_factory()) {
         for (auto& t : host_tools_) {
-            if (factory->has_tool(t->get_name())) continue;
             factory->register_tool(
                 std::make_shared<HostToolAdapter>(t, host_ctx_));
         }

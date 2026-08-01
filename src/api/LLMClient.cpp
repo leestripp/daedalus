@@ -1071,6 +1071,26 @@ void LLMClient::emit_error(daedalus::ErrorKind kind, const std::string& message,
     }
 }
 
+// §fix (2026-07-30, hardened 2026-08-01): circuit breaker for repeated
+// FATAL API errors. Counts ANY consecutive fatal-classified cycle — not just
+// identical signatures: alternating 400 shapes (each recovery injection can
+// corrupt the history into the next shape) defeat a same-signature check.
+bool LLMClient::fatal_breaker_should_end_turn(const std::string& signature) {
+    static constexpr int kMaxConsecutiveFatal = 2;
+    consecutive_fatal_count_++;
+    if (signature != last_fatal_signature_) {
+        LOG_DEBUG("Fatal signature changed: [" + last_fatal_signature_ + "] -> [" + signature + "]");
+        last_fatal_signature_ = signature;
+    }
+    if (consecutive_fatal_count_ >= kMaxConsecutiveFatal) {
+        LOG_ERROR("Fatal API errors repeated " +
+                  std::to_string(consecutive_fatal_count_) +
+                  " times consecutively - ending turn instead of looping.");
+        return true;
+    }
+    return false;
+}
+
 // Helper method to extract error message from raw API response
 std::string LLMClient::extract_error_message(const std::string& response) const {
     // Try to find JSON error object in the response
@@ -1643,23 +1663,15 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 return AgentState::DONE;
             }
 
-            // §fix (2026-07-30): circuit breaker — if the SAME fatal error
-            // fires on consecutive cycles, the injected recovery context did
-            // not help and returning ACT would just re-send the same doomed
-            // request forever (the infinite HTTP 400 loop this fix
-            // eliminates). End the turn instead; the host has already seen
-            // every error via emit_error above.
+            // §fix (2026-07-30, hardened 2026-08-01): circuit breaker — ANY
+            // fatal-classified cycle counts, not just identical signatures.
+            // Alternating 400 shapes (each injected recovery message can
+            // corrupt the history into the next shape) defeat a
+            // same-signature check and looped forever in practice. When it
+            // trips we end the turn WITHOUT injecting another recovery
+            // message; the host has already seen every error via emit_error.
             const std::string fatal_signature = error_type + "|" + full_error_message;
-            if (fatal_signature == last_fatal_signature_) {
-                consecutive_fatal_count_++;
-            } else {
-                last_fatal_signature_ = fatal_signature;
-                consecutive_fatal_count_ = 1;
-            }
-            if (consecutive_fatal_count_ >= 2) {
-                LOG_ERROR("Identical FATAL API error repeated " +
-                          std::to_string(consecutive_fatal_count_) +
-                          " times consecutively - ending turn instead of looping.");
+            if (fatal_breaker_should_end_turn(fatal_signature)) {
                 emit_error(error_kind,
                            "Unrecoverable repeated API error (" + error_type +
                            ") - turn ended to avoid an infinite retry loop.",
@@ -1746,6 +1758,20 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         if (retry_kind == daedalus::ErrorKind::Auth) {
                             return AgentState::DONE;
                         }
+                        // §fix (2026-08-01): this path previously bypassed
+                        // the fatal circuit breaker entirely — a transient
+                        // error that turns fatal during retry re-entered the
+                        // cycle (and appended another [SYSTEM ERROR] message)
+                        // forever. Route it through the same breaker; when it
+                        // trips, end the turn without further injection.
+                        if (fatal_breaker_should_end_turn(
+                                retry_error_type + "|" + retry_error_msg)) {
+                            emit_error(retry_kind,
+                                       "Unrecoverable repeated API error (" + retry_error_type +
+                                       ") - turn ended to avoid an infinite retry loop.",
+                                       /*will_retry=*/false);
+                            return AgentState::DONE;
+                        }
                         // §B9: reuse the shared helper.
                         LastToolCall last_retry = find_last_tool_call(messages);
                         const std::string& last_tool_id   = last_retry.id;
@@ -1777,6 +1803,19 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             std::ostringstream failed_msg;
             failed_msg << "All API retries failed. Adding error to conversation and continuing.";
             emit_error(error_kind, failed_msg.str(), /*will_retry=*/false);
+            // §fix (2026-08-01): route through the fatal circuit breaker.
+            // An unresolvable error that exhausts retries on every cycle
+            // otherwise loops forever, appending one [SYSTEM ERROR] message
+            // per cycle. When the breaker trips, end the turn without
+            // further injection.
+            if (fatal_breaker_should_end_turn(
+                    "retries_exhausted|" + error_type + "|" + full_error_message)) {
+                emit_error(error_kind,
+                           "Unrecoverable repeated API error (" + error_type +
+                           ") - turn ended to avoid an infinite retry loop.",
+                           /*will_retry=*/false);
+                return AgentState::DONE;
+            }
             // §fix (2026-07-30): guarded injection only (see
             // append_tool_results_if_pending).
             Messages::append_tool_results_if_pending(messages,
@@ -1892,6 +1931,18 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         if (nochoices_kind == daedalus::ErrorKind::Auth) {
                             return AgentState::DONE;
                         }
+                        // §fix (2026-08-01): this path previously bypassed
+                        // the fatal circuit breaker — route it through the
+                        // same check; when it trips, end the turn without
+                        // further injection.
+                        if (fatal_breaker_should_end_turn(
+                                retry_error_type + "|" + retry_error_msg)) {
+                            emit_error(nochoices_kind,
+                                       "Unrecoverable repeated API error (" + retry_error_type +
+                                       ") - turn ended to avoid an infinite retry loop.",
+                                       /*will_retry=*/false);
+                            return AgentState::DONE;
+                        }
                         // Find the last tool call for debugging
                         std::string last_tool_name = "UNKNOWN";
                         std::string last_tool_id = "UNKNOWN";
@@ -1934,6 +1985,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                        "API returned empty response (no choices) after "
                            + std::to_string(max_retries) + " retries",
                        /*will_retry=*/false);
+            // §fix (2026-08-01): route through the fatal circuit breaker —
+            // an endlessly empty response otherwise loops ACT forever,
+            // appending one [SYSTEM ERROR] message per cycle.
+            if (fatal_breaker_should_end_turn("empty_response|no_choices")) {
+                emit_error(daedalus::ErrorKind::ServerError,
+                           "Unrecoverable repeated empty API response - "
+                           "turn ended to avoid an infinite retry loop.",
+                           /*will_retry=*/false);
+                return AgentState::DONE;
+            }
             // §fix (2026-07-30): guarded injection only (see
             // append_tool_results_if_pending) — replaces the ad-hoc
             // backward walk + unconditional push that could inject a

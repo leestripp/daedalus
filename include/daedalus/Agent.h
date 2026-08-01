@@ -17,6 +17,7 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <optional>
 #include <stop_token>
@@ -88,11 +89,23 @@ public:
 
     /// @brief Push a user message into the conversation queue. The next
     ///        call to run_one_turn() will consume it.
+    ///
+    /// @warning Each submit queues exactly one message and each
+    ///        run_one_turn() consumes exactly one. Submitting without a
+    ///        matching run_one_turn() leaves the queue off-by-one forever:
+    ///        every later turn then processes the *previous* queued message
+    ///        instead of the fresh prompt. Use pending_count() to check for
+    ///        unconsumed messages.
     void submit_user_message(std::string text);
 
     /// @brief Push a user message with attached images.
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> imgs);
+
+    /// @brief Number of submitted user messages not yet consumed by
+    ///        run_one_turn(). Anything other than the expected 0/1 means
+    ///        submits and turns have drifted out of sync.
+    [[nodiscard]] size_t pending_count() const noexcept;
 
     /// @brief Programmatic cancel. Equivalent to stop_token firing.
     void cancel() noexcept;

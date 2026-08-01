@@ -1237,6 +1237,13 @@ agent:
    consumes it. Use this from any host (CLI, web, tests,
    background job) that has its own input pipeline.
 
+   Each submit queues exactly one message and each `run_one_turn()`
+   consumes exactly one — keep them paired 1:1. Submitting without a
+   matching `run_one_turn()` leaves the queue off-by-one forever: every
+   later turn processes the *previous* queued message instead of the
+   fresh prompt. `Agent::pending_count()` returns the number of
+   unconsumed queued messages so hosts can detect the drift.
+
 > **Removed in v0.4.0:** `AgentSink::request_user_input(...)` and the
 > `ask_user` tool. The agent has no mid-turn user-prompting path.
 > If your host needs a back-and-forth, submit the next user message

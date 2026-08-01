@@ -42,6 +42,7 @@ void Agent::submit_user_message(std::string text,
     impl_->submit_user_message(std::move(text), std::move(imgs));
 }
 void Agent::cancel() noexcept { impl_->cancel(); }
+size_t Agent::pending_count() const noexcept { return impl_->pending_count(); }
 
 // ---- Read-only views -------------------------------------------------------
 

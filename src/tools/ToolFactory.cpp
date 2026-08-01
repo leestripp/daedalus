@@ -25,9 +25,28 @@ void ToolFactory::set_mcp_manager(mcp::McpServerManager* mcp_manager) {
 }
 
 void ToolFactory::register_tool(std::shared_ptr<BaseTool> tool) {
-    if (tool) {
-        m_tools.push_back(tool);
+    if (!tool) return;
+    // §fix (2026-08-01): replace-by-name — a re-registered name updates the
+    // existing slot instead of appending a duplicate definition (which
+    // strict providers reject with HTTP 400 "function name is duplicated").
+    const std::string name = tool->get_name();
+    for (auto& existing : m_tools) {
+        if (existing->get_name() == name) {
+            existing = std::move(tool);
+            return;
+        }
     }
+    m_tools.push_back(std::move(tool));
+}
+
+bool ToolFactory::unregister_tool(const std::string& tool_name) {
+    for (auto it = m_tools.begin(); it != m_tools.end(); ++it) {
+        if ((*it)->get_name() == tool_name) {
+            m_tools.erase(it);
+            return true;
+        }
+    }
+    return false;
 }
 void ToolFactory::initialize_tools() {
     // §TOOL-TRIM (prompt.txt): the default tool surface is intentionally

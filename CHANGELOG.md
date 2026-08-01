@@ -11,6 +11,13 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Added
 
+- **`Agent::pending_count()`** (`include/daedalus/Agent.h`): number of
+  submitted user messages not yet consumed by `run_one_turn()`. Makes the
+  submit/run pairing visible to hosts — submitting without a matching
+  `run_one_turn()` leaves the queue off-by-one (every later turn processes
+  the *previous* message). The `submit_user_message()` doc comment now
+  carries an explicit warning about the 1:1 contract.
+
 - **Structured error channel: `AgentSink::on_error()`**
   (`include/daedalus/AgentSink.h`, new `include/daedalus/types/ErrorKind.h`):
   - New public callback
@@ -124,6 +131,41 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     line for cache-capable providers.
 
 ### Fixed
+
+- **Duplicate tool definitions → provider HTTP 400 "function name X is
+  duplicated"** (2026-08-01, reported via MonkeyByte):
+  `ToolFactory::register_tool()` was a bare `push_back` on the
+  process-global factory, so hosts that rebuild their Agent (model switch,
+  workspace change, session reset) and re-register host tools accumulated a
+  duplicate function definition per build; strict providers rejected every
+  request. Registration is now **replace-by-name** (the existing slot is
+  updated in place), the `AgentImpl::initialize()` host-tools loop no longer
+  skips already-registered names (it refreshes stale adapters from previous
+  agent instances), and a new `ToolFactory::unregister_tool(name)` supports
+  hosts with dynamic tool surfaces (`src/tools/ToolFactory.{h,cpp}`,
+  `src/library/AgentImpl.cpp`). Covered by
+  `tests/test_tool_factory_dedup.cpp`.
+
+- **Fatal API errors looped forever and corrupted history with hundreds of
+  synthetic `[SYSTEM ERROR]` user messages** (2026-08-01, reported via
+  MonkeyByte):
+  - The `consecutive_fatal_count_` circuit breaker only tripped on an
+    *identical* error signature on consecutive cycles. Deterministic 400s
+    that alternate shape between cycles (each injected recovery message
+    corrupts the history into the next shape, e.g. "function name
+    duplicated" → "messages with role 'tool' must be...") reset the counter
+    every cycle, so the breaker never fired. It now counts ANY consecutive
+    fatal-classified cycle (threshold unchanged: one recovery attempt, then
+    the turn ends) (`LLMClient::fatal_breaker_should_end_turn()`,
+    `src/api/LLMClient.cpp`).
+  - Four ACT-returning error paths bypassed the breaker entirely
+    (transient→fatal during retry, retries exhausted, no-choices+fatal,
+    empty response); all now route through it.
+  - When the breaker trips the turn ends WITHOUT appending another
+    `[SYSTEM ERROR]` user message, capping recovery injection at one per
+    fatal sequence and ending the history-corruption burst.
+  - Covered by `tests/test_fatal_breaker.cpp` (alternating-400 in-process
+    HTTP server; asserts 2 requests, DONE, single injected message).
 
 - **MCP stdio servers died silently on shell metacharacters + dead
   servers reported as connected** (§MCP-QUOTE, §MCP-EOF, 2026-07-30):
