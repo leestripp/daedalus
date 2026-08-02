@@ -3,11 +3,16 @@
  * @brief Regression tests for Serper.dev search tool settings key.
  *
  * The Serper search tool reads its API key from the SQLite SettingsStore
- * (via SettingsStore::get_serper_api_key()). These tests guard against
- * the code regressing to a single-key lookup.
+ * (via daedalus::load_serper_api_key() in core/SerperConfig.cpp, the single
+ * source of truth). These tests guard against the tool reimplementing its
+ * own key lookup.
  *
- * The tests are static (source-grep based) because get_serper_api_key() is
- * a file-static function and not part of the public API.
+ * §SERPER-CORE (2026-08-02): SerperSearchTool moved from
+ * demos/example-tools/SearchTool.cpp to src/tools/SerperSearchTool.cpp;
+ * the grep targets were updated accordingly.
+ *
+ * The tests are static (source-grep based) because the key lookup is
+ * exercised end-to-end by test_serper_startup.cpp.
  */
 
 #include <iostream>
@@ -65,40 +70,41 @@ bool contains(const std::string& hay, const std::string& needle) {
 }  // namespace
 
 // ============================================================================
-// Test: SearchTool.cpp accepts BOTH "serper-search" and "serper" key names
+// Test: SerperSearchTool delegates key lookup to the shared SerperConfig
+// helper (no reimplemented lookup logic in the tool itself)
 // ============================================================================
-TEST(searchtool_accepts_canonical_and_legacy_keys) {
+TEST(searchtool_delegates_to_serper_config) {
     auto root = find_project_root();
     if (root.empty()) {
         std::cerr << "SKIP: could not locate project root\n";
         return 0;
     }
-    auto path = root / "demos" / "example-tools" / "SearchTool.cpp";
+    auto path = root / "src" / "tools" / "SerperSearchTool.cpp";
     if (!std::filesystem::exists(path)) {
-        std::cerr << "SKIP: " << path << " not found\n";
-        return 0;
+        std::cerr << "FAIL: " << path << " not found\n";
+        return 1;
     }
     auto content = slurp(path);
     CHECK(!content.empty());
-    CHECK(contains(content, "serper-search"));
-    CHECK(contains(content, "\"serper\""));     // legacy alias still present
+    CHECK(contains(content, "core/SerperConfig.h"));
+    CHECK(contains(content, "daedalus::load_serper_api_key()"));
     return 0;
 }
 
 // ============================================================================
-// Test: SearchTool.cpp error message points at the canonical key
+// Test: SerperSearchTool error message guides the user when the key is missing
 // ============================================================================
-TEST(searchtool_error_message_mentions_serper_search) {
+TEST(searchtool_error_message_mentions_missing_key) {
     auto root = find_project_root();
     if (root.empty()) return 0;
-    auto path = root / "demos" / "example-tools" / "SearchTool.cpp";
+    auto path = root / "src" / "tools" / "SerperSearchTool.cpp";
     if (!std::filesystem::exists(path)) {
-        std::cerr << "SKIP: " << path << " not found\n";
-        return 0;
+        std::cerr << "FAIL: " << path << " not found\n";
+        return 1;
     }
     auto content = slurp(path);
     CHECK(!content.empty());
-    CHECK(contains(content, "serper-search.api_key"));
+    CHECK(contains(content, "API key not configured"));
     return 0;
 }
 
@@ -110,8 +116,8 @@ int main() {
     std::cout << "Running Serper settings tests..." << std::endl;
 
     int local_failures = 0;
-    local_failures += test_searchtool_accepts_canonical_and_legacy_keys();
-    local_failures += test_searchtool_error_message_mentions_serper_search();
+    local_failures += test_searchtool_delegates_to_serper_config();
+    local_failures += test_searchtool_error_message_mentions_missing_key();
 
     std::cout << "\nResults: " << (local_failures == 0 ? "PASS" : "FAIL") << std::endl;
     std::cout << "Total checks: " << test_count << std::endl;

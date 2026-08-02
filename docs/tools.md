@@ -21,11 +21,14 @@ functional autonomous agent are registered automatically:
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
+| `serper_search` | Web search via the Serper.dev Google API (requires an API key in the SettingsStore; returns a descriptive error when unset) |
 | `mcp__<server>__<tool>` | Dynamically registered MCP proxied tools (when MCP is enabled) |
 
-All other tools — Git, search, PDF, system info, background process, and
-network tools — have been moved to `demos/example-tools/` as **reference
-implementations** that you can copy, adapt, or register one at a time.
+All other tools — Git, grep/wiki search, PDF, system info, background
+process, and network tools — have been moved to `demos/example-tools/` as
+**reference implementations** that you can copy, adapt, or register one at
+a time. (`serper_search` moved back into core in v0.6.0-dev because its
+configuration and key lookup have always lived in the core SettingsStore.)
 
 File I/O tools were removed entirely: the agent can read, write, and edit
 files through `execute_bash` (e.g. `cat`, `sed`, `grep`) instead.

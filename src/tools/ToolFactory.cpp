@@ -5,6 +5,7 @@
 #include "tools/BashTool.h"
 #include "tools/SkillTool.h"
 #include "tools/MemoryTool.h"
+#include "tools/SerperSearchTool.h"
 #include "tools/TodoListTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
@@ -51,9 +52,13 @@ bool ToolFactory::unregister_tool(const std::string& tool_name) {
 void ToolFactory::initialize_tools() {
     // §TOOL-TRIM (prompt.txt): the default tool surface is intentionally
     // minimal. Only the tools required for a functional agent are
-    // registered here. File / git / search / pdf / system-info /
+    // registered here. File / git / grep/wiki-search / pdf / system-info /
     // background-process / network tools live in demos/example-tools/
     // and are registered by hosts that need them.
+    // §SERPER-CORE (2026-08-02): serper_search moved back into core — its
+    // config (SettingsStore serper_config table, core/SerperConfig) has
+    // always been core, and the tool degrades to a descriptive error
+    // when no API key is set.
 
     // User interaction tools
     register_tool(std::make_shared<TellUserTool>());
@@ -78,6 +83,9 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<ForgetTool>());
     register_tool(std::make_shared<MemoriesTool>());
     register_tool(std::make_shared<MemoryStatsTool>());
+
+    // §SERPER-CORE: web search via Serper.dev (see note above).
+    register_tool(std::make_shared<SerperSearchTool>());
 
     // Todo list tools
     register_tool(std::make_shared<TodoAddTool>());

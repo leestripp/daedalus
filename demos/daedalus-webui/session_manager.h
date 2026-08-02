@@ -65,10 +65,9 @@ inline void register_webui_tools(daedalus::Agent& agent)
     auto factory = ToolHandler::get_tool_factory();
     if (!factory) return;
 
-    // Search tools
+    // Search tools (serper_search is core again — registered by ToolFactory)
     factory->register_tool(std::make_shared<GrepSearchTool>());
     factory->register_tool(std::make_shared<WikiSearchTool>());
-    factory->register_tool(std::make_shared<SerperSearchTool>());
 
     // PDF tool
     factory->register_tool(std::make_shared<ReadPDFTool>());

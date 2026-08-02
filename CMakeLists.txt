@@ -291,6 +291,7 @@ set(TOOLS_SOURCES
 	src/tools/BashPathChecker.cpp
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
+	src/tools/SerperSearchTool.cpp
 	src/tools/TodoListTool.cpp
 	src/tools/TodoListService.cpp
 )

@@ -14,7 +14,6 @@ namespace daedalus {
  * the Serper search tool is properly configured. It is populated by
  * load_serper_api_key() and consumed by:
  *   - SerperSearchTool::execute() (to fetch the key at request time)
- *   - main() (to print a loud warning at startup)
  *   - tests (to assert configuration correctness)
  *
  * Status values are deliberately explicit (not just bool) so the caller can
@@ -55,27 +54,15 @@ inline std::ostream& operator<<(std::ostream& os,
 }
 
 /**
- * @brief Load and validate the Serper API key from settings.json /
- *        config.json.
+ * @brief Load and validate the Serper API key from the SettingsStore.
  *
- * Searches the same paths SearchTool has always used (in priority order):
- *   1. $HOME/.daedalus/settings/settings.json   (legacy)
- *   2. $XDG_CONFIG_HOME/daedalus/settings.json (legacy name)
- *   3. $XDG_CONFIG_HOME/daedalus/config.json    (v0.4.0+ canonical name)
- *   4. ./settings/settings.json                (relative to cwd)
+ * §v0.5.0+: the SQLite SettingsStore (`serper_config` table, singleton row
+ * id=1, in `$XDG_DATA_HOME/daedalus/daedalus.db`) is the sole source of
+ * truth for the key. Legacy settings.json / config.json files are no
+ * longer consulted.
  *
- * §FIX-XDG-STORAGE (2026-07-17): also probes `config.json` (v0.4.0+
- * canonical) in addition to `settings.json` (legacy name). Both names
- * are accepted during the migration window. The store-based lookup
- * via load_from_settings_store() (above) is the production path.
- *
- * Accepts BOTH "serper-search" (canonical, current) and "serper" (legacy)
- * for backward compatibility with older configs. The first match wins.
- *
- * The returned result has `settings_path` set to:
- *   - the path that was successfully read (when OK or a content-level error
- *     like MISSING_BLOCK is reported), or
- *   - the first path that was tried (when MISSING_FILE).
+ * The returned result has `settings_path` set to the SettingsStore path
+ * that produced the result.
  *
  * @return A SerperApiKeyResult with status set appropriately.
  */

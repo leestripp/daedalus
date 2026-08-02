@@ -32,12 +32,3 @@ public:
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 };
-
-// ========== SerperSearchTool ==========
-class SerperSearchTool : public BaseTool {
-public:
-    std::string get_name() const override { return "serper_search"; }
-    std::string get_description() const override { return "Perform web search using Google via Serper.dev API"; }
-    json get_definition() const override;
-    json execute(const json& args, FileIO& file_io) override;
-};
