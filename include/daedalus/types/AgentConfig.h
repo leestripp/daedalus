@@ -96,6 +96,12 @@ struct AgentConfig {
     std::optional<bool> auto_approve;
     bool memory_enabled = true;
     bool clear_memory = false;
+    // §ContextCache follow-up (2026-08-02): when false, the Session
+    // Memory section is omitted from the composed system prompt while
+    // memory collection continues. Lets hosts that surface memory
+    // through their own trailing message keep the system prompt fully
+    // byte-static for server-side prompt caches.
+    bool memory_in_prompt = true;
 
     // §Phase 11: MCP server integration. Default = true (load MCP servers).
     // Set to false to completely disable MCP — no McpServerManager is

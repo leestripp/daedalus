@@ -1042,15 +1042,15 @@ std::string SessionMemory::get_system_prompt_addition() const {
     if (!project_info_.type.empty()) {
         ss << "Project: " << project_info_.type << "\n";
     }
-    
-    // Stats
+
+    // §ContextCache follow-up (2026-08-02): the volatile stats line
+    // (session/build/error counters change on nearly every run) is
+    // emitted at the END of the dump so unchanged memory content keeps
+    // a byte-stable prefix for server-side prompt caches.
     int resolved_count = 0;
     for (const auto& e : errors_) {
         if (e.resolved) resolved_count++;
     }
-    ss << "Sessions: " << sessions_.size() 
-       << " | Builds: " << builds_.size() 
-       << " | Errors resolved: " << resolved_count << "/" << errors_.size() << "\n";
     
     // Working builds
     if (!builds_.empty()) {
@@ -1109,7 +1109,12 @@ std::string SessionMemory::get_system_prompt_addition() const {
     }
     
     ss << "\nUse this context to avoid repeating mistakes.\n";
-    
+
+    // Volatile counters last — see §ContextCache note above.
+    ss << "\nSessions: " << sessions_.size()
+       << " | Builds: " << builds_.size()
+       << " | Errors resolved: " << resolved_count << "/" << errors_.size() << "\n";
+
     return ss.str();
 }
 

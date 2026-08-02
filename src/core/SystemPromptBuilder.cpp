@@ -247,18 +247,13 @@ std::string SystemPromptBuilder::compose(const SystemPromptOptions& options) {
         sections.push_back(getAvailableSkillsSection(options.available_skills));
     }
 
-    // 7. Session memory (opt-in).
-    if (options.include_session_memory && !options.session_memory.empty()) {
-        sections.push_back(getSessionMemorySection(options.session_memory));
-    }
-
-    // 8. State machine — ALWAYS appended. Non-empty by construction;
+    // 7. State machine — ALWAYS appended. Non-empty by construction;
     //    there is no host option to disable it.  This is so the host
     //    can be sure the prompt always explains the state machine and
     //    the agent is instructed to set it as it works.
     sections.push_back(getStateMachineSection());
 
-    // 9. Reserved agent directories — ALWAYS last.  Tells the agent
+    // 8. Reserved agent directories — ALWAYS appended.  Tells the agent
     //     that .daedalus* folders are owned by the runtime and must
     //     never be deleted / renamed / edited.
     //
@@ -269,6 +264,18 @@ std::string SystemPromptBuilder::compose(const SystemPromptOptions& options) {
     // Status block is carried as a transient trailing message instead
     // (see src/api/ContextStatus.h and LLMClient::inject_context_stats).
     sections.push_back(getReservedAgentDirsSection());
+
+    // 9. Session memory (opt-in) — ALWAYS last.
+    //
+    // §ContextCache follow-up (2026-08-02, icarus patch review): the
+    // memory dump is the most volatile section — its stats header
+    // changes on almost every run. Server-side prompt caches stop at
+    // the first differing byte, so emitting memory LAST keeps slots 7-8
+    // (~2.4k tokens of byte-static mandatory text) inside the cacheable
+    // prefix regardless of memory churn; only this final section misses.
+    if (options.include_session_memory && !options.session_memory.empty()) {
+        sections.push_back(getSessionMemorySection(options.session_memory));
+    }
 
     return combineSections(sections);
 }

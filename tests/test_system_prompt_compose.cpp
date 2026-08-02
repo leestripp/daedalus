@@ -338,14 +338,17 @@ TEST_SUITE("State machine section") {
         // §ContextCache: no per-iteration stats block in the static prompt.
         CHECK(prompt.find("# Context Status") == std::string::npos);
 
-        // State-machine comes after the session-memory section (not last
-        // overall — reserved-dirs comes after — but it IS last among the
-        // "thinking/process" sections).
+        // §ContextCache follow-up (2026-08-02): the state-machine and
+        // reserved-dirs sections stay together in the static prefix;
+        // the volatile session-memory section is emitted LAST.
         auto sm_pos  = prompt.find("# State Machine");
+        auto rd_pos  = prompt.find("# Reserved Agent Directories");
         auto mem_pos = prompt.find("# Session Memory");
         REQUIRE(sm_pos  != std::string::npos);
+        REQUIRE(rd_pos  != std::string::npos);
         REQUIRE(mem_pos != std::string::npos);
-        CHECK(mem_pos < sm_pos);
+        CHECK(sm_pos < rd_pos);
+        CHECK(rd_pos < mem_pos);
     }
 
     TEST_CASE("State machine section survives with default options") {
@@ -359,7 +362,8 @@ TEST_SUITE("State machine section") {
 }
 
 // ============================================================================
-// Suite 8: Reserved agent directories section is ALWAYS appended last.
+// Suite 8: Reserved agent directories section is ALWAYS appended (after the
+// state-machine section; only the volatile session-memory section may follow).
 // ============================================================================
 
 TEST_SUITE("Reserved agent dirs section") {
@@ -375,9 +379,9 @@ TEST_SUITE("Reserved agent dirs section") {
     }
 
     TEST_CASE("Section is appended AFTER the state-machine section") {
-        // Both library-owned blocks are appended; the reserved-dirs
-        // section is the FINAL header so it's the last thing the
-        // model reads before deciding what to do.
+        // Both library-owned blocks are appended; without session memory
+        // the reserved-dirs section is the FINAL header so it's the last
+        // thing the model reads before deciding what to do.
         SystemPromptOptions options;
         std::string prompt = SystemPromptBuilder::compose(options);
 
@@ -391,6 +395,29 @@ TEST_SUITE("Reserved agent dirs section") {
         // the body of the section itself).
         std::string tail = prompt.substr(rd_pos);
         // The next "\n# " header should not appear in the tail.
+        CHECK(tail.find("\n# ") == std::string::npos);
+    }
+
+    TEST_CASE("Session memory is emitted AFTER the static mandatory sections") {
+        // §ContextCache follow-up (2026-08-02): the volatile session-memory
+        // dump must be the LAST section so the byte-static mandatory
+        // sections stay inside the server-side prompt-cache prefix.
+        SystemPromptOptions options;
+        options.session_memory = "SESSION_MEMORY";
+        options.include_session_memory = true;
+        std::string prompt = SystemPromptBuilder::compose(options);
+
+        auto sm_pos   = prompt.find("# State Machine");
+        auto rd_pos   = prompt.find("# Reserved Agent Directories");
+        auto mem_pos  = prompt.find("# Session Memory");
+        REQUIRE(sm_pos != std::string::npos);
+        REQUIRE(rd_pos != std::string::npos);
+        REQUIRE(mem_pos != std::string::npos);
+        CHECK(sm_pos < rd_pos);
+        CHECK(rd_pos < mem_pos);
+
+        // Nothing follows the memory section.
+        std::string tail = prompt.substr(mem_pos);
         CHECK(tail.find("\n# ") == std::string::npos);
     }
 

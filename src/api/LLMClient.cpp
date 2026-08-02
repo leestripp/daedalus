@@ -2914,8 +2914,12 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         }
     }
 
-    // Session memory fact dump.
-    if (session_memory_ && !config_.memory_disabled) {
+    // Session memory fact dump. Emitted LAST in the composed prompt so
+    // the volatile content doesn't truncate the cacheable prefix (see
+    // SystemPromptBuilder::compose()). Hosts can suppress the prompt
+    // section entirely via AgentConfig::memory_in_prompt while memory
+    // collection continues.
+    if (session_memory_ && !config_.memory_disabled && config_.memory_in_prompt) {
         options.session_memory = session_memory_->get_system_prompt_addition();
     }
 

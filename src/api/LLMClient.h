@@ -47,6 +47,10 @@ struct AppConfig {
     std::string session_id;
     bool auto_mode = false;  // Automatically approve tool executions
     bool memory_disabled = false;  // Disable session memory
+    // §ContextCache follow-up (2026-08-02): omit the Session Memory
+    // section from the composed system prompt (memory collection is
+    // unaffected). Mapped from AgentConfig::memory_in_prompt.
+    bool memory_in_prompt = true;
     // §Phase 9.8: SSE streaming. Default = true (progressive tokens).
     // Set to false to get a single buffered JSON response instead.
     bool stream = true;

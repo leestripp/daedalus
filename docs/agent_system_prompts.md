@@ -12,7 +12,8 @@
 ## The Contract
 
 The system prompt is a **composite document** assembled by
-`SystemPromptBuilder::compose()` in this fixed order. There are 10 slots:
+`SystemPromptBuilder::compose()` in this fixed order. There are 9 slots
+(plus a transient trailing Context Status message that is not a slot):
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -28,11 +29,12 @@ The system prompt is a **composite document** assembled by
 │                                loaded — name + desc only)    │
 │  6. available_skills       ← daedalus (catalog of skills the │
 │                                agent can load_skill)         │
-│  7. session_memory         ← daedalus (fact dump, opt-in)    │
-│  8. State Machine          ← daedalus (ALWAYS appended —     │
+│  7. State Machine          ← daedalus (ALWAYS appended —     │
 │                                see §2.7)                     │
-│  9. Reserved Agent Dirs    ← daedalus (ALWAYS appended —     │
+│  8. Reserved Agent Dirs    ← daedalus (ALWAYS appended —     │
 │                                see §2.8)                     │
+│  9. session_memory         ← daedalus (fact dump, opt-in,    │
+│                                ALWAYS LAST — §ContextCache)  │
 └─────────────────────────────────────────────────────────────┘
 │  ~ Context Status          ← transient trailing message, NOT │
 │                                part of the prompt (§2.6)     │
@@ -43,11 +45,14 @@ rules*. **daedalus** appends everything the agent needs to *know about
 its environment* — and the two always-on sections that protect the
 runtime.
 
-Slots 1–2 are **yours**. Slots 3–8 are daedalus's dynamic, data-driven
-additions (each can be suppressed by leaving the corresponding field
-empty or toggling a flag). Slots 9 and 10 are **non-optional** daedalus
-prose sections — see §2.7 and §2.8 for why they exist and how to
-augment (not replace) them in your prose.
+Slots 1–2 are **yours**. Slots 3–6 and 9 are daedalus's dynamic,
+data-driven additions (each can be suppressed by leaving the
+corresponding field empty or toggling a flag). Slots 7 and 8 are
+**non-optional** daedalus prose sections — see §2.7 and §2.8 for why
+they exist and how to augment (not replace) them in your prose. Slot 9
+is emitted **last** because it is the most volatile section — emitting
+it after the byte-static mandatory sections keeps them inside the
+server-side prompt-cache prefix (§ContextCache).
 
 ---
 
@@ -114,14 +119,14 @@ These are daedalus's job — the library will write them for you:
 | **JSON tool schemas** | Library appends live JSON in slot 4 — your copy goes stale |
 | **MCP server list** | Library appends live status in slot 3 — your copy goes stale |
 | **Skill catalog / active-skill lists** | Library appends live data in slots 5–6 — your copy goes stale |
-| **Session-memory fact dump** | Library appends live facts in slot 7 |
+| **Session-memory fact dump** | Library appends live facts in slot 9 (always last) |
 | **Token-usage / iteration table** | Library sends a live transient trailing message every turn — your copy goes stale and breaks prompt caches |
-| **`# State Machine` instructions** | Library appends its own version in slot 8 — your copy duplicates |
-| **`# Reserved Agent Directories` instructions** | Library appends its own version in slot 9 — your copy duplicates |
+| **`# State Machine` instructions** | Library appends its own version in slot 7 — your copy duplicates |
+| **`# Reserved Agent Directories` instructions** | Library appends its own version in slot 8 — your copy duplicates |
 
-If you want to *augment* the library's slots 8 and 9 with extra
-domain-specific rules (e.g. "in this project, the agent must always
-run `pytest` before `Done`"), put those *prose* rules in your
+If you want to *augment* the library's mandatory slots (7 and 8) with
+extra domain-specific rules (e.g. "in this project, the agent must
+always run `pytest` before `Done`"), put those *prose* rules in your
 `system_prompt` — the library sections are appended **after** yours
 and won't overwrite them.
 
@@ -144,7 +149,7 @@ section to your use case.
 
 daedalus appends the following sections in fixed order. Slots 3, 5, 6
 opt out by leaving the matching `SystemPromptOptions` field empty.
-Slots 7 and 8 also have a master `include_*` flag. Slots 9 and 10
+Slot 9 also has a master `include_*` flag. Slots 7 and 8
 are **non-optional** — see each sub-section.
 
 ### 2.1 Tool Definitions (JSON Schema)
@@ -249,8 +254,14 @@ store:
 ```
 
 **You don't write this.** It's generated each turn from
-`SessionMemory::get_system_prompt_addition()`. To opt out, set
-`include_session_memory = false` or leave the field empty.
+`SessionMemory::get_system_prompt_addition()` and emitted as the
+**last** section of the composed prompt (§ContextCache: the memory dump
+is the most volatile section, so it goes after the byte-static
+mandatory sections to keep them inside the server-side prompt-cache
+prefix). To opt out, set `include_session_memory = false` or leave the
+field empty; hosts using `AgentConfig` can set
+`cfg.memory_in_prompt = false` to drop the section while memory
+collection continues.
 
 ### 2.6 Context Status (per-turn, transient trailing message)
 
@@ -430,9 +441,9 @@ Agent::run_one_turn(user_message)
        4. tool_definitions       (live, JSON schema of all tools)
        5. active_skills          (live, name + desc)
        6. available_skills       (live catalog, excluding active)
-       7. session_memory         (live, if include_session_memory)
-       8. State Machine          (ALWAYS — slot §2.7)
-       9. Reserved Agent Dirs    (ALWAYS — slot §2.8)
+       7. State Machine          (ALWAYS — slot §2.7)
+       8. Reserved Agent Dirs    (ALWAYS — slot §2.8)
+       9. session_memory         (live, LAST, if include_session_memory)
 
   (the per-iteration Context Status table is sent separately as a
    transient trailing message — §2.6 / §ContextCache)
@@ -447,9 +458,9 @@ Agent::run_one_turn(user_message)
   → messages.add(role="assistant", content=response)
 ```
 
-The host only sees slots 1–2 land "first". Slots 3–8 are mechanical
-and safe to ignore. Slots 9–10 are guaranteed to be present on every
-single turn — that's a contract, not an accident.
+The host only sees slots 1–2 land "first". Slots 3–6 and 9 are
+mechanical and safe to ignore. Slots 7–8 are guaranteed to be present
+on every single turn — that's a contract, not an accident.
 
 ---
 
@@ -539,9 +550,9 @@ DO NOT modify code that is unrelated to the user's request.
 4. tool JSON schemas (built-in tools)
 5. active skills
 6. available skills catalog
-7. *(omitted if `memory_enabled = false`)*
-8. `# State Machine` (mandatory)
-9. `# Reserved Agent Directories` (mandatory)
+7. `# State Machine` (mandatory)
+8. `# Reserved Agent Directories` (mandatory)
+9. session memory *(omitted if `memory_enabled = false`; always last)*
 
 *(The per-iteration context-status table is no longer a compose slot —
 it rides as a transient trailing message so the static prompt stays
@@ -564,7 +575,7 @@ ordered, independent sub-tasks that can be handed off to sub-agents.
 )";
 ```
 
-Library adders as above (1–10). The manager's status flips naturally
+Library adders as above (1–9). The manager's status flips naturally
 land in `Planning`; its sub-agents use `Acting` heavily.
 
 ### Webui — isolated session per HTTP connection
@@ -579,8 +590,8 @@ Each session is isolated — you have no memory of previous sessions.
 cfg.memory_enabled = false;   // no session-memory slot
 ```
 
-Library adders as above (1–10). Slot 7 (`# Session Memory`) is
-skipped because `memory_enabled = false`. Slots 9 and 10 still append.
+Library adders as above (1–9). Slot 9 (`# Session Memory`) is
+skipped because `memory_enabled = false`. Slots 7 and 8 still append.
 
 ---
 
@@ -638,14 +649,19 @@ Every field maps 1:1 to a slot in the contract diagram.
 | `tool_definitions` | 4 | `""` | Tool JSON schema; empty = skipped |
 | `active_skills` | 5 | `""` | Currently loaded skills; empty = skipped |
 | `available_skills` | 6 | `""` | Catalog of available skills; empty = skipped |
-| `session_memory` | 7 | `""` | Pre-formatted fact dump |
-| `include_session_memory` | 7 | `true` | Master switch for slot 7 |
+| `session_memory` | 9 | `""` | Pre-formatted fact dump; emitted LAST |
+| `include_session_memory` | 9 | `true` | Master switch for slot 9 |
 
-Slots 8 (`# State Machine`) and 9 (`# Reserved Agent Directories`)
+Slots 7 (`# State Machine`) and 8 (`# Reserved Agent Directories`)
 are library-owned and **not configurable** — see §2.7 and §2.8. The
 per-iteration Context Status block (§2.6) is deliberately NOT a compose
 slot: it lives outside the static system prompt so provider prompt
-caches keep matching (§ContextCache).
+caches keep matching (§ContextCache). Slot 9 (`# Session Memory`) is
+emitted last for the same reason — it is the most volatile section, so
+placing it after the byte-static mandatory sections keeps them inside
+the cacheable prefix. Hosts can also suppress it via
+`AgentConfig::memory_in_prompt = false` while memory collection
+continues.
 
 For ergonomic setup, prefer filling an `AgentConfig` (`cfg.system_prompt`,
 `cfg.mcp_enabled`, etc.) and letting `Agent::initialize()` populate the

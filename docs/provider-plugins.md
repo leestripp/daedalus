@@ -180,6 +180,20 @@ changes per iteration must live at the very end of the request:
   automatically on the next turn.
 - Tool definitions and message history are append-only within a turn,
   so turn N+1's request shares its entire prefix with turn N.
+- The **Session Memory** section — the most volatile part of the
+  prompt — is emitted **last** in `compose()` (§ContextCache follow-up,
+  2026-08-02), so the byte-static mandatory sections (`# State Machine`,
+  `# Reserved Agent Directories`) stay inside the cacheable prefix
+  regardless of memory churn. Its stats counters
+  (`Sessions: N | Builds: M | …`) are likewise emitted at the end of the
+  memory dump. Hosts that surface memory through their own trailing
+  message can drop the section entirely with
+  `AgentConfig::memory_in_prompt = false`.
+- Mid-session tool-surface changes (MCP connect/disconnect, tool
+  enable/disable) mutate the `tools` array, which precedes the system
+  message in prefix order — they invalidate the whole cache for the
+  rest of the session. This is inherent to the protocol, so **batch
+  such toggles at session start** whenever possible.
 
 ### Best settings per provider
 

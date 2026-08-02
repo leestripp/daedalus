@@ -170,6 +170,34 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
     daedalus-manager and daedalus-subagent print a final cached-token
     line for cache-capable providers.
 
+- **`AgentConfig::memory_in_prompt`** (§ContextCache follow-up,
+  2026-08-02): new behaviour flag (default `true`). When `false`, the
+  Session Memory section is omitted from the composed system prompt
+  while memory collection continues — hosts that surface memory through
+  their own trailing message can keep the entire system prompt
+  byte-static for server-side prompt caches. Previously the only switch
+  was `memory_enabled = false`, which disabled the memory feature
+  entirely. Wired through `AgentImpl` → `LLMClient` →
+  `SystemPromptOptions::include_session_memory`.
+
+### Changed
+
+- **Session Memory moved to the END of the composed system prompt**
+  (§ContextCache follow-up, 2026-08-02, from the icarus maintainers'
+  prompt-cache review): `SystemPromptBuilder::compose()` now emits
+  sections as host prompt → system_info note → MCP → tool definitions →
+  skills → `# State Machine` → `# Reserved Agent Directories` →
+  `# Session Memory`. MiniMax / Kimi server-side prompt caches stop at
+  the first differing byte, and the memory dump is the most volatile
+  section — previously any memory change invalidated the cache for the
+  ~2.4k tokens of byte-static mandatory text that followed it. Only the
+  trailing memory section itself misses now. Hosts that diff prompts or
+  snapshot-test composed output will see the reordering. The volatile
+  stats line (`Sessions: N | Builds: M | Errors resolved: X/Y`) also
+  moved from the top to the bottom of the memory dump
+  (`SessionMemory::get_system_prompt_addition()`) so unchanged memory
+  content keeps a byte-stable prefix.
+
 ### Fixed
 
 - **Streaming retry/fallback re-posts asked for SSE and crashed on

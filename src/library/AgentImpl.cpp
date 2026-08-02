@@ -103,6 +103,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
         catch (...) { out.auto_mode = false; }
     }
     out.memory_disabled = !cfg.memory_enabled;
+    out.memory_in_prompt = cfg.memory_in_prompt;
     out.system_prompt  = cfg.system_prompt;   // §Phase 6: host-supplied role
     if (!cfg.user_agent.empty()) out.user_agent = cfg.user_agent;  // §UA
     out.stream         = cfg.stream;            // §Phase 9.8: SSE streaming
