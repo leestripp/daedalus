@@ -122,6 +122,12 @@ struct CompressionResult {
 // Messages Class
 // ============================================================================
 
+// §CRASH-6 (2026-08-05): crash-mirror state shared with the signal
+// handler. Defined in Messages.cpp; heap-allocated per Messages
+// instance and intentionally leaked for process lifetime so the
+// signal handler can never touch freed memory.
+struct MessagesCrashState;
+
 class Messages {
 public:
     /**
@@ -254,7 +260,12 @@ public:
     bool flush_if_dirty() const;
 
     /**
-     * @brief Clear all messages (keep system if exists)
+     * @brief Clear all messages and persist the cleared state
+     *
+     * Resets the in-memory chain, then synchronously removes the
+     * persisted state (messages.json, the .tmp/.crash mirrors, and the
+     * SQLite mirror row) so a cleared session cannot be resurrected on
+     * the next load() (§CRASH-6, monkeybyte report defect #6).
      */
     void clear();
 
@@ -277,10 +288,11 @@ public:
      * Idempotent: calling twice does not stack handlers.
      *
      * The crash handler MUST be installed after a Messages object is
-     * alive (so its pre-opened fd exists). The static
-     * `crash_handler_registry` keeps a list of active Messages
-     * instances; the signal handler iterates and writes to each
-     * .crash file.
+     * alive (so its pre-opened fd exists). A fixed-size process-global
+     * registry of per-instance crash-mirror states keeps the list of
+     * active instances; the signal handler iterates it lock-free.
+     * The states are intentionally leaked for process lifetime, so the
+     * handler can never dereference freed memory (§CRASH-6).
      *
      * Call this from main() (after constructing the Agent / Messages)
      * and pair it with `uninstall_crash_handlers()` in the graceful
@@ -290,11 +302,12 @@ public:
     void install_crash_handlers();
     void uninstall_crash_handlers();
 
-    // §CRASH-4: signal-handler accessors. Public so the C signal
-    // handler in the anonymous namespace in Messages.cpp can read
-    // crash_fd_ and crash_payload_ without needing friendship.
-    int  crash_fd_for_signal()     const { return crash_fd_; }
-    const std::string& crash_payload_for_signal() const { return crash_payload_; }
+    // §CRASH-6 (2026-08-05): snapshot of the crash-mirror payload (the
+    // JSON blob the signal handler would write to messages.json.crash).
+    // Returns a copy; safe to call from normal context. The signal
+    // handler itself reads the double-buffered MessagesCrashState
+    // directly — it does not go through this accessor.
+    std::string crash_payload_for_signal() const;
     /**
      * @brief Check if messages file exists
      */
@@ -528,7 +541,7 @@ private:
 
     // §fix (2026-07-18): serializes concurrent save() calls (flush
     // worker vs. a main-thread flush_now()) so the mutable
-    // crash_payload_/crash_fd_ writes at the end of save() don't race.
+    // crash-mirror writes at the end of save() don't race.
     mutable std::mutex save_mutex_;
 
     // Ephemeral runtime state only (NOT persisted)
@@ -561,25 +574,18 @@ private:
     bool stop_flush_ = false;
     bool worker_was_running_ = false;
 
-    // §CRASH-4 (2026-07-16): pre-opened fd for the .crash mirror.
-    // The signal handler can only call async-signal-safe primitives
-    // (open/write/close), so we open the .crash file once at install
-    // time and hold the fd for the lifetime of the Messages object.
-    // Each save() truncates + writes + closes; on signal, the
-    // handler re-writes the last known good contents and exits.
-    //
-    // We keep the fd in the object rather than a static because the
-    // path is per-instance (per-agent). The static signal handler
-    // iterates a process-global registry of Messages* (see
-    // crash_handler_registry_ in Messages.cpp).
-    int crash_fd_ = -1;
+    // §CRASH-6 (2026-08-05): per-instance crash-mirror state (pre-opened
+    // .crash fd + double-buffered payload), shared with the signal
+    // handler. Allocated lazily by crash_state_or_create() on the first
+    // save() or install_crash_handlers(), and INTENTIONALLY LEAKED for
+    // the rest of the process: the signal handler may hold a pointer to
+    // it at any moment, so freeing it (or closing the fd) would be a
+    // use-after-free / stray-write hazard (monkeybyte report, defect
+    // #4). mutable because save() is const.
+    mutable MessagesCrashState* crash_state_ = nullptr;
 
-    // §CRASH-4: cache of the last successfully-saved JSON blob.
-    // The signal handler re-writes this verbatim to the .crash fd.
-    // Updated by save() on every successful flush. mutable because
-    // save() is const (the cache is a side-effect of save, not a
-    // logical state mutation observable through the public API).
-    mutable std::string crash_payload_;
+    // §CRASH-6: lazily allocate crash_state_ (never freed).
+    MessagesCrashState* crash_state_or_create() const;
 
     // Helper: flush worker thread entry point.
     void flush_worker_main();
@@ -594,6 +600,12 @@ private:
     // during crash recovery. Used by load_from_crash_file() to
     // decide whether to drop the last message.
     bool validate_message_for_recovery(const json& msg) const;
+
+    // §CRASH-6 (2026-08-05, monkeybyte report defect #7): drop
+    // structurally invalid messages from a freshly-loaded chain.
+    // Returns the number dropped; used by load() on both the SQLite
+    // mirror and the messages.json path.
+    std::size_t drop_invalid_messages(json& arr, const std::string& source) const;
     
     // Curl handle for compression API calls
     

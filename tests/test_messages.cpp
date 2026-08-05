@@ -833,7 +833,7 @@ TEST_SUITE("Save and Load") {
         cleanup_test_project(proj);
     }
     
-    TEST_CASE("clear removes messages but not file (must call save to remove file)") {
+    TEST_CASE("clear persists the cleared state (file removed immediately)") {
         auto proj = create_test_project();
         auto msgs = create_test_messages(proj);
         
@@ -843,11 +843,100 @@ TEST_SUITE("Save and Load") {
         
         msgs.clear();
         CHECK(msgs.size() == 0);
-        // clear() only clears memory, file remains
-        // call save() on empty messages to remove file
-        msgs.save();
-        CHECK_FALSE(msgs.has_saved_messages());  // Now file is removed
+        // §CRASH-6 (defect #6): clear() persists synchronously — the
+        // file (and the SQLite mirror row) are gone without an
+        // explicit save().
+        CHECK_FALSE(msgs.has_saved_messages());
+        // The crash payload is cleared too, so the signal handler
+        // cannot resurrect the cleared chain.
+        CHECK(msgs.crash_payload_for_signal().empty());
         
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-6 clear survives reload (cleared chain not resurrected)") {
+        auto proj = create_test_project();
+
+        {
+            auto msgs = create_test_messages(proj);
+            msgs.add_system("Doomed system");
+            msgs.add_user("Doomed user");
+            msgs.save();
+            CHECK(msgs.has_saved_messages());
+            msgs.clear();
+        }
+
+        // A fresh instance must NOT see the cleared chain (regression:
+        // clear() used to leave messages.json + the SQLite mirror
+        // untouched, so load() brought the old chain back).
+        auto msgs2 = create_test_messages(proj);
+        CHECK_FALSE(msgs2.load());
+        CHECK(msgs2.size() == 0);
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-6 load drops structurally invalid messages") {
+        auto proj = create_test_project();
+
+        // Plant a messages.json where one message is missing its role
+        // (the monkeybyte failure mode: every LLM request built from
+        // such a chain was rejected by the provider, forever).
+        {
+            std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json",
+                            std::ios::binary);
+            f << R"([
+                {"role":"system","content":"System"},
+                {"content":"assistant reply with no role"},
+                {"role":"user","content":"Hello"}
+            ])";
+        }
+
+        auto msgs = create_test_messages(proj);
+        CHECK(msgs.load());
+        // The invalid message is dropped, the valid ones survive.
+        CHECK(msgs.size() == 2);
+        CHECK(msgs.get_messages()[0]["role"] == "system");
+        CHECK(msgs.get_messages()[1]["role"] == "user");
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-6 load with only invalid messages starts fresh") {
+        auto proj = create_test_project();
+
+        {
+            std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json",
+                            std::ios::binary);
+            f << R"([{"content":"no role at all"}])";
+        }
+
+        auto msgs = create_test_messages(proj);
+        CHECK_FALSE(msgs.load());
+        CHECK(msgs.size() == 0);
+
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("CRASH-6 .crash mirror tolerates a stale trailing tail") {
+        auto proj = create_test_project();
+
+        // Plant a .crash file with a stale tail (what a failed
+        // ftruncate leaves behind — a suffix of a previous, longer
+        // payload, defect #5).
+        {
+            std::ofstream f(proj / ".daedalus" / "daedalus" / "messages.json.crash",
+                            std::ios::binary);
+            f << R"([{"role":"system","content":"Recovered"}]n":"old stale tail"}])";
+        }
+
+        MessageCompressionConfig cfg;
+        cfg.auto_flush_enabled = false;
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
+        CHECK(msgs.load());
+        CHECK(msgs.size() == 1);
+        CHECK(msgs.get_messages()[0]["content"] == "Recovered");
+
         cleanup_test_project(proj);
     }
     

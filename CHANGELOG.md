@@ -200,6 +200,45 @@ Communication Protocol (ACP) sub-library + runtime skill/MCP/tool toggles.
 
 ### Fixed
 
+- **Crash-handler hardening + cleared/corrupt session persistence**
+  (§CRASH-6, 2026-08-05, from the monkeybyte crash report in
+  `daedalus_bugs.md`): seven defects in the `Messages` crash-handling
+  and persistence machinery (`src/core/Messages.cpp`):
+  - The signal handler snapshotted the registry into a `std::vector` —
+    `malloc` inside a SIGSEGV handler deadlocks or re-corrupts the heap
+    when the fault originated in the allocator. The registry is now a
+    fixed-size array of `std::atomic<MessagesCrashState*>` with CAS
+    registration: no allocation, no lock anywhere on the signal path
+    (also removes the spinlock self-deadlock when a thread faults while
+    holding the registry lock).
+  - `save()` mutated the `std::string crash_payload_` the handler read —
+    a dangling-`data()` race. The payload is now double-buffered:
+    `save()` writes the inactive slot and flips an atomic index, so the
+    handler never reads a buffer being written.
+  - The handler dereferenced `Messages*` that a concurrent destructor
+    could free (use-after-free). Per-instance crash state (fd + payload)
+    now lives in a heap-allocated `MessagesCrashState` that is
+    intentionally leaked for process lifetime, and the `.crash` fd is
+    never closed (a closed fd number could be recycled mid-write).
+  - A failed `ftruncate(fd, 0)` left a stale tail in the `.crash`
+    mirror, producing corrupt recovery JSON exactly when the mirror was
+    needed. Both `save()` and the handler now write first and
+    `ftruncate` to the exact payload length, and the recovery parser
+    tolerates trailing garbage by walking backwards over `]` candidates.
+  - `Messages::clear()` never persisted: it set neither `dirty_` nor
+    touched the SQLite mirror, so a corrupt chain survived "clear chat"
+    until the whole `.daedalus/` folder was deleted. `clear()` now
+    synchronously removes `messages.json`, the `.tmp`/`.crash` mirrors,
+    the SQLite mirror row, and clears the crash payload.
+  - `load()` ran only `sanitize_message_chain()` — a message with a
+    missing/empty `role` (e.g. from an interrupted save) was loaded
+    forever after and broke every LLM request. Both load paths (SQLite
+    mirror and `messages.json`) now validate every message with
+    `validate_message_for_recovery()` and drop invalid entries with a
+    warning; an all-invalid mirror is deleted.
+  Covered by new CRASH-6 cases in `tests/test_messages.cpp`; documented
+  in `docs/crash_resilience.md`.
+
 - **Streaming retry/fallback re-posts asked for SSE and crashed on
   `json::parse("data: ...")`** (§SYNC-FALLBACK-STREAM, 2026-08-01, found
   by live LM Studio verification): all four non-streaming fallback sites

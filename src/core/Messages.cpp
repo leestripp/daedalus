@@ -27,6 +27,9 @@
 #include <sys/stat.h>  // mode_t
 #include <csignal>     // sigaction
 #include <vector>
+#include <array>       // fixed-size crash registry
+#include <cstdlib>     // malloc/free (crash payload slots)
+#include <iterator>    // istreambuf_iterator
 #include <cstring>     // strlen
 #include <mutex>       // std::call_once
 #include <algorithm>   // std::find, std::swap
@@ -156,19 +159,66 @@ prefix, suffix, or explanation. Just output the summary in the format above.
 
 // ============================================================================
 // §CRASH-4 (2026-07-16): async-signal-safe crash handler infrastructure.
+// §CRASH-6 (2026-08-05): reworked per the monkeybyte crash report
+// (daedalus_bugs.md, defects #1-#5). The old design kept a
+// std::vector<Messages*> guarded by a spinlock, snapshotted it into a
+// std::vector inside the signal handler (malloc in a SIGSEGV handler —
+// deadlock/heap corruption if the fault originated in the allocator),
+// and let the handler dereference Messages objects that a concurrent
+// destructor could free. The new design:
 //
-// The crash handler must avoid allocations, locks, and any non-trivial
-// stdlib calls. We keep a small registry of active Messages* in a
-// process-global vector, guarded by a tiny atomic spinlock (no
-// pthread_mutex, which is NOT async-signal-safe per POSIX).
+//   - registry is a FIXED-SIZE array of atomic pointers — no lock,
+//     no dynamic storage anywhere on the signal path (defects #1/#3);
+//   - per-instance state lives in a heap-allocated MessagesCrashState
+//     that is INTENTIONALLY LEAKED for the rest of the process, so the
+//     handler can never touch freed memory or a recycled fd
+//     (defect #4);
+//   - the payload is double-buffered: save() writes the inactive slot
+//     and flips an atomic index, so the handler never reads a buffer
+//     that save() is mutating (defect #2);
+//   - after writing, the handler ftruncate()s to the payload length to
+//     cut any stale tail (defect #5).
 // ============================================================================
+
+// Crash-mirror state shared between a Messages instance and the signal
+// handler. Allocated lazily (first save() or install_crash_handlers())
+// and deliberately never freed — see uninstall_crash_handlers().
+struct MessagesCrashState {
+    // Pre-opened fd for messages.json.crash. -1 until
+    // install_crash_handlers() opens it. Never closed: closing it would
+    // let the fd number be recycled while a concurrent signal handler
+    // still writes through it (report defect #4).
+    std::atomic<int> fd{-1};
+
+    // false after uninstall_crash_handlers(); the handler skips
+    // inactive entries.
+    std::atomic<bool> active{true};
+
+    // Bookkeeping for install/uninstall idempotency (normal threads).
+    std::atomic<bool> registered{false};
+
+    // Double-buffered payload (report defect #2). save() writes the
+    // INACTIVE slot then flips active_slot with release ordering; the
+    // handler loads active_slot once with acquire ordering and reads
+    // that slot, so it never reads a buffer save() is mutating.
+    struct PayloadSlot {
+        char* data = nullptr;       // malloc'd, `capacity` bytes
+        std::size_t size = 0;       // valid bytes in `data`
+        std::size_t capacity = 0;
+    };
+    PayloadSlot slots[2];
+    std::atomic<int> active_slot{0};
+};
 
 namespace {
 
-// Lock-free registry of Messages instances that want their .crash
-// file written on SIGSEGV/SIGABRT/SIGFPE/SIGILL.
-std::atomic<int> g_crash_registry_lock{0};
-std::vector<Messages*> g_crash_registry;
+// Lock-free fixed-size registry of crash-mirror states that want their
+// .crash file written on SIGSEGV/SIGABRT/SIGFPE/SIGILL. Registration is
+// a CAS on an empty slot — no lock is ever taken, so a thread that
+// faults mid-registration cannot deadlock the handler (defect #3).
+constexpr std::size_t kCrashRegistryCapacity = 64;
+std::array<std::atomic<MessagesCrashState*>, kCrashRegistryCapacity>
+    g_crash_registry{};
 
 // Async-signal-safe write helper. Writes len bytes from buf to fd,
 // looping on EINTR. Returns 0 on success, -1 on hard error. No
@@ -203,36 +253,75 @@ void re_raise(int sig) {
 // .crash file with the most recently persisted contents, then
 // re-raises.
 extern "C" void daedalus_crash_signal_handler(int sig) {
-    // Spinlock acquire.
-    while (g_crash_registry_lock.fetch_add(1, std::memory_order_acquire)
-           != 0) {
-        g_crash_registry_lock.fetch_sub(1, std::memory_order_relaxed);
-        // Avoid volatile-increment (deprecated in C++20+). Use a
-        // local counter the compiler is allowed to optimise out; we
-        // only need a handful of iterations to give the holder a
-        // chance to release.
-        for (int i = 0; i < 100; ++i) { /* brief spin */ }
-    }
-    // Snapshot registry contents while holding the lock. Copy into
-    // a local vector so we can release the lock before iterating.
-    std::vector<Messages*> snapshot;
-    snapshot.reserve(g_crash_registry.size());
-    for (auto* p : g_crash_registry) {
-        snapshot.push_back(p);
-    }
-    g_crash_registry_lock.fetch_sub(1, std::memory_order_release);
-
-    for (Messages* m : snapshot) {
-        if (!m) continue;
-        int fd = m->crash_fd_for_signal();
-        const std::string& blob = m->crash_payload_for_signal();
-        if (fd >= 0 && !blob.empty()) {
-            ::lseek(fd, 0, SEEK_SET);
-            signal_safe_write(fd, blob.data(), blob.size());
-            ::fsync(fd);
+    // §CRASH-6: no allocation, no locks, no stdlib — only atomic loads
+    // and async-signal-safe syscalls. The registry slots point at
+    // leaked MessagesCrashState objects, so even a Messages destructor
+    // racing the handler cannot produce a use-after-free.
+    for (const auto& slot : g_crash_registry) {
+        MessagesCrashState* st = slot.load(std::memory_order_acquire);
+        if (!st) continue;
+        if (!st->active.load(std::memory_order_acquire)) continue;
+        const int fd = st->fd.load(std::memory_order_relaxed);
+        if (fd < 0) continue;
+        const MessagesCrashState::PayloadSlot& s =
+            st->slots[st->active_slot.load(std::memory_order_acquire) & 1];
+        if (!s.data || s.size == 0) continue;
+        ::lseek(fd, 0, SEEK_SET);
+        if (signal_safe_write(fd, s.data, s.size) >= 0) {
+            // ftruncate(2) is async-signal-safe. Cutting the file at
+            // exactly the payload length keeps the mirror a valid JSON
+            // document even when the new payload is shorter than the
+            // previous one (report defect #5). Best-effort: if the
+            // truncate fails, the recovery-side parser tolerates the
+            // stale tail (see load_from_crash_file()).
+            const int trunc_rc = ::ftruncate(fd, static_cast<off_t>(s.size));
+            (void)trunc_rc;
         }
+        ::fsync(fd);
     }
     re_raise(sig);
+}
+
+// Registry add/remove — normal-thread context only.
+bool crash_registry_add(MessagesCrashState* st) {
+    for (auto& slot : g_crash_registry) {
+        MessagesCrashState* expected = nullptr;
+        if (slot.compare_exchange_strong(expected, st,
+                                         std::memory_order_release,
+                                         std::memory_order_relaxed)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void crash_registry_remove(MessagesCrashState* st) {
+    for (auto& slot : g_crash_registry) {
+        MessagesCrashState* expected = st;
+        if (slot.compare_exchange_strong(expected, nullptr,
+                                         std::memory_order_release,
+                                         std::memory_order_relaxed)) {
+            return;
+        }
+    }
+}
+
+// Publish a new payload: write the inactive slot, then flip the atomic
+// index. Called from save() (normal context — malloc is fine here).
+void crash_state_set_payload(MessagesCrashState* st,
+                             const char* data, std::size_t size) {
+    const int next = 1 - st->active_slot.load(std::memory_order_relaxed);
+    auto& s = st->slots[next];
+    if (s.capacity < size) {
+        char* nb = static_cast<char*>(std::malloc(size > 0 ? size : 1));
+        if (!nb) return;  // OOM: keep the previous payload
+        std::free(s.data);
+        s.data = nb;
+        s.capacity = size;
+    }
+    if (size > 0) std::memcpy(s.data, data, size);
+    s.size = size;
+    st->active_slot.store(next, std::memory_order_release);
 }
 
 // One-time install of the signal handler for SIGSEGV/SIGABRT/SIGFPE/SIGILL.
@@ -305,11 +394,12 @@ Messages::~Messages() {
     // save() here would re-create the messages file even after the
     // test wiped the data dir (destroying the test isolation).
 
-    // §CRASH-4 (2026-07-16): close the .crash fd and deregister from
-    // the signal-handler registry. Callers should have called
-    // uninstall_crash_handlers() in the graceful shutdown path; we
-    // also do it here defensively so the registry doesn't accumulate
-    // dangling pointers across Messages instances.
+    // §CRASH-4 (2026-07-16): deregister from the signal-handler
+    // registry. Callers should have called uninstall_crash_handlers()
+    // in the graceful shutdown path; we also do it here defensively so
+    // the handler stops writing this instance's .crash file. (The
+    // crash-mirror state itself is intentionally leaked — see
+    // uninstall_crash_handlers.)
     uninstall_crash_handlers();
 }
 
@@ -450,12 +540,23 @@ bool Messages::load() {
             try {
                 json saved = json::parse(blob);
                 if (saved.is_array() && !saved.empty()) {
-                    std::lock_guard<std::mutex> lk(messages_mutex_);
-                    messages_ = saved;
-                    messages_ = sanitize_message_chain(messages_);
-                    LOG_INFO("Loaded " + std::to_string(messages_.size())
-                             + " messages from SQLite mirror");
-                    return true;
+                    // §CRASH-6 (defect #7): drop structurally invalid
+                    // entries instead of feeding them to the provider.
+                    drop_invalid_messages(saved, "SQLite mirror");
+                    if (saved.empty()) {
+                        // Everything was invalid — the mirror is poison.
+                        LOG_WARNING("Messages: SQLite mirror held only "
+                                    "invalid messages; deleting and "
+                                    "falling back to JSON");
+                        store.delete_messages_json(session_id_);
+                    } else {
+                        std::lock_guard<std::mutex> lk(messages_mutex_);
+                        messages_ = saved;
+                        messages_ = sanitize_message_chain(messages_);
+                        LOG_INFO("Loaded " + std::to_string(messages_.size())
+                                 + " messages from SQLite mirror");
+                        return true;
+                    }
                 }
             } catch (const json::parse_error&) {
                 // Corrupt mirror: delete it and fall through to JSON load (B22)
@@ -495,6 +596,15 @@ bool Messages::load() {
 
         if (saved.empty()) {
             LOG_INFO("Messages file is empty");
+            return false;
+        }
+
+        // §CRASH-6 (defect #7): drop structurally invalid entries
+        // instead of feeding them to the provider.
+        drop_invalid_messages(saved, messages_file_.string());
+        if (saved.empty()) {
+            LOG_WARNING("Messages file contained only invalid messages; "
+                        "starting fresh");
             return false;
         }
 
@@ -547,7 +657,36 @@ bool Messages::load_from_crash_file(const std::string& crash_path) {
             LOG_WARNING("Crash file exists but cannot be read: " + crash_path);
             return false;
         }
-        json saved = json::parse(f);
+        // §CRASH-6 (report defect #5): the .crash mirror is written
+        // through a pre-opened fd; if a truncation ever failed the file
+        // can carry a stale tail after the closing ']'. Tolerate that:
+        // walk backwards over ']' candidates and take the first prefix
+        // that parses as a valid document.
+        const std::string text{std::istreambuf_iterator<char>(f),
+                               std::istreambuf_iterator<char>()};
+        json saved;
+        try {
+            saved = json::parse(text);
+        } catch (const json::parse_error&) {
+            bool recovered = false;
+            std::size_t pos = text.find_last_of(']');
+            for (int attempts = 0;
+                 !recovered && attempts < 16 && pos != std::string::npos;
+                 ++attempts) {
+                try {
+                    saved = json::parse(text.substr(0, pos + 1));
+                    recovered = true;
+                } catch (const json::parse_error&) {
+                    pos = (pos == 0) ? std::string::npos
+                                     : text.find_last_of(']', pos - 1);
+                }
+            }
+            if (!recovered) {
+                throw;  // rethrow the original parse error
+            }
+            LOG_WARNING("Messages: .crash file had trailing bytes; "
+                        "parsed up to the last valid ']'");
+        }
         if (!saved.is_array() || saved.empty()) {
             LOG_WARNING("Crash file is empty or not an array: " + crash_path);
             return false;
@@ -650,16 +789,43 @@ bool Messages::validate_message_for_recovery(const json& msg) const {
     return true;
 }
 
+// §CRASH-6 (monkeybyte report, defect #7): validate every message of a
+// loaded chain, not just the last one on the .crash recovery path.
+// load() used to run only sanitize_message_chain() (which fixes
+// orphaned tool results) — a message with a missing/empty role that
+// landed in the store once (e.g. written by an interrupted save) was
+// loaded forever after, and every LLM request built from the chain
+// failed. Reuses the crash-recovery validator; invalid entries are
+// dropped with a warning instead of fed back to the provider.
+std::size_t Messages::drop_invalid_messages(json& arr,
+                                            const std::string& source) const {
+    std::size_t dropped = 0;
+    json valid = json::array();
+    for (const auto& m : arr) {
+        if (validate_message_for_recovery(m)) {
+            valid.push_back(m);
+        } else {
+            ++dropped;
+            LOG_WARNING("Messages: dropping structurally invalid message "
+                        "from " + source + ": " + m.dump());
+        }
+    }
+    if (dropped > 0) {
+        arr = std::move(valid);
+    }
+    return dropped;
+}
+
 void Messages::save() const {
     // §fix (2026-07-18): serialize concurrent save() calls — the flush
     // worker and a main-thread flush_now() can run save() at the same
-    // time and would race on crash_payload_/crash_fd_.
+    // time and would race on the crash-mirror state.
     std::lock_guard<std::mutex> save_lock(save_mutex_);
     save_impl();
 }
 
 // §fix (2026-07-18): unsynchronized persistence core. Caller must hold
-// save_mutex_ so that crash_payload_/crash_fd_ mutations and the atomic
+// save_mutex_ so that crash-mirror mutations and the atomic
 // dirty_/snapshot dance are serialized.
 void Messages::save_impl() const {
     // §fix (2026-07-18): snapshot messages_ under messages_mutex_ so the
@@ -695,6 +861,13 @@ void Messages::save_impl() const {
                 messages_file_.parent_path());
             store.delete_messages_json(session_id_);
         } catch (...) { /* best-effort */ }
+        // §CRASH-6 (report defect #6): clear the crash payload too —
+        // otherwise the signal handler would rewrite the stale chain
+        // into the .crash mirror, resurrecting a cleared session on the
+        // next load().
+        if (crash_state_) {
+            crash_state_set_payload(crash_state_, "", 0);
+        }
         return;
     }
 
@@ -702,7 +875,8 @@ void Messages::save_impl() const {
     json to_save = sanitize_message_chain(snapshot);
 
     // §CRASH-4 (2026-07-16): declare `contents` at function scope so
-    // it's visible after the try block where crash_payload_ is updated.
+    // it's visible after the try block where the crash-mirror state is
+    // updated.
     const std::string contents = to_save.dump(2);
 
     try {
@@ -805,24 +979,28 @@ void Messages::save_impl() const {
     // §fix: dirty_ stays cleared (done at snapshot time). A concurrent
     // add_*() after the snapshot re-sets it, so nothing is lost.
 
-    // §CRASH-4 (2026-07-16): cache the JSON payload so the crash
-    // handler can re-write it verbatim without re-entering save()
-    // (which calls into the allocator, mutex-guarded SQLite, and
-    // std::ofstream — none of which are async-signal-safe).
-    crash_payload_ = contents;
-    if (crash_fd_ >= 0) {
+    // §CRASH-4 (2026-07-16) / §CRASH-6 (2026-08-05): publish the JSON
+    // payload into the double-buffered crash state so the signal handler
+    // can re-write it verbatim without allocating or racing save()
+    // (report defect #2), and keep the pre-opened .crash fd in sync:
+    // write, then ftruncate to the exact payload length to cut any
+    // stale tail (report defect #5).
+    MessagesCrashState* st = crash_state_or_create();
+    crash_state_set_payload(st, contents.data(), contents.size());
+    const int cfd = st->fd.load(std::memory_order_acquire);
+    if (cfd >= 0) {
         // Re-write the .crash file via the pre-opened fd so the
         // crash handler has the latest contents even if a save()
         // happened after the fd was opened.
-        ::lseek(crash_fd_, 0, SEEK_SET);
-        if (::ftruncate(crash_fd_, 0) != 0) {
-            // Best-effort: if the truncate fails the write below still
-            // overwrites from offset 0; a stale tail is preferable to
-            // skipping the mirror update entirely.
+        ::lseek(cfd, 0, SEEK_SET);
+        if (signal_safe_write(cfd, contents.data(), contents.size()) >= 0) {
+            if (::ftruncate(cfd, static_cast<off_t>(contents.size())) != 0) {
+                LOG_WARNING("Messages: ftruncate on .crash mirror failed; "
+                            "file may carry a stale tail");
+            }
         }
-        signal_safe_write(crash_fd_, contents.data(), contents.size());
-        ::fsync(crash_fd_);
-        ::lseek(crash_fd_, 0, SEEK_SET);
+        ::fsync(cfd);
+        ::lseek(cfd, 0, SEEK_SET);
     }
 }
 
@@ -830,62 +1008,88 @@ void Messages::save_impl() const {
 // §CRASH-4 (2026-07-16): crash handler install / uninstall
 // ============================================================================
 
+MessagesCrashState* Messages::crash_state_or_create() const {
+    // §CRASH-6: the state is allocated once and INTENTIONALLY LEAKED
+    // (report defect #4). A signal can arrive at any moment; the handler
+    // must never dereference freed memory or write through a recycled
+    // fd, so the state — including the .crash fd — lives for the rest
+    // of the process. Cost: one struct + one fd per Messages instance.
+    if (!crash_state_) {
+        crash_state_ = new MessagesCrashState();
+    }
+    return crash_state_;
+}
+
+std::string Messages::crash_payload_for_signal() const {
+    // §CRASH-6: snapshot of the active payload slot. Called from normal
+    // (non-signal) context — tests, diagnostics — so copying is fine.
+    if (!crash_state_) return {};
+    const auto& s = crash_state_->slots[
+        crash_state_->active_slot.load(std::memory_order_acquire) & 1];
+    if (!s.data || s.size == 0) return {};
+    return std::string(s.data, s.size);
+}
+
 void Messages::install_crash_handlers() {
-    // Open (or truncate) the .crash file once. The fd is held open
-    // for the lifetime of this Messages instance. The signal
-    // handler writes to this fd — no allocation, no stdio.
-    if (crash_fd_ < 0) {
+    MessagesCrashState* st = crash_state_or_create();
+    // Open (or truncate) the .crash file once. The fd is held open for
+    // the rest of the process (intentionally — see
+    // uninstall_crash_handlers). The signal handler writes to this fd —
+    // no allocation, no stdio.
+    if (st->fd.load(std::memory_order_relaxed) < 0) {
         const std::string crash_path = messages_file_.string() + ".crash";
         // Ensure the directory exists (data_dir_ was created in the
         // ctor, but be defensive).
         std::error_code ec;
         std::filesystem::create_directories(messages_file_.parent_path(), ec);
-        crash_fd_ = ::open(crash_path.c_str(),
-                           O_CREAT | O_WRONLY | O_TRUNC, 0644);
-        // Write current contents (empty if nothing saved yet) so
-        // the fd has a valid byte sequence.
-        if (crash_fd_ >= 0) {
-            signal_safe_write(crash_fd_, crash_payload_.data(),
-                              crash_payload_.size());
-            ::fsync(crash_fd_);
-            ::lseek(crash_fd_, 0, SEEK_SET);
+        const int fd = ::open(crash_path.c_str(),
+                              O_CREAT | O_WRONLY | O_TRUNC, 0644);
+        if (fd >= 0) {
+            // Write the current payload (empty if nothing saved yet) so
+            // the fd has a valid byte sequence from the start.
+            const auto& s = st->slots[
+                st->active_slot.load(std::memory_order_acquire) & 1];
+            if (s.data && s.size > 0) {
+                signal_safe_write(fd, s.data, s.size);
+                ::fsync(fd);
+                ::lseek(fd, 0, SEEK_SET);
+            }
+            st->fd.store(fd, std::memory_order_release);
+        } else {
+            LOG_WARNING("Messages: cannot open .crash mirror: " + crash_path);
         }
     }
     // Install the signal handlers (one-time, process-global).
     install_signal_handlers_once();
-    // Register ourselves in the process-global registry.
-    while (g_crash_registry_lock.fetch_add(1, std::memory_order_acquire)
-           != 0) {
-        g_crash_registry_lock.fetch_sub(1, std::memory_order_relaxed);
-        for (int i = 0; i < 100; ++i) { /* spin */ }
+    // Register ourselves in the process-global registry (lock-free CAS).
+    if (!st->registered.load(std::memory_order_relaxed)) {
+        st->active.store(true, std::memory_order_release);
+        if (crash_registry_add(st)) {
+            st->registered.store(true, std::memory_order_release);
+        } else {
+            LOG_ERROR("Messages: crash-mirror registry is full ("
+                      + std::to_string(kCrashRegistryCapacity)
+                      + " entries); this instance will not be written "
+                        "on crash");
+        }
     }
-    g_crash_registry.push_back(this);
-    g_crash_registry_lock.fetch_sub(1, std::memory_order_release);
 }
 
 void Messages::uninstall_crash_handlers() {
-    // Remove from registry.
-    while (g_crash_registry_lock.fetch_add(1, std::memory_order_acquire)
-           != 0) {
-        g_crash_registry_lock.fetch_sub(1, std::memory_order_relaxed);
-        for (int i = 0; i < 100; ++i) { /* spin */ }
+    MessagesCrashState* st = crash_state_;
+    if (!st) return;
+    st->active.store(false, std::memory_order_release);
+    if (st->registered.exchange(false, std::memory_order_acq_rel)) {
+        crash_registry_remove(st);
     }
-    auto it = std::find(g_crash_registry.begin(),
-                        g_crash_registry.end(), this);
-    if (it != g_crash_registry.end()) {
-        // Swap-remove: O(1) and doesn't break iterators.
-        std::swap(*it, g_crash_registry.back());
-        g_crash_registry.pop_back();
-    }
-    g_crash_registry_lock.fetch_sub(1, std::memory_order_release);
-
-    // Close the .crash fd. We keep crash_payload_ around in case
-    // the file is needed for crash recovery (load() checks for
-    // messages.json.crash on the next launch).
-    if (crash_fd_ >= 0) {
-        ::close(crash_fd_);
-        crash_fd_ = -1;
-    }
+    // §CRASH-6 (report defect #4): neither the state nor the fd is
+    // released here. A signal handler on another thread may already
+    // have loaded `st` from the registry; freeing it — or closing the
+    // fd, whose number could then be recycled by an unrelated open —
+    // would turn that into a use-after-free or a stray write into an
+    // unrelated file. Leaking one struct + one fd per Messages
+    // instance is the deliberate crash-path trade-off. The .crash file
+    // itself stays on disk for crash recovery on the next launch.
 }
 
 // ============================================================================
@@ -947,9 +1151,24 @@ void Messages::flush_worker_main() {
 }
 
 void Messages::clear() {
-    std::lock_guard<std::mutex> lk(messages_mutex_);
-    messages_ = json::array();
-    executing_tools_.clear();
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        messages_ = json::array();
+        executing_tools_.clear();
+    }
+    // §CRASH-6 (monkeybyte report, defect #6): persist the cleared
+    // state. The old code only reset the in-memory chain: it never set
+    // dirty_, so the auto-flush worker never wrote the empty state, and
+    // the SQLite mirror (which load() consults FIRST) kept the old
+    // chain forever — a corrupt chain survived "clear chat" until the
+    // whole .daedalus/ folder was deleted. save() on an empty chain
+    // removes messages.json, the .tmp/.crash mirrors, the SQLite mirror
+    // row, and clears the crash payload.
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
+    save();
 }
 
 bool Messages::cleanup_dangling_tool_results() {

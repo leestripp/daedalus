@@ -110,20 +110,43 @@ worker explicitly enable it.
 `Messages::install_crash_handlers()` registers `SIGSEGV`, `SIGABRT`,
 `SIGFPE`, and `SIGILL` handlers that write the current messages to
 `messages.json.crash` and then re-raise the signal. The handlers use
-**only async-signal-safe primitives** (open, write, close, lseek,
-fsync, signal) — no allocations, no mutexes, no stdio, no SQLite.
+**only async-signal-safe primitives** (write, lseek, ftruncate, fsync,
+signal) — no allocations, no locks, no stdio, no SQLite.
+
+§CRASH-6 (2026-08-05, monkeybyte crash report `daedalus_bugs.md`
+defects #1–#5) reworked the internals:
+
+- **Fixed-size lock-free registry** — a
+  `std::array<std::atomic<MessagesCrashState*>, 64>` with CAS
+  registration replaces the old `std::vector` + spinlock. The handler
+  never allocates and never takes a lock, so a fault inside
+  malloc/free (or while the old spinlock was held) cannot deadlock or
+  re-corrupt the heap.
+- **Leaked per-instance state** — the pre-opened `.crash` fd and the
+  payload live in a heap-allocated `MessagesCrashState` that is
+  *intentionally never freed* (and the fd never closed). A signal
+  handler racing a `Messages` destructor can therefore never touch
+  freed memory or write through a recycled fd.
+- **Double-buffered payload** — `save()` writes the inactive slot and
+  flips an atomic index (release/acquire), so the handler never reads
+  a buffer that `save()` is mutating. The old design cached a
+  `std::string` the handler read while `save()` reassigned it —
+  a dangling-`data()` race.
+- **Stale-tail handling** — after writing, both `save()` and the
+  handler `ftruncate()` the fd to the exact payload length, and the
+  recovery parser tolerates trailing garbage (walks backwards over
+  `]` candidates) as a second line of defence.
 
 ```cpp
 extern "C" void daedalus_crash_signal_handler(int sig) {
-    // Spinlock acquire (no pthread_mutex — POSIX says it's NOT
-    // async-signal-safe). Snapshots the registry.
-    while (g_crash_registry_lock.fetch_add(1, ...) != 0) { ... }
-
-    for (Messages* m : snapshot) {
-        // Re-write the cached payload verbatim to the pre-opened fd.
-        ::lseek(m->crash_fd(), 0, SEEK_SET);
-        write(fd, payload.data(), payload.size());
-        ::fsync(fd);
+    for (const auto& slot : g_crash_registry) {        // atomic loads only
+        MessagesCrashState* st = slot.load(std::memory_order_acquire);
+        if (!st || !st->active.load(...)) continue;
+        const auto& s = st->slots[st->active_slot.load(...) & 1];
+        ::lseek(st->fd, 0, SEEK_SET);
+        write(st->fd, s.data, s.size);
+        ::ftruncate(st->fd, s.size);   // cut any stale tail
+        ::fsync(st->fd);
     }
     re_raise(sig);   // restore default handler, re-raise
 }
@@ -131,13 +154,13 @@ extern "C" void daedalus_crash_signal_handler(int sig) {
 
 **Why pre-opened fd?** Signal handlers can't safely allocate or call
 `open()`. We open the `.crash` file once at install time and hold
-the fd for the lifetime of the Messages object.
+the fd open for the rest of the process (deliberate leak — see above).
 
 **Why a cached payload?** The handler must not re-enter `save()` (which
 calls into the allocator, mutex-guarded SQLite, and `std::ofstream` —
-none async-signal-safe). Instead, `save()` caches the last
-successfully-written JSON blob in `crash_payload_`, and the handler
-writes that blob verbatim.
+none async-signal-safe). Instead, `save()` publishes the last
+successfully-written JSON blob into the double-buffered
+`MessagesCrashState`, and the handler writes that blob verbatim.
 
 **Production wiring:**
 
@@ -226,9 +249,27 @@ bool Messages::validate_message_for_recovery(const json& msg) const {
 }
 ```
 
+**Load-time validation (§CRASH-6, defect #7):** every message loaded
+from the SQLite mirror or `messages.json` is checked with the same
+well-formedness validator used for crash recovery
+(`validate_message_for_recovery()` — role present and non-empty, tool
+results carry `tool_call_id`, assistant tool-call arguments parse).
+Structurally invalid entries are **dropped with a warning** instead of
+being fed back to the provider, so a single bad write can no longer
+poison every subsequent session. If nothing survives, the store is
+treated as empty (and a poisoned SQLite mirror is deleted).
+
+**`clear()` persists (§CRASH-6, defect #6):** `Messages::clear()` now
+marks the chain dirty and synchronously `save()`s — which on an empty
+chain removes `messages.json`, the `.tmp`/`.crash` mirrors, and the
+SQLite mirror row, and clears the crash payload. A host-side "clear
+chat" can no longer be undone by the next `load()`.
+
 **Trade-off:** we only drop ONE message. If multiple are corrupt, the
 user gets them all back so they can inspect / repair / delete by hand.
 The recovery is logged at WARN level so the user knows what happened.
+(Note: this drop-last trade-off applies to the `.crash` recovery path
+only; the normal load path drops every invalid entry — see above.)
 
 ---
 
@@ -257,6 +298,10 @@ The recovery is logged at WARN level so the user knows what happened.
   idempotency / payload cache.
 - **CRASH-5** (5 cases) — `load()` falls back to `.crash` / drops
   corrupt last message / re-saves recovered chain.
+- **CRASH-6** (4 cases) — `clear()` persists the cleared state
+  (file + mirror removed, cleared chain not resurrected) /
+  load-time validation drops invalid messages / `.crash` mirror
+  tolerates a stale trailing tail.
 
 **Manual verification:** run `daedalus-cli`, type a prompt, hit Ctrl-C.
 Inspect `<project>/.daedalus/daedalus/messages.json` — it should contain the
