@@ -1350,10 +1350,11 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
     // ============================================================================
     // COMPRESSION TIMEOUT STRATEGY (DO NOT REMOVE THESE COMMENTS)
     // ============================================================================
-    // We try the compression up to 3 times with INCREASING timeouts:
-    //   Attempt 1: 30s  - fast path, works for small contexts (10-100 msgs)
-    //   Attempt 2: 60s  - 2x, gives more time for medium contexts
-    //   Attempt 3: 120s - 4x, for very large contexts (800+ messages)
+    // We try the compression up to 3 times with INCREASING timeouts derived
+    // from config_.compression_timeout (default 30s):
+    //   Attempt 1: 1x base (default 30s)  - fast path, works for small contexts (10-100 msgs)
+    //   Attempt 2: 2x base (default 60s)  - gives more time for medium contexts
+    //   Attempt 3: 4x base (default 120s) - for very large contexts (800+ messages)
     //
     // We do NOT use exponential backoff (wait longer between retries) because
     // that would just delay the inevitable. Instead, we give each retry MORE
@@ -1385,9 +1386,11 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
 
     std::string request_body = request_payload.dump();
 
-    // Timeout sequence: 30s, 60s, 120s (2x growth per retry)
-    // DO NOT CHANGE WITHOUT READING THE COMMENT BLOCK ABOVE
-    const int timeouts[] = {30, 60, 120};
+    // Timeout sequence: base, 2x base, 4x base (2x growth per retry).
+    // The base comes from config_.compression_timeout (default 30s →
+    // 30s/60s/120s). DO NOT CHANGE WITHOUT READING THE COMMENT BLOCK ABOVE
+    const int base_timeout = std::max(1, config_.compression_timeout);
+    const int timeouts[] = {base_timeout, base_timeout * 2, base_timeout * 4};
     const int num_attempts = sizeof(timeouts) / sizeof(timeouts[0]);
 
     using daedalus::net::HttpRequest;
@@ -1526,7 +1529,7 @@ std::string Messages::extract_summary_text(const std::string& response_body) {
     return {};
 }
 
-std::optional<std::string> Messages::compress() {
+CompressResult Messages::compress() {
 
     // §fix (2026-07-18): snapshot the compression range under
     // messages_mutex_ — the flush worker saves concurrently. The LLM
@@ -1542,7 +1545,7 @@ std::optional<std::string> Messages::compress() {
 
         // If no messages, nothing to compress
         if (s >= e) {
-            return std::nullopt;
+            return {CompressOutcome::NothingToCompress, {}};
         }
         start_idx = s;
         end_idx = e;
@@ -1558,7 +1561,7 @@ std::optional<std::string> Messages::compress() {
     }
 
     if (middle_copy.empty()) {
-        return std::nullopt;
+        return {CompressOutcome::NothingToCompress, {}};
     }
 
     // Write debug files if enabled
@@ -1601,7 +1604,7 @@ std::optional<std::string> Messages::compress() {
             LOG_CERR(ERROR,  "[CONTEXT] Compression failed and only " << total
                       << " messages remain. Cannot safely reduce. Giving up."
                       << '\n');
-            return std::nullopt;
+            return {CompressOutcome::Failed, {}};
         }
 
         // Calculate the safe split point: keep system + last 30%
@@ -1617,11 +1620,10 @@ std::optional<std::string> Messages::compress() {
         if (actual_delete_count == 0) {
             LOG_CERR(WARNING,  "[CONTEXT] Cannot safely reduce context (only system msg?). Giving up."
                       << '\n');
-            return std::nullopt;
+            return {CompressOutcome::Failed, {}};
         }
 
-        LOG_CERR(ERROR,  "[CONTEXT] FALLBACK: All " << (3)
-                  << " compression attempts failed (timeouts 30s, 60s, 120s)."
+        LOG_CERR(ERROR,  "[CONTEXT] FALLBACK: All compression attempts failed."
                   << '\n');
         LOG_CERR(INFO,  "[CONTEXT] FALLBACK: Deleting first " << actual_delete_count
                   << " of " << total << " messages to prevent context overflow."
@@ -1632,7 +1634,11 @@ std::optional<std::string> Messages::compress() {
 
         messages_.erase(messages_.begin() + delete_start,
                         messages_.begin() + delete_start + actual_delete_count);
-        return std::nullopt;  // Return nullopt but context has been reduced
+        // §COMPRESS-REPORT: the context WAS reduced — report it as
+        // FallbackDeleted so callers fire on_compaction and do NOT
+        // schedule a retry. (Previously this returned the same nullopt
+        // as a genuine failure, so hosts never saw the state change.)
+        return {CompressOutcome::FallbackDeleted, {}};
     }
 
     // SUCCESS: Now safe to delete the middle messages and rebuild
@@ -1693,7 +1699,7 @@ std::optional<std::string> Messages::compress() {
 
     std::string result = new_messages.dump();
 
-    return result;
+    return {CompressOutcome::Compressed, result};
 }
 
 void Messages::replace_messages(const std::string& compressed_json) {

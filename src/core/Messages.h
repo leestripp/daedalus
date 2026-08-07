@@ -71,7 +71,10 @@ struct MessageCompressionConfig {
     std::string api_url;
     std::string api_key;
     double temperature = 0.0;  // §Phase 8.7: sampling temperature for summary LLM
-    int compression_timeout = 30;             // Seconds for compression API call (first attempt, retries use 60/120s)
+    // §COMPRESS-REPORT: base timeout in seconds for the compression API
+    // call. call_llm_for_summary() tries 3 times with growing timeouts:
+    // compression_timeout, 2x, 4x (default 30 → 30s/60s/120s).
+    int compression_timeout = 30;             // Base seconds; retries use 2x/4x
     
     // Debug
     bool debug_output = false;
@@ -96,6 +99,33 @@ struct MessageCompressionConfig {
     // accurate between streaming turns (SSE is always usage=null).
     // Signature: void(int, int, int) — set by LLMClient::initialize().
     std::function<void(int, int, int)> on_compression_tokens;
+};
+
+/**
+ * @brief Outcome of a Messages::compress() call (§COMPRESS-REPORT).
+ *
+ * The old std::optional<std::string> return conflated three different
+ * endings into a single nullopt — "nothing to compress", "summary
+ * failed but the fallback deleted the oldest messages anyway", and
+ * "gave up entirely". Hosts keying success off on_compaction therefore
+ * misreported a real context reduction as a failure, because the
+ * fallback-delete path never surfaced as a state change.
+ */
+enum class CompressOutcome {
+    Compressed,         ///< Summary generated; CompressResult::compressed_json is valid.
+    NothingToCompress,  ///< History too small / empty middle; nothing changed.
+    FallbackDeleted,    ///< Summary failed; oldest ~70% deleted as last resort.
+                        ///< The context WAS reduced — callers must still fire
+                        ///< on_compaction and must NOT schedule a retry.
+    Failed,             ///< Summary failed AND history too small to safely reduce.
+};
+
+/**
+ * @brief Return value of Messages::compress().
+ */
+struct CompressResult {
+    CompressOutcome outcome = CompressOutcome::Failed;
+    std::string compressed_json;  ///< Valid only when outcome == Compressed.
 };
 
 /**
@@ -327,9 +357,12 @@ public:
     /**
      * @brief Compress middle messages - just compress, no threshold check
      *        (threshold check should be done in main loop before calling this)
-     * @return Compressed messages as JSON string, or nullopt on failure
+     * @return CompressResult whose outcome distinguishes success, nothing-to-
+     *         compress, fallback-delete (context reduced WITHOUT a summary),
+     *         and outright failure. compressed_json is valid only when
+     *         outcome == CompressOutcome::Compressed.
      */
-    std::optional<std::string> compress();
+    CompressResult compress();
     
     /**
      * @brief Replace messages array with compressed messages from JSON string

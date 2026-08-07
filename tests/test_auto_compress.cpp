@@ -60,8 +60,13 @@ public:
     // first_total/later_total: usage.total_tokens reported for the first
     // main-turn response and all later ones. Defaults trip the 90%
     // threshold of a 10000-token context on cycle 1.
-    explicit CompressionFakeServer(int first_total = 9500, int later_total = 100)
-        : first_total_(first_total), later_total_(later_total) {
+    // fail_compression: answer every compression summary request with
+    // HTTP 500 — drives Messages::compress() down its last-resort
+    // fallback-delete path (§COMPRESS-REPORT).
+    explicit CompressionFakeServer(int first_total = 9500, int later_total = 100,
+                                   bool fail_compression = false)
+        : first_total_(first_total), later_total_(later_total),
+          fail_compression_(fail_compression) {
         listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
         int yes = 1;
@@ -165,6 +170,16 @@ private:
         if (body.find("\"max_tokens\"") != std::string::npos) {
             // Messages::call_llm_for_summary — the compression request.
             compression_requests_.fetch_add(1);
+            if (fail_compression_) {
+                // 5xx is retried (fast — no backoff), so all 3 attempts
+                // land here and the summary call gives up → fallback.
+                const std::string resp =
+                    "HTTP/1.1 500 Internal Server Error\r\n"
+                    "Content-Length: 0\r\n"
+                    "Connection: close\r\n\r\n";
+                ::send(cfd, resp.data(), resp.size(), 0);
+                return;
+            }
             send_json(cfd, chat_body("Summary: the user greeted the agent.", 520));
             return;
         }
@@ -182,6 +197,7 @@ private:
     int port_ = 0;
     int first_total_ = 9500;
     int later_total_ = 100;
+    bool fail_compression_ = false;
     std::atomic<bool> running_{false};
     std::atomic<int> main_requests_{0};
     std::atomic<int> compression_requests_{0};
@@ -647,6 +663,128 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
         CHECK(history.size() < 7);   // first 70% collapsed into the summary
         CHECK(history[0].value("role", "") == "system");
         CHECK(history[1].value("role", "") == "user");
+    }
+
+    fs::remove_all(home);
+}
+
+
+TEST_CASE("Agent::compress_context reports fallback delete via on_compaction") {
+    // §COMPRESS-REPORT: when ALL summary attempts fail (here: HTTP 500 on
+    // every compression request), Messages::compress() falls back to
+    // deleting the oldest ~70% WITHOUT a summary. That is a real context
+    // reduction and MUST surface as on_compaction — before the fix the
+    // fallback returned the same nullopt as a genuine failure, so hosts
+    // keying success off on_compaction misreported it ("failed, but the
+    // context shrank"). Also asserts the request is NOT carried over to
+    // the next turn after a fallback delete.
+    CompressionFakeServer server(/*first_total=*/100, /*later_total=*/100,
+                                 /*fail_compression=*/true);
+    fs::path home = make_temp_home("fallback-report");
+
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "openai-compatible";
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "big";
+        m.provider         = "fake";
+        m.model_id         = "fake-model";
+        m.max_context_size = 100000;   // usage stays at 0.1% — no auto-trigger
+        m.temperature      = 0.0;
+        store.upsert_model(m);
+        store.set_default_model_name("big");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "fallback-report-e2e";
+    cfg.stream         = false;
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+
+    auto sink = std::make_shared<CompactionSink>();
+    {
+        daedalus::Agent agent(std::move(cfg), sink);
+        agent.initialize();
+
+        // Build a real history: 3 turns → system + 3x(user+assistant) = 7
+        // messages, so the fallback delete (needs > 5) can proceed.
+        for (int i = 0; i < 3; ++i) {
+            agent.submit_user_message("hello " + std::to_string(i));
+            agent.run_one_turn();
+        }
+        CHECK(server.main_requests() == 3);
+        CHECK(server.compression_requests() == 0);
+
+        // Idle: compression runs synchronously; all 3 summary attempts get
+        // HTTP 500, so compress() takes the fallback-delete path.
+        agent.compress_context();
+
+        CHECK(server.compression_requests() == 3);   // 3 attempts, all failed
+        CHECK(server.main_requests() == 3);          // no extra turn was run
+
+        // Transcript reduced WITHOUT a summary wrapper: system + last 30%.
+        agent.shutdown();
+    }
+
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        // THE FIX: the fallback delete fires on_compaction even though no
+        // summary was produced — and after < before because messages were
+        // really deleted.
+        REQUIRE(sink->compactions.size() == 1);
+        CHECK(sink->compactions[0].after < sink->compactions[0].before);
+        CHECK(sink->errors.empty());
+    }
+
+    {
+        const fs::path transcript =
+            project / ".daedalus" / "daedalus" / "messages.json";
+        REQUIRE(fs::is_regular_file(transcript));
+        std::ifstream f(transcript);
+        const json history = json::parse(f);
+        CHECK(history.size() < 7);
+        CHECK(history[0].value("role", "") == "system");
+        // No synthetic "[Context compressed" user message was injected.
+        for (const auto& msg : history) {
+            CHECK(msg.value("content", "").find("[Context compressed") ==
+                  std::string::npos);
+        }
+    }
+
+    // The fallback delete must NOT re-arm compress_requested_: the next
+    // turn runs without compressing again.
+    {
+        daedalus::AgentConfig cfg2;
+        cfg2.project_root   = project;
+        cfg2.daedalus_home  = home;
+        cfg2.session_id     = "fallback-report-e2e";
+        cfg2.stream         = false;
+        cfg2.memory_enabled = false;
+        cfg2.mcp_enabled    = false;
+
+        auto sink2 = std::make_shared<CompactionSink>();
+        daedalus::Agent agent2(std::move(cfg2), sink2);
+        agent2.initialize();
+        agent2.submit_user_message("are you still there?");
+        agent2.run_one_turn();
+        agent2.shutdown();
+
+        CHECK(server.main_requests() == 4);        // exactly one new turn
+        CHECK(server.compression_requests() == 3); // no second compress
+        std::lock_guard<std::mutex> lk(sink2->mu);
+        CHECK(sink2->compactions.empty());
     }
 
     fs::remove_all(home);

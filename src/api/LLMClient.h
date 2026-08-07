@@ -149,9 +149,11 @@ private:
     std::atomic<bool> turn_active_{false};
 
     /// @brief Compress immediately on the caller's thread. Caller must
-    ///        hold turn_mutex_ (or be inside a turn). Returns true when
-    ///        compression succeeded and on_compaction was fired.
-    bool compress_now_unlocked();
+    ///        hold turn_mutex_ (or be inside a turn). on_compaction fires
+    ///        for both Compressed and FallbackDeleted outcomes — the
+    ///        fallback delete is a real context reduction and hosts must
+    ///        see it (§COMPRESS-REPORT).
+    CompressOutcome compress_now_unlocked();
 
     // §fix (2026-07-30, hardened 2026-08-01): circuit breaker for repeated
     // FATAL API errors. EVERY fatal-classified cycle increments the counter

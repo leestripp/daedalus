@@ -2736,16 +2736,31 @@ void LLMClient::cancel() noexcept {
 // hold turn_mutex_ (or be inside a turn): run_one_turn() caches a
 // reference to messages_' array across cycles, so an unguarded compress
 // would dangle it.
-bool LLMClient::compress_now_unlocked() {
-    if (!messages_) return false;
+CompressOutcome LLMClient::compress_now_unlocked() {
+    if (!messages_) return CompressOutcome::NothingToCompress;
     const size_t before_tokens = messages_->estimate_tokens();
-    auto compressed = messages_->compress();
-    if (!compressed) return false;
-    messages_->replace_messages(*compressed);
-    const size_t after_tokens = messages_->estimate_tokens();
-    if (sink_) sink_->on_compaction(before_tokens, after_tokens);
-    LOG_INFO("[CONTEXT] Compressed successfully (host request).");
-    return true;
+    auto result = messages_->compress();
+    switch (result.outcome) {
+    case CompressOutcome::Compressed:
+        messages_->replace_messages(result.compressed_json);
+        if (sink_) sink_->on_compaction(before_tokens, messages_->estimate_tokens());
+        LOG_INFO("[CONTEXT] Compressed successfully (host request).");
+        break;
+    case CompressOutcome::FallbackDeleted:
+        // §COMPRESS-REPORT: the summary call failed but the fallback
+        // still reduced the context. That is a real state change — fire
+        // on_compaction so host stats/UI don't go stale (hosts keying
+        // success off on_compaction otherwise misreport this as a
+        // failure even though the context shrank).
+        if (sink_) sink_->on_compaction(before_tokens, messages_->estimate_tokens());
+        LOG_WARNING("[CONTEXT] Summary failed; oldest messages deleted as "
+                    "fallback (host request). Context reduced without summary.");
+        break;
+    case CompressOutcome::NothingToCompress:
+    case CompressOutcome::Failed:
+        break;
+    }
+    return result.outcome;
 }
 
 // §AutoCompress: host-facing trigger. Idle → compress right now on the
@@ -2764,9 +2779,15 @@ void LLMClient::compress_context() noexcept {
         return;
     }
     try {
-        if (!compress_now_unlocked()) {
-            // Nothing to compress yet (or the summary call failed) —
-            // carry the request over to the next turn's first checkpoint.
+        const CompressOutcome outcome = compress_now_unlocked();
+        if (outcome == CompressOutcome::NothingToCompress ||
+            outcome == CompressOutcome::Failed) {
+            // Nothing to compress yet (or the summary call failed and the
+            // history was left untouched) — carry the request over to the
+            // next turn's first checkpoint. Compressed/FallbackDeleted are
+            // NOT re-armed: the context was already reduced, so re-arming
+            // would just compress again next turn for no reason
+            // (§COMPRESS-REPORT).
             compress_requested_.store(true, std::memory_order_relaxed);
         }
     } catch (...) {
@@ -3059,15 +3080,27 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             if (messages_) {
                 const size_t before_tokens = last_total_tokens_;
                 messages_->set_messages(messages);
-                auto compressed = messages_->compress();
-                if (compressed) {
-                    messages_->replace_messages(*compressed);
+                auto compress_result = messages_->compress();
+                if (compress_result.outcome == CompressOutcome::Compressed) {
+                    messages_->replace_messages(compress_result.compressed_json);
                     messages = messages_->get_messages();
                     const size_t after_tokens = messages_->estimate_tokens();
                     if (sink_) sink_->on_compaction(before_tokens, after_tokens);
                     LOG_INFO("[CONTEXT] Compressed successfully. Continuing...");
+                } else if (compress_result.outcome == CompressOutcome::FallbackDeleted) {
+                    // §COMPRESS-REPORT: summary failed but the fallback
+                    // still reduced the context — report it so host
+                    // stats/UI stay in sync.
+                    messages = messages_->get_messages();
+                    const size_t after_tokens = messages_->estimate_tokens();
+                    if (sink_) sink_->on_compaction(before_tokens, after_tokens);
+                    LOG_WARNING("[COMPRESS] Summary failed; oldest messages "
+                                "deleted as fallback. Continuing...");
                 } else {
-                    LOG_ERROR("[COMPRESS] Failed - first half already deleted");
+                    // Nothing to compress, or summary failed AND the
+                    // history was too small to safely reduce — the
+                    // context is unchanged.
+                    LOG_ERROR("[COMPRESS] Failed - context unchanged");
                 }
             }
             iteration_count_ = 0;

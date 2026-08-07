@@ -4,6 +4,30 @@ All notable changes to CodeMax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Compression fallback delete is now reported** (§COMPRESS-REPORT,
+  2026-08-07): when all 3 summary attempts failed, `Messages::compress()`
+  silently deleted the oldest ~70% of messages and returned the same
+  `nullopt` as a genuine failure — so `on_compaction()` never fired,
+  hosts keying success off it misreported the run as failed even though
+  the context had really shrunk, and `compress_context()` re-armed
+  `compress_requested_`, triggering a pointless second compress on the
+  next turn. `compress()` now returns a `CompressResult` with a
+  `CompressOutcome` (`Compressed` / `NothingToCompress` /
+  `FallbackDeleted` / `Failed`); both `LLMClient` compress paths fire
+  `on_compaction(before, after)` for `FallbackDeleted`, and the
+  host-request flag is only carried over when the context was left
+  untouched. Covered by a new fallback end-to-end case in
+  `tests/test_auto_compress.cpp`.
+
+- **`compression_timeout` config is honored**: the 3 compression
+  attempts now use `compression_timeout`, 2x, 4x (default 30 →
+  30s/60s/120s) instead of a hardcoded `{30, 60, 120}` array that
+  ignored the configured value.
+
 ## [0.9.7] — 2026-08-05
 
 Crash-resilient message persistence + libcurl removal + Agent

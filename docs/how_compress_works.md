@@ -165,21 +165,26 @@ Host calls agent.compress_context()
 ┌─────────────────────────────────────────┐
 │ messages_->compress() called            │
 │                                         │
-│ 1. Extract first 70% (safe split)        │
-│ 2. DELETE original immediately         │
-│ 3. Convert to plain text                │
-│ 4. Send to LLM for summary              │
+│ 1. Extract first 70% (safe split)       │
+│ 2. Convert COPY to plain text           │
+│    (originals are NOT deleted yet)      │
+│ 3. Send to LLM for summary              │
 └─────────────────────────────────────────┘
     │
     ▼
 ┌─────────────────────────────────────────┐
 │ If LLM succeeds:                        │
-│ → Rebuild with summary                  │
+│ → Delete middle, rebuild with summary   │
 │ → messages_ = [system, user(summary), suffix(last 30%)]
+│ → outcome = Compressed                  │
 │                                         │
-│ If LLM fails:                           │
-│ → messages_ already reduced             │
-│ → Continue main loop                    │
+│ If LLM fails (all 3 attempts):          │
+│ → FALLBACK: delete oldest ~70% anyway   │
+│   (context reduced, no summary)         │
+│ → outcome = FallbackDeleted             │
+│                                         │
+│ Both outcomes fire on_compaction() —    │
+│ the context changed in both cases.      │
 └─────────────────────────────────────────┘
 ```
 
@@ -230,7 +235,7 @@ struct MessageCompressionConfig {
     std::string model = "MiniMax-M2.7";
     std::string api_url;
     std::string api_key;
-    int compression_timeout = 30;          // Seconds for API call
+    int compression_timeout = 30;          // Base seconds; retries use 2x/4x (30/60/120)
     bool debug_output = false;
 };
 ```
@@ -264,31 +269,40 @@ get_compression_indices():
     return (1, 1 + safe_split_point)  // start=1, end=exclusive
 ```
 
-### Step 2: Delete First 70%, Then Compress
+### Step 2: Summarize First, Delete After
 
 ```cpp
 compress():
     auto [start_idx, end_idx] = get_compression_indices()
-    
-    // Make COPY before deletion
+
+    // Make COPY; originals stay intact until the summary succeeds
     json first_70_copy = messages_[start_idx to end_idx)
-    
-    // DELETE IMMEDIATELY - context already reduced!
-    messages_.erase(start_idx, end_idx)
-    
+
     // Convert COPY to plain text
     string plain_text = messages_to_plain_text(first_70_copy)
-    
-    // Call LLM for summary
+
+    // Call LLM for summary (3 attempts, growing timeouts:
+    // compression_timeout, 2x, 4x — default 30s/60s/120s)
     string summary = call_llm_for_summary(prompt)
-    
+
     if (summary.empty()) {
-        return nullopt;  // LLM failed, but context already reduced
+        // LAST-RESORT FALLBACK: delete the oldest ~70% anyway so the
+        // next API call cannot overflow the context window.
+        messages_.erase(oldest ~70%)
+        return {FallbackDeleted, {}};  // context reduced WITHOUT a summary
     }
-    
-    // Rebuild: system + user(summary) + last 30%
+
+    // Success: delete middle, rebuild as
+    // system + user(summary) + last 30%
     ...
+    return {Compressed, new_messages.dump()};
 ```
+
+`compress()` returns a `CompressResult` whose `outcome` distinguishes
+four endings (`Compressed`, `NothingToCompress`, `FallbackDeleted`,
+`Failed`). Callers fire `on_compaction()` for both `Compressed` and
+`FallbackDeleted` — the fallback delete is a real context reduction and
+hosts must see it — and do not schedule a retry after a fallback delete.
 
 ---
 
@@ -373,7 +387,7 @@ The summary rides inside a synthetic leading **user** message:
 | `compress_threshold` | 0.9 | Trigger auto-compress at 90% |
 | `compress_ratio` | 0.70 | Compress first 70%, keep last 30% |
 | `max_compress_output` | 1500 | Max tokens in LLM summary |
-| `compression_timeout` | 30 | Seconds before LLM call fails |
+| `compression_timeout` | 30 | Base seconds per LLM attempt; 3 attempts use base, 2x, 4x (default 30s/60s/120s) |
 
 ### Per-Model Context Size
 
@@ -419,19 +433,23 @@ Compression generates debug files in `/tmp/` for troubleshooting:
 The compression happens in `LLMClient`:
 
 ```cpp
-// In run_interaction(), after each agent cycle:
+// In run_one_turn(), after each agent cycle:
 bool at_threshold = messages_->should_compress(last_total_tokens_);
-if (at_threshold) {
-    std::cout << "[COMPRESS] Auto-triggering context compression at 90%..." << std::endl;
-    
-    auto compressed = messages_->compress();  // Deletes first 70%, compresses copy
-    if (compressed) {
-        messages_->replace_messages(*compressed);
+if (at_threshold || host_requested) {
+    const size_t before_tokens = last_total_tokens_;
+    messages_->set_messages(messages);
+    auto result = messages_->compress();
+    if (result.outcome == CompressOutcome::Compressed) {
+        messages_->replace_messages(result.compressed_json);
         messages = messages_->get_messages();
-        iteration_count_ = 0;
-        last_total_tokens_ = 0;
+        sink_->on_compaction(before_tokens, messages_->estimate_tokens());
+    } else if (result.outcome == CompressOutcome::FallbackDeleted) {
+        // Context reduced WITHOUT a summary — still fires on_compaction.
+        messages = messages_->get_messages();
+        sink_->on_compaction(before_tokens, messages_->estimate_tokens());
     }
-    
+    iteration_count_ = 0;
+    last_total_tokens_ = 0;
     continue;  // DON'T exit to user input - continue main loop!
 }
 ```
@@ -445,8 +463,10 @@ After compression (success or failure), the main loop MUST continue:
 - Agent resumes with reduced context
 
 If LLM fails during compression:
-- First 70% messages are already deleted (context reduced)
-- `compress()` returns `nullopt`
+- The fallback deletes the oldest ~70% (context reduced, no summary)
+- `compress()` returns `CompressOutcome::FallbackDeleted`
+- `on_compaction(before, after)` still fires — hosts see the reduction
+- No retry is scheduled for a host-requested compress
 - `continue;` still executes - main loop continues
 - No exit to user input
 
@@ -462,12 +482,11 @@ If LLM fails during compression:
 | **Use case** | Fresh start | Prevent context overflow |
 
 Both methods follow the same flow:
-1. Delete first 70% immediately (at safe split point)
-2. Convert to plain text
-3. Compress via LLM
-4. If success, add summary to top
-5. If failure, context is still reduced
-6. Continue main loop (don't exit)
+1. Copy the first 70% (at safe split point), summarize via LLM
+2. On success, delete the middle and rebuild with the summary
+3. On failure, fall back to deleting the oldest ~70% without a summary
+4. Both reductions fire `on_compaction()`
+5. Continue main loop (don't exit)
 
 ---
 
@@ -475,12 +494,19 @@ Both methods follow the same flow:
 
 ### LLM Failure During Compression
 
-If `call_llm_for_summary()` returns empty string:
-1. First 70% messages are already deleted from `messages_`
+If `call_llm_for_summary()` returns empty string after all 3 attempts:
+1. The fallback deletes the oldest ~70% of `messages_` (last resort to
+   prevent context overflow)
 2. Context is reduced (even without summary)
-3. `compress()` returns `nullopt`
-4. Caller logs: "[CONTEXT] Compression failed - first 70% already deleted"
-5. Main loop continues via `continue;`
+3. `compress()` returns `CompressOutcome::FallbackDeleted`
+4. The caller fires `on_compaction(before, after)` so host stats/UI
+   reflect the reduction, and logs the fallback
+5. A host-requested compress is NOT re-armed after a fallback delete
+6. Main loop continues via `continue;`
+
+If the history is too small to safely reduce (≤5 messages), `compress()`
+returns `CompressOutcome::Failed` instead and the context is left
+untouched.
 
 The context is smaller even without a summary, which is acceptable per requirements.
 
