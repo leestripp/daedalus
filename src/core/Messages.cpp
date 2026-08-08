@@ -1381,6 +1381,16 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
     request_payload["model"] = config_.model;
     request_payload["messages"] = msg_content;
     request_payload["stream"] = false;
+    // §BUG-COMPRESS-TEMP (DO NOT REMOVE): config_.temperature MUST already
+    // be the provider-plugin-clamped value — LLMClient clamps it via
+    // plugin_->clamp_temperature() when populating this config (constructor
+    // and set_config()). This compression call bypasses run_agent_cycle(),
+    // so it never sees the clamp the main chat path applies. Models with a
+    // fixed server-side temperature (Kimi k2.7-code / k3 / kimi-for-coding
+    // = 1.0) HARD-REJECT any other value, which used to fail all 3 attempts
+    // and silently delete 70% of the context via the fallback below.
+    // If you touch this, keep tests/test_auto_compress.cpp's
+    // "compression request carries provider-clamped temperature" green.
     request_payload["temperature"] = config_.temperature;
     request_payload["max_tokens"] = config_.max_compress_output;
 

@@ -70,7 +70,12 @@ struct MessageCompressionConfig {
     std::string model = "MiniMax-M2.7";
     std::string api_url;
     std::string api_key;
-    double temperature = 0.0;  // §Phase 8.7: sampling temperature for summary LLM
+    double temperature = 0.0;  // §Phase 8.7: sampling temperature for summary LLM.
+                               // §BUG-COMPRESS-TEMP: MUST be pre-clamped by the
+                               // owner (LLMClient) via ProviderPlugin::
+                               // clamp_temperature() — Messages never sees the
+                               // plugin, and fixed-temperature models reject
+                               // unclamped values.
     // §COMPRESS-REPORT: base timeout in seconds for the compression API
     // call. call_llm_for_summary() tries 3 times with growing timeouts:
     // compression_timeout, 2x, 4x (default 30 → 30s/60s/120s).

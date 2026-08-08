@@ -235,6 +235,9 @@ struct MessageCompressionConfig {
     std::string model = "MiniMax-M2.7";
     std::string api_url;
     std::string api_key;
+    double temperature = 0.0;              // MUST be pre-clamped by LLMClient via
+                                           // ProviderPlugin::clamp_temperature()
+                                           // (§BUG-COMPRESS-TEMP — see below)
     int compression_timeout = 30;          // Base seconds; retries use 2x/4x (30/60/120)
     bool debug_output = false;
 };
@@ -303,6 +306,44 @@ four endings (`Compressed`, `NothingToCompress`, `FallbackDeleted`,
 `Failed`). Callers fire `on_compaction()` for both `Compressed` and
 `FallbackDeleted` — the fallback delete is a real context reduction and
 hosts must see it — and do not schedule a retry after a fallback delete.
+
+---
+
+## The Compression API Request (§BUG-COMPRESS-TEMP — read before touching)
+
+`call_llm_for_summary()` builds its **own** request payload and posts it
+directly through `HttpSession`. It does **not** pass through
+`LLMClient::run_agent_cycle()`, which means none of the provider-plugin
+request shaping the main chat path gets (`clamp_temperature`,
+`mutate_chat_payload`) applies there automatically.
+
+The invariant that keeps compression working:
+
+> Every field the selected model requires — above all `temperature` —
+> must be resolved through the active `ProviderPlugin` **before** it is
+> written into `MessageCompressionConfig`. `Messages` is provider-agnostic
+> by design and never sees the plugin.
+
+Concretely, `LLMClient` clamps in all three places it populates the
+compression config:
+
+- Constructor, settings-loaded path
+- Constructor, no-settings fallback path
+- `set_config()` on model switch (re-clamped through the *new* plugin —
+  a switch can cross providers)
+
+**Why this matters (2026-08-08 incident):** the compression request used
+to go out with the model row's raw temperature. Models with a fixed
+server-side temperature (Kimi `kimi-for-coding*` / `k3` /
+`kimi-k2.7-code` = 1.0) **hard-reject** any other value, so all 3 summary
+attempts failed and the last-resort fallback silently deleted ~70% of the
+context — compression "worked" only by throwing history away. The
+regression test is `tests/test_auto_compress.cpp` → *"compression
+request carries provider-clamped temperature"*.
+
+If you add any new LLM call site that hand-builds a payload, apply the
+same rule: clamp/mutate through the plugin, or extend the plugin
+interface — never send raw model settings.
 
 ---
 
@@ -532,3 +573,7 @@ Key test cases:
 - `should_compress` - verifies threshold detection
 - `compress` - verifies full compression flow
 - `safe_split_point` - verifies split doesn't break tool call chains
+- `compression request carries provider-clamped temperature`
+  (`tests/test_auto_compress.cpp`) - §BUG-COMPRESS-TEMP regression:
+  proves the summary request goes out with the plugin-clamped
+  temperature the selected model requires, not the raw store value

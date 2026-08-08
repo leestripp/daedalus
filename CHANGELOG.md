@@ -4,6 +4,26 @@ All notable changes to CodeMax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Compression request now uses the provider-clamped temperature**
+  (§BUG-COMPRESS-TEMP, 2026-08-08): `Messages::call_llm_for_summary()`
+  builds its own payload and bypasses `LLMClient::run_agent_cycle()`, so
+  the provider plugin's `clamp_temperature()` was never applied — the
+  summary request went out with the model row's raw temperature.
+  Fixed-temperature models (Kimi `kimi-for-coding*` / `k3` /
+  `kimi-k2.7-code` = 1.0) hard-reject any other value, so all 3 summary
+  attempts failed and the last-resort fallback silently deleted ~70% of
+  the context. `LLMClient` now clamps the temperature through the active
+  plugin in all three places it populates `MessageCompressionConfig`
+  (constructor with/without settings, and `set_config()` on model
+  switch). Covered by a new end-to-end regression case in
+  `tests/test_auto_compress.cpp` ("compression request carries
+  provider-clamped temperature"); invariant documented in
+  `docs/how_compress_works.md` and `docs/provider-plugins.md`.
+
 ## [0.9.8] — 2026-08-07
 
 ### Fixed

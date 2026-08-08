@@ -101,6 +101,13 @@ public:
     }
     int main_requests() const        { return main_requests_.load(); }
     int compression_requests() const { return compression_requests_.load(); }
+    // §BUG-COMPRESS-TEMP: raw body of the most recent compression summary
+    // request — lets tests assert the payload carries the clamped
+    // temperature the selected model requires.
+    std::string last_compression_body() const {
+        std::lock_guard<std::mutex> lk(body_mu_);
+        return last_compression_body_;
+    }
 
 private:
     static void send_json(int cfd, const std::string& body) {
@@ -170,6 +177,10 @@ private:
         if (body.find("\"max_tokens\"") != std::string::npos) {
             // Messages::call_llm_for_summary — the compression request.
             compression_requests_.fetch_add(1);
+            {
+                std::lock_guard<std::mutex> lk(body_mu_);
+                last_compression_body_ = body;
+            }
             if (fail_compression_) {
                 // 5xx is retried (fast — no backoff), so all 3 attempts
                 // land here and the summary call gives up → fallback.
@@ -201,6 +212,8 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<int> main_requests_{0};
     std::atomic<int> compression_requests_{0};
+    mutable std::mutex body_mu_;
+    std::string last_compression_body_;
     std::thread thread_;
 };
 
@@ -513,6 +526,74 @@ TEST_CASE("auto-compress at 90% fires AgentSink::on_compaction end-to-end") {
         REQUIRE(history.size() >= 2);
         CHECK(history[0].value("role", "") == "system");
         CHECK(history[1].value("role", "") == "user");
+    }
+
+    fs::remove_all(home);
+}
+
+
+TEST_CASE("compression request carries provider-clamped temperature") {
+    // §BUG-COMPRESS-TEMP (2026-08-08) — DO NOT DELETE THIS TEST.
+    // Messages::call_llm_for_summary posts its own hand-built payload and
+    // never passes through LLMClient::run_agent_cycle(), so the provider
+    // plugin's temperature clamp was skipped: the compression request went
+    // out with the model row's raw temperature (0.0). Fixed-temperature
+    // models (Kimi kimi-for-coding / k3 / kimi-k2.7-code — server enforces
+    // temperature=1.0) rejected every attempt, and the last-resort
+    // fallback silently DELETED 70% of the context. LLMClient must clamp
+    // the temperature it writes into MessageCompressionConfig exactly like
+    // the main chat path does.
+    CompressionFakeServer server;
+    fs::path home = make_temp_home("compress-temp-clamp");
+
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake-kimi";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "moonshot";   // pinned: loopback auto-detects as lmstudio
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "kimi-fixed-temp";
+        m.provider         = "fake-kimi";
+        m.model_id         = "kimi-for-coding";   // MoonshotPlugin forces 1.0
+        m.max_context_size = 10000;
+        m.temperature      = 0.0;   // invalid for this model — clamp must fix it
+        store.upsert_model(m);
+        store.set_default_model_name("kimi-fixed-temp");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "compress-temp-clamp-e2e";
+    cfg.stream         = false;
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+    // cfg.temperature deliberately left at -1.0 → model row's 0.0 applies,
+    // which is exactly the value the plugin must clamp to 1.0.
+
+    auto sink = std::make_shared<CompactionSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    agent.submit_user_message("hello");
+    agent.run_one_turn();
+    agent.shutdown();
+
+    REQUIRE(server.compression_requests() == 1);
+    const json body = json::parse(server.last_compression_body());
+    // The clamped value must be on the wire — not the store's raw 0.0.
+    CHECK(body.value("temperature", -1.0) == 1.0);
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        CHECK(sink->errors.empty());
     }
 
     fs::remove_all(home);

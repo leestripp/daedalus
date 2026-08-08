@@ -54,7 +54,7 @@ The active plugin for a running session is logged
 | `known_models()` | `{}` | Static model table; empty = discovery is the source of truth. |
 | `context_size_for(model_id)` | `0` (unknown) | Context window lookup; consulted by `SettingsStore::get_max_context_size_for_model()` after the user-set value and before the legacy built-in map. |
 | `mutate_chat_payload(payload, ctx)` | no-op | Shape the request before send (thinking switches, cache keys, stripping). `ctx` carries model id/name, provider, base URL, `cache_key` (agent name), stream flag, temperature, and the host-selected `thinking_level`. |
-| `clamp_temperature(model_id, t)` | `t` | Force model-specific sampling constraints. |
+| `clamp_temperature(model_id, t)` | `t` | Force model-specific sampling constraints. **Applies to BOTH request paths** — the main chat path (`LLMClient::run_agent_cycle`) and the compression summary path (LLMClient clamps before writing `MessageCompressionConfig::temperature`; see §BUG-COMPRESS-TEMP below). |
 | `sanitize_history(messages)` | no-op | Enforce conversation rules before send. |
 | `create_stream_parser(sink)` | `nullptr` | SSE parser for streaming requests (see below). |
 | `parse_models_response(body)` | `{}` | Parse the models-endpoint dialect for discovery. |
@@ -89,6 +89,27 @@ the level mid-session — the payload hook reads it per request, so the
 change applies from the next turn with no agent rebuild. LM Studio's
 plugin strips `thinking` and `reasoning_effort` since local servers
 reject unknown fields.
+
+## Temperature clamping covers EVERY request path (§BUG-COMPRESS-TEMP)
+
+`clamp_temperature()` is not optional garnish — for models with a fixed
+server-side temperature (Kimi `kimi-for-coding*` / `k3` / `kimi-k2.7-code`
+= 1.0) any other value is a **hard API error**. There are two request
+paths and both must clamp:
+
+| Path | Where the clamp happens |
+|------|-------------------------|
+| Main chat | `LLMClient::run_agent_cycle()` applies `plugin_->clamp_temperature()` when building the payload. |
+| Compression summary | `Messages::call_llm_for_summary()` builds its own payload and never sees the plugin — so `LLMClient` (constructor **and** `set_config()`) pre-clamps the value it writes into `MessageCompressionConfig::temperature`. |
+
+The compression path once skipped the clamp (§BUG-COMPRESS-TEMP,
+2026-08-08): every summary request was rejected, all 3 retries failed,
+and the last-resort fallback silently deleted ~70% of the context. The
+regression test lives in `tests/test_auto_compress.cpp`
+("compression request carries provider-clamped temperature"). If you add
+a new LLM call site that builds its own payload, route its temperature
+through `clamp_temperature()` the same way — or extend the plugin
+interface instead of bypassing it.
 
 
 ## Streaming parsers

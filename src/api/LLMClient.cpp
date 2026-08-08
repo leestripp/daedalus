@@ -281,7 +281,14 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
         messages_config.debug_output = true; // Enable for debugging
         messages_config.api_url = config_.base_url + config_.chat_endpoint;
         messages_config.api_key = config_.api_key;
-        messages_config.temperature = config_.temperature;  // §Phase 8.7
+        // §Phase 8.7 / §BUG-COMPRESS-TEMP: the compression call posts its
+        // own payload (Messages::call_llm_for_summary) and never passes
+        // through run_agent_cycle(), so the provider plugin's temperature
+        // clamp was skipped — models with a fixed temperature (e.g. Kimi
+        // k2.7-code = 1.0) rejected the compression request outright.
+        // Clamp here, same as the main chat path does.
+        messages_config.temperature =
+            plugin_->clamp_temperature(config_.model, config_.temperature);
 
         // §Phase 9.10: wire compression token callback so the main agent's
         // token bar stays accurate between streaming turns (SSE is always null).
@@ -300,7 +307,8 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
         MessageCompressionConfig messages_config;
         messages_config.max_context_size = 200000;
         messages_config.debug_output = true;
-        messages_config.temperature = config_.temperature;  // §Phase 8.7
+        messages_config.temperature =  // §BUG-COMPRESS-TEMP: clamp like the main path
+            plugin_->clamp_temperature(config_.model, config_.temperature);
         messages_config.on_compression_tokens =
             [this](int pt, int ct, int tt) {
                 report_compression_token_usage(pt, ct, tt);
@@ -368,7 +376,9 @@ void LLMClient::set_config(const AppConfig& config) {
     mc.model        = config_.model;
     mc.api_url      = config_.base_url + config_.chat_endpoint;
     mc.api_key      = config_.api_key;
-    mc.temperature  = config_.temperature;
+    // §BUG-COMPRESS-TEMP: clamp through the (possibly new) provider plugin,
+    // same as the main chat path — a model switch can change the rule.
+    mc.temperature  = plugin_->clamp_temperature(config_.model, config_.temperature);
     messages_->set_config(mc);
 }
 
