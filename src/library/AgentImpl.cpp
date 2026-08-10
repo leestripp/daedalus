@@ -625,16 +625,16 @@ void AgentImpl::uninstall_crash_handlers() {
 
 void AgentImpl::submit_user_message(std::string text)
 {
-    pending_user_messages_.push_back(std::move(text));
+    pending_user_messages_.push_back({std::move(text), {}});
 }
 
 void AgentImpl::submit_user_message(std::string text,
-                                    std::vector<ImageAttachment> /*images*/)
+                                    std::vector<ImageAttachment> images)
 {
-    // §Phase 1+: image attachment forwarding to Messages will be added in a
-    // follow-on patch — the LLMClient's `run_one_turn(text)` doesn't accept
-    // images yet at this layer.
-    pending_user_messages_.push_back(std::move(text));
+    // §READ-IMAGE-CORE follow-up (2026-08-10): attachments ride the queue
+    // alongside the text and are handed to LLMClient::queue_image_attachments()
+    // when the message drains — payload-only injection, vision-gated.
+    pending_user_messages_.push_back({std::move(text), std::move(images)});
 }
 
 void AgentImpl::cancel() noexcept
@@ -695,7 +695,7 @@ void AgentImpl::run_one_turn(std::stop_token st)
         // No LLMClient spun up (no model credentials configured). Surface
         // as Error rather than crashing. File-log unconditionally (also
         // covers the no-sink case, which was previously dropped silently).
-        std::string msg = std::move(pending_user_messages_.front());
+        std::string msg = std::move(pending_user_messages_.front().text);
         pending_user_messages_.erase(pending_user_messages_.begin());
         LOG_ERROR("[Internal] Agent::run_one_turn() — no model configured; "
                   "cannot dispatch message: " + msg);
@@ -709,11 +709,14 @@ void AgentImpl::run_one_turn(std::stop_token st)
         return;
     }
 
-    std::string user_msg = std::move(pending_user_messages_.front());
+    PendingUserMessage pending = std::move(pending_user_messages_.front());
     pending_user_messages_.erase(pending_user_messages_.begin());
 
     set_state(AgentState::Understanding);
-    ::AgentState r = body_->client->run_one_turn(user_msg);
+    if (!pending.images.empty()) {
+        body_->client->queue_image_attachments(pending.images);
+    }
+    ::AgentState r = body_->client->run_one_turn(pending.text);
     // §BUG-005: a cancel() that interrupted this turn has been fully
     // consumed — never let the flag leak into the next turn.
     cancel_requested_.store(false, std::memory_order_release);

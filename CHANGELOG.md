@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Host image attachments now reach the model** (0.10.0 regression):
+  `![alt](path)` Markdown in user messages was sent as literal text
+  (`build_multimodal_message()` was dead code with zero call sites) and
+  the public `Agent::submit_user_message(text, ImageAttachments)`
+  overload silently discarded its images. Both paths now feed the
+  read_image pipeline: refs are extracted at message time
+  (`src/api/ImageRefs.h`), loaded via `ImageProcessor` /
+  `download_image_as_base64` / raw bytes, and injected into the next
+  request payload only — history keeps plain Markdown text, and the
+  `model_supports_vision()` gate drops images on text-only models with
+  a warning instead of risking a provider 400. The dead
+  `build_multimodal_message()` / `find_image_references()` code was
+  removed. Covered by `tests/image_attachment_tests` (extraction units
+  plus end-to-end payload capture against an in-process HTTP server,
+  including the vision-gate drop case).
+
 ## [0.10.0] — 2026-08-10
 
 ### Added

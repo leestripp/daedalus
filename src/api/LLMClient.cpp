@@ -8,6 +8,7 @@
 #include "core/FileIO.h"
 #include "core/utils.h"
 #include "core/ImageProcessor.h"
+#include "api/ImageRefs.h"
 #include "core/SkillManager.h"
 #include "core/Logger.h"
 #include "core/SystemPromptBuilder.h"
@@ -1162,6 +1163,54 @@ bool LLMClient::model_supports_vision() const {
     return true;  // unknown model — let the API decide
 }
 
+// §READ-IMAGE-CORE follow-up (2026-08-10): host attachment loading.
+// Local paths go through ImageProcessor (decode + <=512px downscale for
+// png/jpeg, passthrough for gif/bmp/webp); http(s) URLs are downloaded to
+// base64 (Kimi rejects public URLs outright, so this is the only way they
+// can work); data URIs pass through unchanged. Failures log and skip —
+// a broken attachment must never abort the user's turn.
+void LLMClient::queue_image_ref(const std::string& ref, const std::string& via) {
+    std::string data_uri;
+    if (ref.rfind("http://", 0) == 0 || ref.rfind("https://", 0) == 0) {
+        data_uri = download_image_as_base64(ref);
+    } else if (ref.rfind("data:", 0) == 0) {
+        data_uri = ref;
+    } else {
+        data_uri = ImageProcessor::load_local_image(
+            ref, config_.target_directory.string());
+    }
+    if (data_uri.empty()) {
+        LOG_WARNING("image attachment could not be loaded: " + ref);
+        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+            "Could not load image attachment: " + ref);
+        return;
+    }
+    PendingImage pi;
+    pi.path     = ref;
+    pi.via      = via;
+    pi.data_uri = std::move(data_uri);
+    pending_images_.push_back(std::move(pi));
+}
+
+void LLMClient::queue_image_attachments(
+        const std::vector<daedalus::ImageAttachment>& images) {
+    for (const auto& img : images) {
+        using Source = daedalus::ImageAttachment::Source;
+        if (img.source == Source::Bytes) {
+            if (img.bytes.empty() || img.mime_type.empty()) continue;
+            PendingImage pi;
+            pi.path = img.path_or_url.empty() ? "<bytes>" : img.path_or_url;
+            pi.via  = "user attachment";
+            pi.data_uri = "data:" + img.mime_type + ";base64," +
+                          base64_encode(img.bytes.data(), img.bytes.size());
+            pending_images_.push_back(std::move(pi));
+        } else {
+            // Path and Url share the ref loader.
+            queue_image_ref(img.path_or_url, "user attachment");
+        }
+    }
+}
+
 // Run a single agent cycle (one LLM call + tool execution)
 // §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
 // path now uses OmniNet::HTTP::Client internally.
@@ -1367,7 +1416,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     {"image_url", {{"url", pi.data_uri}}}
                 });
                 if (!text_block.empty()) text_block += "\n";
-                text_block += "[Image attached via read_image: " + pi.path + "]";
+                text_block += "[Image attached via " + pi.via + ": " + pi.path + "]";
                 if (!pi.prompt.empty()) {
                     text_block += "\n" + pi.prompt;
                 }
@@ -2350,6 +2399,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     pi.path     = result.value("path", "unknown");
                     pi.prompt   = result.value("prompt", "");
                     pi.data_uri = data_uri;
+                    pi.via      = "read_image";
                     pending_images_.push_back(std::move(pi));
                 }
 
@@ -2625,140 +2675,6 @@ void LLMClient::inject_context_stats(json& messages) {
 
 // Format: ![alt text](path_or_url)
 // Returns a vector of pairs: (image_path_or_url, position in string)
-static std::vector<std::pair<std::string, size_t>> find_image_references(const std::string& input) {
-    std::vector<std::pair<std::string, size_t>> references;
-    size_t pos = 0;
-    while (true) {
-        size_t start = input.find("![", pos);
-        if (start == std::string::npos) break;
-        size_t link_start = input.find("](", start);
-        if (link_start == std::string::npos) break;
-        size_t link_end = input.find(")", link_start + 2);
-        if (link_end == std::string::npos) break;
-        std::string url = input.substr(link_start + 2, link_end - link_start - 2);
-        size_t url_start = url.find_first_not_of(" \t");
-        size_t url_end = url.find_last_not_of(" \t");
-        if (url_start != std::string::npos) {
-            url = url.substr(url_start, url_end - url_start + 1);
-            references.push_back({url, start});
-        }
-        pos = link_end + 1;
-    }
-    return references;
-}
-
-json LLMClient::build_multimodal_message(const std::string& user_input) {
-    // Find image references in the input
-    auto image_refs = find_image_references(user_input);
-    
-    // If no image references, return simple text message
-    if (image_refs.empty()) {
-        return json::object({
-            {"role", "user"},
-            {"content", user_input}
-        });
-    }
-    
-    // Build multi-modal content array
-    json content = json::array();
-    
-    size_t current_pos = 0;
-    
-    for (const auto& ref : image_refs) {
-        const std::string& image_path = ref.first;
-        size_t image_pos = ref.second;
-        
-        // Add text before this image (if any)
-        if (image_pos > current_pos) {
-            std::string text_before = user_input.substr(current_pos, image_pos - current_pos);
-            // Also remove the ![alt](url) syntax from text
-            // Find the matching closing paren and remove the whole syntax
-            size_t syntax_start = text_before.rfind("![");
-            if (syntax_start != std::string::npos) {
-                text_before = text_before.substr(0, syntax_start);
-            }
-            
-            // Clean up whitespace
-            text_before = trim(text_before);
-            if (!text_before.empty()) {
-                content.push_back({
-                    {"type", "text"},
-                    {"text", text_before}
-                });
-            }
-        }
-        
-        // Process the image
-        std::string data_uri;
-        
-        // Check if it's a URL
-        if (image_path.substr(0, 7) == "http://" || image_path.substr(0, 8) == "https://") {
-            data_uri = download_image_as_base64(image_path);
-        } else if (image_path.substr(0, 5) == "data:") {
-            data_uri = image_path;
-        } else {
-            // It's a local file
-            data_uri = ImageProcessor::load_local_image(image_path, config_.target_directory.string());
-        }
-        
-        if (!data_uri.empty()) {
-            content.push_back({
-                {"type", "image_url"},
-                {"image_url", {
-                    {"url", data_uri}
-                }}
-            });
-        } else {
-            // Image failed to load, include text note
-            content.push_back({
-                {"type", "text"},
-                {"text", "[Image not found: " + image_path + "]"}
-            });
-        }
-        
-        // Update position to after the image reference
-        // Find the end of ![...](...)
-        size_t search_pos = image_pos;
-        while (search_pos < user_input.size() && user_input[search_pos] != ')') {
-            search_pos++;
-        }
-        current_pos = search_pos + 1;
-    }
-    
-    // Add any remaining text after the last image
-    if (current_pos < user_input.size()) {
-        std::string remaining = user_input.substr(current_pos);
-        remaining = trim(remaining);
-        
-        // Remove any remaining image syntax
-        size_t syntax_pos = remaining.find("![");
-        if (syntax_pos != std::string::npos) {
-            remaining = remaining.substr(0, syntax_pos);
-            remaining = trim(remaining);
-        }
-        
-        if (!remaining.empty()) {
-            content.push_back({
-                {"type", "text"},
-                {"text", remaining}
-            });
-        }
-    }
-    
-    // If content array is empty (all images failed or no text), return error
-    if (content.empty()) {
-        return json::object({
-            {"role", "user"},
-            {"content", user_input}
-        });
-    }
-    
-    return json::object({
-        {"role", "user"},
-        {"content", content}
-    });
-}
-
 // Manager mode system prompt - makes the agent act as a manager
 // This is a STRICT override that tells the agent to not do work itself,
 // but instead spawn sub-agents and wait for them
@@ -3097,6 +3013,16 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             LOG_WARNING("run_one_turn: cleaning up dangling tool result from "
                         "interrupted turn.");
             messages_->cleanup_dangling_tool_results();
+        }
+        // §READ-IMAGE-CORE follow-up (2026-08-10): host image attachments
+        // written as Markdown ![alt](ref) are queued for payload-only
+        // injection — the SAME pipeline as the read_image tool (vision
+        // gate + stripped history). The stored message keeps the cheap
+        // Markdown text; the base64 never persists in context. This
+        // replaces the dead build_multimodal_message() path, which used
+        // to embed the data URI in history (re-paid every turn).
+        for (const auto& ref : daedalus::image_refs::extract(user_message)) {
+            queue_image_ref(ref, "user attachment");
         }
         messages.push_back({{"role", "user"}, {"content", user_message}});
     }

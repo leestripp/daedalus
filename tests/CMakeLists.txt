@@ -1826,6 +1826,25 @@ target_link_libraries(daedalus_read_image_tool_tests PRIVATE
 add_test(NAME read_image_tool_tests COMMAND daedalus_read_image_tool_tests)
 
 # ============================================================================
+# Host image attachments (0.10.0 bug: ![alt](path) never reached the model).
+# Markdown + queue_image_attachments -> payload-only injection, vision gate.
+# ============================================================================
+add_executable(daedalus_image_attachment_tests
+    test_image_attachments.cpp
+)
+target_include_directories(daedalus_image_attachment_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_image_attachment_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME image_attachment_tests COMMAND daedalus_image_attachment_tests)
+
+# ============================================================================
 # daedalus_bugs.md §2: fatal API error circuit breaker — alternating 400
 # error shapes must end the turn after 2 cycles instead of looping and
 # flooding the history with [SYSTEM ERROR] messages. Drives LLMClient

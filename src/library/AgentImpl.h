@@ -175,7 +175,14 @@ private:
     std::atomic<bool> cancel_requested_{false};
 
     // Pending user messages — agents consume them one per turn.
-    std::vector<std::string> pending_user_messages_;
+    // §READ-IMAGE-CORE follow-up (2026-08-10): queued user messages carry
+    // optional image attachments from the public
+    // submit_user_message(text, imgs) overload.
+    struct PendingUserMessage {
+        std::string text;
+        std::vector<daedalus::ImageAttachment> images;
+    };
+    std::vector<PendingUserMessage> pending_user_messages_;
 
     // Forward-declared body. We define it inline here so that std::unique_ptr<Body>
     // can be destroyed at the AgentImpl instantiation point (PIMPL needs the

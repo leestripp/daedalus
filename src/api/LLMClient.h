@@ -2,6 +2,7 @@
 
 #include <string>
 #include <nlohmann/json.hpp>
+#include "daedalus/types/ImageAttachment.h"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -219,8 +220,14 @@ private:
         std::string path;
         std::string prompt;
         std::string data_uri;
+        std::string via;  ///< "read_image" | "user attachment" (injection label)
     };
     std::vector<PendingImage> pending_images_;
+
+    /// Queue one image ref (local path / http(s) URL / data URI) for
+    /// payload-only injection on the next request. Load failures are
+    /// logged and skipped — they never abort the turn.
+    void queue_image_ref(const std::string& ref, const std::string& via);
 
     /// True when the active provider plugin's static model table marks
     /// config_.model as vision-capable. Unknown models (not in the
@@ -247,7 +254,6 @@ private:
 
     // Helper to build multi-modal user messages
     // Detects image references in the format ![alt](path_or_url) and converts to array content
-    json build_multimodal_message(const std::string& user_input);
     
     // Extract and store token usage from a parsed LLM response.
     // Called after every successful API response so that
@@ -418,6 +424,14 @@ public:
         std::function<void(std::string_view)> streaming_callback = nullptr
     );
     AgentState run_one_turn(const std::string& user_message);  // Phase 2.5: extracted agent cycle (returns when agent emits stop/cancel)
+
+    /// §READ-IMAGE-CORE follow-up (2026-08-10): queue host-supplied image
+    /// attachments for the next chat request. Shares the read_image
+    /// pipeline: images ride the request payload only (stored history
+    /// keeps plain text) and injection is gated on model_supports_vision().
+    /// Call BEFORE run_one_turn(); Agent::submit_user_message(text, imgs)
+    /// is the public-API path that lands here.
+    void queue_image_attachments(const std::vector<daedalus::ImageAttachment>& images);
     // Note: the old run_interaction() / run_manager_mode() have been
     // removed. The Agent has exactly ONE loop. Manager / sub-agent
     // patterns are host concerns and will live in demos/daedalus-manager/

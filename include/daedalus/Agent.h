@@ -99,6 +99,13 @@ public:
     void submit_user_message(std::string text);
 
     /// @brief Push a user message with attached images.
+    ///
+    /// Images are loaded when the message drains (Path and Url refs are
+    /// fetched/encoded then; Bytes are used as-is), attached to the next
+    /// chat request as image_url content parts, and never persisted in
+    /// the conversation history — see docs/tools.md "Image input".
+    /// Requires a vision-capable model; text-only models drop the images
+    /// with a warning instead of failing the request.
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> imgs);
 

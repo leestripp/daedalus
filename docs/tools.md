@@ -34,6 +34,48 @@ configuration and key lookup have always lived in the core SettingsStore.)
 File I/O tools were removed entirely: the agent can read, write, and edit
 files through `execute_bash` (e.g. `cat`, `sed`, `grep`) instead.
 
+## Image input (vision models)
+
+daedalus can attach images to chat requests for vision-capable models
+(e.g. Kimi K3, `moonshot-v1-*-vision-preview`, MiniMax-M3). There are
+three entry points, all sharing one pipeline:
+
+| Entry point | Who uses it | Example |
+|-------------|-------------|---------|
+| `read_image(path, prompt?)` tool | the agent itself, mid-task | `read_image("build/error-screenshot.png")` |
+| `![alt](ref)` Markdown in a user message | hosts / end users typing prompts | `what broke in ![ui](shots/login.png)?` |
+| `Agent::submit_user_message(text, imgs)` | host applications | `agent.submit_user_message("describe", {ImageAttachment{...}})` |
+
+How the pipeline works (all three paths):
+
+1. **Load & convert** — refs are resolved to base64 data URIs.
+   Local files go through `ImageProcessor` (`png`/`jpeg` decode and
+   downscale to ≤512px longest edge via libpng/libjpeg; `gif`/`bmp`/`webp`
+   pass through as-is, 2MB cap; SVG is rejected — send SVG markup as
+   text). `http(s)` URLs are downloaded to base64 (Kimi rejects public
+   image URLs outright). `ImageAttachment::Bytes` are used as-is with
+   their declared `mime_type`.
+2. **Payload-only injection** — images are appended to the *next chat
+   request* as a trailing user message with `image_url` content parts
+   (the multipart `content` array shape vision APIs require). The base64
+   is **never persisted in conversation history** — the stored message
+   keeps only the cheap Markdown text / a stripped reference, so image
+   tokens are paid exactly once, not on every turn.
+3. **Vision gate** — injection only happens when the active provider
+   plugin's model table marks the model `supports_vision` (unknown
+   models default to yes). On text-only models the images are dropped
+   with a warning instead of risking a provider HTTP 400.
+
+Notes for hosts:
+
+- Relative paths resolve against the agent's target directory
+  (project root), same as every other tool.
+- Failed loads (missing file, undecodable image) log a warning and are
+  skipped — they never abort the turn.
+- Size limits: 10MB for `png`/`jpeg` (downscaled on decode), 2MB for
+  passthrough formats; keep the total request under the 4MB default
+  `max_request_size_` and the provider's own limit (Kimi: 100MB).
+
 ## Registering a brand-new custom tool
 
 For tools **you write yourself**, use the public API: subclass
