@@ -3031,6 +3031,7 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     iteration_count_ = 0;
     last_total_tokens_ = 0;
     last_cached_tokens_ = 0;
+    consecutive_compress_count_ = 0;  // §BUG-COMPRESS-LOOP
 
     bool agent_running = true;
     AgentState final_state = AgentState::DONE;
@@ -3090,6 +3091,30 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         const bool host_requested =
             compress_requested_.exchange(false, std::memory_order_relaxed);
         if (at_threshold || host_requested) {
+            // §BUG-COMPRESS-LOOP: circuit breaker. Compression that cannot
+            // bring the context below the threshold used to retry forever —
+            // every attempt reset iteration_count_ (so the max-iterations
+            // guard never fired) and `continue`d, looping "Compressing"
+            // until the user cancelled. Each failed attempt also blocks up
+            // to ~210s in Messages::compress()'s internal retries. Allow
+            // kMaxConsecutiveCompressions attempts (a legitimate partial
+            // compress converges in 1-2: each success deletes ~70% of the
+            // remainder), then end the turn with a terminal error instead.
+            static constexpr int kMaxConsecutiveCompressions = 2;
+            ++consecutive_compress_count_;
+            if (consecutive_compress_count_ > kMaxConsecutiveCompressions) {
+                emit_error(daedalus::ErrorKind::Internal,
+                    "Context compression could not bring the conversation "
+                    "below the auto-compress threshold after " +
+                    std::to_string(kMaxConsecutiveCompressions) +
+                    " attempts — ending the turn instead of looping. The "
+                    "summary call may be failing, or the model's max context "
+                    "size may be set far smaller than the real window "
+                    "(check the model configuration); otherwise start a new "
+                    "chat.", /*will_retry=*/false);
+                final_state = AgentState::DONE;
+                break;
+            }
             if (host_requested) {
                 LOG_INFO("[COMPRESS] Host requested context compression...");
             } else {
@@ -3126,6 +3151,9 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
             last_cached_tokens_ = 0;
             continue;
         }
+        // §BUG-COMPRESS-LOOP: this cycle completed below the threshold —
+        // the conversation is making progress again.
+        consecutive_compress_count_ = 0;
 
         // §Phase 5.1: route through Logger.
         if (result_state == AgentState::CANCELLED) {

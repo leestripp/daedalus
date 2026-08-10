@@ -167,6 +167,21 @@ private:
     std::string last_fatal_signature_;  // kept for logging
     int consecutive_fatal_count_ = 0;
 
+    // §BUG-COMPRESS-LOOP (2026-08-10): consecutive compression attempts
+    // that did NOT get the context back below the auto-compress threshold.
+    // The 90% auto-compress branch used to retry forever: every attempt
+    // reset iteration_count_ (so the max-iterations guard could never
+    // fire) and `continue`d the loop, so a compression that cannot bring
+    // the context under the threshold — summary call keeps failing,
+    // history too small to reduce, a single tool result bigger than the
+    // window, or a max_context_size configured far smaller than the real
+    // model window — looped "Compressing" indefinitely, each failed
+    // attempt blocking up to ~210s in internal retries (30s/60s/120s).
+    // Incremented on every compression attempt in the run loop, reset on
+    // any cycle that completes below the threshold; the loop ends the
+    // turn with a terminal on_error once the cap is exceeded.
+    int consecutive_compress_count_ = 0;
+
     /**
      * Record a FATAL-classified API error and decide whether the turn must
      * end. Returns true once the same turn has hit kMaxConsecutiveFatal

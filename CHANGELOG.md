@@ -6,6 +6,26 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **§BUG-COMPRESS-LOOP: auto-compression no longer loops forever.** The
+  90% auto-compress branch in the agent run loop retried compression
+  indefinitely whenever compression could not bring the context back
+  below the threshold — the summary call failing repeatedly, a history
+  too small to safely reduce, a single tool result bigger than the
+  window, or a `max_context_size` configured far smaller than the real
+  model window. Every attempt reset `iteration_count_` (so the
+  max-iterations guard could never fire) and `continue`d the loop, so
+  the agent sat in the "Compressing" state until the user cancelled —
+  each failed attempt also blocking up to ~210 s in
+  `Messages::compress()`'s internal retries (30 s/60 s/120 s). A
+  consecutive-compression circuit breaker (mirroring the fatal-API-error
+  breaker) now allows 2 attempts that fail to drop below the threshold,
+  then emits a terminal `on_error(ErrorKind::Internal, …,
+  will_retry=false)` and ends the turn as DONE. The counter resets at
+  turn start and on any cycle that completes below the threshold, so
+  legitimate back-to-back partial compressions still converge.
+
 ## [0.10.1] — 2026-08-10
 
 ### Fixed
