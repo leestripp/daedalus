@@ -209,6 +209,24 @@ private:
     // surface needs rebuilding. Set true when mcp_tools_dirty() returns true.
     bool mcp_tools_refresh_pending_ = true;
 
+    // §READ-IMAGE-CORE (2026-08-10): images loaded by the read_image tool
+    // during the current turn, waiting to be attached to the next chat
+    // request as image_url content parts (Kimi/OpenAI vision format).
+    // The data URI rides the request payload only — stored history keeps
+    // just the stripped text reference (see the read_image special-case
+    // in run_agent_cycle's tool-result handling).
+    struct PendingImage {
+        std::string path;
+        std::string prompt;
+        std::string data_uri;
+    };
+    std::vector<PendingImage> pending_images_;
+
+    /// True when the active provider plugin's static model table marks
+    /// config_.model as vision-capable. Unknown models (not in the
+    /// table) are treated as vision-capable — the API is the arbiter.
+    [[nodiscard]] bool model_supports_vision() const;
+
     // State machine methods
     // §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
     // path now uses OmniNet::HTTP::Client internally.

@@ -6,6 +6,31 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Core `read_image` tool — vision input for Kimi K3 and other
+  vision-capable models** (§READ-IMAGE-CORE, 2026-08-10): a new default
+  tool loads a local image and returns a base64 data URI; `LLMClient`
+  attaches it to the *next* chat request as an `image_url` content part
+  (the multipart `content` array shape documented at
+  platform.kimi.ai/docs/guide/use-kimi-vision-model — base64 only, no
+  public URLs) and strips the payload from stored history so the tokens
+  are paid exactly once. PNGs are decoded via libpng and downscaled to
+  ≤512px longest edge (Kimi accepts up to 4K; 512px keeps vision-token
+  cost low) and JPEGs get the same treatment via libjpeg-turbo
+  (§JPEG-SCALE: decode → bilinear scale → re-encode q85, so a 2000×1000
+  photo goes on the wire as 512×256); `gif`/`bmp`/`webp` pass through as
+  base64 with a 2MB cap; SVG is rejected with guidance (Kimi refuses SVG
+  image parts — send the XML as text). The shared
+  `ImageProcessor::load_local_image()` dispatcher routes by sniffed
+  magic bytes, so the `![alt](path)` attachment path in `LLMClient`
+  also benefits from JPEG scaling. Injection is gated on the active provider
+  plugin's `supports_vision` table entry — text-only models (e.g.
+  MiniMax-M2.x) drop the image with a warning instead of risking a
+  provider 400. `ImageProcessor` learned WebP magic-byte / extension
+  detection. Covered by `tests/test_read_image_tool_tests` (12 cases, incl.
+  libjpeg-generated fixtures verified for exact scaled dimensions).
+
 ### Fixed
 
 - **Compression request now uses the provider-clamped temperature**

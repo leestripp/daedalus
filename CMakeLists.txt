@@ -119,6 +119,8 @@ find_package(nlohmann_json QUIET)
 find_package(OpenSSL REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(PNG REQUIRED libpng)
+# libjpeg (turbo) — JPEG decode/encode for ImageProcessor scaling.
+pkg_check_modules(JPEG REQUIRED libjpeg)
 pkg_check_modules(POPPLER REQUIRED poppler-cpp)
 
 # OmniNet: C++23 HTTP/WebSocket library, fetched from GitLab on first build.
@@ -292,6 +294,7 @@ set(TOOLS_SOURCES
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
 	src/tools/SerperSearchTool.cpp
+	src/tools/ReadImageTool.cpp
 	src/tools/TodoListTool.cpp
 	src/tools/TodoListService.cpp
 )
@@ -347,6 +350,7 @@ target_include_directories(daedalus
 		${PROJECT_BINARY_DIR}/src
 		${PROJECT_SOURCE_DIR}/src
 		${PNG_INCLUDE_DIRS}
+		${JPEG_INCLUDE_DIRS}
 )
 
 target_link_libraries(daedalus
@@ -364,11 +368,12 @@ target_link_libraries(daedalus
 		# will need to also link OmniNet.
 		"$<BUILD_INTERFACE:OmniNet>"
 	PRIVATE
-		# libpng is used by ImageProcessor in core. Keeping it PRIVATE
-		# means it's baked into libdaedalus.a but not declared as a
-		# link dep to consumers. PDF tools moved to demos/example-tools/
-		# and link poppler-cpp there instead.
+		# libpng + libjpeg are used by ImageProcessor in core. Keeping
+		# them PRIVATE means they're baked into libdaedalus.a but not
+		# declared as link deps to consumers. PDF tools moved to
+		# demos/example-tools/ and link poppler-cpp there instead.
 		${PNG_LIBRARIES}
+		${JPEG_LIBRARIES}
 )
 
 # Visibility hint: when later turned into a shared library, only the

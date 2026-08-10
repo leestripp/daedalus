@@ -6,6 +6,7 @@
 #include "tools/SkillTool.h"
 #include "tools/MemoryTool.h"
 #include "tools/SerperSearchTool.h"
+#include "tools/ReadImageTool.h"
 #include "tools/TodoListTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
@@ -86,6 +87,14 @@ void ToolFactory::initialize_tools() {
 
     // §SERPER-CORE: web search via Serper.dev (see note above).
     register_tool(std::make_shared<SerperSearchTool>());
+
+    // §READ-IMAGE-CORE (2026-08-10): local image -> base64 data URI so
+    // vision-capable models (Kimi K3, moonshot-v1-*-vision) can see it.
+    // LLMClient carries the data URI into the next request as an
+    // image_url content part and strips it from stored history, so the
+    // tool is only useful when registered by default. Returns a
+    // descriptive error for unsupported formats (e.g. SVG).
+    register_tool(std::make_shared<ReadImageTool>());
 
     // Todo list tools
     register_tool(std::make_shared<TodoAddTool>());

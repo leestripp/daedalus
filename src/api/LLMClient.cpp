@@ -1141,6 +1141,27 @@ std::string LLMClient::extract_error_message(const std::string& response) const 
     return "";
 }
 
+// §READ-IMAGE-CORE: consult the active plugin's static model table for the
+// vision flag. Case-insensitive because the store key ("kimi-k3") and the
+// wire id may differ in case. Models absent from the table (custom /
+// freshly released) are assumed vision-capable — the provider API is the
+// final arbiter, and the fatal breaker bounds any 400 loop.
+bool LLMClient::model_supports_vision() const {
+    if (!plugin_) return true;
+    for (const auto& m : plugin_->known_models()) {
+        const std::string& id = m.model_id;
+        if (id.size() == config_.model.size() &&
+            std::equal(id.begin(), id.end(), config_.model.begin(),
+                       [](char x, char y) {
+                           return std::tolower(static_cast<unsigned char>(x)) ==
+                                  std::tolower(static_cast<unsigned char>(y));
+                       })) {
+            return m.supports_vision;
+        }
+    }
+    return true;  // unknown model — let the API decide
+}
+
 // Run a single agent cycle (one LLM call + tool execution)
 // §NC-8 (2026-07-16): CURL* parameter dropped. The sync fallback
 // path now uses OmniNet::HTTP::Client internally.
@@ -1324,6 +1345,53 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
     // Rebuild payload after truncation
     request_payload["messages"] = messages;
+
+    // §READ-IMAGE-CORE (2026-08-10): attach any images queued by the
+    // read_image tool as a trailing user message with image_url parts —
+    // the exact multipart shape Kimi/OpenAI vision endpoints expect
+    // (content is a real JSON array, never a serialized string). The
+    // message lives in the REQUEST PAYLOAD ONLY: stored history keeps
+    // just the stripped text reference written above, so the base64
+    // payload is paid (in tokens) exactly once instead of on every
+    // subsequent turn.
+    //
+    // Gated on model_supports_vision(): for text-only models the image
+    // is dropped with a log line rather than risking a provider 400.
+    if (!pending_images_.empty()) {
+        if (model_supports_vision()) {
+            json content = json::array();
+            std::string text_block;
+            for (const auto& pi : pending_images_) {
+                content.push_back({
+                    {"type", "image_url"},
+                    {"image_url", {{"url", pi.data_uri}}}
+                });
+                if (!text_block.empty()) text_block += "\n";
+                text_block += "[Image attached via read_image: " + pi.path + "]";
+                if (!pi.prompt.empty()) {
+                    text_block += "\n" + pi.prompt;
+                }
+            }
+            content.push_back({{"type", "text"}, {"text", text_block}});
+
+            request_payload["messages"].push_back({
+                {"role", "user"},
+                {"content", content}
+            });
+            LOG_INFO("read_image: attached " +
+                     std::to_string(pending_images_.size()) +
+                     " image(s) to this request");
+        } else {
+            LOG_WARNING("read_image: model '" + config_.model +
+                        "' is not vision-capable; dropping " +
+                        std::to_string(pending_images_.size()) +
+                        " queued image(s)");
+            if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+                "read_image: current model does not support vision input; "
+                "image was not sent.");
+        }
+        pending_images_.clear();
+    }
 
     // Reset cancellation flag
 
@@ -2271,8 +2339,22 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 // Replace the large data_uri with just a reference to save memory
                 std::string data_uri = result["data_uri"].get<std::string>();
                 size_t data_size = data_uri.length();
-                result_for_storage["data_uri"] = "[IMAGE_DATA_REMOVED: " + result.value("path", "unknown") + 
-                    " (" + std::to_string(data_size) + " bytes) - Use the path/reference in your next message to include this image]";
+
+                // §READ-IMAGE-CORE: queue the image for attachment to the
+                // NEXT request as an image_url content part (see the
+                // injection block right before the HTTP dispatch). Only
+                // successful reads queue; error results carry no data_uri
+                // in practice, but guard anyway.
+                if (!is_error && !data_uri.empty()) {
+                    PendingImage pi;
+                    pi.path     = result.value("path", "unknown");
+                    pi.prompt   = result.value("prompt", "");
+                    pi.data_uri = data_uri;
+                    pending_images_.push_back(std::move(pi));
+                }
+
+                result_for_storage["data_uri"] = "[IMAGE_DATA_REMOVED: " + result.value("path", "unknown") +
+                    " (" + std::to_string(data_size) + " bytes) - image attached to next request automatically]";
                 result_for_storage["image_data_removed"] = true;
             }
             

@@ -22,6 +22,7 @@ functional autonomous agent are registered automatically:
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
 | `serper_search` | Web search via the Serper.dev Google API (requires an API key in the SettingsStore; returns a descriptive error when unset) |
+| `read_image` | Load a local image (`png` / `jpeg` / `gif` / `bmp` / `webp`) and attach it to the next model request as an `image_url` content part, so vision-capable models (e.g. Kimi K3) can see it. PNGs and JPEGs are decoded and downscaled to ≤512px longest edge (libpng / libjpeg); `gif` / `bmp` / `webp` pass through as base64 (2MB cap). SVG is rejected — send SVG markup as text instead. The base64 payload rides one request only and is stripped from stored history. |
 | `mcp__<server>__<tool>` | Dynamically registered MCP proxied tools (when MCP is enabled) |
 
 All other tools — Git, grep/wiki search, PDF, system info, background

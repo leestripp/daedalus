@@ -11,6 +11,9 @@
 
 // libpng for image loading and encoding
 #include <png.h>
+// libjpeg (turbo) for JPEG decode/encode — JPEGs get the same
+// downscale-to-<=512px treatment as PNG (§JPEG-SCALE, 2026-08-10).
+#include <jpeglib.h>
 
 // Maximum dimension after scaling (longest edge = 512)
 static const int MAX_SCALED_DIMENSION = 512;
@@ -38,7 +41,14 @@ std::string ImageProcessor::detect_format(const unsigned char* data, size_t size
     if (size >= 2 && data[0] == 'B' && data[1] == 'M') {
         return "image/bmp";
     }
-    
+
+    // Check WebP: "RIFF" .... "WEBP"
+    if (size >= 12 && data[0] == 'R' && data[1] == 'I' &&
+        data[2] == 'F' && data[3] == 'F' &&
+        data[8] == 'W' && data[9] == 'E' && data[10] == 'B' && data[11] == 'P') {
+        return "image/webp";
+    }
+
     return "application/octet-stream";
 }
 
@@ -55,13 +65,14 @@ std::string ImageProcessor::get_mime_from_extension(const std::string& extension
     if (ext == "png") return "image/png";
     if (ext == "gif") return "image/gif";
     if (ext == "bmp") return "image/bmp";
+    if (ext == "webp") return "image/webp";
     
     return "application/octet-stream";
 }
 
 bool ImageProcessor::is_supported_image(const std::string& path) {
     std::string ext = get_image_extension(path);
-    static const std::set<std::string> supported = {"jpg", "jpeg", "png", "gif", "bmp"};
+    static const std::set<std::string> supported = {"jpg", "jpeg", "png", "gif", "bmp", "webp"};
     return supported.count(ext) > 0;
 }
 
@@ -316,6 +327,142 @@ static std::string load_and_scale_image(const std::string& path) {
     return "data:image/png;base64," + base64;
 }
 
+// ---------------------------------------------------------------------------
+// JPEG support (§JPEG-SCALE, 2026-08-10)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// libjpeg's default error handler calls exit(); route errors through
+// setjmp/longjmp instead, same pattern as the libpng path above.
+struct JpegErrorManager {
+    jpeg_error_mgr pub;
+    jmp_buf jump;
+};
+
+void jpeg_error_exit_fn(j_common_ptr cinfo) {
+    auto* mgr = reinterpret_cast<JpegErrorManager*>(cinfo->err);
+    longjmp(mgr->jump, 1);
+}
+
+} // namespace
+
+// Decode a JPEG file to interleaved RGB (3 channels, 8-bit).
+// Grayscale sources are expanded to RGB by the decompressor.
+// Returns an empty vector on failure.
+static std::vector<unsigned char> decode_jpeg_rgb(const std::string& path,
+                                                  int& width, int& height) {
+    FILE* fp = fopen(path.c_str(), "rb");
+    if (!fp) return {};
+
+    jpeg_decompress_struct cinfo{};
+    JpegErrorManager jerr;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jpeg_error_exit_fn;
+
+    if (setjmp(jerr.jump)) {
+        jpeg_destroy_decompress(&cinfo);
+        fclose(fp);
+        return {};
+    }
+
+    jpeg_create_decompress(&cinfo);
+    jpeg_stdio_src(&cinfo, fp);
+    jpeg_read_header(&cinfo, TRUE);
+    cinfo.out_color_space = JCS_RGB;
+    jpeg_start_decompress(&cinfo);
+
+    width  = static_cast<int>(cinfo.output_width);
+    height = static_cast<int>(cinfo.output_height);
+    const int channels = static_cast<int>(cinfo.output_components);  // 3
+
+    std::vector<unsigned char> rgb(
+        static_cast<size_t>(width) * height * channels);
+    while (cinfo.output_scanline < cinfo.output_height) {
+        JSAMPROW row = rgb.data() + cinfo.output_scanline * width * channels;
+        jpeg_read_scanlines(&cinfo, &row, 1);
+    }
+
+    jpeg_finish_decompress(&cinfo);
+    jpeg_destroy_decompress(&cinfo);
+    fclose(fp);
+    return rgb;
+}
+
+// Encode an interleaved RGB buffer as JPEG (quality 85) into memory.
+// Returns an empty vector on failure.
+static std::vector<unsigned char> encode_jpeg_rgb(const unsigned char* rgb,
+                                                  int width, int height) {
+    jpeg_compress_struct cinfo{};
+    JpegErrorManager jerr;
+    cinfo.err = jpeg_std_error(&jerr.pub);
+    jerr.pub.error_exit = jpeg_error_exit_fn;
+
+    if (setjmp(jerr.jump)) {
+        jpeg_destroy_compress(&cinfo);
+        return {};
+    }
+
+    jpeg_create_compress(&cinfo);
+
+    unsigned char* mem = nullptr;
+    unsigned long mem_size = 0;  // NOLINT: libjpeg API uses unsigned long
+    jpeg_mem_dest(&cinfo, &mem, &mem_size);
+
+    cinfo.image_width      = static_cast<JDIMENSION>(width);
+    cinfo.image_height     = static_cast<JDIMENSION>(height);
+    cinfo.input_components = 3;
+    cinfo.in_color_space   = JCS_RGB;
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, 85, TRUE);
+
+    jpeg_start_compress(&cinfo, TRUE);
+    const int row_stride = width * 3;
+    while (cinfo.next_scanline < cinfo.image_height) {
+        JSAMPROW row = const_cast<unsigned char*>(
+            rgb + cinfo.next_scanline * row_stride);
+        jpeg_write_scanlines(&cinfo, &row, 1);
+    }
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
+    std::vector<unsigned char> out(mem, mem + mem_size);
+    free(mem);  // jpeg_mem_dest allocates with malloc
+    return out;
+}
+
+/**
+ * @brief Decode a JPEG with libjpeg, downscale to <=512px longest edge
+ *        (same rule as the PNG path), and re-encode as JPEG q85.
+ * @return data:image/jpeg;base64 URI, empty on failure
+ */
+static std::string load_and_scale_jpeg(const std::string& path) {
+    int width = 0, height = 0;
+    std::vector<unsigned char> rgb = decode_jpeg_rgb(path, width, height);
+    if (rgb.empty()) return "";
+
+    int new_width = width, new_height = height;
+    if (width > MAX_SCALED_DIMENSION || height > MAX_SCALED_DIMENSION) {
+        calculate_scaled_dimensions(width, height, MAX_SCALED_DIMENSION,
+                                    new_width, new_height);
+    }
+
+    std::vector<unsigned char> final_data;
+    if (new_width != width || new_height != height) {
+        final_data.resize(static_cast<size_t>(new_width) * new_height * 3);
+        scale_image_bilinear(rgb.data(), width, height,
+                             final_data.data(), new_width, new_height, 3);
+    } else {
+        final_data = std::move(rgb);
+    }
+
+    std::vector<unsigned char> jpeg =
+        encode_jpeg_rgb(final_data.data(), new_width, new_height);
+    if (jpeg.empty()) return "";
+
+    return "data:image/jpeg;base64," + base64_encode(jpeg.data(), jpeg.size());
+}
+
 std::string ImageProcessor::read_file_as_base64(const std::string& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
@@ -378,7 +525,29 @@ std::string ImageProcessor::load_local_image(const std::string& path, const std:
     if (file_size > MAX_FILE_SIZE) {
         return "";
     }
-    
-    // Load, scale to 512px longest edge, and encode to base64 PNG
-    return load_and_scale_image(file_path.string());
+
+    // §JPEG-SCALE (2026-08-10): route by sniffed magic bytes (fall back to
+    // the extension). PNG and JPEG decode + downscale to <=512px longest
+    // edge; gif/bmp/webp pass through unchanged as base64 (no in-process
+    // codec for them).
+    std::string mime = "application/octet-stream";
+    {
+        unsigned char header[12] = {};
+        if (std::ifstream in{file_path, std::ios::binary}) {
+            in.read(reinterpret_cast<char*>(header), sizeof(header));
+            mime = detect_format(header, static_cast<size_t>(in.gcount()));
+        }
+    }
+    if (mime == "application/octet-stream") {
+        mime = get_mime_from_extension(get_image_extension(file_path.string()));
+    }
+
+    if (mime == "image/jpeg") {
+        return load_and_scale_jpeg(file_path.string());
+    }
+    if (mime == "image/png") {
+        return load_and_scale_image(file_path.string());
+    }
+    // gif / bmp / webp / unknown-with-image-extension: passthrough.
+    return read_file_as_base64(file_path.string());
 }

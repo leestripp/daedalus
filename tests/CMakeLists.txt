@@ -1805,6 +1805,27 @@ target_link_libraries(daedalus_tool_factory_dedup_tests PRIVATE
 add_test(NAME tool_factory_dedup_tests COMMAND daedalus_tool_factory_dedup_tests)
 
 # ============================================================================
+# §READ-IMAGE-CORE (2026-08-10): core read_image tool — PNG scaled path,
+# jpeg/gif/bmp/webp passthrough, SVG rejection, webp magic-byte detection.
+# ============================================================================
+add_executable(daedalus_read_image_tool_tests
+    test_read_image_tool.cpp
+)
+target_include_directories(daedalus_read_image_tool_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+    ${JPEG_INCLUDE_DIRS}
+)
+target_link_libraries(daedalus_read_image_tool_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    ${JPEG_LIBRARIES}
+    pthread
+)
+add_test(NAME read_image_tool_tests COMMAND daedalus_read_image_tool_tests)
+
+# ============================================================================
 # daedalus_bugs.md §2: fatal API error circuit breaker — alternating 400
 # error shapes must end the turn after 2 cycles instead of looping and
 # flooding the history with [SYSTEM ERROR] messages. Drives LLMClient
