@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-08-10
+
 ### Added
 
 - **Core `read_image` tool — vision input for Kimi K3 and other
