@@ -2,6 +2,45 @@
 #include "daedalus/settings.h"   // v0.3.5: SettingsStore mirror
 #include "Logger.h"
 #include "core/Utf8Utils.h"  // §B11/B28: shared utf8_sanitize_replace_invalid
+
+namespace {
+
+// §BUG-MEMORY-BLOAT (2026-08-10): one-line, length-capped rendering of a
+// stored shell command for prompt dumps. Multi-line heredoc scripts
+// collapse to their first line — the full text stays in the store.
+// Unbounded dumps of every build ever recorded (multi-KB heredocs
+// included) inflated the system prompt to ~250k tokens on long-lived
+// projects, pinning the context over the 90% auto-compress threshold
+// with nothing compressible.
+std::string truncate_memory_command(const std::string& cmd,
+                                    size_t max_len = 200) {
+    std::string out = cmd;
+    std::replace(out.begin(), out.end(), '\n', ' ');
+    std::replace(out.begin(), out.end(), '\r', ' ');
+    std::replace(out.begin(), out.end(), '\t', ' ');
+    if (out.size() > max_len) {
+        out.resize(max_len);
+        out += "...";
+    }
+    return out;
+}
+
+// §BUG-MEMORY-BLOAT: evict the least useful build entries (lowest
+// use_count, then oldest last_used) until the category fits its cap.
+// builds_ was the ONLY category never pruned — consolidate() trimmed
+// patterns/sessions but builds grew unbounded.
+void prune_build_entries(std::vector<BuildEntry>& builds, int max_entries) {
+    while (static_cast<int>(builds.size()) > max_entries) {
+        auto worst = std::min_element(builds.begin(), builds.end(),
+            [](const BuildEntry& a, const BuildEntry& b) {
+                if (a.use_count != b.use_count) return a.use_count < b.use_count;
+                return a.last_used < b.last_used;
+            });
+        builds.erase(worst);
+    }
+}
+
+} // namespace
 #include <fstream>
 #include <iostream>
 #include <algorithm>
@@ -717,7 +756,16 @@ void SessionMemory::on_build_complete(const std::string& command, bool success) 
 void SessionMemory::add_build(const std::string& command, bool success) {
     // Filter sensitive data before storing
     std::string filtered_command = filter_sensitive_data(command);
-    
+
+    // §BUG-MEMORY-BLOAT: enforce the configured entry cap at store time —
+    // multi-KB heredoc scripts are useless as memory entries and were the
+    // bulk of a ~3 MB memory store that bloated the system prompt.
+    const size_t max_entry = static_cast<size_t>(config_.max_entry_size_bytes);
+    if (filtered_command.size() > max_entry) {
+        filtered_command.resize(max_entry);
+        filtered_command += "...[truncated]";
+    }
+
     // Check if this command already exists
     for (auto& build : builds_) {
         if (build.command == filtered_command) {
@@ -738,6 +786,8 @@ void SessionMemory::add_build(const std::string& command, bool success) {
     entry.use_count = 1;
     
     builds_.push_back(entry);
+    // §BUG-MEMORY-BLOAT: keep the category inside its configured cap.
+    prune_build_entries(builds_, config_.max_entries_per_category);
     LOG_INFO("Memory: New build recorded | Success: " + std::string(success ? "yes" : "no"));
 }
 
@@ -1052,12 +1102,30 @@ std::string SessionMemory::get_system_prompt_addition() const {
         if (e.resolved) resolved_count++;
     }
     
-    // Working builds
+    // Working builds — §BUG-MEMORY-BLOAT: top-N by usefulness only, with
+    // commands collapsed to a capped single line. Previously EVERY
+    // successful build was dumped in full; on long-lived projects (500+
+    // entries incl. heredoc scripts) this alone was ~250k tokens of system
+    // prompt, re-sent with every request and impossible to compress away.
     if (!builds_.empty()) {
-        ss << "\n### Working Builds\n";
-        for (const auto& b : builds_) {
-            if (b.success) {
-                ss << "- " << b.command << " (used " << b.use_count << " times)\n";
+        constexpr size_t kMaxBuildsInPrompt = 20;
+        std::vector<const BuildEntry*> sorted;
+        sorted.reserve(builds_.size());
+        for (const auto& b : builds_)
+            if (b.success) sorted.push_back(&b);
+        std::sort(sorted.begin(), sorted.end(),
+                  [](const BuildEntry* a, const BuildEntry* b) {
+                      if (a->use_count != b->use_count)
+                          return a->use_count > b->use_count;
+                      return a->last_used > b->last_used;
+                  });
+        if (sorted.size() > kMaxBuildsInPrompt)
+            sorted.resize(kMaxBuildsInPrompt);
+        if (!sorted.empty()) {
+            ss << "\n### Working Builds\n";
+            for (const auto* b : sorted) {
+                ss << "- " << truncate_memory_command(b->command)
+                   << " (used " << b->use_count << " times)\n";
             }
         }
     }
@@ -1115,7 +1183,16 @@ std::string SessionMemory::get_system_prompt_addition() const {
        << " | Builds: " << builds_.size()
        << " | Errors resolved: " << resolved_count << "/" << errors_.size() << "\n";
 
-    return ss.str();
+    std::string out = ss.str();
+    // §BUG-MEMORY-BLOAT: final backstop — this addition rides the system
+    // prompt on EVERY request, so it must never dominate the context
+    // window. Per-section caps above should make this unreachable.
+    constexpr size_t kMaxAdditionBytes = 16 * 1024;
+    if (out.size() > kMaxAdditionBytes) {
+        out.resize(kMaxAdditionBytes);
+        out += "\n[session memory truncated]\n";
+    }
+    return out;
 }
 
 // ============================================================================
@@ -1150,6 +1227,10 @@ void SessionMemory::consolidate() {
         sessions_.erase(sessions_.begin());
     }
     
+    // §BUG-MEMORY-BLOAT: builds_ was never pruned — bring existing
+    // long-lived stores back inside the category cap on session end.
+    prune_build_entries(builds_, config_.max_entries_per_category);
+
     // 2. Check size limit
     size_t size = calculate_size();
     size_t max_size = static_cast<size_t>(config_.max_total_size_kb) * 1024;

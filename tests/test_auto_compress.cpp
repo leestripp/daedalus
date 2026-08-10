@@ -245,6 +245,28 @@ fs::path make_temp_home(const std::string& tag) {
     return p;
 }
 
+// §BUG-MEMORY-BLOAT: the run loop skips auto-compress for trivially small
+// histories (< 10 non-system messages) — compression can only rewrite
+// non-system messages, so when the history is a handful of entries the
+// pressure is by definition outside its reach and it would shred the
+// history for zero gain, re-triggering every cycle. The auto-trigger
+// tests below therefore seed a realistic restored-session history on
+// disk; the agent loads it like any returning session.
+void seed_history(const fs::path& project, int non_system_messages) {
+    const fs::path dir = project / ".daedalus" / "daedalus";
+    fs::create_directories(dir);
+    json history = json::array();
+    history.push_back({{"role", "system"}, {"content", "test system prompt"}});
+    for (int i = 0; i < non_system_messages; ++i) {
+        history.push_back(
+            {{"role", i % 2 == 0 ? "user" : "assistant"},
+             {"content", "seeded message " + std::to_string(i) +
+                         " — filler text to give the restored history body."}});
+    }
+    std::ofstream f(dir / "messages.json");
+    f << history.dump(2);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -479,8 +501,16 @@ TEST_CASE("auto-compress at 90% fires AgentSink::on_compaction end-to-end") {
     cfg.daedalus_home  = home;
     cfg.session_id     = "auto-compress-e2e";
     cfg.stream         = false;   // buffered JSON keeps the fake server simple
-    cfg.memory_enabled = false;
+    // memory_enabled must stay TRUE here: !memory_enabled makes
+    // initialize() WIPE messages.json before Messages::load() runs
+    // (AgentImpl "no prior context of any kind"), which would delete the
+    // seeded history this test relies on.
+    cfg.memory_enabled = true;
     cfg.mcp_enabled    = false;
+
+    // §BUG-MEMORY-BLOAT: needs >= 10 non-system messages or the
+    // small-history guard skips auto-compress.
+    seed_history(project, 12);
 
     auto sink = std::make_shared<CompactionSink>();
     daedalus::Agent agent(std::move(cfg), sink);
@@ -574,10 +604,16 @@ TEST_CASE("compression request carries provider-clamped temperature") {
     cfg.daedalus_home  = home;
     cfg.session_id     = "compress-temp-clamp-e2e";
     cfg.stream         = false;
-    cfg.memory_enabled = false;
+    // memory_enabled stays TRUE — see the on_compaction test above:
+    // !memory_enabled wipes messages.json at initialize, deleting the seed.
+    cfg.memory_enabled = true;
     cfg.mcp_enabled    = false;
     // cfg.temperature deliberately left at -1.0 → model row's 0.0 applies,
     // which is exactly the value the plugin must clamp to 1.0.
+
+    // §BUG-MEMORY-BLOAT: needs >= 10 non-system messages or the
+    // small-history guard skips auto-compress.
+    seed_history(project, 12);
 
     auto sink = std::make_shared<CompactionSink>();
     daedalus::Agent agent(std::move(cfg), sink);

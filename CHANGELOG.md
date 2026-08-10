@@ -8,6 +8,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§BUG-MEMORY-BLOAT: session-memory dump no longer inflates the system
+  prompt to ~250k tokens (the real "compressing over and over" trigger).**
+  `SessionMemory::get_system_prompt_addition()` dumped EVERY successful
+  build command ever recorded in full — heredoc scripts included — and
+  `builds_` was the only memory category never pruned (`consolidate()`
+  trimmed patterns/sessions only). On a long-lived project the store grew
+  to ~3 MB / 570+ builds, the system prompt reached ~246k tokens (94% of
+  a 256k window), and the 90% auto-compress fired every cycle while
+  `Messages::compress()` — which never touches the system message — could
+  not reduce it: an empty-looking chat looped "Compressing" indefinitely
+  and every request re-sent ~250k cached tokens. Fixes: the prompt dump
+  now renders only the top 20 builds by use_count/recency with commands
+  collapsed to a capped single line, plus a 16 KB backstop cap on the
+  whole addition; `add_build()` enforces the configured
+  `max_entry_size_bytes` (2 KB) at store time and prunes the category to
+  `max_entries_per_category` (50); `consolidate()` prunes builds too, so
+  existing bloated stores shrink on session end; and the run loop skips
+  auto-compress when fewer than 10 non-system messages exist (context
+  dominated by the system prompt can never be compressed — keep working
+  instead of shredding a tiny history for zero gain).
+
 - **§BUG-COMPRESS-LOOP: auto-compression no longer loops forever.** The
   90% auto-compress branch in the agent run loop retried compression
   indefinitely whenever compression could not bring the context back

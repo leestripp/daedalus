@@ -3088,6 +3088,29 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         // Auto-compress at 90% threshold OR when the host asked for it via
         // Agent::compress_context() (§AutoCompress).
         bool at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
+        if (at_threshold) {
+            // §BUG-MEMORY-BLOAT: compression only rewrites NON-system
+            // messages. When the history is a handful of messages, the
+            // pressure comes from the system prompt (session memory dump,
+            // project docs, tool schemas) which compression can NEVER
+            // reduce — shredding the tiny history gains ~0 tokens and the
+            // threshold stays tripped, looping "Compressing" every cycle.
+            // Skip and keep working; the provider accepts the request.
+            const auto& hist = messages_->get_messages();
+            const size_t non_system =
+                (!hist.empty() && hist[0].value("role", "") == "system")
+                    ? hist.size() - 1
+                    : hist.size();
+            constexpr size_t kMinAutoCompressMessages = 10;
+            if (non_system < kMinAutoCompressMessages) {
+                LOG_WARNING("[COMPRESS] At 90% threshold but only " +
+                            std::to_string(non_system) +
+                            " non-system messages — context is dominated by "
+                            "the system prompt, which compression cannot "
+                            "reduce. Skipping auto-compress.");
+                at_threshold = false;
+            }
+        }
         const bool host_requested =
             compress_requested_.exchange(false, std::memory_order_relaxed);
         if (at_threshold || host_requested) {
