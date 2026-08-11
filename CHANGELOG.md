@@ -6,6 +6,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **§BUG-UTF8-TRUNC: invalid UTF-8 no longer aborts the agent turn.**
+  Byte-level truncation (`resize`/`substr`) could split a multi-byte
+  UTF-8 codepoint — the §BUG-MEMORY-BLOAT entry cap (2048 bytes) did
+  exactly that to build commands; the corrupted string later escaped
+  into the conversation (memory recall tool result), and the next
+  request payload `dump()` threw `type_error.316 invalid UTF-8 byte at
+  index 2048`, escaping `run_one_turn` and killing the turn with a raw
+  exception. Fixes: new `utf8_truncate_safe()` helper (cuts at codepoint
+  boundaries) applied to every truncation (SessionMemory entry/prompt/
+  backstop caps, BashCommandExecutor output cuts, tool-result middle
+  truncation); ALL request payload dumps now use
+  `error_handler_t::replace` so a bad byte can never abort the loop —
+  the request goes out with U+FFFD and the agent keeps working (with a
+  host-visible warning); the strict-dump fallback that used to end the
+  turn as DONE now reserializes with replacements and continues; memory
+  recall sanitizes legacy corrupted entries on output.
+
 ## [0.10.2] — 2026-08-10
 
 ### Fixed

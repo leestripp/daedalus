@@ -323,6 +323,23 @@ inline bool is_ascii_only(const std::string& str) {
  * @param input The string to sanitize
  * @return A new string with invalid bytes replaced by '?'
  */
+/**
+ * @brief Truncate to at most max_bytes WITHOUT splitting a multi-byte
+ * UTF-8 codepoint. Byte-level truncation (resize/substr) can cut a
+ * 2-4 byte sequence in half, producing invalid UTF-8 that later kills
+ * nlohmann::json dump/parse with type_error.316 (§BUG-UTF8-TRUNC).
+ * Backs the cut point off to the previous codepoint boundary.
+ */
+inline std::string utf8_truncate_safe(const std::string& input, size_t max_bytes) {
+    if (input.size() <= max_bytes) return input;
+    size_t cut = max_bytes;
+    // While the byte at the cut is a continuation byte (10xxxxxx), the
+    // codepoint started earlier — back off to its start.
+    while (cut > 0 && is_utf8_continuation_byte(static_cast<uint8_t>(input[cut])))
+        --cut;
+    return input.substr(0, cut);
+}
+
 inline std::string utf8_sanitize_replace_invalid(const std::string& input) {
     int expected_continuations = 0;
     size_t sequence_start_pos = 0;

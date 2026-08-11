@@ -18,10 +18,11 @@ std::string truncate_memory_command(const std::string& cmd,
     std::replace(out.begin(), out.end(), '\n', ' ');
     std::replace(out.begin(), out.end(), '\r', ' ');
     std::replace(out.begin(), out.end(), '\t', ' ');
-    if (out.size() > max_len) {
-        out.resize(max_len);
-        out += "...";
-    }
+    // §BUG-UTF8-TRUNC: cut at a codepoint boundary — a byte-level resize
+    // can split a multi-byte UTF-8 sequence, and the invalid string later
+    // kills nlohmann dump/parse with type_error.316.
+    out = utf8_truncate_safe(out, max_len);
+    if (out.size() < cmd.size()) out += "...";
     return out;
 }
 
@@ -762,8 +763,11 @@ void SessionMemory::add_build(const std::string& command, bool success) {
     // bulk of a ~3 MB memory store that bloated the system prompt.
     const size_t max_entry = static_cast<size_t>(config_.max_entry_size_bytes);
     if (filtered_command.size() > max_entry) {
-        filtered_command.resize(max_entry);
-        filtered_command += "...[truncated]";
+        // §BUG-UTF8-TRUNC: never split a codepoint — the corrupted entry
+        // escaped into tool results (memory recall) and aborted the turn
+        // via type_error.316 on the next payload dump.
+        filtered_command =
+            utf8_truncate_safe(filtered_command, max_entry) + "...[truncated]";
     }
 
     // Check if this command already exists
@@ -1189,7 +1193,7 @@ std::string SessionMemory::get_system_prompt_addition() const {
     // window. Per-section caps above should make this unreachable.
     constexpr size_t kMaxAdditionBytes = 16 * 1024;
     if (out.size() > kMaxAdditionBytes) {
-        out.resize(kMaxAdditionBytes);
+        out = utf8_truncate_safe(out, kMaxAdditionBytes);  // §BUG-UTF8-TRUNC
         out += "\n[session memory truncated]\n";
     }
     return out;

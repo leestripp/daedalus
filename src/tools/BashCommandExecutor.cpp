@@ -1,4 +1,5 @@
 #include "tools/BashCommandExecutor.h"
+#include "core/Utf8Utils.h"  // §BUG-UTF8-TRUNC: utf8_truncate_safe
 #include "tools/SanitizedOutputStream.h"
 #include "core/Subprocess.h"
 #include "core/ThreadPool.h"
@@ -219,12 +220,17 @@ std::string BashCommandExecutor::sanitize_output(const std::string& output) {
     
     if (sanitized.size() > max_size) {
         if (sanitized.size() <= head_size + tail_size) {
-            return sanitized.substr(0, max_size) + "\n[Output truncated at " + std::to_string(max_size) + " bytes]";
+            // §BUG-UTF8-TRUNC: cut at a codepoint boundary.
+            return utf8_truncate_safe(sanitized, max_size) + "\n[Output truncated at " + std::to_string(max_size) + " bytes]";
         }
         
         // Keep head and tail, truncate middle
-        std::string head = sanitized.substr(0, head_size);
+        // §BUG-UTF8-TRUNC: both cut points land on codepoint boundaries.
+        std::string head = utf8_truncate_safe(sanitized, head_size);
         std::string tail = sanitized.substr(sanitized.size() - tail_size);
+        while (!tail.empty() &&
+               is_utf8_continuation_byte(static_cast<uint8_t>(tail.front())))
+            tail.erase(tail.begin());
         
         // Count lines skipped in middle
         size_t lines_skipped = 0;

@@ -1256,27 +1256,23 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         plugin_->mutate_chat_payload(request_payload, pctx);
     }
 
-    // Validate JSON serialization before sending
+    // Validate JSON serialization before sending.
+    // §BUG-UTF8-TRUNC: invalid UTF-8 in a message string (byte-level
+    // truncation splitting a codepoint, binary tool output, etc.) must
+    // NEVER stop the agent loop. Serialize with error_handler_t::replace
+    // — bad bytes become U+FFFD and the request still goes out, so the
+    // agent keeps working. A warning tells the host it happened.
     std::string payload_str;
     try {
         payload_str = request_payload.dump();
     } catch (const std::exception& e) {
-        LOG_ERROR("Failed to serialize request payload: " + std::string(e.what()));
-        // §on_error: was LOG-only — the host saw nothing and the turn
-        // ended as if successful (DONE).
-        emit_error(daedalus::ErrorKind::Internal,
-                   "Failed to serialize request payload: " + std::string(e.what()),
-                   /*will_retry=*/false);
-        // Try to identify which message is problematic
-        for (size_t i = 0; i < messages.size(); i++) {
-            try {
-                std::string msg_str = messages[i].dump();
-            } catch (const std::exception& e2) {
-                LOG_ERROR("Problematic message at index " + std::to_string(i) + ": " + e2.what());
-                LOG_ERROR("Message content (first 200 chars): " + messages[i].dump().substr(0, 200));
-            }
-        }
-        return AgentState::DONE;
+        LOG_WARNING("Request payload held invalid UTF-8 (" + std::string(e.what())
+                    + ") — reserializing with replacement characters and continuing.");
+        if (sink_) sink_->on_log(daedalus::LogLevel::Warn,
+            "⚠️ Invalid UTF-8 in the conversation (likely a truncated tool "
+            "result) — offending bytes replaced, continuing the turn.");
+        payload_str = request_payload.dump(-1, ' ', false,
+                                           json::error_handler_t::replace);
     }
     // Verify payload can be parsed back (catch JSON corruption)
     try {
@@ -1340,8 +1336,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     messages = messages_->get_messages();  // Re-get reference after update
     
     // Rebuild payload after sanitization
+    // §BUG-UTF8-TRUNC: error_handler_t::replace — this dump previously
+    // escaped run_one_turn as type_error.316 and killed the turn.
     request_payload["messages"] = messages;
-    payload_str = request_payload.dump();
+    payload_str = request_payload.dump(-1, ' ', false,
+                                       json::error_handler_t::replace);
     
     // Check for tool_calls in messages and verify their IDs are valid strings
     for (size_t i = 0; i < messages.size(); i++) {
@@ -1502,7 +1501,8 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     }
     lifecycle.start_wait();
     auto api_future = make_api_request_async(
-        api_url, request_payload.dump(), cancel_token, streaming_callback);
+        api_url, request_payload.dump(-1, ' ', false, json::error_handler_t::replace),
+        cancel_token, streaming_callback);
 
     // §Phase 5.1: wait for the API response. The host may call
     // Agent::cancel() (which fires cancel_source_) at any time; we
@@ -1671,7 +1671,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 sync_payload["stream"] = false;
                 sync_payload.erase("stream_options");
                 api_response = make_http_request_with_retry( api_url,
-                    sync_payload.dump());
+                    sync_payload.dump(-1, ' ', false, json::error_handler_t::replace));
                 response_body = api_response.body;
                 // §robust-client: the fallback may itself return an HTTP
                 // error status — handle it by status, not by parse luck.
@@ -1716,7 +1716,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     sync_payload["stream"] = false;
                     sync_payload.erase("stream_options");
                     api_response = make_http_request_with_retry( api_url,
-                        sync_payload.dump());
+                        sync_payload.dump(-1, ' ', false, json::error_handler_t::replace));
                     response_body = api_response.body;
                     // §robust-client: the fallback may itself return an HTTP
                     // error status — handle it by status, not by parse luck.
@@ -1873,7 +1873,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 json sync_payload = request_payload;
                 sync_payload["stream"] = false;
                 sync_payload.erase("stream_options");
-                api_response = make_http_request_with_retry( api_url, sync_payload.dump());
+                api_response = make_http_request_with_retry( api_url, sync_payload.dump(-1, ' ', false, json::error_handler_t::replace));
                 response_body = api_response.body;
                 // §robust-client: status first — a terminal HTTP error
                 // (auth / 5xx / unstructured body) ends the turn here.
@@ -2052,7 +2052,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 json sync_payload = request_payload;
                 sync_payload["stream"] = false;
                 sync_payload.erase("stream_options");
-                api_response = make_http_request_with_retry( api_url, sync_payload.dump());
+                api_response = make_http_request_with_retry( api_url, sync_payload.dump(-1, ' ', false, json::error_handler_t::replace));
                 response_body = api_response.body;
                 // §robust-client: status first — a terminal HTTP error
                 // (auth / 5xx / unstructured body) ends the turn here.
@@ -2479,10 +2479,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 const size_t truncation_msg_size = 60;
                 size_t keep_each = (max_size > truncation_msg_size) ? (max_size - truncation_msg_size) / 2 : max_size / 2;
                 
-                std::string start_part = result_content.substr(0, keep_each);
+                // §BUG-UTF8-TRUNC: land both cuts on codepoint boundaries —
+                // a split sequence here poisoned the history and aborted
+                // the NEXT payload dump with type_error.316.
+                std::string start_part = utf8_truncate_safe(result_content, keep_each);
                 std::string end_part;
                 if (total_size > keep_each) {
                     end_part = result_content.substr(total_size - keep_each, keep_each);
+                    while (!end_part.empty() &&
+                           is_utf8_continuation_byte(static_cast<uint8_t>(end_part.front())))
+                        end_part.erase(end_part.begin());
                 }
                 
                 std::ostringstream truncated;

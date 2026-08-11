@@ -1,4 +1,5 @@
 #include "tools/MemoryTool.h"
+#include "core/Utf8Utils.h"  // §BUG-UTF8-TRUNC
 #include "core/SessionMemory.h"
 #include "core/FileIO.h"
 
@@ -233,7 +234,11 @@ json MemoriesTool::execute(const json& args, FileIO& /*file_io*/) {
                 int count = 0;
                 for (const auto* b : builds) {
                     if (count >= limit) break;
-                    output << "- [" << b->id << "] " << b->command << "\n";
+                    // §BUG-UTF8-TRUNC: entries stored before utf8-safe
+                    // truncation may hold split codepoints — never let them
+                    // into a tool result raw (next payload dump would 316).
+                    output << "- [" << b->id << "] "
+                           << utf8_sanitize_replace_invalid(b->command) << "\n";
                     output << "  Used " << b->use_count << " times, last: " << format_time(b->last_used) << "\n";
                     count++;
                 }
