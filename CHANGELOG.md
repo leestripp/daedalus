@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-08-14
+
 ### Added
 
 - **§COMPRESS-TOOL: model-facing `compress_context` tool restored**
