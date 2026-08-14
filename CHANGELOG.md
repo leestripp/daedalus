@@ -6,6 +6,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **§COMPRESS-TOOL: model-facing `compress_context` tool restored**
+  (2026-08-14). Removed on 2026-08-01 ("the agent never called it"), but
+  in practice the agent panics as context pressure climbs toward the 90%
+  auto-compress threshold with no way to shed stale context itself. The
+  tool is back with the safer deferred semantics introduced by
+  §AutoCompress: calling it does NOT compress inline — the tool result
+  (`{"status":"compress_context","reason":...}`) is picked up by the new
+  `LLMClient::handle_compress_context_result()` in `run_agent_cycle()`,
+  which sets the same `compress_requested_` flag as the host-facing
+  `Agent::compress_context()`. Compression runs at the cycle-boundary
+  checkpoint, never interrupts in-flight tool calls, and reports via
+  `AgentSink::on_compaction()` as usual. The context-status block now
+  nudges the agent toward the tool above 70% pressure (instead of the
+  old "Do NOT call any compression tool" warning at 90%). Registered by
+  default in `ToolFactory`. Covered by a new e2e case (model emits the
+  tool call below threshold → exactly one compaction at the cycle
+  boundary), a `handle_compress_context_result` unit suite, and schema
+  assertions in `tests/test_tool_definitions.cpp`.
+
 ### Fixed
 
 - **§BUG-UTF8-TRUNC: invalid UTF-8 no longer aborts the agent turn.**

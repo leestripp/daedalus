@@ -65,9 +65,11 @@ TEST_SUITE("ToolDefinitions") {
         CHECK(has_stop);
         CHECK(has_set_status);
 
-        // compress_context was removed: compression is host/system
-        // driven (90% threshold or Agent::compress_context()).
-        CHECK(std::find(tool_names.begin(), tool_names.end(), "compress_context") == tool_names.end());
+        // §COMPRESS-TOOL (2026-08-14): compress_context is back as a
+        // model-facing tool. It only SCHEDULES compression — the actual
+        // work runs at the cycle-boundary checkpoint, same path as the
+        // 90% threshold and Agent::compress_context() triggers.
+        CHECK(std::find(tool_names.begin(), tool_names.end(), "compress_context") != tool_names.end());
 
         // Non-core tools are NOT in the default set.
         CHECK(std::find(tool_names.begin(), tool_names.end(), "read_file") == tool_names.end());
@@ -99,6 +101,26 @@ TEST_SUITE("ToolDefinitions") {
         }
     }
     
+    TEST_CASE("compress_context tool definition is well-formed (§COMPRESS-TOOL)") {
+        std::string defs = ToolHandler::get_tool_definitions();
+        json parsed = json::parse(defs);
+
+        bool found = false;
+        for (const auto& item : parsed) {
+            if (item["function"]["name"] != "compress_context") continue;
+            found = true;
+            const json& func = item["function"];
+            CHECK(!func["description"].get<std::string>().empty());
+            REQUIRE(func.contains("parameters"));
+            CHECK(func["parameters"]["type"] == "object");
+            REQUIRE(func["parameters"]["properties"].contains("reason"));
+            CHECK(func["parameters"]["properties"]["reason"]["type"] == "string");
+            REQUIRE(func["parameters"].contains("required"));
+            CHECK(func["parameters"]["required"] == json::array({"reason"}));
+        }
+        CHECK(found);
+    }
+
     TEST_CASE("get_tool_definitions_filtered excludes specified tools") {
         std::string all_defs = ToolHandler::get_tool_definitions();
         json all_parsed = json::parse(all_defs);

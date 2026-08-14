@@ -682,7 +682,8 @@ AFTER:  [system, user(summary), msgN*0.7+1, ..., msgN]
 ### How It Works
 
 - **Automatic**: Triggers when token usage hits 90% of `max_context_size`
-- **Manual**: Host calls `Agent::compress_context()` — immediate when idle, deferred to the cycle boundary when a turn is running
+- **Manual (host)**: Host calls `Agent::compress_context()` — immediate when idle, deferred to the cycle boundary when a turn is running
+- **Manual (agent)**: The agent calls the `compress_context` tool — deferred to the cycle boundary, same checkpoint as the other triggers
 - **70/30 Split**: Oldest 70% summarized via LLM, newest 30% kept intact
 - **Safe Split**: Split NEVER breaks tool call pairs - if a tool result would be orphaned, the whole chain is included in compression
 - **Result Structure**: `system + user(summary) + suffix(last 30%)`
@@ -710,11 +711,15 @@ registered example tools under `demos/example-tools/`.
 
 ### User Interaction
 - `tell_user` - informational message from the agent to the user
+- `compress_context` - schedule context compression at the end of the
+  current cycle (never interrupts in-flight tool calls)
 - `set_status` - declare the agent's current state
 - `stop` - finish the current turn with a summary
 
-Context compression is host/system driven (90% threshold or
-`Agent::compress_context()`), not model-facing.
+Context compression can be triggered three ways, all sharing the same
+cycle-boundary checkpoint: the automatic 90% threshold, the host via
+`Agent::compress_context()`, or the agent itself via the
+`compress_context` tool.
 
 ### Memory
 - `remember`, `forget`, `memories`, `memory_stats`

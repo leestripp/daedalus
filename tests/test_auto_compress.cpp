@@ -42,6 +42,10 @@
 
 #include <daedalus.h>
 #include <daedalus/settings.h>
+
+// §COMPRESS-TOOL: unit suite for LLMClient::handle_compress_context_result
+// lives at the bottom of this file.
+#include "api/LLMClient.h"
 #include <nlohmann/json.hpp>
 
 namespace fs = std::filesystem;
@@ -64,9 +68,11 @@ public:
     // HTTP 500 — drives Messages::compress() down its last-resort
     // fallback-delete path (§COMPRESS-REPORT).
     explicit CompressionFakeServer(int first_total = 9500, int later_total = 100,
-                                   bool fail_compression = false)
+                                   bool fail_compression = false,
+                                   bool emit_compress_tool_call = false)
         : first_total_(first_total), later_total_(later_total),
-          fail_compression_(fail_compression) {
+          fail_compression_(fail_compression),
+          emit_compress_tool_call_(emit_compress_tool_call) {
         listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         if (listen_fd_ < 0) throw std::runtime_error("socket() failed");
         int yes = 1;
@@ -197,11 +203,43 @@ private:
 
         // Main agent turn: configured usage for cycle 1 vs. later cycles.
         const int seq = main_requests_.fetch_add(1);
-        if (seq == 0) {
+        if (seq == 0 && emit_compress_tool_call_) {
+            // §COMPRESS-TOOL: the model asks for compression itself via the
+            // compress_context tool on cycle 1.
+            send_json(cfd, tool_call_body(first_total_));
+        } else if (seq == 0) {
             send_json(cfd, chat_body("Hi there!", first_total_));
         } else {
             send_json(cfd, chat_body("All done.", later_total_));
         }
+    }
+
+    // Assistant message carrying a compress_context tool call.
+    static std::string tool_call_body(int total_tokens) {
+        json j = {
+            {"id", "cmpl-fake"},
+            {"object", "chat.completion"},
+            {"choices", json::array({{
+                {"index", 0},
+                {"message", {
+                    {"role", "assistant"},
+                    {"content", nullptr},
+                    {"tool_calls", json::array({{
+                        {"id", "call_compress_1"},
+                        {"type", "function"},
+                        {"function", {
+                            {"name", "compress_context"},
+                            {"arguments", "{\"reason\": \"research complete, shed early context\"}"}
+                        }},
+                    }})},
+                }},
+                {"finish_reason", "tool_calls"},
+            }})},
+            {"usage", {{"prompt_tokens", total_tokens - 10},
+                       {"completion_tokens", 10},
+                       {"total_tokens", total_tokens}}},
+        };
+        return j.dump();
     }
 
     int listen_fd_ = -1;
@@ -209,6 +247,7 @@ private:
     int first_total_ = 9500;
     int later_total_ = 100;
     bool fail_compression_ = false;
+    bool emit_compress_tool_call_ = false;
     std::atomic<bool> running_{false};
     std::atomic<int> main_requests_{0};
     std::atomic<int> compression_requests_{0};
@@ -905,4 +944,121 @@ TEST_CASE("Agent::compress_context reports fallback delete via on_compaction") {
     }
 
     fs::remove_all(home);
+}
+
+
+// ---------------------------------------------------------------------------
+// §COMPRESS-TOOL (2026-08-14): model-facing compress_context tool, restored.
+// The model emits a compress_context tool call on cycle 1 (usage LOW —
+// 100/100000, so the 90% auto-trigger can never fire). The run loop must
+// turn the tool result into the same deferred compress request as
+// Agent::compress_context(): compression runs at the cycle-boundary
+// checkpoint, on_compaction fires once, and the turn completes DONE on
+// cycle 2.
+// ---------------------------------------------------------------------------
+TEST_CASE("model-facing compress_context tool triggers compression below threshold") {
+    CompressionFakeServer server(/*first_total=*/100, /*later_total=*/100,
+                                 /*fail_compression=*/false,
+                                 /*emit_compress_tool_call=*/true);
+    fs::path home = make_temp_home("tool-trigger");
+
+    {
+        auto store = daedalus::SettingsStore::for_home(home);
+        daedalus::ProviderConfig p;
+        p.name          = "fake";
+        p.host          = server.base_url();
+        p.api_key       = "test-key";
+        p.chat_endpoint = "/v1/chat/completions";
+        p.plugin        = "openai-compatible";
+        store.upsert_provider(p);
+
+        daedalus::ModelConfig m;
+        m.name             = "big";
+        m.provider         = "fake";
+        m.model_id         = "fake-model";
+        m.max_context_size = 100000;   // 100 tokens = 0.1% — far below 90%
+        m.temperature      = 0.0;
+        store.upsert_model(m);
+        store.set_default_model_name("big");
+    }
+
+    fs::path project = home / "project";
+    fs::create_directories(project);
+
+    daedalus::AgentConfig cfg;
+    cfg.project_root   = project;
+    cfg.daedalus_home  = home;
+    cfg.session_id     = "tool-trigger-e2e";
+    cfg.stream         = false;
+    cfg.memory_enabled = false;
+    cfg.mcp_enabled    = false;
+
+    auto sink = std::make_shared<CompactionSink>();
+    daedalus::Agent agent(std::move(cfg), sink);
+    agent.initialize();
+
+    agent.submit_user_message("hello");
+    agent.run_one_turn();
+    agent.shutdown();
+
+    // The model's own compress_context call scheduled compression at the
+    // end of cycle 1 — exactly one compaction, one summary request.
+    {
+        std::lock_guard<std::mutex> lk(sink->mu);
+        REQUIRE(sink->compactions.size() == 1);
+        CHECK(sink->compactions[0].before == 100);
+        CHECK(sink->errors.empty());
+    }
+    CHECK(server.compression_requests() == 1);
+    CHECK(server.main_requests() == 2);   // cycle 1 (tool call) → compress → cycle 2 (DONE)
+
+    fs::remove_all(home);
+}
+
+
+// ---------------------------------------------------------------------------
+// §COMPRESS-TOOL: unit tests for LLMClient::handle_compress_context_result.
+// The handler is the seam between the tool result and the deferred
+// compress_requested_ flag — verify payload acceptance/rejection.
+// ---------------------------------------------------------------------------
+namespace {
+
+AppConfig make_compress_handler_config(const fs::path& dir) {
+    AppConfig cfg;
+    cfg.target_directory = dir;
+    cfg.memory_disabled = true;   // hermetic: no SessionMemory on disk
+    return cfg;
+}
+
+}  // namespace
+
+TEST_SUITE("handle_compress_context_result (§COMPRESS-TOOL)") {
+
+    TEST_CASE("Valid compress_context payload is accepted") {
+        LLMClient client(make_compress_handler_config(
+            make_temp_home("handler_valid")));
+        json result = {{"status", "compress_context"},
+                       {"reason", "research complete"}};
+        CHECK(client.handle_compress_context_result(result) == true);
+    }
+
+    TEST_CASE("Reason is optional for acceptance") {
+        LLMClient client(make_compress_handler_config(
+            make_temp_home("handler_noreason")));
+        CHECK(client.handle_compress_context_result(
+                  {{"status", "compress_context"}}) == true);
+    }
+
+    TEST_CASE("Rejected payloads return false") {
+        LLMClient client(make_compress_handler_config(
+            make_temp_home("handler_reject")));
+        CHECK(client.handle_compress_context_result(json::object()) == false);
+        CHECK(client.handle_compress_context_result(
+                  {{"status", "success"}}) == false);
+        CHECK(client.handle_compress_context_result(
+                  {{"status", "error"}, {"message", "boom"}}) == false);
+        CHECK(client.handle_compress_context_result(
+                  {{"status", "set_state"}, {"state", "Acting"}}) == false);
+        CHECK(client.handle_compress_context_result(json::array()) == false);
+    }
 }

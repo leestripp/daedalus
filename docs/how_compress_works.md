@@ -141,7 +141,43 @@ If the first valid safe split point is too far from the 70% target (e.g., a huge
 
 ## Trigger Methods
 
+All three trigger methods converge on the same cycle-boundary
+checkpoint and the same `Messages::compress()` pipeline — they differ
+only in WHO asks.
+
+### Method 0: Agent-Triggered Compression (`compress_context` tool)
+
+The agent can request compression itself via the model-facing
+`compress_context` tool (restored 2026-08-14, §COMPRESS-TOOL):
+
+```
+Model emits compress_context({"reason": "..."}) tool call
+    │
+    ▼
+LLMClient::run_agent_cycle() executes the tool
+    │
+    ▼
+handle_compress_context_result() sets compress_requested_ flag
+    │
+    ▼
+Cycle-boundary checkpoint (same as Method 1/2 below) performs
+the actual compression — NEVER inline, so in-flight tool calls
+are never interrupted and the message chain stays valid
+```
+
+The tool result tells the model compression is *scheduled*, not done,
+so it continues its work normally. The `reason` argument lands in the
+log (`[COMPRESS] Agent requested context compression: <reason>`).
+
+The context-status block nudges the agent toward this tool once
+context pressure passes 70%, so it can shed stale history BEFORE the
+hard 90% auto-trigger.
+
 ### Method 1: Host-Triggered Compression (`Agent::compress_context()`)
+
+> **Note:** the model-facing `compress_context` tool (Method 0) funnels
+> into this exact mechanism — the tool result sets the same deferred
+> flag, so everything below applies to both.
 
 **When to use:**
 - Context is getting large but not yet at 90% threshold
@@ -513,14 +549,14 @@ If LLM fails during compression:
 
 ---
 
-## Key Differences: Host-Triggered vs Automatic
+## Key Differences: Agent-Triggered vs Host-Triggered vs Automatic
 
-| Aspect | `compress_context()` | Auto (90%) |
-|--------|----------------------|------------|
-| **Trigger** | Host API call | Token threshold |
-| **Continuation** | Continue main loop | Continue main loop |
-| **Message** | "Context compressed..." | "Context compressed..." |
-| **Use case** | Fresh start | Prevent context overflow |
+| Aspect | `compress_context` tool | `compress_context()` | Auto (90%) |
+|--------|------------------------|----------------------|------------|
+| **Who triggers** | The agent (model) | Host API call | Token threshold |
+| **When it runs** | Cycle boundary | Immediate when idle, else cycle boundary | Cycle boundary |
+| **Continuation** | Continue main loop | Continue main loop | Continue main loop |
+| **Use case** | Agent sheds stale context proactively | Fresh start from the host | Prevent context overflow |
 
 Both methods follow the same flow:
 1. Copy the first 70% (at safe split point), summarize via LLM

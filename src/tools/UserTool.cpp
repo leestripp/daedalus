@@ -83,6 +83,66 @@ json TellUserTool::execute(const json& args, FileIO&) {
     }
 }
 
+// ========== CompressContextTool ==========
+
+json CompressContextTool::get_definition() const {
+    return json::object({
+        {"type", "function"},
+        {"function", {
+            {"name", get_name()},
+            {"description", "Request context compression when you no longer need older parts of the conversation. Use this when you've gathered all the information you need and want to free up context space for continuing work, or when context pressure is climbing toward the auto-compress threshold. Compression is scheduled at the end of the current cycle - your current work is never interrupted."},
+            {"parameters", json::object({
+                {"type", "object"},
+                {"properties", json::object({
+                    {"reason", json::object({
+                        {"type", "string"},
+                        {"description", "Brief explanation of why context can be compressed now (e.g., 'Code research is complete, no longer need early search results')"}
+                    })}
+                })},
+                {"required", json::array({"reason"})}
+            })}
+        }}
+    });
+}
+
+json CompressContextTool::execute(const json& args, FileIO&) {
+    try {
+        std::string reason;
+
+        if (args.is_object() && args.contains("reason")) {
+            reason = args["reason"].get<std::string>();
+        } else if (args.is_string()) {
+            try {
+                json parsed_args = json::parse(args.get<std::string>());
+                reason = parsed_args.value("reason", "");
+            } catch (...) {
+                reason = args.get<std::string>();
+            }
+        } else {
+            reason = args.value("reason", "");
+        }
+
+        if (reason.empty()) {
+            return json::object({{"status", "error"}, {"message", "Missing 'reason' in arguments"}});
+        }
+
+        // §COMPRESS-TOOL: the actual compression is triggered by
+        // LLMClient::run_agent_cycle() when it sees status
+        // "compress_context" — it sets the compress_requested_ flag and
+        // compression runs at the cycle-boundary checkpoint, exactly like
+        // Agent::compress_context() (§AutoCompress). The tool result the
+        // model sees explains the deferral so it doesn't expect the
+        // context to shrink before its next response.
+        return json::object({
+            {"status", "compress_context"},
+            {"reason", reason},
+            {"message", "Context compression scheduled. It runs at the end of the current cycle; continue your work normally."}
+        });
+    } catch (const std::exception& e) {
+        return json::object({{"status", "error"}, {"message", std::string(e.what())}});
+    }
+}
+
 // ========== StopTool ==========
 
 json StopTool::get_definition() const {

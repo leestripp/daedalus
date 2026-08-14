@@ -65,6 +65,12 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<TellUserTool>());
     register_tool(std::make_shared<StopTool>());
 
+    // §COMPRESS-TOOL (2026-08-14): model-facing compression trigger,
+    // restored. The tool only schedules compression — LLMClient turns the
+    // result into the same compress_requested_ flag as
+    // Agent::compress_context(), consumed at the cycle boundary.
+    register_tool(std::make_shared<CompressContextTool>());
+
     // §State Machine: agent-driven state transitions.
     register_tool(std::make_shared<SetStatusTool>());
 

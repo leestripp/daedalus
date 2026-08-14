@@ -1089,6 +1089,27 @@ bool LLMClient::handle_set_state_result(const json& result) {
     return true;
 }
 
+// §COMPRESS-TOOL (2026-08-14): handle a `compress_context` tool result.
+// The model-facing tool was removed on 2026-08-01 because the agent never
+// called it; it is back by request. The tool cannot compress inline — the
+// run loop holds a reference to the live message array across the cycle —
+// so this sets the same compress_requested_ flag as the host-facing
+// compress_context() and the cycle-boundary checkpoint (§AutoCompress)
+// does the work: same code path as the 90% threshold trigger, safe
+// mid-turn, result reported via on_compaction().
+bool LLMClient::handle_compress_context_result(const json& result) {
+    if (!result.is_object()
+        || result.value("status", "") != "compress_context") {
+        return false;
+    }
+    const std::string reason = result.value("reason", "");
+    compress_requested_.store(true, std::memory_order_relaxed);
+    LOG_INFO("[COMPRESS] Agent requested context compression"
+             + (reason.empty() ? std::string(".")
+                               : ": " + reason));
+    return true;
+}
+
 // §on_error: structured error routing to the host sink. Every error is also
 // written to the file Logger unconditionally, so hosts that override on_error
 // / on_log (console rendering) still leave a trace in the project log file.
@@ -2335,6 +2356,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 // firing the sink directly for direct LLMClient users.
                 handle_set_state_result(result);
 
+                // §COMPRESS-TOOL: when the agent asks for compression via
+                // the `compress_context` tool, set the deferred flag — the
+                // checkpoint at the end of this cycle performs the actual
+                // compression (same path as Agent::compress_context()).
+                handle_compress_context_result(result);
+
                 // Log tool failures for operators; the structured result is
                 // already delivered via on_tool_result above.
                 if (status == "error") {
@@ -2613,9 +2640,20 @@ void LLMClient::inject_context_stats(json& messages) {
     // Add urgent warning if at 90% threshold - system handles compression automatically
     if (at_threshold) {
         stats << "\n🚨 **Context at 90% threshold** - SYSTEM will auto-compress\n\n";
-        stats << "**No action needed** - system handles compression automatically\n";
-        stats << "- Do NOT call any compression tool\n";
-        stats << "- Just continue your work - system will compress when ready\n\n";
+        stats << "**No action needed** - the system compresses at the end of this cycle\n";
+        stats << "- Just continue your work - compression never interrupts in-flight tool calls\n";
+        stats << "- You may also call `compress_context` yourself at any time to schedule compression earlier\n\n";
+    } else if (messages_ && get_max_context_size_value() > 0) {
+        // §COMPRESS-TOOL: proactive nudge above 70% — the agent can shed
+        // stale context BEFORE the hard 90% trigger instead of panicking
+        // at the threshold.
+        const float ratio = messages_->get_compression_ratio(last_total_tokens_);
+        if (ratio >= 0.70f) {
+            stats << "\n⚠️ **Context pressure above 70%**\n\n";
+            stats << "If older parts of the conversation are no longer needed, call the "
+                     "`compress_context` tool to schedule compression now - "
+                     "it runs at the end of the cycle and never interrupts your work.\n\n";
+        }
     }
 
     stats << "# Context Status\n";

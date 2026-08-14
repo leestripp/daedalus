@@ -645,6 +645,12 @@ Thread-safe, with two modes depending on agent activity:
   trigger — so in-flight tool calls are never interrupted. The request
   is honored even if the turn ends up cancelled.
 
+The agent itself can also trigger compression through the model-facing
+`compress_context` tool (§COMPRESS-TOOL): the tool result sets the same
+deferred flag, so all three triggers (agent tool, host API, 90%
+threshold) share the cycle-boundary checkpoint. No host wiring is
+required — the tool is registered by default.
+
 ---
 
 ### `on_bell()` — Notification Signal

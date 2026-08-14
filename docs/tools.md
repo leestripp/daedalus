@@ -16,6 +16,7 @@ functional autonomous agent are registered automatically:
 |------|---------|
 | `execute_bash` | Run shell commands in the project root |
 | `tell_user` | Send text back to the host / user |
+| `compress_context` | Schedule context compression at the end of the current cycle |
 | `set_status` | Declare the agent's own state mid-turn |
 | `stop` | End the agent loop cleanly |
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
@@ -339,8 +340,9 @@ Tool call chains in the suffix remain complete because we never cut through them
 ### Fix 5: Compression Only After Complete Iteration
 
 In-turn compression is triggered at the cycle boundary (90% context
-threshold, or a deferred `Agent::compress_context()` request from the
-host), which ensures it only happens:
+threshold, a deferred `Agent::compress_context()` request from the
+host, or the agent's own `compress_context` tool call — all three set
+the same deferred flag), which ensures it only happens:
 - After all tool calls in an iteration have been resolved
 - After tool results have been added to messages
 - When the message chain is complete and valid
@@ -498,6 +500,41 @@ Sends a message to the user. Use this to communicate results, status updates, or
   "name": "tell_user",
   "arguments": {
     "content": "I've analyzed the code and found that the main.cpp file needs refactoring."
+  }
+}
+```
+
+---
+
+## 1a. `compress_context`
+
+### Purpose
+Requests context compression when the agent no longer needs older parts of
+the conversation. Restored as a model-facing tool on 2026-08-14
+(§COMPRESS-TOOL) after the 2026-08-01 removal — the agent panics near the
+90% auto-compress threshold when it cannot shed stale context itself.
+
+The tool does **not** compress inline: the result
+(`{"status": "compress_context", ...}`) is picked up by
+`LLMClient::handle_compress_context_result()`, which sets the same deferred
+flag as `Agent::compress_context()`. Compression runs at the cycle-boundary
+checkpoint — never mid-tool-batch — and is reported via
+`AgentSink::on_compaction()`. The context-status block nudges the agent to
+call this tool once context pressure passes 70%.
+
+### Parameters
+
+| Name   | Type   | Required | Description                                        |
+|--------|--------|----------|----------------------------------------------------|
+| reason | string | Yes      | Why the context can be compressed now (logged)     |
+
+### Example Usage
+
+```json
+{
+  "name": "compress_context",
+  "arguments": {
+    "reason": "Code research is complete, no longer need early search results"
   }
 }
 ```

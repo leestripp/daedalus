@@ -385,6 +385,15 @@ public:
     ///        Extracted from run_agent_cycle() so it is unit-testable.
     bool handle_set_state_result(const json& result);
 
+    /// @brief Handle a tool result from the model-facing
+    ///        `compress_context` tool ({"status":"compress_context",...}).
+    ///        Sets the same compress_requested_ flag as
+    ///        compress_context(), so compression runs at the
+    ///        cycle-boundary checkpoint (§AutoCompress) — never inline,
+    ///        never interrupting in-flight tool calls. Returns true when
+    ///        the result was a valid compression request.
+    bool handle_compress_context_result(const json& result);
+
     /// @brief Update the running AppConfig (e.g., after a model switch).
     ///        Also refreshes the Messages compression config so context-size
     ///        and API settings follow the new model.
