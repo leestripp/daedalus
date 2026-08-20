@@ -1864,3 +1864,25 @@ target_link_libraries(daedalus_fatal_breaker_tests PRIVATE
     pthread
 )
 add_test(NAME fatal_breaker_tests COMMAND daedalus_fatal_breaker_tests)
+
+# ============================================================================
+# §IdleExitBreaker regression tests (2026-08-20): a model calling set_status
+# twice in a row with no other tool calls is trying to exit the agent loop
+# (set_status never exits — only stop does). LLMClient now ends the turn
+# after 2 consecutive set_status-only iterations. Drives LLMClient against
+# an in-process HTTP server.
+# ============================================================================
+add_executable(daedalus_status_only_breaker_tests
+    test_status_only_breaker.cpp
+)
+target_include_directories(daedalus_status_only_breaker_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_status_only_breaker_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME status_only_breaker_tests COMMAND daedalus_status_only_breaker_tests)

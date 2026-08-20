@@ -1141,6 +1141,29 @@ bool LLMClient::fatal_breaker_should_end_turn(const std::string& signature) {
     return false;
 }
 
+// §IdleExitBreaker (2026-08-20): circuit breaker for set_status-only
+// iterations. A finished model used to call set_status("Idle"/"Done")
+// expecting the agent loop to exit — it doesn't; only the `stop` tool
+// ends a turn. The model then answers each re-invocation with yet
+// another set_status and the turn loops forever (observed in the wild:
+// the host re-sending only the auto context-status block, the model
+// replying set_status("Done") every iteration). Threshold 2 mirrors the
+// fatal breaker: one status-only iteration is a legitimate UI update,
+// two in a row means the model is done and forgot how to say so.
+bool LLMClient::status_only_breaker_should_end_turn() {
+    static constexpr int kMaxConsecutiveStatusOnly = 2;
+    ++consecutive_status_only_count_;
+    if (consecutive_status_only_count_ >= kMaxConsecutiveStatusOnly) {
+        LOG_ERROR("set_status-only iterations repeated " +
+                  std::to_string(consecutive_status_only_count_) +
+                  " times consecutively - model is trying to exit the "
+                  "loop; ending turn instead of looping. "
+                  "(To end a turn explicitly, call the stop tool.)");
+        return true;
+    }
+    return false;
+}
+
 // Helper method to extract error message from raw API response
 std::string LLMClient::extract_error_message(const std::string& response) const {
     // Try to find JSON error object in the response
@@ -2547,6 +2570,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
         // Determine next state based on tool types used
         // If execute_bash was called, we just completed BUILD_TEST
         bool has_build_test = false;
+        bool status_only = !tool_calls.empty();
         for (const auto& tool_call : tool_calls) {
             // §fix (2026-07-18): guarded lookup — malformed tool_calls
             // (missing function/name) must not throw here.
@@ -2557,8 +2581,22 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             }
             if (fn == "execute_bash") {
                 has_build_test = true;
-                break;
             }
+            if (fn != "set_status") {
+                status_only = false;
+            }
+        }
+
+        // §IdleExitBreaker (2026-08-20): this iteration's tool calls were
+        // exclusively set_status. Once is a UI update; twice in a row is
+        // a model stuck trying to exit — end the turn like `stop` would.
+        // Tool results were already appended to the history above.
+        if (status_only) {
+            if (status_only_breaker_should_end_turn()) {
+                return AgentState::DONE;
+            }
+        } else {
+            consecutive_status_only_count_ = 0;
         }
 
         // Agent decides next state - continue in ACT or go to BUILD_TEST
@@ -2610,6 +2648,10 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             }
         }
     }
+
+    // §IdleExitBreaker: a plain-text response is real progress (and ends
+    // the turn anyway) — reset the set_status-only counter.
+    consecutive_status_only_count_ = 0;
 
     // When agent just responds with text (no tools), task is complete
     // The user will be prompted to continue or quit when DONE state is handled
@@ -2891,6 +2933,10 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // returned CANCELLED forever. Install a fresh source before any
     // token is taken from it (run_agent_cycle calls get_token()).
     cancel_source_ = std::stop_source{};
+
+    // §IdleExitBreaker: fresh turn — a status-only iteration at the end
+    // of the PREVIOUS turn must not count against this one.
+    consecutive_status_only_count_ = 0;
 
     // §Phase 16: route skill tools to this Agent's owned SkillManager while
     // this turn is executing.

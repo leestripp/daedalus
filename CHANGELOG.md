@@ -6,6 +6,23 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **§IdleExitBreaker: set_status-only circuit breaker ends runaway
+  turns** (2026-08-20). Follow-up to §IdleLoopFix: rejecting
+  runtime-owned states stopped `set_status("Idle")`, but a finished
+  model could still loop forever on *accepted* states — calling
+  `set_status("Done")`, getting `status: success`, and answering every
+  re-invocation with another `set_status` (observed in icarus: the host
+  re-sent only the auto context-status block and the model replied
+  `set_status("Done")` every iteration). `set_status` never exits the
+  agent loop — only the `stop` tool does. `LLMClient` now counts
+  consecutive iterations whose ONLY tool call is `set_status`; at 2 in
+  a row the turn ends exactly as if `stop` had been called. The counter
+  resets at turn start, on any other tool call, and on plain-text
+  responses. Regression tests: `status_only_breaker_tests` (in-process
+  HTTP server, mirrors `fatal_breaker_tests`).
+
 ## [1.0.0] — 2026-08-20
 
 ### Fixed
