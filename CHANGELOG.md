@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.0] — 2026-08-20
+
 ### Fixed
 
 - **§IdleLoopFix: `set_status` no longer accepts runtime-owned states**
@@ -1615,4 +1617,5 @@ the refactor: multi-provider LLM support, agent skills (open standard),
 ("70/30 split"), background processes, manager mode, sub-agent
 looping, sub-agent mode.
 
-[Unreleased]: https://gitlab.example/codemax/-/compare/v0.x...main
+[Unreleased]: https://gitlab.com/leestripp/daedalus/-/compare/1.0.0...main
+[1.0.0]: https://gitlab.com/leestripp/daedalus/-/compare/0.10.3...1.0.0
