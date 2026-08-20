@@ -6,6 +6,33 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **§IdleLoopFix: `set_status` no longer accepts runtime-owned states**
+  (2026-08-20). `Idle`, `AwaitingApproval`, and `Compressing` are set by
+  the library itself, but `SetStatusTool` used to accept all three from
+  the model and return `status: success`. In the field this produced an
+  infinite loop: a model that had finished its work would read the
+  system prompt's "Idle = no work in flight" row and call
+  `set_status("Idle")` expecting the agent loop to exit — but
+  `set_status` only *reports* state to the host sink; the loop ends
+  exclusively via the `stop` tool (or host cancel). The success result
+  reinforced the behaviour, so the model repeated it forever.
+  `SetStatusTool` now recognises the runtime-owned names (so the error
+  is precise) but rejects them: the `Idle` message explicitly explains
+  that no `set_status` call exits the loop and points at the `stop`
+  tool. The tool description, the parameter schema description, and the
+  system-prompt state-machine section were updated to match — `Idle`
+  moved to the "Runtime-owned states" table, plus an explicit rule:
+  "`set_status` never exits the agent loop — not even `Done`." The
+  `AgentState::Idle` enum value itself is unchanged (still the
+  host-facing initial/resting state). Regression coverage in
+  `tests/test_set_status_tool.cpp` (rejection of all three states,
+  case/whitespace variants, JSON-string form, and a contract check that
+  error payloads never carry `status == "set_state"`, so no
+  `on_state_change` event can fire).
+
+
 ## [0.10.3] — 2026-08-14
 
 ### Added

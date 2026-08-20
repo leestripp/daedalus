@@ -34,7 +34,9 @@ public:
                "so the host UI / sink can render the current stage correctly.  YOU are the only one "
                "who knows when verification failed and you must loop back to Understanding or "
                "Planning — call this to reflect that.  Use Documenting when you are updating "
-               "README, CHANGELOG, comments, or tool docs after the code change is verified.";
+               "README, CHANGELOG, comments, or tool docs after the code change is verified.  "
+               "NOTE: set_status only updates the host UI stage — it NEVER exits the agent "
+               "loop, not even Done.  To end your turn, call the stop tool.";
     }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;

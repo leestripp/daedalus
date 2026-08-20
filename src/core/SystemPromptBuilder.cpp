@@ -106,13 +106,12 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "\n"
         "| State | Meaning |\n"
         "|-------|---------|\n"
-        "| `Idle` | No work in flight. |\n"
         "| `Understanding` | Reading the request, parsing input, gathering context. |\n"
         "| `Planning` | Designing the approach, choosing which tools to call. |\n"
         "| `Acting` | Running tools (file edits, bash, MCP, etc.). |\n"
         "| `Verifying` | Compiling, testing, inspecting output — this is a decision gate. |\n"
         "| `Documenting` | Updating README, CHANGELOG, comments, docs after verification. |\n"
-        "| `Done` | Turn complete — emit your final assistant message and stop. |\n"
+        "| `Done` | Turn complete — emit your final assistant message, then call the `stop` tool. |\n"
         "| `Cancelled` | Host cancelled the turn; stop work and ack. |\n"
         "| `Error` | Unrecoverable error; report to host and stop. |\n"
         "\n"
@@ -121,8 +120,14 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "\n"
         "| State | Meaning |\n"
         "|-------|---------|\n"
+        "| `Idle` | Constructed / resting between turns — no work in flight. |\n"
         "| `AwaitingApproval` | A bash command is waiting for host approval. |\n"
         "| `Compressing` | Context compaction in flight. |\n"
+        "\n"
+        "**`set_status` never exits the agent loop** — no state does, not\n"
+        "even `Done`. The turn only ends when you call the `stop` tool\n"
+        "(or the host cancels). `set_status` exists purely to keep the\n"
+        "host UI stage chip in sync.\n"
         "\n"
         "Workflow:\n"
         "\n"
@@ -152,9 +157,10 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "5. **Never stay in `Acting` forever.** If you have no more tools to\n"
         "   call, transition to `Verifying` (and then `Done` or `Documenting`)\n"
         "   or back to `Planning` if more work is needed.\n"
-        "6. **Always end with `Done`.** Call `set_status` with `Done`\n"
-        "   immediately before your final assistant message; otherwise the\n"
-        "   host UI will leave the stage chips stuck.\n";
+        "6. **Always end with `Done`, then `stop`.** Call `set_status` with\n"
+        "   `Done` immediately before your final assistant message, then call\n"
+        "   the `stop` tool — `set_status` alone does not end the loop, and\n"
+        "   without `stop` the turn never terminates.\n";
 }
 
 std::string SystemPromptBuilder::getReservedAgentDirsSection() {

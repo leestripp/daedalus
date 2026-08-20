@@ -11,6 +11,15 @@ namespace {
 // Public AgentState names — keep in sync with
 // include/daedalus/types/AgentState.h and
 // demos/daedalus-webui/web_sse_sink.h.
+//
+// §IdleLoopFix (2026-08-20): the list is split into model-driven and
+// runtime-owned states.  A model that had just finished its work used
+// to read "Idle = no work in flight" and call set_status("Idle")
+// expecting the agent loop to exit — but set_status only *reports*
+// state to the host; the loop ends exclusively via the `stop` tool
+// (or host cancel).  The tool returned status=success, so the model
+// looped forever.  Idle / AwaitingApproval / Compressing are now
+// rejected with an actionable error instead of being accepted.
 constexpr std::array<std::string_view, 11> kValidStates = {
     "Idle",
     "Understanding",
@@ -20,6 +29,25 @@ constexpr std::array<std::string_view, 11> kValidStates = {
     "Documenting",
     "AwaitingApproval",
     "Compressing",
+    "Done",
+    "Cancelled",
+    "Error",
+};
+
+// States the library sets itself — never accepted from the model.
+constexpr std::array<std::string_view, 3> kRuntimeOwnedStates = {
+    "Idle",
+    "AwaitingApproval",
+    "Compressing",
+};
+
+// States the model may pass to set_status.
+constexpr std::array<std::string_view, 8> kModelStates = {
+    "Understanding",
+    "Planning",
+    "Acting",
+    "Verifying",
+    "Documenting",
     "Done",
     "Cancelled",
     "Error",
@@ -46,11 +74,18 @@ std::string canonicalise(std::string_view name) {
     return {};
 }
 
+bool is_runtime_owned(std::string_view canonical) {
+    for (auto v : kRuntimeOwnedStates) {
+        if (v == canonical) return true;
+    }
+    return false;
+}
+
 std::string valid_states_list() {
     std::string out;
-    for (size_t i = 0; i < kValidStates.size(); ++i) {
+    for (size_t i = 0; i < kModelStates.size(); ++i) {
         if (i) out += ", ";
-        out += std::string(kValidStates[i]);
+        out += std::string(kModelStates[i]);
     }
     return out;
 }
@@ -69,10 +104,13 @@ json SetStatusTool::get_definition() const {
                     {"state", json::object({
                         {"type", "string"},
                         {"description",
-                         "The state to transition to. One of: Idle, Understanding, Planning, "
+                         "The state to transition to. One of: Understanding, Planning, "
                          "Acting, Verifying, Documenting, Done, Cancelled, Error. "
-                         "(AwaitingApproval and Compressing are runtime-managed — the library "
-                         "sets them itself.) "
+                         "(Idle, AwaitingApproval and Compressing are runtime-managed — the "
+                         "library sets them itself; passing them is an error.) "
+                         "NOTE: set_status only updates the host UI stage — it NEVER exits "
+                         "the agent loop, not even 'Done'. To end your turn, call the 'stop' "
+                         "tool. "
                          "Case-insensitive; normalised to title-case in the response."}
                     })}
                 })},
@@ -139,6 +177,27 @@ json SetStatusTool::execute(const json& args, FileIO& /*file_io*/) {
                 {"status", "error"},
                 {"message",
                  "Unknown state '" + trimmed + "'. Valid: " + valid_states_list() + "."},
+            });
+        }
+
+        // §IdleLoopFix: runtime-owned states are recognised above (so we
+        // can give a precise message) but never accepted.  Most important
+        // is "Idle": the model must learn that no set_status call — not
+        // even "Done" — exits the agent loop; only the `stop` tool does.
+        if (is_runtime_owned(normalised)) {
+            std::string msg =
+                "'" + normalised + "' is runtime-owned — the library sets it "
+                "itself; never pass it to set_status. ";
+            if (normalised == "Idle") {
+                msg +=
+                    "Note: set_status only reports your stage to the host UI; "
+                    "it does NOT exit the agent loop (no state does — not even "
+                    "'Done'). To end your turn, call the 'stop' tool. ";
+            }
+            msg += "Model-driven states: " + valid_states_list() + ".";
+            return json::object({
+                {"status", "error"},
+                {"message", msg},
             });
         }
 

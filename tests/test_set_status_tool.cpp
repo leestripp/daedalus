@@ -10,6 +10,12 @@
  *   5. The success status string is "set_state" so LLMClient can
  *      branch on it and fire the public state-change event.
  *   6. agent_state_from() (the inverse of to_string()) round-trips.
+ *   7. §IdleLoopFix (2026-08-20): runtime-owned states (Idle,
+ *      AwaitingApproval, Compressing) are REJECTED with an actionable
+ *      error.  A model used to call set_status("Idle") expecting the
+ *      agent loop to exit ("Idle = no work in flight"), got
+ *      status=success, and looped forever.  The loop ends only via the
+ *      `stop` tool — the error message for Idle says exactly that.
  */
 
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
@@ -58,13 +64,12 @@ TEST_SUITE("SetStatusTool — JSON schema") {
 
 TEST_SUITE("SetStatusTool — valid input") {
 
-    TEST_CASE("Every public AgentState name round-trips") {
+    TEST_CASE("Every model-driven AgentState name round-trips") {
         SetStatusTool tool;
         FileIO io(std::filesystem::temp_directory_path());  // unused by SetStatusTool
         const std::vector<std::string> valid = {
-            "Idle", "Understanding", "Planning", "Acting", "Verifying",
-            "Documenting", "AwaitingApproval", "Compressing",
-            "Done", "Cancelled", "Error",
+            "Understanding", "Planning", "Acting", "Verifying",
+            "Documenting", "Done", "Cancelled", "Error",
         };
         for (const auto& name : valid) {
             json args = {{"state", name}};
@@ -108,6 +113,75 @@ TEST_SUITE("SetStatusTool — valid input") {
         json r = tool.execute(args, io);
         CHECK(r["status"] == "set_state");
         CHECK(r["state"]  == "Done");
+    }
+}
+
+// ============================================================================
+// Suite 2b: §IdleLoopFix — runtime-owned states are rejected.
+// ============================================================================
+
+TEST_SUITE("SetStatusTool — runtime-owned states rejected") {
+
+    TEST_CASE("Idle returns an error that points at the stop tool") {
+        SetStatusTool tool;
+        FileIO io(std::filesystem::temp_directory_path());
+        json r = tool.execute({{"state", "Idle"}}, io);
+        CHECK(r["status"] == "error");
+        REQUIRE(r.contains("message"));
+        std::string msg = r["message"].get<std::string>();
+        // The model must learn: runtime-owned + set_status never exits
+        // the loop + stop is the exit hatch.
+        CHECK(msg.find("runtime-owned") != std::string::npos);
+        CHECK(msg.find("does NOT exit the agent loop") != std::string::npos);
+        CHECK(msg.find("stop") != std::string::npos);
+        // …and it must list the states it CAN use so it can self-correct.
+        CHECK(msg.find("Planning") != std::string::npos);
+        CHECK(msg.find("Done")     != std::string::npos);
+    }
+
+    TEST_CASE("Idle is rejected case-insensitively and with whitespace") {
+        SetStatusTool tool;
+        FileIO io(std::filesystem::temp_directory_path());
+        for (const auto& variant : {"idle", "IDLE", "  Idle \t", "iDlE"}) {
+            json r = tool.execute({{"state", variant}}, io);
+            CHECK(r["status"] == "error");
+            CHECK(r["message"].get<std::string>().find("runtime-owned")
+                  != std::string::npos);
+        }
+    }
+
+    TEST_CASE("AwaitingApproval and Compressing are rejected as runtime-owned") {
+        SetStatusTool tool;
+        FileIO io(std::filesystem::temp_directory_path());
+        for (const auto& name : {"AwaitingApproval", "Compressing"}) {
+            json r = tool.execute({{"state", name}}, io);
+            CHECK(r["status"] == "error");
+            std::string msg = r["message"].get<std::string>();
+            CHECK(msg.find(name) != std::string::npos);
+            CHECK(msg.find("runtime-owned") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("JSON-string form of Idle is also rejected") {
+        SetStatusTool tool;
+        FileIO io(std::filesystem::temp_directory_path());
+        json args = std::string(R"({"state":"Idle"})");
+        json r = tool.execute(args, io);
+        CHECK(r["status"] == "error");
+        CHECK(r["message"].get<std::string>().find("stop") != std::string::npos);
+    }
+
+    TEST_CASE("Error result never carries status==set_state (no state event fired)") {
+        // LLMClient::handle_set_state_result() branches on
+        // status == "set_state"; an error payload must therefore never
+        // reach the sink.  Belt-and-braces check on the contract.
+        SetStatusTool tool;
+        FileIO io(std::filesystem::temp_directory_path());
+        for (const auto& name : {"Idle", "AwaitingApproval", "Compressing"}) {
+            json r = tool.execute({{"state", name}}, io);
+            CHECK(r["status"] != "set_state");
+            CHECK_FALSE(r.contains("state"));
+        }
     }
 }
 
