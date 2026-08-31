@@ -888,8 +888,22 @@ void Messages::save_impl() const {
         return;
     }
 
-    // Sanitize before saving - remove orphaned tool results
-    json to_save = sanitize_message_chain(snapshot);
+    // Sanitize before saving - remove orphaned tool results.
+    // SANITIZE-NOTHROW: last-resort catch -- any persistence error that
+    // escapes here would ride the flush worker thread into
+    // std::terminate (SIGABRT). Re-mark dirty so the next tick retries.
+    json to_save;
+    try {
+        to_save = sanitize_message_chain(snapshot);
+    } catch (const std::exception& e) {
+        LOG_CERR(ERROR, "[Messages] sanitize_message_chain threw during save: " << e.what() << '\n');
+        dirty_.store(true, std::memory_order_release);
+        return;
+    } catch (...) {
+        LOG_CERR(ERROR, "[Messages] sanitize_message_chain threw unknown during save" << '\n');
+        dirty_.store(true, std::memory_order_release);
+        return;
+    }
 
     // §CRASH-4 (2026-07-16): declare `contents` at function scope so
     // it's visible after the try block where the crash-mirror state is
@@ -1159,11 +1173,23 @@ void Messages::flush_worker_main() {
         if (stop_flush_) {
             // Final flush so nothing in-flight is lost.
             lk.unlock();
-            flush_if_dirty();
+            // SANITIZE-NOTHROW: this thread must never let an exception
+            // escape -- std::thread + uncaught exception = terminate.
+            try { flush_if_dirty(); }
+            catch (const std::exception& e) {
+                LOG_CERR(ERROR, "[Messages] flush worker: flush_if_dirty threw: " << e.what() << '\n');
+            } catch (...) {
+                LOG_CERR(ERROR, "[Messages] flush worker: flush_if_dirty threw unknown" << '\n');
+            }
             return;
         }
         lk.unlock();
-        flush_if_dirty();
+        try { flush_if_dirty(); }
+        catch (const std::exception& e) {
+            LOG_CERR(ERROR, "[Messages] flush worker: flush_if_dirty threw: " << e.what() << '\n');
+        } catch (...) {
+            LOG_CERR(ERROR, "[Messages] flush worker: flush_if_dirty threw unknown" << '\n');
+        }
     }
 }
 
@@ -1833,19 +1859,45 @@ std::vector<std::string> Messages::get_pending_tool_ids() const {
     return pending;
 }
 
+namespace {
+
+// SANITIZE-NOTHROW (2026-08-31, MonkeyByte coredump 2026-08-30):
+// entry.value("role", ...) throws type_error when a chain entry is not
+// an object, or when role/tool_call_id/id is present but null or
+// non-string. That exception escaped save() onto the background flush
+// worker thread -> std::terminate -> SIGABRT (intermittent: fired only
+// when a malformed/partially-written chain entry met a flush tick).
+// Sanitize runs on the persistence path, so it must never throw --
+// extract strings defensively and drop unusable entries instead.
+std::string chain_safe_str(const json& j, const char* key) {
+    if (!j.is_object()) return "";
+    const auto it = j.find(key);
+    return (it != j.end() && it->is_string()) ? it->get<std::string>()
+                                              : std::string();
+}
+
+} // namespace
+
 json Messages::sanitize_assistant_message(const json& msg,
                                             const std::unordered_set<std::string>& tool_result_ids) const {
     if (!msg.is_object() || !msg.contains("tool_calls")) return msg;
-    
+
     json sanitized = msg;
     json valid_calls = json::array();
-    
+
     if (msg["tool_calls"].is_array()) {
         for (const auto& tc : msg["tool_calls"]) {
-            std::string tc_id = tc.value("id", "");
-            
+            // SANITIZE-NOTHROW: a non-object tool_call entry (null, string,
+            // ...) would make .value()/.contains() below throw type_error.
+            if (!tc.is_object()) {
+                LOG_CERR(INFO,  "[Messages] Removing non-object tool_call entry" << '\n');
+                continue;
+            }
+            std::string tc_id = chain_safe_str(tc, "id");
+
             bool valid_args = true;
-            if (tc.contains("function") && tc["function"].contains("arguments")) {
+            if (tc.contains("function") && tc["function"].is_object()
+                && tc["function"].contains("arguments")) {
                 const auto& args_val = tc["function"]["arguments"];
                 if (args_val.is_string()) {
                     // Use json::accept() for efficient validation without creating parse tree
@@ -1909,10 +1961,14 @@ json Messages::sanitize_message_chain(const json& msgs) const {
 
     for (size_t i = 0; i < msgs.size(); i++) {
         const auto& msg = msgs[i];
-        std::string role = msg.value("role", "");
+        if (!msg.is_object()) {
+            LOG_CERR(INFO,  "[Messages] Dropped non-object chain entry at index " << i << '\n');
+            continue;
+        }
+        std::string role = chain_safe_str(msg, "role");
 
         if (role == "tool") {
-            std::string tc_id = msg.value("tool_call_id", "");
+            std::string tc_id = chain_safe_str(msg, "tool_call_id");
             if (tc_id.empty()) {
                 LOG_CERR(INFO,  "[Messages] Removed malformed tool result (empty tool_call_id)" << '\n');
                 continue;
@@ -1943,8 +1999,8 @@ json Messages::sanitize_message_chain(const json& msgs) const {
             // elsewhere in history do NOT count (position-aware).
             std::unordered_set<std::string> adjacent_result_ids;
             for (size_t j = i + 1; j < msgs.size(); j++) {
-                if (msgs[j].value("role", "") != "tool") break;
-                std::string id = msgs[j].value("tool_call_id", "");
+                if (chain_safe_str(msgs[j], "role") != "tool") break;
+                std::string id = chain_safe_str(msgs[j], "tool_call_id");
                 if (!id.empty()) adjacent_result_ids.insert(id);
             }
             // Prune tool_calls that have no adjacent result or invalid args.
@@ -1953,7 +2009,7 @@ json Messages::sanitize_message_chain(const json& msgs) const {
                 result.push_back(sanitized);
                 if (sanitized.contains("tool_calls")) {
                     for (const auto& tc : sanitized["tool_calls"]) {
-                        std::string id = tc.value("id", "");
+                        std::string id = chain_safe_str(tc, "id");
                         if (!id.empty()) open_block.insert(id);
                     }
                 }

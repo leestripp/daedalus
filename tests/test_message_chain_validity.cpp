@@ -454,3 +454,167 @@ TEST_SUITE("truncate_if_needed block retention") {
         cleanup_test_project(proj);
     }
 }
+
+// ============================================================================
+// §SANITIZE-NOTHROW (2026-08-31, MonkeyByte coredump 2026-08-30)
+// sanitize_message_chain runs on the persistence path (background flush
+// worker) where an escaped exception is std::terminate -> SIGABRT.
+// Malformed chain entries (non-object entries, null/non-string role,
+// tool_call_id, or tool_call id) must be dropped, never thrown on.
+// ============================================================================
+
+TEST_SUITE("sanitize_message_chain never throws (SANITIZE-NOTHROW)") {
+
+    TEST_CASE("Non-object chain entries are dropped") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json chain = json::array({
+            make_msg("system", "sys"),
+            nullptr,
+            make_msg("user", "hi"),
+            "a bare string",
+            42,
+            make_assistant_tc("X", "calling tool"),
+            make_tool_result("X"),
+        });
+
+        json out;
+        CHECK_NOTHROW(out = msgs.sanitize_message_chain(chain));
+        REQUIRE(out.size() == 4);
+        CHECK(roles_of(out) == std::vector<std::string>(
+            {"system", "user", "assistant", "tool"}));
+        check_chain_valid(out);
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Null or non-string role does not throw") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json chain = json::array({
+            make_msg("system", "sys"),
+            json{{"role", nullptr}, {"content", "no role"}},
+            json{{"role", 123}, {"content", "numeric role"}},
+            make_msg("user", "hi"),
+        });
+
+        CHECK_NOTHROW(msgs.sanitize_message_chain(chain));
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Tool result with null tool_call_id is dropped") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json chain = json::array({
+            make_msg("user", "hi"),
+            make_assistant_tc("X", "calling tool"),
+            json{{"role", "tool"}, {"tool_call_id", nullptr}, {"content", "bad"}},
+            make_tool_result("X"),
+        });
+
+        json out;
+        CHECK_NOTHROW(out = msgs.sanitize_message_chain(chain));
+        REQUIRE(out.size() == 3);
+        CHECK(out[2].value("tool_call_id", "") == "X");
+        check_chain_valid(out);
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("tool_call with null id is pruned, valid sibling survives") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json asst = {
+            {"role", "assistant"},
+            {"tool_calls", json::array({
+                {{"id", nullptr}, {"type", "function"},
+                 {"function", {{"name", "t"}, {"arguments", "{}"}}}},
+                {{"id", "Y"}, {"type", "function"},
+                 {"function", {{"name", "t"}, {"arguments", "{}"}}}},
+            })}
+        };
+        json chain = json::array({
+            make_msg("user", "hi"),
+            asst,
+            make_tool_result("Y"),
+        });
+
+        json out;
+        CHECK_NOTHROW(out = msgs.sanitize_message_chain(chain));
+        REQUIRE(out.size() == 3);
+        REQUIRE(out[1]["tool_calls"].size() == 1);
+        CHECK(out[1]["tool_calls"][0].value("id", "") == "Y");
+        check_chain_valid(out);
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Non-object tool_call entries are dropped without throwing") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json asst = {
+            {"role", "assistant"},
+            {"tool_calls", json::array({
+                nullptr,
+                "bogus",
+                {{"id", "Z"}, {"type", "function"},
+                 {"function", {{"name", "t"}, {"arguments", "{}"}}}},
+            })}
+        };
+        json chain = json::array({
+            make_msg("user", "hi"),
+            asst,
+            make_tool_result("Z"),
+        });
+
+        json out;
+        CHECK_NOTHROW(out = msgs.sanitize_message_chain(chain));
+        REQUIRE(out.size() == 3);
+        REQUIRE(out[1]["tool_calls"].size() == 1);
+        CHECK(out[1]["tool_calls"][0].value("id", "") == "Z");
+        check_chain_valid(out);
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("tool_call with non-object function does not throw") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json asst = {
+            {"role", "assistant"},
+            {"tool_calls", json::array({
+                {{"id", "W"}, {"type", "function"}, {"function", "not-an-object"}},
+            })}
+        };
+        json chain = json::array({
+            make_msg("user", "hi"),
+            asst,
+            make_tool_result("W"),
+        });
+
+        json out;
+        CHECK_NOTHROW(out = msgs.sanitize_message_chain(chain));
+        check_chain_valid(out);
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("save() survives a malformed chain (flush worker path)") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+
+        json chain = json::array({
+            make_msg("system", "sys"),
+            nullptr,
+            json{{"role", nullptr}, {"content", "no role"}},
+            make_msg("user", "hi"),
+        });
+        msgs.set_messages(chain);
+
+        // save() is what the background flush worker calls; before
+        // SANITIZE-NOTHROW this threw out of the worker -> terminate.
+        CHECK_NOTHROW(msgs.save());
+        cleanup_test_project(proj);
+    }
+}
