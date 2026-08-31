@@ -3,7 +3,7 @@
  * @brief Umbrella header for the non-core example tools.
  *
  * These tools were moved out of libdaedalus so the default tool surface
- * stays minimal. Demos that need file / git / search / pdf / system-info /
+ * stays minimal. Demos that need file / git / search / system-info /
  * background-process / network tools include this header, then register
  * the individual tools they want through ToolHandler::get_tool_factory().
  *
@@ -16,6 +16,5 @@
 #include "BackgroundTool.h"
 #include "GitTool.h"
 #include "NetworkTool.h"
-#include "PDFTool.h"
 #include "SearchTool.h"
 #include "SystemInfoTool.h"

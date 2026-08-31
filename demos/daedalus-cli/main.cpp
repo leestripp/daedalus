@@ -128,8 +128,7 @@ static void register_cli_tools()
     factory->register_tool(std::make_shared<GrepSearchTool>());
     factory->register_tool(std::make_shared<WikiSearchTool>());
 
-    // PDF tool
-    factory->register_tool(std::make_shared<ReadPDFTool>());
+    // read_pdf is core again (§PDF-CORE) -- registered by ToolFactory.
 
     // Git tools
     factory->register_tool(std::make_shared<GitStatusTool>());

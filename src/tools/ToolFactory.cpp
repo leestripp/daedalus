@@ -7,6 +7,7 @@
 #include "tools/MemoryTool.h"
 #include "tools/SerperSearchTool.h"
 #include "tools/ReadImageTool.h"
+#include "tools/PDFTool.h"
 #include "tools/TodoListTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
@@ -53,9 +54,13 @@ bool ToolFactory::unregister_tool(const std::string& tool_name) {
 void ToolFactory::initialize_tools() {
     // §TOOL-TRIM (prompt.txt): the default tool surface is intentionally
     // minimal. Only the tools required for a functional agent are
-    // registered here. File / git / grep/wiki-search / pdf / system-info /
+    // registered here. File / git / grep/wiki-search / system-info /
     // background-process / network tools live in demos/example-tools/
     // and are registered by hosts that need them.
+    // §PDF-CORE (2026-08-31): read_pdf moved back into core -- poppler-cpp
+    // is a REQUIRED build dependency of the library, so the tool ships as
+    // a built-in rather than an opt-in example (same reasoning as
+    // §SERPER-CORE below).
     // §SERPER-CORE (2026-08-02): serper_search moved back into core — its
     // config (SettingsStore serper_config table, core/SerperConfig) has
     // always been core, and the tool degrades to a descriptive error
@@ -101,6 +106,9 @@ void ToolFactory::initialize_tools() {
     // tool is only useful when registered by default. Returns a
     // descriptive error for unsupported formats (e.g. SVG).
     register_tool(std::make_shared<ReadImageTool>());
+
+    // §PDF-CORE: extract text from PDF files via poppler-cpp (required dep).
+    register_tool(std::make_shared<ReadPDFTool>());
 
     // Todo list tools
     register_tool(std::make_shared<TodoAddTool>());

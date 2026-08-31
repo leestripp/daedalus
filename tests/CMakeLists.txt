@@ -1331,7 +1331,8 @@ target_link_libraries(daedalus_cli_system_prompt_tests PRIVATE
 add_test(NAME cli_system_prompt_tests COMMAND daedalus_cli_system_prompt_tests)
 
 # ToolDefinitions tests - verify get_tool_definitions() returns valid output
-# Note: Includes PDFTool but with POPPLER include dirs for linking
+# Note: PDFTool is core again (§PDF-CORE); compiled here directly
+# like the other tool sources, with POPPLER include dirs for linking.
 add_executable(daedalus_tool_definitions_tests
     test_tool_definitions.cpp
     ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
@@ -1347,7 +1348,7 @@ add_executable(daedalus_tool_definitions_tests
     ${PROJECT_SOURCE_DIR}/demos/example-tools/BackgroundTool.cpp
     ${PROJECT_SOURCE_DIR}/src/tools/UserTool.cpp
     ${PROJECT_SOURCE_DIR}/src/tools/McpProxiedTool.cpp
-    ${PROJECT_SOURCE_DIR}/demos/example-tools/PDFTool.cpp
+    ${PROJECT_SOURCE_DIR}/src/tools/PDFTool.cpp
     ${PROJECT_SOURCE_DIR}/demos/example-tools/NetworkTool.cpp
     ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
     ${PROJECT_SOURCE_DIR}/src/core/FileIO.cpp

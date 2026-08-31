@@ -24,13 +24,16 @@ functional autonomous agent are registered automatically:
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
 | `serper_search` | Web search via the Serper.dev Google API (requires an API key in the SettingsStore; returns a descriptive error when unset) |
 | `read_image` | Load a local image (`png` / `jpeg` / `gif` / `bmp` / `webp`) and attach it to the next model request as an `image_url` content part, so vision-capable models (e.g. Kimi K3) can see it. PNGs and JPEGs are decoded and downscaled to ≤512px longest edge (libpng / libjpeg); `gif` / `bmp` / `webp` pass through as base64 (2MB cap). SVG is rejected — send SVG markup as text instead. The base64 payload rides one request only and is stripped from stored history. |
+| `read_pdf` | Extract text from a PDF file (poppler-cpp). Supports `start_page` / `max_pages` range selection; returns per-page text with page markers. |
 | `mcp__<server>__<tool>` | Dynamically registered MCP proxied tools (when MCP is enabled) |
 
-All other tools — Git, grep/wiki search, PDF, system info, background
+All other tools — Git, grep/wiki search, system info, background
 process, and network tools — have been moved to `demos/example-tools/` as
 **reference implementations** that you can copy, adapt, or register one at
 a time. (`serper_search` moved back into core in v0.6.0-dev because its
-configuration and key lookup have always lived in the core SettingsStore.)
+configuration and key lookup have always lived in the core SettingsStore;
+`read_pdf` moved back into core in v1.0.2-dev (§PDF-CORE) because
+poppler-cpp is a REQUIRED dependency of the library build.)
 
 File I/O tools were removed entirely: the agent can read, write, and edit
 files through `execute_bash` (e.g. `cat`, `sed`, `grep`) instead.

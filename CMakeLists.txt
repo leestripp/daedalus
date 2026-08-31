@@ -295,6 +295,7 @@ set(TOOLS_SOURCES
 	src/tools/MemoryTool.cpp
 	src/tools/SerperSearchTool.cpp
 	src/tools/ReadImageTool.cpp
+	src/tools/PDFTool.cpp
 	src/tools/TodoListTool.cpp
 	src/tools/TodoListService.cpp
 )
@@ -351,6 +352,7 @@ target_include_directories(daedalus
 		${PROJECT_SOURCE_DIR}/src
 		${PNG_INCLUDE_DIRS}
 		${JPEG_INCLUDE_DIRS}
+		${POPPLER_INCLUDE_DIRS}
 )
 
 target_link_libraries(daedalus
@@ -370,10 +372,12 @@ target_link_libraries(daedalus
 	PRIVATE
 		# libpng + libjpeg are used by ImageProcessor in core. Keeping
 		# them PRIVATE means they're baked into libdaedalus.a but not
-		# declared as link deps to consumers. PDF tools moved to
-		# demos/example-tools/ and link poppler-cpp there instead.
+		# declared as link deps to consumers. poppler-cpp is used by
+		# PDFTool (§PDF-CORE 2026-08-31: read_pdf is a built-in tool
+		# again, so the required poppler dep links here, not in demos).
 		${PNG_LIBRARIES}
 		${JPEG_LIBRARIES}
+		${POPPLER_LIBRARIES}
 )
 
 # Visibility hint: when later turned into a shared library, only the

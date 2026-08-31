@@ -9,7 +9,6 @@ set(EXAMPLE_TOOLS_SOURCES
     BackgroundTool.cpp
     GitTool.cpp
     NetworkTool.cpp
-    PDFTool.cpp
     SearchTool.cpp
     SystemInfoTool.cpp
 )
@@ -23,7 +22,6 @@ target_include_directories(daedalus_example_tools
         ${PROJECT_SOURCE_DIR}/src
         ${PROJECT_SOURCE_DIR}/include
         ${nlohmann_json_INCLUDE_DIR}
-        ${POPPLER_INCLUDE_DIRS}
 )
 
 target_link_libraries(daedalus_example_tools
@@ -31,5 +29,4 @@ target_link_libraries(daedalus_example_tools
         daedalus
     PRIVATE
         OmniNet
-        ${POPPLER_LIBRARIES}
 )

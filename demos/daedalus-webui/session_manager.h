@@ -69,8 +69,7 @@ inline void register_webui_tools(daedalus::Agent& agent)
     factory->register_tool(std::make_shared<GrepSearchTool>());
     factory->register_tool(std::make_shared<WikiSearchTool>());
 
-    // PDF tool
-    factory->register_tool(std::make_shared<ReadPDFTool>());
+    // read_pdf is core again (§PDF-CORE) -- registered by ToolFactory.
 
     // Git tools
     factory->register_tool(std::make_shared<GitStatusTool>());

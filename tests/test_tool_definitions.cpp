@@ -43,7 +43,7 @@ TEST_SUITE("ToolDefinitions") {
 
         // §TOOL-TRIM (prompt.txt): the default library surface is minimal.
         // Only core agent tools are registered by ToolFactory. File / git /
-        // search / pdf / system-info / background / network tools live in
+        // search / system-info / background / network tools live in
         // demos/example-tools/ and are registered by hosts that need them.
         CHECK(tool_names.size() >= 8);
 
@@ -70,6 +70,10 @@ TEST_SUITE("ToolDefinitions") {
         // work runs at the cycle-boundary checkpoint, same path as the
         // 90% threshold and Agent::compress_context() triggers.
         CHECK(std::find(tool_names.begin(), tool_names.end(), "compress_context") != tool_names.end());
+
+        // §PDF-CORE (2026-08-31): read_pdf is a built-in again
+        // (poppler-cpp is a REQUIRED dependency of the library build).
+        CHECK(std::find(tool_names.begin(), tool_names.end(), "read_pdf") != tool_names.end());
 
         // Non-core tools are NOT in the default set.
         CHECK(std::find(tool_names.begin(), tool_names.end(), "read_file") == tool_names.end());
