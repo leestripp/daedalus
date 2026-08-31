@@ -2253,6 +2253,11 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
     // Add the assistant's message to history
     messages.push_back(message);
+    // PERSIST-DIRTY: raw-reference push - keep the flush worker in the
+    // loop so a crash/kill mid-turn doesn't lose the reply.
+    if (messages_) {
+        messages_->mark_dirty();
+    }
 
     // Check for tool calls
     if (message.contains("tool_calls")) {
@@ -2559,6 +2564,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             // Note: Summary is already printed by print_tool_result() above
             if (function_name == "stop") {
                 messages.insert(messages.end(), tool_results.begin(), tool_results.end());
+                if (messages_) messages_->mark_dirty();  // PERSIST-DIRTY
                 return AgentState::DONE;
             }
 
@@ -2566,6 +2572,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
 
         // Add tool results to message history
         messages.insert(messages.end(), tool_results.begin(), tool_results.end());
+        if (messages_) messages_->mark_dirty();  // PERSIST-DIRTY
 
         // Determine next state based on tool types used
         // If execute_bash was called, we just completed BUILD_TEST
@@ -3117,6 +3124,18 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         messages.push_back({{"role", "user"}, {"content", user_message}});
     }
 
+    // PERSIST-DIRTY (2026-08-31): the pushes above went through the raw
+    // json& reference, bypassing add_*() - mark the chain dirty so the
+    // write-through flush worker persists the new turn promptly instead
+    // of waiting for cleanup() (which hosts that never call shutdown()
+    // - e.g. monkeybyte's ~ChatController - never reach). Without this,
+    // the on-disk chain lagged the live one, often ending in an
+    // unanswered user message that the NEXT session then re-answered
+    // alongside the user's fresh prompt.
+    if (messages_) {
+        messages_->mark_dirty();
+    }
+
     // Reset per-turn state
     iteration_count_ = 0;
     last_total_tokens_ = 0;
@@ -3283,5 +3302,11 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         break;
     }
 
+    // PERSIST-DIRTY: catch every early-return mutation (API-error
+    // injections, dangling-cleanup edits) that didn't mark the
+    // chain dirty on its own path.
+    if (messages_) {
+        messages_->mark_dirty();
+    }
     return final_state;
 }

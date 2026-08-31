@@ -295,6 +295,20 @@ public:
     bool flush_if_dirty() const;
 
     /**
+     * @brief Mark the chain dirty so the background flush worker (and the
+     * destructor's final flush) persist it. Needed because the LLMClient
+     * turn path mutates the chain through the raw get_messages()
+     * reference - bypassing add_*() - which used to leave dirty_ unset
+     * for entire sessions: nothing was written between cleanup() calls,
+     * the .crash mirror went stale, and hosts that never call
+     * Agent::shutdown() lost the whole session (or reloaded a stale
+     * chain ending in an unanswered user message, which the next
+     * session then re-answered alongside the new prompt).
+     * (\u00a7PERSIST-DIRTY, 2026-08-31)
+     */
+    void mark_dirty();
+
+    /**
      * @brief Clear all messages and persist the cleared state
      *
      * Resets the in-memory chain, then synchronously removes the

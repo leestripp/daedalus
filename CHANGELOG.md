@@ -8,6 +8,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **PERSIST-DIRTY: session history was never persisted during turns**
+  (2026-08-31, reported via MonkeyByte: "the last message from the
+  previous session is sent to the LLM again on startup"). The
+  `LLMClient` turn path mutates the message chain through the raw
+  `get_messages()` reference, bypassing `add_*()` - so `dirty_` was
+  never set, the CRASH-2 write-through flush worker stayed idle for
+  entire sessions, and the ONLY save happened in `cleanup()` (reachable
+  solely via `Agent::shutdown()`). Hosts that close without
+  `shutdown()` (MonkeyByte's `~ChatController`) reloaded a stale chain
+  on the next startup - typically ending in an unanswered user message,
+  which the model then re-answered alongside the user's fresh prompt
+  ("both sent at once"), while exchanges newer than the last save were
+  silently lost. Fixes: new `Messages::mark_dirty()` public API;
+  `set_messages()` now marks dirty (sanitize/truncate/compress
+  rewrites); the turn path marks dirty after the user push, after each
+  assistant reply, after tool-result commits, and at end of turn;
+  `cleanup_dangling_tool_results()` now wakes the worker immediately.
+  With write-through restored, the `~Messages()` final
+  `flush_if_dirty()` persists the live chain even when a host skips
+  `shutdown()`. Regression tests: `daedalus_messages_tests`
+  (reload-after-clean-shutdown fidelity + set_messages dirty
+  write-through).
+
 - **§IdleExitBreaker: set_status-only circuit breaker ends runaway
   turns** (2026-08-20). Follow-up to §IdleLoopFix: rejecting
   runtime-owned states stopped `set_status("Idle")`, but a finished

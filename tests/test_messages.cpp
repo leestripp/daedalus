@@ -1973,7 +1973,13 @@ TEST_SUITE("Compression Regression - Safe Split with Tool Calls") {
 // ===========================================================================
 TEST_CASE("Messages - truncate_if_needed preserves multi-step tool chain (B5)") {
     fs::path proj = create_test_project();
-    Messages msgs(proj, {});
+    // PERSIST-DIRTY (2026-08-31): disable the background flush worker.
+    // set_messages() now marks the chain dirty; with the default config
+    // (auto-flush enabled) the worker saves concurrently and races the
+    // remove_all() in cleanup_test_project ("Directory not empty").
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = false;
+    Messages msgs(proj, cfg);
     msgs.load();  // creates messages.json with []
 
     // Build a chain that totals > 2000 bytes. Each tool result has
@@ -2093,6 +2099,111 @@ TEST_CASE("Messages - inject_context_stats preserves trailing prompt (B8)") {
     REQUIRE(s1 != std::string::npos);
     size_t s2 = post.find("<!-- /daedalus-context-status -->", s1 + 1);
     CHECK(s2 == std::string::npos);
+
+    cleanup_test_project(proj);
+}
+
+// ============================================================================
+// PERSIST-DIRTY regression tests (2026-08-31): shutdown/startup "last
+// message re-sent" report. Simulates session 1 saving on close, session 2
+// loading and sending a NEW message. Asserts no duplication and a sane
+// wire-chain tail.
+// ============================================================================
+TEST_CASE("Messages - reload after clean shutdown does not duplicate last message") {
+    auto proj = create_test_project();
+
+    // ---- Session 1: full exchange + trailing transient status, then close.
+    {
+        auto msgs = create_test_messages(proj);
+        msgs.add_system("sys prompt");
+        msgs.add_user("user question from session 1");
+        msgs.add_assistant("assistant answer from session 1");
+        // inject_context_stats() leaves this transient trailing system
+        // message in the live chain; cleanup()->save() persists it.
+        msgs.get_messages().push_back({
+            {"role", "system"},
+            {"content", "<!-- daedalus-context-status -->\n# Context Status\n| fake | 1 |\n"}
+        });
+        msgs.save();
+    } // dtor (auto_flush disabled in tests: no worker)
+
+    // ---- Session 2: startup load.
+    auto msgs2 = create_test_messages(proj);
+    REQUIRE(msgs2.load());
+
+    // Count occurrences of each session-1 message - none may be duplicated.
+    int n_sys = 0, n_u1 = 0, n_a1 = 0, n_status = 0;
+    for (const auto& m : msgs2.get_messages()) {
+        const std::string c = m.value("content", "");
+        if (c == "sys prompt") ++n_sys;
+        if (c.find("user question from session 1") != std::string::npos) ++n_u1;
+        if (c.find("assistant answer from session 1") != std::string::npos) ++n_a1;
+        if (c.find("daedalus-context-status") != std::string::npos) ++n_status;
+    }
+    CHECK(n_sys == 1);
+    CHECK(n_u1 == 1);
+    CHECK(n_a1 == 1);
+
+    // ---- Simulate LLMClient::run_one_turn("new user msg"):
+    json& live = msgs2.get_messages();
+    live.push_back({{"role", "user"}, {"content", "brand new question"}});
+
+    // inject_context_stats equivalent: drop old status msgs, append fresh.
+    auto& arr = live;
+    for (auto it = arr.begin(); it != arr.end();) {
+        if (it->value("role", "") == "system" &&
+            it->value("content", "").find("<!-- daedalus-context-status -->") != std::string::npos) {
+            it = arr.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    arr.push_back({{"role","system"},{"content","<!-- daedalus-context-status -->\n# Context Status\n| fresh | 2 |\n"}});
+
+    n_u1 = 0; n_a1 = 0; n_status = 0;
+    int n_u2 = 0;
+    for (const auto& m : arr) {
+        const std::string c = m.value("content", "");
+        if (c.find("user question from session 1") != std::string::npos) ++n_u1;
+        if (c.find("assistant answer from session 1") != std::string::npos) ++n_a1;
+        if (c.find("brand new question") != std::string::npos) ++n_u2;
+        if (c.find("daedalus-context-status") != std::string::npos) ++n_status;
+    }
+    CHECK(n_u1 == 1);
+    CHECK(n_a1 == 1);
+    CHECK(n_u2 == 1);
+    CHECK(n_status == 1);
+    // Second-to-last must be the new user message (status is appended last).
+    CHECK(arr[arr.size() - 2].value("content", "") == "brand new question");
+
+    cleanup_test_project(proj);
+}
+
+// PERSIST-DIRTY: set_messages() now marks the chain dirty so the flush
+// worker (or the destructor's final flush) persists rewrites made through
+// the raw-reference path (sanitize/truncate/compress in LLMClient).
+TEST_CASE("Messages - set_messages marks chain dirty (write-through restored)") {
+    auto proj = create_test_project();
+
+    MessageCompressionConfig cfg;
+    cfg.auto_flush_enabled = true;
+    cfg.auto_flush_interval_ms = 50;
+
+    {
+        Messages msgs(proj / ".daedalus" / "daedalus", cfg);
+        // Route the initial content through set_messages only - no add_*().
+        msgs.set_messages(json::array({
+            {{"role", "system"},    {"content", "sys"}},
+            {{"role", "user"},      {"content", "u1"}},
+            {{"role", "assistant"}, {"content", "a1"}},
+        }));
+        msgs.flush_now();  // deterministic: wait for the worker-visible state
+    } // dtor: worker's final flush_if_dirty() must have saved
+
+    auto reload = create_test_messages(proj);
+    REQUIRE(reload.load());
+    CHECK(reload.size() == 3);
+    CHECK(reload.get_messages()[2].value("content", "") == "a1");
 
     cleanup_test_project(proj);
 }

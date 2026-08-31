@@ -520,8 +520,25 @@ void Messages::add_message(const json& msg) {
 }
 
 void Messages::set_messages(const json& msgs) {
-    std::lock_guard<std::mutex> lk(messages_mutex_);
-    messages_ = msgs;
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        messages_ = msgs;
+    }
+    // PERSIST-DIRTY (2026-08-31): set_messages() rewrites the chain
+    // (sanitize/truncate/compress paths in LLMClient) - it must mark
+    // dirty like add_*() does, otherwise the rewrite never reaches disk.
+    mark_dirty();
+}
+
+// PERSIST-DIRTY (2026-08-31): see header. The LLMClient turn path
+// mutates the chain through the raw get_messages() reference; this lets
+// it rejoin the write-through persistence design (CRASH-2) without
+// rerouting every push through add_*().
+void Messages::mark_dirty() {
+    dirty_.store(true, std::memory_order_release);
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 // ============================================================================
@@ -1213,6 +1230,13 @@ bool Messages::cleanup_dangling_tool_results() {
 
     if (removed_any) {
         dirty_.store(true, std::memory_order_release);
+        // PERSIST-DIRTY: wake the worker immediately - this cleanup runs
+        // at the entry of a turn after an interrupted one, and its result
+        // (an unanswered user message at the tail) was previously the
+        // stale state that outlived the session on disk.
+        if (config_.auto_flush_enabled) {
+            flush_cv_.notify_all();
+        }
     }
     return removed_any;
 }
