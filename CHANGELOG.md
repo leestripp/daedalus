@@ -6,6 +6,42 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [1.0.2] — 2026-08-31
+
+### Changed
+
+- **PDF-CORE: `read_pdf` is a built-in agent tool again** (2026-08-31).
+  `ReadPDFTool` was moved to `demos/example-tools/` during the TOOL-TRIM
+  work even though poppler-cpp remained a REQUIRED dependency of the
+  library build. The tool now lives in `src/tools/PDFTool.cpp`, is
+  registered by default in `ToolFactory::initialize_tools()`, and
+  poppler-cpp links PRIVATE into `libdaedalus.a`. Hosts no longer need
+  to register `ReadPDFTool` themselves (the CLI and webui demos'
+  explicit registrations were removed; re-registering remains harmless
+  thanks to replace-by-name).
+
+### Fixed
+
+- **SANITIZE-NOTHROW: malformed chain entries crashed the flush worker**
+  (2026-08-31, MonkeyByte coredump 2026-08-30). `sanitize_message_chain()`
+  used `entry.value("role", ...)` / `.value("tool_call_id", ...)` /
+  `.value("id", ...)`, which throw `json::type_error` when a chain entry
+  is not an object, or when `role`/`tool_call_id`/`id` is present but
+  null or non-string. The exception escaped `save()` onto the background
+  flush worker thread → `std::terminate` → SIGABRT (intermittent: fired
+  only when a malformed/partially-written chain entry met a flush tick).
+  Fixes (`src/core/Messages.cpp`): sanitize now extracts strings
+  defensively (`chain_safe_str()`) and drops non-object chain entries,
+  tool results with missing `tool_call_id`, non-object `tool_call`
+  entries, and `tool_call`s with non-object `function` instead of
+  throwing; `save_impl()` re-marks `dirty_` and returns if sanitize ever
+  throws; the flush worker wraps `flush_if_dirty()` in a last-resort
+  catch so no persistence error can ride the thread into `terminate`.
+  Regression tests: `daedalus_message_chain_validity_tests`
+  (SANITIZE-NOTHROW suite).
+
+## [1.0.1] — 2026-08-31
+
 ### Fixed
 
 - **PERSIST-DIRTY: session history was never persisted during turns**
