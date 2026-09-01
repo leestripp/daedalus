@@ -198,6 +198,14 @@ public:
     
     /**
      * @brief Get direct reference to message array (for API calls, etc.)
+     *
+     * §PERSIST-RACE (2026-09-02): the returned reference is NOT
+     * synchronized. It exists for the single-threaded LLMClient turn
+     * path, which must call mark_dirty() after each mutation batch so a
+     * consistent snapshot is published for the flush worker. The worker
+     * never reads messages_ directly (see persist_snapshot_ below), so
+     * unlocked mutation through this reference cannot tear a worker's
+     * deep copy (MonkeyByte SIGSEGV, daedalus_bugs.md BUG 1).
      */
     json& get_messages() { return messages_; }
     const json& get_messages() const { return messages_; }
@@ -305,6 +313,12 @@ public:
      * chain ending in an unanswered user message, which the next
      * session then re-answered alongside the new prompt).
      * (\u00a7PERSIST-DIRTY, 2026-08-31)
+     *
+     * §PERSIST-RACE (2026-09-02): this also PUBLISHES a deep copy
+     * of the chain into persist_snapshot_ (under messages_mutex_). The
+     * flush worker saves only that published copy, so it never races
+     * raw-reference mutations of messages_. Call it AFTER a mutation
+     * batch completes, never mid-mutation.
      */
     void mark_dirty();
 
@@ -576,11 +590,32 @@ private:
      */
     void save_impl() const;
 
+    /**
+     * @brief §PERSIST-RACE: publish the current chain to
+     * persist_snapshot_ and set dirty_. Caller MUST hold
+     * messages_mutex_ and must be at a quiescent point (no mutation of
+     * messages_ in flight). All internal mutators call this inside
+     * their existing critical sections; the public mark_dirty() wraps
+     * it with the lock for the raw-reference turn path.
+     */
+    void mark_dirty_locked();
+
     std::filesystem::path data_dir_;     // §Phase 8.8: per-agent namespace dir
     std::filesystem::path messages_file_;
     std::string session_id_ = "default"; // §Plan.md v0.3.5: SQLite mirror key
     json messages_;
     MessageCompressionConfig config_;
+
+    // §PERSIST-RACE (2026-09-02): published copy of the chain,
+    // refreshed by mark_dirty()/mark_dirty_locked() on the mutating
+    // thread at quiescent points. save_impl() snapshots ONLY this -
+    // never messages_ - because the turn path mutates messages_ through
+    // the raw get_messages() reference without holding messages_mutex_,
+    // and a deep copy racing those mutations is a torn read (json object
+    // header with a null payload pointer -> SIGSEGV in the flush worker,
+    // taking down the whole host process; daedalus_bugs.md BUG 1).
+    // Guarded by messages_mutex_. mutable because save() is const.
+    mutable json persist_snapshot_;
 
     // §fix (2026-07-18): guards messages_ against the background flush
     // worker. The worker calls save() concurrently with main-thread

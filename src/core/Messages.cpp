@@ -46,6 +46,12 @@
 #include <thread>
 #include <chrono>
 
+// SANITIZE-NOTHROW: defensive string extraction (defined below, before
+// sanitize_message_chain). Forward-declared so the earlier
+// cleanup_dangling_tool_results / truncate_if_needed paths can use it
+// too (§PERSIST-RACE hardening, 2026-09-02).
+namespace { std::string chain_safe_str(const json& j, const char* key); }
+
 // Helper function to sanitize strings to valid UTF-8
 // Simple replacement-based approach (doesn't need iconv)
 // ============================================================================
@@ -441,9 +447,9 @@ void Messages::add_system(const std::string& content) {
             return;
         }
         messages_.push_back({{"role", "system"}, {"content", content}});
+        mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
-    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
-    dirty_.store(true, std::memory_order_release);
+    // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -466,9 +472,9 @@ void Messages::add_user(const std::string& content, const std::string& image_url
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
         messages_.push_back(msg);
+        mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
-    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
-    dirty_.store(true, std::memory_order_release);
+    // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -478,9 +484,9 @@ void Messages::add_assistant(const std::string& content) {
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
         messages_.push_back({{"role", "assistant"}, {"content", content}});
+        mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
-    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
-    dirty_.store(true, std::memory_order_release);
+    // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -499,9 +505,9 @@ void Messages::add_tool_result(const std::string& tool_call_id, const std::strin
             {"content", content},
             {"status", is_error ? "error" : "success"}
         });
+        mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
-    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
-    dirty_.store(true, std::memory_order_release);
+    // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -511,9 +517,9 @@ void Messages::add_message(const json& msg) {
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
         messages_.push_back(msg);
+        mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
-    // §CRASH-2 (2026-07-16): mark dirty + notify the flush worker.
-    dirty_.store(true, std::memory_order_release);
+    // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -523,19 +529,32 @@ void Messages::set_messages(const json& msgs) {
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
         messages_ = msgs;
+        // PERSIST-DIRTY (2026-08-31): set_messages() rewrites the chain
+        // (sanitize/truncate/compress paths in LLMClient) - it must mark
+        // dirty like add_*() does, otherwise the rewrite never reaches
+        // disk. §PERSIST-RACE: publish in the same critical section.
+        mark_dirty_locked();
     }
-    // PERSIST-DIRTY (2026-08-31): set_messages() rewrites the chain
-    // (sanitize/truncate/compress paths in LLMClient) - it must mark
-    // dirty like add_*() does, otherwise the rewrite never reaches disk.
-    mark_dirty();
+    if (config_.auto_flush_enabled) {
+        flush_cv_.notify_all();
+    }
 }
 
 // PERSIST-DIRTY (2026-08-31): see header. The LLMClient turn path
 // mutates the chain through the raw get_messages() reference; this lets
 // it rejoin the write-through persistence design (CRASH-2) without
 // rerouting every push through add_*().
-void Messages::mark_dirty() {
+// §PERSIST-RACE (2026-09-02): caller must hold messages_mutex_.
+void Messages::mark_dirty_locked() {
+    persist_snapshot_ = messages_;
     dirty_.store(true, std::memory_order_release);
+}
+
+void Messages::mark_dirty() {
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        mark_dirty_locked();
+    }
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -834,6 +853,16 @@ std::size_t Messages::drop_invalid_messages(json& arr,
 }
 
 void Messages::save() const {
+    // §PERSIST-RACE: refresh the published snapshot first, so a caller
+    // that mutated via the raw get_messages() reference without
+    // mark_dirty() still persists the live chain (legacy save()
+    // semantics). Only main-thread-style callers use save(); the flush
+    // worker goes through flush_if_dirty(), which must NOT read
+    // messages_ and therefore skips this refresh.
+    {
+        std::lock_guard<std::mutex> lk(messages_mutex_);
+        persist_snapshot_ = messages_;
+    }
     // §fix (2026-07-18): serialize concurrent save() calls — the flush
     // worker and a main-thread flush_now() can run save() at the same
     // time and would race on the crash-mirror state.
@@ -845,14 +874,19 @@ void Messages::save() const {
 // save_mutex_ so that crash-mirror mutations and the atomic
 // dirty_/snapshot dance are serialized.
 void Messages::save_impl() const {
-    // §fix (2026-07-18): snapshot messages_ under messages_mutex_ so the
-    // flush worker can save while the main thread mutates the chain.
+    // §PERSIST-RACE (2026-09-02, daedalus_bugs.md BUG 1): snapshot the
+    // PUBLISHED chain, never messages_ itself. The LLMClient turn path
+    // mutates messages_ through the raw get_messages() reference without
+    // holding messages_mutex_; a deep copy racing those mutations is a
+    // torn read (json object header with null payload -> SIGSEGV in the
+    // flush worker, killing the host). persist_snapshot_ is written only
+    // at mark time, on the mutating thread, at quiescent points.
     // Clear dirty_ atomically with the snapshot; it is re-set on failure
     // below so the worker retries on the next tick.
     json snapshot;
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
-        snapshot = messages_;
+        snapshot = persist_snapshot_;
         dirty_.store(false, std::memory_order_release);
     }
 
@@ -908,7 +942,13 @@ void Messages::save_impl() const {
     // §CRASH-4 (2026-07-16): declare `contents` at function scope so
     // it's visible after the try block where the crash-mirror state is
     // updated.
-    const std::string contents = to_save.dump(2);
+    // §BUG-UTF8-SAVE (2026-09-02): a tool result carrying invalid UTF-8
+    // (binary bash output etc.) made dump() throw type_error.316 here;
+    // on the flush worker that was std::terminate -> SIGABRT even with
+    // sanitize hardened. Replace invalid sequences like the LLMClient
+    // payload path does (§BUG-UTF8-TRUNC).
+    const std::string contents = to_save.dump(2, ' ', false,
+                                              json::error_handler_t::replace);
 
     try {
         // §Phase 8.8 / §Phase 16: parent_path() is the per-agent
@@ -1143,7 +1183,12 @@ bool Messages::flush_if_dirty() const {
     if (!dirty_.load(std::memory_order_acquire)) {
         return false;
     }
-    save();
+    // §PERSIST-RACE: the worker must never read messages_ (that read
+    // races raw-reference turn-path mutations). save() refreshes the
+    // snapshot from messages_, so the worker cannot use it - take
+    // save_mutex_ and persist the snapshot published at mark time.
+    std::lock_guard<std::mutex> save_lock(save_mutex_);
+    save_impl();
     return true;
 }
 
@@ -1198,6 +1243,7 @@ void Messages::clear() {
         std::lock_guard<std::mutex> lk(messages_mutex_);
         messages_ = json::array();
         executing_tools_.clear();
+        mark_dirty_locked();  // §PERSIST-RACE: publish the empty chain
     }
     // §CRASH-6 (monkeybyte report, defect #6): persist the cleared
     // state. The old code only reset the in-memory chain: it never set
@@ -1207,7 +1253,6 @@ void Messages::clear() {
     // whole .daedalus/ folder was deleted. save() on an empty chain
     // removes messages.json, the .tmp/.crash mirrors, the SQLite mirror
     // row, and clears the crash payload.
-    dirty_.store(true, std::memory_order_release);
     if (config_.auto_flush_enabled) {
         flush_cv_.notify_all();
     }
@@ -1223,8 +1268,8 @@ bool Messages::cleanup_dangling_tool_results() {
 
     // Remove trailing tool results. These occur when the previous turn was
     // interrupted after a tool executed but before the assistant could respond.
-    while (!messages_.empty() && messages_.back().value("role", "") == "tool") {
-        std::string tc_id = messages_.back().value("tool_call_id", "");
+    while (!messages_.empty() && chain_safe_str(messages_.back(), "role") == "tool") {
+        std::string tc_id = chain_safe_str(messages_.back(), "tool_call_id");
         if (!tc_id.empty()) {
             removed_tool_ids.insert(tc_id);
         }
@@ -1235,13 +1280,13 @@ bool Messages::cleanup_dangling_tool_results() {
     // If the message that initiated those tool calls is now at the end,
     // remove it as well — an assistant message with tool_calls must be
     // followed by tool results, not a user message.
-    if (!messages_.empty() && messages_.back().value("role", "") == "assistant"
+    if (!messages_.empty() && chain_safe_str(messages_.back(), "role") == "assistant"
         && messages_.back().contains("tool_calls")) {
         const auto& tool_calls = messages_.back()["tool_calls"];
         bool all_have_removed_results = true;
         if (tool_calls.is_array()) {
             for (const auto& tc : tool_calls) {
-                std::string tc_id = tc.value("id", "");
+                std::string tc_id = chain_safe_str(tc, "id");
                 if (!tc_id.empty() && removed_tool_ids.count(tc_id) == 0) {
                     all_have_removed_results = false;
                     break;
@@ -1255,7 +1300,7 @@ bool Messages::cleanup_dangling_tool_results() {
     }
 
     if (removed_any) {
-        dirty_.store(true, std::memory_order_release);
+        mark_dirty_locked();  // §PERSIST-RACE (lock held by this function)
         // PERSIST-DIRTY: wake the worker immediately - this cleanup runs
         // at the entry of a turn after an interrupted one, and its result
         // (an unanswered user message at the tail) was previously the
@@ -1694,6 +1739,10 @@ CompressResult Messages::compress() {
 
         messages_.erase(messages_.begin() + delete_start,
                         messages_.begin() + delete_start + actual_delete_count);
+        // §PERSIST-RACE: the fallback rewrite was never marked dirty,
+        // so the reduced chain could be lost if the process died before
+        // the next add_*(). Publish it now (lock held above).
+        mark_dirty_locked();
         // §COMPRESS-REPORT: the context WAS reduced — report it as
         // FallbackDeleted so callers fire on_compaction and do NOT
         // schedule a retry. (Previously this returned the same nullopt
@@ -1769,6 +1818,10 @@ void Messages::replace_messages(const std::string& compressed_json) {
         {
             std::lock_guard<std::mutex> lk(messages_mutex_);
             messages_ = std::move(parsed);
+            // §PERSIST-RACE: the compressed chain rewrite was never
+            // marked dirty - publish it so the write-through worker
+            // persists the compressed state promptly.
+            mark_dirty_locked();
         }
         // §Phase 5.1: route through Logger instead of std::cout.
         LOG_CERR(INFO, "[CONTEXT] Replaced " << count << " messages with compressed version");
@@ -1845,7 +1898,9 @@ std::vector<std::string> Messages::get_pending_tool_ids() const {
     for (const auto& msg : messages_) {
         if (msg.value("role", "") == "assistant" && msg.contains("tool_calls")) {
             for (const auto& tc : msg["tool_calls"]) {
-                std::string tc_id = tc.value("id", "");
+                // SANITIZE-NOTHROW: tc may be a non-object (e.g. a bare
+                // string) in a corrupt chain - value() would throw.
+                std::string tc_id = chain_safe_str(tc, "id");
                 if (!tc_id.empty()) {
                     // Check if there's a result for this tool
                     if (!has_tool_result(tc_id)) {
@@ -2294,21 +2349,23 @@ json Messages::truncate_if_needed(size_t max_size) {
         if (tool_call_id.empty()) return std::string::npos;
         for (size_t j = messages_.size(); j-- > 0; ) {
             const auto& m = messages_[j];
-            if (m.value("role", "") != "assistant") continue;
+            // SANITIZE-NOTHROW: chain entries may be non-objects in a
+            // corrupt chain; value() would throw type_error.306.
+            if (chain_safe_str(m, "role") != "assistant") continue;
             if (!m.contains("tool_calls") || !m["tool_calls"].is_array()) continue;
             for (const auto& tc : m["tool_calls"]) {
-                if (tc.value("id", "") == tool_call_id) return j;
+                if (chain_safe_str(tc, "id") == tool_call_id) return j;
             }
         }
         return std::string::npos;
     };
 
     for (size_t i = messages_.size(); i-- > 1; ) {
-        const std::string role = messages_[i].value("role", "");
+        const std::string role = chain_safe_str(messages_[i], "role");
 
         if (role == "tool") {
             const std::string tool_call_id =
-                messages_[i].value("tool_call_id", "");
+                chain_safe_str(messages_[i], "tool_call_id");
             const size_t parent =
                 find_parent_assistant_for_tool_result(tool_call_id);
 
@@ -2370,6 +2427,11 @@ json Messages::truncate_if_needed(size_t max_size) {
               << " messages)" << '\n');
 
     messages_ = result;
+    // §PERSIST-RACE: the truncation rewrite was never marked dirty,
+    // so the reduced chain could be lost (and the stale larger chain
+    // reloaded) if the process died before the next add_*(). Publish
+    // now - the lock is held for the whole function.
+    mark_dirty_locked();
     return json::object({{"truncated", true},
                         {"original_size", serialized.size()},
                         {"new_size", new_size_str.size()}});

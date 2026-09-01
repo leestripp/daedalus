@@ -2207,3 +2207,115 @@ TEST_CASE("Messages - set_messages marks chain dirty (write-through restored)") 
 
     cleanup_test_project(proj);
 }
+
+// ============================================================================
+// §PERSIST-RACE / SANITIZE-NOTHROW regression suite
+// (daedalus_bugs.md BUG 1, MonkeyByte coredump 2026-08-30 + SIGSEGV 2026-09-02)
+// ============================================================================
+
+TEST_SUITE("PERSIST-RACE") {
+
+    TEST_CASE("stress: raw get_messages() mutation + mark_dirty while flush worker saves") {
+        // Simulates the LLMClient turn path: the chain is mutated through
+        // the raw get_messages() reference (no mutex) and mark_dirty() is
+        // called after each push, while the background flush worker saves
+        // at a 1ms interval. Pre-fix the worker deep-copied messages_
+        // concurrently with those unlocked push_backs -> torn json read ->
+        // SIGSEGV in the host process. Post-fix the worker only ever reads
+        // the published snapshot taken at mark time.
+        auto proj = create_test_project();
+        MessageCompressionConfig config;
+        config.debug_output = false;
+        config.auto_flush_enabled = true;
+        config.auto_flush_interval_ms = 1;
+        {
+            Messages msgs(proj / ".daedalus" / "daedalus", config);
+            for (int i = 0; i < 1000; ++i) {
+                msgs.get_messages().push_back(make_msg(
+                    i % 2 ? "assistant" : "user",
+                    "message payload number " + std::to_string(i)
+                        + " with some body text to give the copier work"));
+                msgs.mark_dirty();
+            }
+            msgs.flush_now();
+        }  // dtor: stop worker + final flush
+
+        // Reload and verify the full chain survived to disk.
+        MessageCompressionConfig cfg2;
+        cfg2.auto_flush_enabled = false;
+        cfg2.debug_output = false;
+        Messages check(proj / ".daedalus" / "daedalus", cfg2);
+        REQUIRE(check.load());
+        CHECK(check.get_messages().size() == 1000);
+        CHECK(check.get_messages().back()["content"].get<std::string>()
+                  .find("999") != std::string::npos);
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("save() persists a raw-reference push without mark_dirty (legacy semantics)") {
+        // Hosts/tests that push via get_messages() and then call save()
+        // directly must still persist the live chain: public save()
+        // refreshes the published snapshot before writing.
+        auto proj = create_test_project();
+        {
+            auto msgs = create_test_messages(proj);
+            msgs.get_messages().push_back(make_msg("system", "s"));
+            msgs.get_messages().push_back(make_msg("user", "raw push, no mark_dirty"));
+            msgs.save();
+        }
+        auto check = create_test_messages(proj);
+        REQUIRE(check.load());
+        REQUIRE(check.get_messages().size() == 2);
+        CHECK(check.get_messages()[1]["content"] == "raw push, no mark_dirty");
+        cleanup_test_project(proj);
+    }
+}
+
+TEST_SUITE("SANITIZE-NOTHROW") {
+
+    TEST_CASE("save() survives malformed chain entries without throwing") {
+        // MonkeyByte coredump 2026-08-30: entry.value("role", ...) threw
+        // type_error on non-object / null-role entries and escaped save()
+        // onto the flush worker -> std::terminate -> SIGABRT. Sanitize
+        // must drop unusable entries instead.
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        json chain = json::array();
+        chain.push_back(make_msg("system", "s"));
+        chain.push_back(make_msg("user", "hello"));
+        chain.push_back("i am a bare string, not an object");
+        chain.push_back(42);
+        chain.push_back(nullptr);
+        chain.push_back(json{{"role", nullptr}});
+        chain.push_back(json{{"role", "tool"}, {"tool_call_id", nullptr},
+                             {"content", "x"}});
+        chain.push_back(json{{"role", "assistant"}, {"content", "a"},
+                             {"tool_calls", json::array({"not-an-object"})}});
+        chain.push_back(json{{"role", "assistant"},
+                             {"tool_calls", json::array({{{"id", nullptr}}})}});
+        msgs.set_messages(chain);
+
+        CHECK_NOTHROW(msgs.save());
+
+        auto check = create_test_messages(proj);
+        REQUIRE(check.load());
+        // Only structurally usable entries survive.
+        for (const auto& m : check.get_messages()) {
+            CHECK(m.is_object());
+            CHECK(m.value("role", "") != "");
+        }
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("cleanup_dangling_tool_results survives a non-object tail entry") {
+        auto proj = create_test_project();
+        auto msgs = create_test_messages(proj);
+        json chain = json::array();
+        chain.push_back(make_msg("system", "s"));
+        chain.push_back(make_msg("user", "u"));
+        chain.push_back("corrupt tail entry");
+        msgs.set_messages(chain);
+        CHECK_NOTHROW(msgs.cleanup_dangling_tool_results());
+        cleanup_test_project(proj);
+    }
+}

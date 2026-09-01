@@ -404,23 +404,56 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
         
         // If both pipes closed, process should have exited
         if (stdout_eof && stderr_eof) {
-            // Process has exited, get its status before reaping
-            int exit_status;
-            pid_t status_ret = waitpid(pid, &exit_status, 0);
-            if (status_ret == pid) {
-                if (WIFEXITED(exit_status)) {
-                    result.exit_code = WEXITSTATUS(exit_status);
-                } else if (WIFSIGNALED(exit_status)) {
-                    result.exit_code = -1;  // -1 indicates killed by signal
-                    result.signaled = true;
-                    result.signal = WTERMSIG(exit_status);
+            // §SUBPROC-EOF-HANG (2026-09-02, daedalus_bugs.md BUG 2,
+            // MonkeyByte): the direct child may have closed its inherited
+            // pipe fds but still be running (`exec sleep 300 >&- 2>&-`,
+            // daemonizing processes). Both pipes hit EOF while the child
+            // is alive, and the old blocking waitpid(..., 0) here ignored
+            // the configured timeout entirely — the tool call hung
+            // forever. Poll with WNOHANG against the remaining deadline;
+            // on expiry kill the group and report timed_out like the main
+            // timeout path.
+            int exit_status = 0;
+            while (true) {
+                pid_t status_ret = waitpid(pid, &exit_status, WNOHANG);
+                if (status_ret == pid) {
+                    if (WIFEXITED(exit_status)) {
+                        result.exit_code = WEXITSTATUS(exit_status);
+                    } else if (WIFSIGNALED(exit_status)) {
+                        result.exit_code = -1;  // -1 indicates killed by signal
+                        result.signaled = true;
+                        result.signal = WTERMSIG(exit_status);
+                    }
+                    exit_status_captured = true;
+                    break;
                 }
-                exit_status_captured = true;
-            } else if (errno == ECHILD) {
-                // Process already reaped by signal handler or other thread
-                // Assume success - the process ran and we're just seeing cleanup effects
-                result.exit_code = 0;
-                exit_status_captured = true;
+                if (status_ret < 0 && errno == ECHILD) {
+                    // Process already reaped by signal handler or other thread
+                    // Assume success - the process ran and we're just seeing cleanup effects
+                    result.exit_code = 0;
+                    exit_status_captured = true;
+                    break;
+                }
+                if (timeout_ms >= 0 && remaining <= 0) {
+                    // Deadline reached with the child still alive.
+                    kill_group(pid);
+                    result.timed_out = true;
+                    // kill_group() already reaps with WNOHANG; capture the
+                    // status if the kill landed, otherwise the tail reap
+                    // below collects the SIGKILLed child immediately.
+                    int kstatus = 0;
+                    if (waitpid(pid, &kstatus, WNOHANG) == pid) {
+                        result.exit_code = -1;
+                        if (WIFSIGNALED(kstatus)) {
+                            result.signaled = true;
+                            result.signal = WTERMSIG(kstatus);
+                        }
+                        exit_status_captured = true;
+                    }
+                    break;
+                }
+                usleep(10000);  // 10ms
+                if (timeout_ms >= 0) remaining -= 10;
             }
             break;
         }
@@ -431,10 +464,20 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
             kill_group(pid);
             result.timed_out = true;
             
-            // Drain remaining output
-            while (!stdout_eof && !stderr_eof) {
+            // §SUBPROC-DRAIN-HANG (2026-09-02, daedalus_bugs.md BUG 2,
+            // MonkeyByte): a grandchild that escaped the process group
+            // (setsid / daemon double-fork) survives killpg() and keeps
+            // the pipe write ends open, so EOF never arrives — the old
+            // unbounded && loop spun forever (`setsid sleep 600 & sleep 100`
+            // repro). Same bounded-drain treatment the normal exit path
+            // got on 2026-07-18, with the loop condition fixed to ||.
+            int drain_iters = 0;
+            while (!stdout_eof || !stderr_eof) {
                 read_pipe(pipe_stdout[0], stdout_output, stdout_eof);
                 read_pipe(pipe_stderr[0], stderr_output, stderr_eof);
+                if (stdout_eof && stderr_eof) break;
+                if (++drain_iters > 100) break;  // ~1s at 10ms/iter
+                usleep(10000);
             }
             
             // Get exit status (process was killed)

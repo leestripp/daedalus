@@ -6,6 +6,45 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **PERSIST-RACE: flush worker SIGSEGV racing raw chain mutations**
+  (2026-09-02, daedalus_bugs.md BUG 1, MonkeyByte). The LLMClient turn
+  path mutates the chain through the raw `get_messages()` reference
+  without holding `messages_mutex_`; once PERSIST-DIRTY started calling
+  `mark_dirty()` mid-turn, the flush worker's deep copy of `messages_`
+  in `save_impl()` raced those mutations and tore a json object header
+  (SIGSEGV inside `json::get_ptr`, host process died). `Messages` now
+  uses a published-snapshot design: `mark_dirty()`/every internal
+  mutator deep-copies the chain into `persist_snapshot_` under the
+  mutex at quiescent points, and the worker only ever serializes that
+  published copy — it never reads `messages_` again. Public `save()`
+  refreshes the snapshot first, preserving legacy
+  push-via-reference-then-save() semantics. Reproduced 5/8 runs pre-fix
+  (SIGSEGV), 10/10 clean post-fix, ThreadSanitizer-clean.
+- **SANITIZE-NOTHROW completion** (2026-09-02). The remaining
+  `.value()` throw paths were hardened with `chain_safe_str`
+  (`cleanup_dangling_tool_results`, `sanitize_assistant_message`,
+  `truncate_if_needed`, LLMClient's dangling-tool `back()` check), and
+  `save_impl()`'s `dump()` now uses `error_handler_t::replace` so
+  invalid UTF-8 in a tool result can no longer throw `type_error.316`
+  on the worker thread (std::terminate — SIGABRT).
+  `compress()`/`replace_messages()`/`truncate_if_needed()` also mark
+  the chain dirty now — their rewrites previously never reached
+  disk.
+- **SUBPROC-EOF-HANG / SUBPROC-DRAIN-HANG: `execute_bash` infinite
+  hangs** (2026-09-02, daedalus_bugs.md BUG 2, MonkeyByte).
+  (A) `Subprocess::execute_combined`'s EOF branch did a blocking
+  `waitpid()` that ignored the configured timeout when the child closed
+  its inherited pipe fds but kept running (`exec sleep 300 >&- 2>&-`);
+  it now polls with WNOHANG against the remaining deadline and kills
+  the process group on expiry. (B) The timeout-path drain loop spun
+  forever when a `setsid` grandchild survived `killpg()` and held the
+  pipe write ends open; it now uses the normal path's bounded drain
+  (100 iterations x 10ms) with the loop condition fixed from `&&` to
+  `||`. Regression tests: `tests/test_subprocess_timeout.cpp`.
+
+
 ## [1.0.2] — 2026-08-31
 
 ### Changed

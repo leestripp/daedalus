@@ -3106,7 +3106,10 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         // message after the tool result, causing the API to reject with
         // "tool call result does not follow tool call". Remove the incomplete
         // trailing tool cycle instead of refusing the user's message.
-        if (!messages.empty() && messages.back().value("role", "") == "tool") {
+        // SANITIZE-NOTHROW: guard is_object() - a corrupt chain tail
+        // (bare string/number) would make value() throw type_error.306.
+        if (!messages.empty() && messages.back().is_object()
+            && messages.back().value("role", "") == "tool") {
             LOG_WARNING("run_one_turn: cleaning up dangling tool result from "
                         "interrupted turn.");
             messages_->cleanup_dangling_tool_results();

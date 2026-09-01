@@ -242,6 +242,25 @@ target_link_libraries(daedalus_mcp_proxied_tool_tests PRIVATE
 add_test(NAME mcp_proxied_tool_tests COMMAND daedalus_mcp_proxied_tool_tests)
 
 # ============================================================================
+# §SUBPROC-EOF-HANG / §SUBPROC-DRAIN-HANG regression tests
+# (daedalus_bugs.md BUG 2, MonkeyByte 2026-09-01): execute_combined must
+# honour its timeout even when the child closes its inherited fds (EOF
+# branch) or a setsid grandchild keeps the pipe write ends open (timeout
+# drain branch).
+# ============================================================================
+add_executable(daedalus_subprocess_timeout_tests
+    test_subprocess_timeout.cpp
+)
+target_include_directories(daedalus_subprocess_timeout_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_subprocess_timeout_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME subprocess_timeout_tests COMMAND daedalus_subprocess_timeout_tests)
+
+# ============================================================================
 # §18.9 — MCP Hub hardening tests (breaker, shutdown, listener plumbing).
 # ============================================================================
 add_executable(daedalus_mcp_hub_hardening_tests
