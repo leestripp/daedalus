@@ -3,6 +3,7 @@
 #include "../core/SkillManager.h"
 #include "../core/FileIO.h"
 
+#include <filesystem>
 #include <iostream>
 
 using json = nlohmann::json;
@@ -13,7 +14,7 @@ using json = nlohmann::json;
 
 DiscoverSkillsTool::DiscoverSkillsTool() {
     name_ = "discover_skills";
-    description_ = "List available skills and their metadata. Use this to find relevant skills for the task.";
+    description_ = "List available skills, their metadata, and the skill directories. Use this to find relevant skills or to learn where to create a new one.";
 }
 
 json DiscoverSkillsTool::get_definition() const {
@@ -21,7 +22,7 @@ json DiscoverSkillsTool::get_definition() const {
         {"type", "function"},
         {"function", {
             {"name", get_name()},
-            {"description", "Lists all available skills with their metadata (name, description, version). Use this to find skills that might be relevant to the current task."},
+            {"description", "Lists all available skills with their metadata (name, description, version, path), plus skill_directories: the directories scanned for skills (daedalus user-global, ~/.agents/skills, project-local .agents/skills, and any host-configured dirs). To CREATE a new skill, write a directory named after it containing a SKILL.md file into one of those directories (prefer the project-local .agents/skills/ for project-specific skills, ~/.agents/skills/ for reusable ones), then call discover_skills again to pick it up."},
             {"parameters", {
                 {"type", "object"},
                 {"properties", {
@@ -66,7 +67,21 @@ json DiscoverSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
     }
     
     result["count"] = skills.size();
-    
+
+    // §SKILL-DIRS (2026-09-04): tell the agent WHERE skills live.
+    // Previously only existing skills' paths were returned, so an empty
+    // directory was invisible and the model had no idea where to create
+    // a new skill. List every configured directory (expanded, absolute)
+    // with an exists flag so the agent can pick a target.
+    result["skill_directories"] = json::array();
+    for (const auto& dir : skill_manager->skill_directories()) {
+        const auto abs = std::filesystem::absolute(dir);
+        result["skill_directories"].push_back(json::object({
+            {"path", abs.string()},
+            {"exists", std::filesystem::exists(abs)}
+        }));
+    }
+
     return result;
 }
 

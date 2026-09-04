@@ -8,6 +8,31 @@ Agent Skills are portable packages of instructions, scripts, and resources that 
 
 ---
 
+## Where Skills Live (§SKILL-DIRS)
+
+The agent is told the skill locations through the `discover_skills` tool:
+its result includes a `skill_directories` array — every configured
+scan directory as `{path, exists}` (paths are expanded and absolute), and
+the tool description explains how to create a skill. Previously only the
+paths of already-discovered skills were returned, so an empty directory
+was invisible and the agent had no way to know where to create one
+(2026-09-04).
+
+Default scan directories, in discovery order:
+
+| Directory | Scope |
+|-----------|-------|
+| `$XDG_DATA_HOME/daedalus/skills/` (default `~/.local/share/daedalus/skills/`) | daedalus user-global |
+| `~/.agents/skills/` | Anthropic Agent Skills standard, user-global |
+| `.agents/skills/` | Anthropic Agent Skills standard, project-local |
+
+Hosts can add more via `AgentConfig::skills_dirs`. To create a skill at
+runtime the agent writes a `<name>/SKILL.md` directory into one of these
+(prefer project-local for project-specific skills, user-global for
+reusable ones) and calls `discover_skills` again to pick it up.
+
+---
+
 ## Why Agent Skills?
 
 AI agents need to handle diverse, specialized tasks. Rather than relying solely on prompts or building custom integrations, Agent Skills provide a standardized way to:

@@ -255,6 +255,21 @@ public:
      * @param directory Path to add
      */
     void add_skill_directory(const std::filesystem::path& directory);
+
+    /**
+     * Get the configured skill directories with ~ and $VARs expanded.
+     * §SKILL-DIRS (2026-09-04): the agent had no way to learn where
+     * skills live — discover_skills only returned paths of skills
+     * that already exist, so an empty directory was invisible and the
+     * model could not know where to CREATE one. This exposes the scan
+     * list so DiscoverSkillsTool can report it.
+     * @return Absolute paths scanned for skills, in discovery order
+     *         (daedalus user-global, ~/.agents/skills, .agents/skills,
+     *         then any host-configured dirs).
+     */
+    std::vector<std::filesystem::path> skill_directories() const {
+        return expand_skill_directories();
+    }
     
     // =========================================================================
     // Utility

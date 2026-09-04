@@ -6,11 +6,16 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include <doctest/doctest.h>
 #include <algorithm>
+#include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 // Include ToolHandler after doctest
 #include "tools/ToolHandler.h"
 #include "tools/ToolFactory.h"
+#include "tools/SkillTool.h"
+#include "core/SkillManager.h"
+#include "core/FileIO.h"
 
 using json = nlohmann::json;
 
@@ -189,4 +194,58 @@ TEST_SUITE("ToolDefinitions") {
         CHECK(ToolHandler::matches_pattern("make install all", "make*all") == true);
         CHECK(ToolHandler::matches_pattern("xmake all", "make*all") == false);
     }
+}
+
+TEST_CASE("discover_skills reports the skill directories (§SKILL-DIRS)") {
+    // Regression: the agent had no way to learn where skills live -
+    // discover_skills only returned paths of skills that already exist,
+    // so empty directories were invisible and the model could not know
+    // where to CREATE a skill. The output must carry the configured
+    // scan directories with exists flags.
+    SkillManager sm;
+    sm.init_after_settings();  // adds the default scan directories
+    SkillManager::set_current(&sm);
+
+    DiscoverSkillsTool tool;
+    FileIO file_io(".");  // unused by discover_skills
+    const json result = tool.execute(json::object(), file_io);
+
+    SkillManager::set_current(nullptr);
+
+    REQUIRE(result.value("status", "") == "success");
+    REQUIRE(result.contains("skill_directories"));
+    const auto& dirs = result["skill_directories"];
+    REQUIRE(dirs.is_array());
+    // Defaults: daedalus user-global + ~/.agents/skills + .agents/skills
+    CHECK(dirs.size() >= 3);
+
+    const char* home = std::getenv("HOME");
+    REQUIRE(home != nullptr);
+    // The defaults are stored with trailing slashes and absolute() does
+    // not normalise them away - compare lexically_normal forms.
+    const auto norm = [](const std::string& s) {
+        std::string n = std::filesystem::path(s).lexically_normal().string();
+        while (n.size() > 1 && n.back() == '/') n.pop_back();
+        return n;
+    };
+    const std::string want_user =
+        norm(std::string(home) + "/.agents/skills");
+    const std::string want_project =
+        norm(std::filesystem::absolute(std::filesystem::path(".agents/skills"))
+                 .string());
+
+    bool saw_user = false;
+    bool saw_project = false;
+    for (const auto& d : dirs) {
+        REQUIRE(d.contains("path"));
+        REQUIRE(d.contains("exists"));
+        const std::string path = d["path"].get<std::string>();
+        CHECK(!path.empty());
+        CHECK(path.front() == '/');  // expanded + absolute
+        const std::string n = norm(path);
+        if (n == want_user) saw_user = true;
+        if (n == want_project) saw_project = true;
+    }
+    CHECK(saw_user);
+    CHECK(saw_project);
 }

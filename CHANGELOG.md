@@ -6,6 +6,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **SKILL-DIRS: the agent now knows where skills live** (2026-09-04).
+  `discover_skills` returns a new `skill_directories` array — every
+  configured scan directory as `{path, exists}` — and its tool
+  description explains how to create a skill (write a `<name>/SKILL.md`
+  directory into one of them, preferring project-local `.agents/skills/`
+  or user-global `~/.agents/skills/`). Previously only existing skills'
+  paths were returned, so empty directories were invisible and the agent
+  had no idea where to create a skill. Backed by the new public
+  `SkillManager::skill_directories()`.
+
+
 ### Fixed
 
 - **PERSIST-RACE: flush worker SIGSEGV racing raw chain mutations**
