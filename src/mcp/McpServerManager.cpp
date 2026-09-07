@@ -383,6 +383,10 @@ bool McpServerManager::connect(const std::string& server_name) {
 
         mark_mcp_tools_dirty();
         breaker_record_success(server_name);
+        // §Phase39-H1: recovery must be VISIBLE — breaker failures log,
+        // so successes (first connect or post-cooldown retry) do too.
+        LOG_CERR(INFO, "[MCP] server '" << server_name << "' connected — "
+                 << server_tools_[server_name].size() << " tool(s)");
         return true;
     } catch (const std::exception& e) {
         last_error_ = std::string("stdio connect threw: ") + e.what();
