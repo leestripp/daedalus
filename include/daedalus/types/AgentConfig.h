@@ -66,6 +66,15 @@ struct AgentConfig {
     std::string chat_endpoint;     // empty = "/v1/chat/completions"
     int max_context_size = 0;      // 0 = use model's setting from settings.json
 
+    // When true, the explicit fields above are authoritative: the
+    // settings store's model entries are NEVER consulted for resolution
+    // (even when model_name matches a settings key) and the store's
+    // default_model_name is never auto-adopted. For hosts that own the
+    // model registry themselves (e.g. HiveMind's worker models.json) and
+    // inject credentials per spawn — prevents a per-agent settings store
+    // from becoming a shadow registry that silently diverges.
+    bool explicit_model_wins = false;
+
     // ----- Filesystem overrides -----
     // All optional; helpers in <daedalus/default_paths.h> compute sensible defaults.
     //

@@ -72,7 +72,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
                             : cfg.project_root;
     out.agent_name = cfg.agent_name;        // §Phase 8.8
     out.session_id = cfg.session_id;        // §ContextCache: prompt-cache key fallback
-    if (!cfg.model_name.empty()) {
+    if (!cfg.model_name.empty() && !cfg.explicit_model_wins) {
         auto m = store.resolve_model(cfg.model_name);
         if (m.has_value()) {
             out.base_url      = m->host;
@@ -335,7 +335,9 @@ void AgentImpl::initialize()
     // out of the box too.
     bool has_explicit_creds = !cfg_.model_name.empty()
         || (!cfg_.api_key.empty() && !cfg_.api_host.empty());
-    if (!has_explicit_creds && body_->store) {
+    // explicit_model_wins: the host owns the registry — never adopt the
+    // settings store's default model behind its back.
+    if (!cfg_.explicit_model_wins && !has_explicit_creds && body_->store) {
         try {
             auto default_model = body_->store->get_default_model_name();
             if (!default_model.empty()
@@ -896,6 +898,20 @@ ModelInfo AgentImpl::active_model() const noexcept
     // 1. cfg.model_name
     if (!cfg_.model_name.empty()) {
         if (auto m = find_by_name(cfg_.model_name)) return *m;
+    }
+    // explicit_model_wins: the host owns the registry — never fall through
+    // to settings-store models; report the explicit config instead.
+    if (cfg_.explicit_model_wins) {
+        if (cfg_.model_name.empty()) return {};
+        ModelInfo mi;
+        mi.name            = cfg_.model_name;  // hosts inject the model id here
+        mi.model_id        = cfg_.model_name;
+        mi.host            = cfg_.api_host;
+        mi.chat_endpoint   = cfg_.chat_endpoint.empty()
+                                 ? "/v1/chat/completions" : cfg_.chat_endpoint;
+        mi.max_context_size = cfg_.max_context_size;
+        mi.temperature     = cfg_.temperature;
+        return mi;
     }
     // 2. default_model from settings store
     try {
