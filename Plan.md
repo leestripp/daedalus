@@ -7,7 +7,7 @@
 
 ## TASK-2026-09-10-06: STATECHANGE-TYPED — type-safe `AgentSink::on_state_change` (REQ-5)
 
-> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Status** DONE (2026-09-10, commit 2b25f27)
 > **Created**: 2026-09-10
 > **Source**: prompt.txt (MonkeyByte upstream report vs d73d1ba), REQ-5
 
@@ -37,7 +37,7 @@ enum/int protocol drift.
 
 ## TASK-2026-09-10-05: COMPRESS-RESULT — `compress_context()` outcome feedback (REQ-3)
 
-> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Status** DONE (2026-09-10, commit 2b25f27)
 > **Created**: 2026-09-10
 > **Source**: prompt.txt REQ-3
 
@@ -73,7 +73,7 @@ internal thresholds to give the user any feedback.
 
 ## TASK-2026-09-10-04: HISTORY-SNAPSHOT — read-only conversation history view (REQ-2)
 
-> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Status** DONE (2026-09-10, commit 2b25f27)
 > **Created**: 2026-09-10
 > **Source**: prompt.txt REQ-2
 
@@ -105,7 +105,7 @@ compression/sanitization.
 
 ## TASK-2026-09-10-03: AUTO-FLUSH-CFG — public kill switch for the flush worker (REQ-1)
 
-> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Status** DONE (2026-09-10, commit 2b25f27)
 > **Created**: 2026-09-10
 > **Source**: prompt.txt REQ-1
 
@@ -135,7 +135,7 @@ worker through the public API.
 
 ## TASK-2026-09-10-02: TURN-ERROR — terminal failure visible after `run_one_turn()` (BUG-4)
 
-> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Status** DONE (2026-09-10, commit 2b25f27)
 > **Created**: 2026-09-10
 > **Source**: prompt.txt BUG-4
 
@@ -173,7 +173,7 @@ track `on_error(will_retry=false)` themselves across the turn boundary.
 
 ## TASK-2026-09-10-01: QUEUE-MUTEX — `cancel()` queue race + synchronized queue API (BUG-3 / REQ-4)
 
-> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Status** DONE (2026-09-10, commit 2b25f27)
 > **Created**: 2026-09-10
 > **Source**: prompt.txt BUG-3 (fix option 1) + REQ-4
 
