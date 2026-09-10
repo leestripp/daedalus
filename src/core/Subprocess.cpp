@@ -299,7 +299,8 @@ SubprocessResult Subprocess::execute_shell(const std::string& command,
 SubprocessResult Subprocess::execute_combined(const std::string& command,
                                               const std::string& cwd,
                                               int timeout_ms,
-                                              OutputChunkFn output_chunk_cb) {
+                                              OutputChunkFn output_chunk_cb,
+                                              std::stop_token st) {
     SubprocessResult result;
     
     // Use shell to execute the command
@@ -434,10 +435,17 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
                     exit_status_captured = true;
                     break;
                 }
-                if (timeout_ms >= 0 && remaining <= 0) {
-                    // Deadline reached with the child still alive.
+                // §BASH-CANCEL: user-facing stop fires the stop_token —
+                // kill the process group instantly rather than waiting
+                // out the (possibly hour-long) tool timeout.
+                if (st.stop_requested() || (timeout_ms >= 0 && remaining <= 0)) {
+                    // Deadline reached (or cancel requested) with the child still alive.
                     kill_group(pid);
-                    result.timed_out = true;
+                    if (st.stop_requested()) {
+                        result.cancelled = true;
+                    } else {
+                        result.timed_out = true;
+                    }
                     // kill_group() already reaps with WNOHANG; capture the
                     // status if the kill landed, otherwise the tail reap
                     // below collects the SIGKILLed child immediately.
@@ -458,11 +466,18 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
             break;
         }
         
-        // Check timeout
-        if (timeout_ms >= 0 && remaining <= 0) {
-            // Timeout - kill process group
+        // §BASH-CANCEL: a user-facing stop (Agent::cancel() →
+        // LLMClient::cancel() → cancel_source_) must interrupt a
+        // synchronous execute_bash instantly — the configured timeout
+        // can be an hour, which is far too long to keep the host UI
+        // blocked. Folded into the timeout path: same kill, same
+        // bounded drain, same reap; only the result flag differs.
+        const bool cancel_hit = st.stop_requested();
+        if (cancel_hit || (timeout_ms >= 0 && remaining <= 0)) {
+            // Timeout / cancel - kill process group
             kill_group(pid);
-            result.timed_out = true;
+            result.timed_out = !cancel_hit;
+            result.cancelled = cancel_hit;
             
             // §SUBPROC-DRAIN-HANG (2026-09-02, daedalus_bugs.md BUG 2,
             // MonkeyByte): a grandchild that escaped the process group
@@ -556,19 +571,22 @@ SubprocessResult Subprocess::execute_combined(const std::string& command,
 
 SubprocessResult Subprocess::execute_combined(const std::string& command,
                                               const std::string& cwd,
-                                              int timeout_ms) {
-    return execute_combined(command, cwd, timeout_ms, nullptr);
+                                              int timeout_ms,
+                                              std::stop_token st) {
+    return execute_combined(command, cwd, timeout_ms, nullptr, st);
 }
 
 SubprocessResult Subprocess::execute(const std::string& command,
                                     const std::string& cwd,
                                     int timeout_ms,
-                                    OutputChunkFn output_chunk_cb) {
-    return execute_combined(command, cwd, timeout_ms, std::move(output_chunk_cb));
+                                    OutputChunkFn output_chunk_cb,
+                                    std::stop_token st) {
+    return execute_combined(command, cwd, timeout_ms, std::move(output_chunk_cb), st);
 }
 
 SubprocessResult Subprocess::execute(const std::string& command,
                                     const std::string& cwd,
-                                    int timeout_ms) {
-    return execute_combined(command, cwd, timeout_ms);
+                                    int timeout_ms,
+                                    std::stop_token st) {
+    return execute_combined(command, cwd, timeout_ms, st);
 }

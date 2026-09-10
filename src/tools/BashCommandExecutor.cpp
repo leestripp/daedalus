@@ -85,7 +85,8 @@ BashCommandExecutor::Result BashCommandExecutor::execute(
         const std::string& command,
         const std::string& base_dir,
         int timeout_seconds,
-        std::function<void(std::string_view)> output_chunk_cb) {
+        std::function<void(std::string_view)> output_chunk_cb,
+        std::stop_token st) {
     // Sanitize pkill command by removing -f flag
     // pkill -f matches ANY part of command line, not just process name
     std::string sanitized_cmd = sanitize_pkill_command(command);
@@ -103,7 +104,7 @@ BashCommandExecutor::Result BashCommandExecutor::execute(
     std::string full_command = "cd " + escaped_dir + " && { " + sanitized_cmd + "\n} 2>&1";
     
     return execute_internal(full_command, sanitized_cmd, timeout_seconds,
-                            std::move(output_chunk_cb));
+                            std::move(output_chunk_cb), st);
 }
 
 // ========== Private Implementation ==========
@@ -119,7 +120,8 @@ BashCommandExecutor::Result BashCommandExecutor::execute_internal(
         const std::string& full_command,
         const std::string& display_command,
         int timeout_seconds,
-        std::function<void(std::string_view)> output_chunk_cb) {
+        std::function<void(std::string_view)> output_chunk_cb,
+        std::stop_token st) {
     
     CommandSpinner spinner(display_command);
 
@@ -136,18 +138,29 @@ BashCommandExecutor::Result BashCommandExecutor::execute_internal(
         result = Subprocess::execute(full_command, "", timeout_seconds * 1000,
             [&chunk_buffer](std::string_view chunk) {
                 chunk_buffer.append(chunk);
-            });
+            }, st);
     } else {
-        result = Subprocess::execute(full_command, "", timeout_seconds * 1000);
+        result = Subprocess::execute(full_command, "", timeout_seconds * 1000, st);
     }
     chunk_buffer.flush();
-    
+
     spinner.stop();
-    
+
+    // §BASH-CANCEL: user-facing stop killed the process group — report
+    // cancellation (with whatever partial output was captured) rather
+    // than a timeout or a generic failure.
+    if (result.cancelled) {
+        Result r(false, result.signaled ? 128 + result.signal : 130,
+                 sanitize_output(result.stdout),
+                 "Command cancelled by user");
+        r.cancelled = true;
+        return r;
+    }
+
     if (result.timed_out) {
         return Result(false, 124, "", "Command timed out after " + std::to_string(timeout_seconds) + " seconds");
     }
-    
+
     return Result(result.exit_code == 0, result.exit_code, sanitize_output(result.stdout));
 }
 

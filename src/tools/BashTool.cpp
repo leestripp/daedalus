@@ -270,9 +270,23 @@ json BashTool::run_sync(const std::string& command,
         progress(p);
     };
 
+    // §BASH-CANCEL: forward the per-turn cancel token so a user-facing
+    // stop (Agent::cancel()) kills the process group instantly instead
+    // of blocking on the tool's full timeout.
     auto result = BashCommandExecutor::execute(
-        command, project_path, timeout_seconds, std::move(chunk_cb));
+        command, project_path, timeout_seconds, std::move(chunk_cb),
+        ToolHandler::current_cancel_token());
     trigger_build_callback(command, result.exit_code);
+
+    if (result.cancelled) {
+        return json::object({
+            {"status", "cancelled"},
+            {"command", command},
+            {"output", result.output},
+            {"exit_code", result.exit_code},
+            {"message", result.error}
+        });
+    }
 
     return json::object({
         {"status", result.success ? "success" : "error"},

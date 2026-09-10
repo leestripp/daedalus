@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -28,7 +29,10 @@ public:
         int exit_code;
         std::string output;
         std::string error;  // Non-empty if execution failed
-        
+        // §BASH-CANCEL: true when the run was interrupted by the
+        // caller's stop_token (user-facing stop), not by the timeout.
+        bool cancelled = false;
+
         Result() : success(false), exit_code(-1) {}
         Result(bool ok, int code, const std::string& out, const std::string& err = "")
             : success(ok), exit_code(code), output(out), error(err) {}
@@ -59,7 +63,8 @@ public:
     static Result execute(const std::string& command,
                           const std::string& base_dir,
                           int timeout_seconds,
-                          std::function<void(std::string_view)> output_chunk_cb);
+                          std::function<void(std::string_view)> output_chunk_cb,
+                          std::stop_token st = {});
     
     // Utility functions
     static std::string escape_shell_arg(const std::string& input);
@@ -86,7 +91,8 @@ private:
     static Result execute_internal(const std::string& full_command,
                                    const std::string& display_command,
                                    int timeout_seconds,
-                                   std::function<void(std::string_view)> output_chunk_cb);
+                                   std::function<void(std::string_view)> output_chunk_cb,
+                                   std::stop_token st = {});
     
     // Build spinner message
     static std::string build_spinner_context(const std::string& command);

@@ -2941,6 +2941,13 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // token is taken from it (run_agent_cycle calls get_token()).
     cancel_source_ = std::stop_source{};
 
+    // §BASH-CANCEL: hand the fresh token to the tool layer so blocking
+    // tools (execute_bash synchronous run) can abort instantly when the
+    // host calls Agent::cancel(), instead of waiting out their full
+    // timeout. Must happen after the reseat above so tools never see a
+    // stale, already-stopped token from a previous turn.
+    ToolHandler::set_cancel_token(cancel_source_.get_token());
+
     // §IdleExitBreaker: fresh turn — a status-only iteration at the end
     // of the PREVIOUS turn must not count against this one.
     consecutive_status_only_count_ = 0;

@@ -1,3 +1,5 @@
+<!-- monkeybyte:type: cpp -->
+
 # daedalus — Agent Guide
 
 This file is a living reference for AI coding agents working on the daedalus

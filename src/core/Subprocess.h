@@ -14,6 +14,7 @@
 #define SUBPROCESS_H
 
 #include <functional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -40,8 +41,16 @@ struct SubprocessResult {
     
     /** True if process timed out */
     bool timed_out;
-    
-    SubprocessResult() : exit_code(0), signaled(false), signal(0), timed_out(false) {}
+
+    /**
+     * True if execution was cancelled via the caller's stop_token
+     * (§BASH-CANCEL). The process group was killed immediately; this is
+     * distinct from timed_out so callers can report "cancelled by user"
+     * instead of "timed out".
+     */
+    bool cancelled;
+
+    SubprocessResult() : exit_code(0), signaled(false), signal(0), timed_out(false), cancelled(false) {}
 };
 
 /**
@@ -105,7 +114,8 @@ public:
      */
     static SubprocessResult execute(const std::string& command,
                                      const std::string& cwd = "",
-                                     int timeout_ms = 120000);
+                                     int timeout_ms = 120000,
+                                     std::stop_token st = {});
 
     /**
      * Execute a command with timeout, invoking a callback for each chunk of
@@ -118,7 +128,8 @@ public:
     static SubprocessResult execute(const std::string& command,
                                      const std::string& cwd,
                                      int timeout_ms,
-                                     OutputChunkFn output_chunk_cb);
+                                     OutputChunkFn output_chunk_cb,
+                                     std::stop_token st = {});
     
     /**
      * Execute a command with timeout, combining stdout and stderr
@@ -130,7 +141,8 @@ public:
      */
     static SubprocessResult execute_combined(const std::string& command,
                                               const std::string& cwd = "",
-                                              int timeout_ms = 120000);
+                                              int timeout_ms = 120000,
+                                              std::stop_token st = {});
 
     /**
      * Execute a command with timeout, combining stdout and stderr, and
@@ -139,7 +151,8 @@ public:
     static SubprocessResult execute_combined(const std::string& command,
                                               const std::string& cwd,
                                               int timeout_ms,
-                                              OutputChunkFn output_chunk_cb);
+                                              OutputChunkFn output_chunk_cb,
+                                              std::stop_token st = {});
     
     /**
      * Parse a shell command string into argument vector

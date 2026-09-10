@@ -909,7 +909,7 @@ fs::path daedalus::resolve_agent_dir(const fs::path& project_root,
                                     std::string_view agent_name);
 ```
 
-| Cancel | `agent.cancel()` or pass `std::stop_token` into `run_one_turn` | Idempotent. |
+| Cancel | `agent.cancel()` or pass `std::stop_token` into `run_one_turn` | Idempotent. Instant for in-flight API requests **and** for a synchronous `execute_bash` run — the tool's process group is killed immediately rather than waiting out its timeout. |
 | Tear down | `agent.shutdown()` | Idempotent. Called by dtor. |
 
 ## Configuration

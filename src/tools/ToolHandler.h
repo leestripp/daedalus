@@ -1,5 +1,6 @@
 #pragma once
 
+#include <stop_token>
 #include <string>
 #include <vector>
 #include <nlohmann/json.hpp>
@@ -42,6 +43,16 @@ namespace ToolHandler {
     // approved, false otherwise. If no sink is attached, returns the value
     // of is_auto_mode_enabled() (preserving the legacy behaviour).
     bool request_command_approval(const std::string& command);
+
+    // §BASH-CANCEL — per-turn cancellation token for blocking tool
+    // executions. LLMClient installs its freshly-reseated cancel_source_
+    // token at the start of every turn; long-running tools (execute_bash
+    // synchronous run) read it and abort instantly on Agent::cancel()
+    // instead of waiting out their full timeout. A default-constructed
+    // token (no stop possible) means "not cancellable" — the legacy
+    // behaviour for direct ToolHandler users.
+    void set_cancel_token(std::stop_token token);
+    [[nodiscard]] std::stop_token current_cancel_token();
 
     // Execute a tool call - delegates to ToolFactory
     json execute_tool_call(const json& tool_call, FileIO& file_io);

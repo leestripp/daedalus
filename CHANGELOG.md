@@ -21,6 +21,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **BASH-CANCEL: user-facing stop now interrupts a synchronous
+  `execute_bash` instantly** (2026-09-10, MonkeyByte). `Agent::cancel()`
+  fired `LLMClient::cancel_source_`, but the token was only checked
+  *between* agent iterations — a blocking `Subprocess::execute` inside a
+  tool call kept running until its full tool timeout (up to an hour),
+  leaving the host UI hung on stop. The per-turn cancel token is now
+  threaded through the tool layer (`ToolHandler::set_cancel_token()` →
+  `BashTool::run_sync` → `BashCommandExecutor::execute` →
+  `Subprocess::execute`), and the subprocess poll loops kill the whole
+  process group the moment stop is requested (10ms granularity, same
+  bounded-drain/reap as the timeout path). The tool result reports
+  `status: "cancelled"` with any partial output; the turn then ends as
+  `Cancelled` at the next loop checkpoint, as before. Background
+  (`action=start`) processes are unaffected — they are deliberately
+  detached. Regression tests cover both the normal and the
+  closed-pipe (§SUBPROC-EOF-HANG) branches.
 - **PERSIST-RACE: flush worker SIGSEGV racing raw chain mutations**
   (2026-09-02, daedalus_bugs.md BUG 1, MonkeyByte). The LLMClient turn
   path mutates the chain through the raw `get_messages()` reference

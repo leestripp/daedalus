@@ -26,6 +26,8 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <stop_token>
+#include <thread>
 
 namespace {
 
@@ -63,6 +65,51 @@ TEST_CASE("subprocess: §SUBPROC-EOF-HANG — child that closed its fds still ho
     const double secs = run_timed("exec sleep 300 >&- 2>&-", 2000, r);
     CHECK(secs < 15.0);
     CHECK(r.timed_out);
+}
+
+TEST_CASE("subprocess: §BASH-CANCEL — stop_token kills a sleeping child instantly") {
+    // User-facing stop must interrupt a synchronous execute_bash without
+    // waiting for the tool timeout (which can be an hour). Request stop
+    // from another thread 200ms into a 600s run; the poll loop should
+    // kill the process group and return within a couple of seconds.
+    std::stop_source source;
+    SubprocessResult r;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::thread stopper([src = source]() mutable {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        src.request_stop();
+    });
+    r = Subprocess::execute_combined("sleep 600", "", 600000, source.get_token());
+    stopper.join();
+    const double secs = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - t0).count();
+    CHECK(secs < 5.0);
+    CHECK(r.cancelled);
+    CHECK_FALSE(r.timed_out);
+    // The child was actually killed, not merely abandoned.
+    CHECK(std::system("pgrep  'sleep 600' >/dev/null 2>&1") != 0);
+}
+
+TEST_CASE("subprocess: §BASH-CANCEL — stop_token honoured on the EOF branch too") {
+    // Same cancel guarantee when the child has closed its inherited pipe
+    // fds (the §SUBPROC-EOF-HANG branch): both pipes EOF while the child
+    // sleeps on; cancel must still kill it instantly.
+    std::stop_source source;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::thread stopper([src = source]() mutable {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        src.request_stop();
+    });
+    SubprocessResult r =
+        Subprocess::execute_combined("exec sleep 601 >&- 2>&-", "", 600000,
+                                     source.get_token());
+    stopper.join();
+    const double secs = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - t0).count();
+    CHECK(secs < 5.0);
+    CHECK(r.cancelled);
+    CHECK_FALSE(r.timed_out);
+    std::system("pkill  'sleep 601' 2>/dev/null");  // belt-and-braces cleanup
 }
 
 TEST_CASE("subprocess: §SUBPROC-DRAIN-HANG — setsid grandchild holding pipes cannot hang the timeout path") {

@@ -64,6 +64,22 @@ namespace ToolHandler {
     // owns the sink's lifetime.
     std::weak_ptr<daedalus::AgentSink> g_sink;
 
+    // §BASH-CANCEL — per-turn stop_token mirroring the running turn's
+    // cancel_source_. Guarded by g_state_mutex: written once per turn on
+    // the agent thread, read from tool execution paths that may run on
+    // other threads (subagents, ThreadPool).
+    std::stop_token g_cancel_token;
+
+    void set_cancel_token(std::stop_token token) {
+        std::lock_guard<std::mutex> lock(g_state_mutex);
+        g_cancel_token = std::move(token);
+    }
+
+    std::stop_token current_cancel_token() {
+        std::lock_guard<std::mutex> lock(g_state_mutex);
+        return g_cancel_token;
+    }
+
     // Path to the approvals JSON file. Lives in the per-agent project
     // tier (§Phase 16: new layout is .daedalus/daedalus[-<name>]/).
     std::filesystem::path get_approvals_file_path(
