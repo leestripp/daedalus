@@ -8,6 +8,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pending queue management API** (2026-09-10). Hosts can now list,
+  edit, remove and clear the user messages queued by
+  `Agent::submit_user_message()` before `run_one_turn()` consumes
+  them — previously only `pending_count()` was exposed, so a host UI
+  could not show or fix the user's queued follow-ups. New public API:
+  `Agent::pending_messages()` (snapshot as the new
+  `daedalus::PendingUserMessage` type: `text` + `images`),
+  `Agent::edit_pending_message(index, new_text, new_images)` with
+  keep/replace/clear attachment semantics, `Agent::remove_pending_message(index)`
+  and `Agent::clear_pending_messages()`. Index-based edits return
+  `false` on out-of-range indices and leave the queue untouched.
+
 - **SKILL-DIRS: the agent now knows where skills live** (2026-09-04).
   `discover_skills` returns a new `skill_directories` array — every
   configured scan directory as `{path, exists}` — and its tool

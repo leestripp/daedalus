@@ -639,6 +639,32 @@ void AgentImpl::submit_user_message(std::string text,
     pending_user_messages_.push_back({std::move(text), std::move(images)});
 }
 
+bool AgentImpl::edit_pending_message(
+    size_t index,
+    std::string new_text,
+    std::optional<std::vector<daedalus::ImageAttachment>> new_images)
+{
+    if (index >= pending_user_messages_.size()) {
+        return false;
+    }
+    auto& msg = pending_user_messages_[index];
+    msg.text = std::move(new_text);
+    if (new_images.has_value()) {
+        msg.images = std::move(*new_images);
+    }
+    return true;
+}
+
+bool AgentImpl::remove_pending_message(size_t index)
+{
+    if (index >= pending_user_messages_.size()) {
+        return false;
+    }
+    pending_user_messages_.erase(pending_user_messages_.begin()
+                                 + static_cast<std::ptrdiff_t>(index));
+    return true;
+}
+
 void AgentImpl::cancel() noexcept
 {
     // §BUG-005 (2026-07-26): only latch cancel_requested_ when there is

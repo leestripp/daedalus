@@ -1520,6 +1520,24 @@ target_link_libraries(daedalus_agent_name_namespace_tests PRIVATE
 add_test(NAME agent_name_namespace_tests COMMAND daedalus_agent_name_namespace_tests)
 
 # ============================================================================
+# Pending queue management: list / edit / remove / clear queued user messages
+# (Agent::pending_messages, edit_pending_message, remove_pending_message,
+# clear_pending_messages).
+# ============================================================================
+
+add_executable(daedalus_pending_messages_tests
+    test_pending_messages.cpp
+)
+target_include_directories(daedalus_pending_messages_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_pending_messages_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME pending_messages_tests COMMAND daedalus_pending_messages_tests)
+
+# ============================================================================
 # §Phase 9.10: SSE streaming token count smoke test.
 # Exercises one real LLM turn via daedalus-cli with model minimax-m2.7.
 # Verifies:

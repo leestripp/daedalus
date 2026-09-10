@@ -36,6 +36,7 @@
 #include "daedalus/types/HostTool.h"   // deprecated alias; kept for back-compat
 #include "daedalus/types/ImageAttachment.h"
 #include "daedalus/types/ModelInfo.h"
+#include "daedalus/types/PendingUserMessage.h"
 #include "daedalus/types/SkillInfo.h"
 #include "daedalus/types/ToolInfo.h"
 
@@ -113,6 +114,38 @@ public:
     ///        run_one_turn(). Anything other than the expected 0/1 means
     ///        submits and turns have drifted out of sync.
     [[nodiscard]] size_t pending_count() const noexcept;
+
+    // ------------------------------------------------------------------
+    // Pending queue management
+    //
+    // Flexible host-side control over the queued user messages that
+    // submit_user_message() added and run_one_turn() has not consumed
+    // yet — e.g. a chat UI that wants to show, rewrite or drop the
+    // user's queued follow-ups. Index-based: index 0 is the message
+    // the next run_one_turn() will consume. Follows Agent's threading
+    // rules (not thread-safe; call from the driving thread).
+    // ------------------------------------------------------------------
+
+    /// @brief Snapshot of the pending queue, oldest (next to drain) first.
+    [[nodiscard]] std::vector<PendingUserMessage> pending_messages() const;
+
+    /// @brief Replace the text — and optionally the attachments — of the
+    ///        queued message at `index`. `new_images` == std::nullopt
+    ///        keeps the existing attachments; a value (even an empty
+    ///        vector) replaces them. Returns false when `index` is out
+    ///        of range; the queue is left untouched.
+    bool edit_pending_message(
+        size_t index,
+        std::string new_text,
+        std::optional<std::vector<ImageAttachment>> new_images = std::nullopt);
+
+    /// @brief Drop the queued message at `index`. Returns false when
+    ///        `index` is out of range; the queue is left untouched.
+    bool remove_pending_message(size_t index);
+
+    /// @brief Drop every queued user message. No-op when the queue is
+    ///        already empty.
+    void clear_pending_messages() noexcept;
 
     /// @brief Programmatic cancel. Equivalent to stop_token firing.
     void cancel() noexcept;

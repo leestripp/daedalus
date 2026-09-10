@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -34,6 +35,7 @@
 #include "daedalus/types/HostTool.h"   // deprecated alias
 #include "daedalus/types/ImageAttachment.h"
 #include "daedalus/types/ModelInfo.h"
+#include "daedalus/types/PendingUserMessage.h"
 #include "daedalus/types/SkillInfo.h"
 #include "daedalus/types/ToolInfo.h"
 #include "daedalus/settings.h"
@@ -64,6 +66,17 @@ public:
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> images);
     [[nodiscard]] size_t pending_count() const noexcept { return pending_user_messages_.size(); }
+
+    // Pending queue management (see daedalus/Agent.h for semantics).
+    [[nodiscard]] std::vector<daedalus::PendingUserMessage> pending_messages() const {
+        return pending_user_messages_;
+    }
+    bool edit_pending_message(
+        size_t index,
+        std::string new_text,
+        std::optional<std::vector<daedalus::ImageAttachment>> new_images);
+    bool remove_pending_message(size_t index);
+    void clear_pending_messages() noexcept { pending_user_messages_.clear(); }
     void cancel() noexcept;
 
     // Read-only views
@@ -178,11 +191,9 @@ private:
     // §READ-IMAGE-CORE follow-up (2026-08-10): queued user messages carry
     // optional image attachments from the public
     // submit_user_message(text, imgs) overload.
-    struct PendingUserMessage {
-        std::string text;
-        std::vector<daedalus::ImageAttachment> images;
-    };
-    std::vector<PendingUserMessage> pending_user_messages_;
+    // The element type is the public daedalus::PendingUserMessage so
+    // pending_messages() can hand hosts a snapshot without a conversion.
+    std::vector<daedalus::PendingUserMessage> pending_user_messages_;
 
     // Forward-declared body. We define it inline here so that std::unique_ptr<Body>
     // can be destroyed at the AgentImpl instantiation point (PIMPL needs the

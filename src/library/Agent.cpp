@@ -44,6 +44,26 @@ void Agent::submit_user_message(std::string text,
 void Agent::cancel() noexcept { impl_->cancel(); }
 size_t Agent::pending_count() const noexcept { return impl_->pending_count(); }
 
+// ---- Pending queue management ----------------------------------------------
+
+std::vector<PendingUserMessage> Agent::pending_messages() const
+{
+    return impl_->pending_messages();
+}
+bool Agent::edit_pending_message(
+    size_t index,
+    std::string new_text,
+    std::optional<std::vector<ImageAttachment>> new_images)
+{
+    return impl_->edit_pending_message(index, std::move(new_text),
+                                       std::move(new_images));
+}
+bool Agent::remove_pending_message(size_t index)
+{
+    return impl_->remove_pending_message(index);
+}
+void Agent::clear_pending_messages() noexcept { impl_->clear_pending_messages(); }
+
 // ---- Read-only views -------------------------------------------------------
 
 AgentState  Agent::state() const noexcept { return impl_->state(); }

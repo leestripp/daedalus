@@ -1276,6 +1276,21 @@ agent:
    fresh prompt. `Agent::pending_count()` returns the number of
    unconsumed queued messages so hosts can detect the drift.
 
+2. **Pending queue management** — hosts can inspect and rewrite the
+   queue of not-yet-consumed user messages (e.g. a chat UI that shows
+   the user's queued follow-ups and lets them edit or drop them):
+
+   - `Agent::pending_messages()` — snapshot of the queue as
+     `std::vector<daedalus::PendingUserMessage>` (`text` + `images`),
+     oldest (next to drain) first.
+   - `Agent::edit_pending_message(index, new_text, new_images)` —
+     replace the text of the queued message at `index`; `new_images`
+     defaults to `std::nullopt` (keep attachments), a value replaces
+     them (empty vector clears). Returns `false` on out-of-range index.
+   - `Agent::remove_pending_message(index)` — drop one queued message;
+     returns `false` on out-of-range index.
+   - `Agent::clear_pending_messages()` — drop the whole queue.
+
 > **Removed in v0.4.0:** `AgentSink::request_user_input(...)` and the
 > `ask_user` tool. The agent has no mid-turn user-prompting path.
 > If your host needs a back-and-forth, submit the next user message
