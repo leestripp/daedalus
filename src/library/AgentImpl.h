@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -29,6 +30,9 @@
 #include "daedalus/AgentSink.h"
 #include "daedalus/model_discovery.h"
 #include "daedalus/types/AgentConfig.h"
+#include "daedalus/types/AgentError.h"
+#include "daedalus/types/CompressResult.h"
+#include "daedalus/types/HistoryEntry.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
 #include "daedalus/types/BaseTool.h"
@@ -65,10 +69,15 @@ public:
     void submit_user_message(std::string text);
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> images);
-    [[nodiscard]] size_t pending_count() const noexcept { return pending_user_messages_.size(); }
+    [[nodiscard]] size_t pending_count() const noexcept {
+        // §QUEUE-MUTEX (2026-09-10): internally synchronized — any thread.
+        std::lock_guard<std::mutex> lk(pending_mutex_);
+        return pending_user_messages_.size();
+    }
 
     // Pending queue management (see daedalus/Agent.h for semantics).
     [[nodiscard]] std::vector<daedalus::PendingUserMessage> pending_messages() const {
+        std::lock_guard<std::mutex> lk(pending_mutex_);
         return pending_user_messages_;
     }
     bool edit_pending_message(
@@ -76,7 +85,10 @@ public:
         std::string new_text,
         std::optional<std::vector<daedalus::ImageAttachment>> new_images);
     bool remove_pending_message(size_t index);
-    void clear_pending_messages() noexcept { pending_user_messages_.clear(); }
+    void clear_pending_messages() noexcept {
+        std::lock_guard<std::mutex> lk(pending_mutex_);
+        pending_user_messages_.clear();
+    }
     void cancel() noexcept;
 
     // Read-only views
@@ -102,9 +114,25 @@ public:
     // next chat request; no agent rebuild needed.
     void set_thinking_level(daedalus::ThinkingLevel level) noexcept;
 
-    // Host-requested context compression (§AutoCompress). Flags the
-    // LLMClient to compress at the end of the current/next agent cycle.
-    void compress_context() noexcept;
+    // Host-requested context compression (§AutoCompress). Compresses
+    // immediately when idle; flags the LLMClient to compress at the end
+    // of the current/next agent cycle when busy. §COMPRESS-RESULT:
+    // returns what actually happened (NoModel when no LLMClient yet).
+    daedalus::CompressResult compress_context() noexcept;
+
+    // §TURN-ERROR (2026-09-10, MonkeyByte BUG-4): terminal-error query.
+    // Driving thread (mirrored from LLMClient at turn end; AgentImpl's
+    // own pre-dispatch terminal errors are recorded directly).
+    void record_terminal_error(daedalus::ErrorKind kind, std::string message);
+    [[nodiscard]] bool turn_had_terminal_error() const noexcept {
+        return turn_terminal_error_.has_value();
+    }
+    [[nodiscard]] std::optional<daedalus::AgentError> last_error() const {
+        return turn_terminal_error_;
+    }
+
+    // §HISTORY-SNAPSHOT (2026-09-10, MonkeyByte REQ-2). Driving thread.
+    [[nodiscard]] std::vector<daedalus::HistoryEntry> history_snapshot() const;
 
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
@@ -193,7 +221,19 @@ private:
     // submit_user_message(text, imgs) overload.
     // The element type is the public daedalus::PendingUserMessage so
     // pending_messages() can hand hosts a snapshot without a conversion.
+    // §QUEUE-MUTEX (2026-09-10, MonkeyByte BUG-3/REQ-4): guards every
+    // access to pending_user_messages_. Previously the queue was
+    // driving-thread-only by contract, but Agent::cancel() read empty()
+    // unguarded — a data race for hosts with a UI-thread Stop button.
+    // The queue API is now callable from any thread; run_one_turn()
+    // remains driving-thread-only.
+    mutable std::mutex pending_mutex_;
     std::vector<daedalus::PendingUserMessage> pending_user_messages_;
+
+    // §TURN-ERROR: terminal error of the current/most recent turn.
+    // Driving-thread only (set at run_one_turn entry/end, read by the
+    // public query API) — no mutex needed under that contract.
+    std::optional<daedalus::AgentError> turn_terminal_error_;
 
     // Forward-declared body. We define it inline here so that std::unique_ptr<Body>
     // can be destroyed at the AgentImpl instantiation point (PIMPL needs the

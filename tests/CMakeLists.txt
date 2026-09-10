@@ -1538,6 +1538,50 @@ target_link_libraries(daedalus_pending_messages_tests PRIVATE
 add_test(NAME pending_messages_tests COMMAND daedalus_pending_messages_tests)
 
 # ============================================================================
+# MonkeyByte upstream report 2026-09-10 (vs d73d1ba): QUEUE-MUTEX (BUG-3/
+# REQ-4 cross-thread queue + cancel), TURN-ERROR (BUG-4 terminal-error
+# query API), COMPRESS-RESULT (REQ-3 NoModel), STATECHANGE-TYPED (REQ-5
+# typed on_state_change with legacy int forwarding).
+# ============================================================================
+
+add_executable(daedalus_upstream_2026_09_10_tests
+    test_upstream_2026_09_10.cpp
+)
+target_include_directories(daedalus_upstream_2026_09_10_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+)
+target_link_libraries(daedalus_upstream_2026_09_10_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME upstream_2026_09_10_tests COMMAND daedalus_upstream_2026_09_10_tests)
+
+# ============================================================================
+# §HISTORY-SNAPSHOT (REQ-2): Messages::history_snapshot() projection —
+# text roles round-trip, tool plumbing elided, multipart flattened.
+# ============================================================================
+
+add_executable(daedalus_history_snapshot_tests
+    test_history_snapshot.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Messages.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+)
+target_include_directories(daedalus_history_snapshot_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_history_snapshot_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME history_snapshot_tests COMMAND daedalus_history_snapshot_tests)
+
+# ============================================================================
 # §Phase 9.10: SSE streaming token count smoke test.
 # Exercises one real LLM turn via daedalus-cli with model minimax-m2.7.
 # Verifies:

@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -24,6 +25,9 @@ class SkillManager;                        // §Phase 16: per-agent skill manage
 #include "tools/ToolFilter.h"
 
 #include "daedalus/AgentSink.h"
+#include "daedalus/types/AgentError.h"      // §TURN-ERROR
+#include "daedalus/types/HistoryEntry.h"    // §HISTORY-SNAPSHOT
+#include "daedalus/types/CompressResult.h"   // §COMPRESS-RESULT
 #include "daedalus/ProviderPlugin.h"   // §ProviderPlugins
 #include "daedalus/settings.h"   // §v0.5.0: SettingsStore* replaces SettingsManager*
 #include "daedalus/types/AgentState.h"  // §State Machine: public state for the change callback
@@ -48,6 +52,10 @@ struct AppConfig {
     std::string session_id;
     bool auto_mode = false;  // Automatically approve tool executions
     bool memory_disabled = false;  // Disable session memory
+    // §AUTO-FLUSH-CFG (2026-09-10): mapped from AgentConfig::
+    // session_auto_flush. Forwarded into MessageCompressionConfig::
+    // auto_flush_enabled at Messages construction.
+    bool session_auto_flush = true;
     // §ContextCache follow-up (2026-08-02): omit the Session Memory
     // section from the composed system prompt (memory collection is
     // unaffected). Mapped from AgentConfig::memory_in_prompt.
@@ -148,6 +156,15 @@ private:
     // try_lock UB on the turn's own thread.
     std::mutex turn_mutex_;
     std::atomic<bool> turn_active_{false};
+
+    // §TURN-ERROR (2026-09-10, MonkeyByte BUG-4): the last terminal
+    // (will_retry=false) error of the current/most recent turn. Terminal
+    // LLM failures end the turn as DONE — hosts query
+    // turn_had_terminal_error()/last_terminal_error() after run_one_turn()
+    // instead of tracking on_error themselves. Set by emit_error (any
+    // thread, incl. HTTP workers), cleared at run_one_turn() entry.
+    mutable std::mutex terminal_error_mutex_;
+    std::optional<daedalus::AgentError> turn_terminal_error_;
 
     /// @brief Compress immediately on the caller's thread. Caller must
     ///        hold turn_mutex_ (or be inside a turn). on_compaction fires
@@ -353,7 +370,35 @@ public:
     ///        cycle — honored even if the turn is cancelled. If there is
     ///        nothing to compress yet, the request carries over to the
     ///        next turn's first cycle. Thread-safe.
-    void compress_context() noexcept;
+    /// @return §COMPRESS-RESULT (2026-09-10): what actually happened —
+    ///         Compressed / Deferred / NothingToCompress / Failed
+    ///         (NothingToCompress and Failed still arm the carry-over
+    ///         retry at the next turn's first cycle).
+    daedalus::CompressResult compress_context() noexcept;
+
+    /// @brief §TURN-ERROR: true when the current/most recent turn hit a
+    ///        terminal (non-retried) error. Valid after run_one_turn()
+    ///        returns; cleared when the next turn starts. Thread-safe.
+    [[nodiscard]] bool turn_had_terminal_error() const {
+        std::lock_guard<std::mutex> lk(terminal_error_mutex_);
+        return turn_terminal_error_.has_value();
+    }
+
+    /// @brief §TURN-ERROR: the terminal error of the current/most recent
+    ///        turn, if any. Thread-safe.
+    [[nodiscard]] std::optional<daedalus::AgentError> last_terminal_error() const {
+        std::lock_guard<std::mutex> lk(terminal_error_mutex_);
+        return turn_terminal_error_;
+    }
+
+    /// @brief §HISTORY-SNAPSHOT (2026-09-10, MonkeyByte REQ-2): read-only
+    ///        projection of the conversation history (tool calls/results
+    ///        elided). Empty when messages_ is not initialized yet.
+    ///        Driving thread; do not call mid-turn.
+    [[nodiscard]] std::vector<daedalus::HistoryEntry> history_snapshot() const {
+        if (!messages_) return {};
+        return messages_->history_snapshot();
+    }
 
     /// @brief Attach a sink. Call this after construction and before
     ///        initialize(). Required for streaming output, log routing, and

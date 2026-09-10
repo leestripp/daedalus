@@ -26,6 +26,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include "daedalus/types/AgentState.h"
 #include "daedalus/types/ErrorKind.h"
 #include "daedalus/types/LogLevel.h"
 #include "daedalus/types/ApprovalSource.h"
@@ -146,7 +147,22 @@ public:
 
     /// @brief Agent transitioned from one state to another. `to` is the
     /// cast-to-int value of the new AgentState.
+    /// @note Legacy int protocol — prefer the typed overload below. Both
+    ///       fire for every transition (the typed default forwards here),
+    ///       so existing hosts that override only this one keep working.
     virtual void on_state_change(int /*from*/, int /*to*/) noexcept {}
+
+    /// @brief §STATECHANGE-TYPED (2026-09-10, MonkeyByte REQ-5): type-safe
+    /// overload taking AgentState directly — no host-side cast, no risk
+    /// of the enum and the int protocol drifting. The default
+    /// implementation forwards to the legacy int overload above, so
+    /// hosts may override either one (or both, if they want distinct
+    /// handling). Planned to become the only signature at the next
+    /// major version.
+    virtual void on_state_change(daedalus::AgentState from,
+                                 daedalus::AgentState to) noexcept {
+        on_state_change(static_cast<int>(from), static_cast<int>(to));
+    }
 
     /// @brief An LLM/API error occurred. This is the structured error
     /// channel: unlike on_log (free-form diagnostics), on_error carries a
@@ -156,8 +172,10 @@ public:
     /// `will_retry` is true when the library will attempt the request again
     /// (transient failure); false means the failure is terminal for this
     /// turn. Terminal LLM failures still end the turn with public
-    /// AgentState::Done (the internal state machine has no error state), so
-    /// hosts that need to know a turn failed MUST track on_error.
+    /// AgentState::Done (the internal state machine has no error state) —
+    /// since §TURN-ERROR (2026-09-10) hosts can query
+    /// Agent::turn_had_terminal_error() / Agent::last_error() after
+    /// run_one_turn() returns instead of tracking on_error themselves.
     ///
     /// Threading: may be called on the HTTP worker thread (same rule as
     /// on_assistant_delta) as well as the agent worker thread.

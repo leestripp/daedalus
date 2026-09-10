@@ -8,6 +8,42 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **MonkeyByte upstream report 2026-09-10 — new public API** (reported
+  against d73d1ba):
+
+  - **§TURN-ERROR: terminal turn failures are now queryable** (BUG-4).
+    Terminal LLM failures (fatal HTTP 4xx, retries exhausted, no model
+    configured) still end the turn with public `AgentState::Done` — but
+    hosts no longer have to track `on_error(will_retry=false)` across the
+    turn boundary to find out. New: `Agent::turn_had_terminal_error()` and
+    `Agent::last_error()` (returning the new `daedalus::AgentError{kind,
+    message}`), valid after `run_one_turn()` returns and cleared when the
+    next turn starts.
+  - **§HISTORY-SNAPSHOT: read-only conversation history view** (REQ-2).
+    `Agent::history_snapshot()` returns
+    `std::vector<daedalus::HistoryEntry>{role, content}` — the
+    conversation the agent actually sees (post-restore, post-compression,
+    post-sanitization), with tool calls and tool results elided and
+    multipart content flattened to its text parts. GUI hosts can drop
+    their parallel chat-history stores.
+  - **§COMPRESS-RESULT: `compress_context()` outcome feedback** (REQ-3).
+    `Agent::compress_context()` now returns `daedalus::CompressResult`
+    (`Compressed` / `Deferred` / `NothingToCompress` / `NoModel` /
+    `Failed`) instead of `void`, so hosts can tell the user what happened
+    instead of duplicating internal thresholds. Carry-over semantics are
+    unchanged: NothingToCompress/Failed still arm the next-turn retry.
+    Source-compatible for callers ignoring the return value.
+  - **§AUTO-FLUSH-CFG: public kill switch for the flush worker**
+    (REQ-1). `AgentConfig::session_auto_flush` (default true) controls
+    the session-persistence background flush worker, previously reachable
+    only via the internal `MessageCompressionConfig::auto_flush_enabled`.
+    When disabled, saves still happen synchronously at quiescent points.
+  - **§STATECHANGE-TYPED: type-safe `on_state_change`** (REQ-5).
+    `AgentSink` gains an `on_state_change(daedalus::AgentState from,
+    daedalus::AgentState to)` overload; its default forwards to the
+    legacy int overload, so existing hosts keep working unchanged and new
+    hosts can skip the cast.
+
 - **Pending queue management API** (2026-09-10). Hosts can now list,
   edit, remove and clear the user messages queued by
   `Agent::submit_user_message()` before `run_one_turn()` consumes
@@ -30,8 +66,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   had no idea where to create a skill. Backed by the new public
   `SkillManager::skill_directories()`.
 
-
 ### Fixed
+
+- **§QUEUE-MUTEX: `Agent::cancel()` no longer races the message
+  queue** (2026-09-10, MonkeyByte BUG-3 + REQ-4). `cancel()` read
+  `pending_user_messages_.empty()` unguarded while the driving thread
+  could be inside `submit_user_message()` / `run_one_turn()` on the same
+  vector — a data race (UB) through the one API entry point hosts with a
+  UI thread are most likely to call cross-thread. All queue accesses
+  (submit, dequeue, `pending_count`, the management API and the
+  `cancel()` check) are now guarded by an internal mutex, which also
+  upgrades the whole queue API to callable-from-any-thread.
+  `run_one_turn()` remains driving-thread-only.
 
 - **BASH-CANCEL: user-facing stop now interrupts a synchronous
   `execute_bash` instantly** (2026-09-10, MonkeyByte). `Agent::cancel()`

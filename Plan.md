@@ -5,6 +5,210 @@
 
 ---
 
+## TASK-2026-09-10-06: STATECHANGE-TYPED — type-safe `AgentSink::on_state_change` (REQ-5)
+
+> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Created**: 2026-09-10
+> **Source**: prompt.txt (MonkeyByte upstream report vs d73d1ba), REQ-5
+
+### Problem
+
+`AgentSink::on_state_change(int from, int to)` passes states as
+cast-to-int, forcing every host to re-implement the cast and risking
+enum/int protocol drift.
+
+### Scope
+
+1. `include/daedalus/AgentSink.h`: add overload
+   `on_state_change(daedalus::AgentState from, daedalus::AgentState to)`;
+   default forwards to the legacy int overload so existing hosts keep
+   working unchanged. Emitters call the typed overload.
+2. `src/library/AgentImpl.cpp` (`set_state`): call the typed overload.
+3. `tests/test_state_change_routing.cpp` (or new): typed sink receives
+   AgentState values; legacy int-only sink still receives events via
+   forwarding.
+4. `CHANGELOG.md`.
+
+### Verification
+
+- New/updated tests pass; full ctest green; warning-clean.
+
+---
+
+## TASK-2026-09-10-05: COMPRESS-RESULT — `compress_context()` outcome feedback (REQ-3)
+
+> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Created**: 2026-09-10
+> **Source**: prompt.txt REQ-3
+
+### Problem
+
+`Agent::compress_context()` is `void`: a too-short history silently
+no-ops (and silently arms a carry-over request), a busy turn silently
+defers, and a missing model silently does nothing. Hosts must duplicate
+internal thresholds to give the user any feedback.
+
+### Scope
+
+1. New public `daedalus::CompressResult` enum
+   (`Compressed`, `Deferred`, `NothingToCompress`, `NoModel`, `Failed`)
+   in `include/daedalus/types/CompressResult.h` (+ `to_string`).
+2. `src/api/LLMClient.{h,cpp}`: `compress_context()` returns the mapped
+   outcome (immediate path maps `CompressOutcome`; busy/try-lock paths
+   return `Deferred`). Carry-over re-arm semantics unchanged
+   (NothingToCompress/Failed still arm the next-turn retry — documented).
+3. `AgentImpl` / `Agent`: `compress_context()` returns
+   `CompressResult::NoModel` when no LLMClient exists; declaration in
+   `include/daedalus/Agent.h` updated (`noexcept` retained; adding a
+   return value is source-compatible for callers ignoring it).
+4. Tests: NoModel without credentials; enum mapping unit coverage.
+5. `CHANGELOG.md`, `docs/how_compress_works.md` cross-ref if needed.
+
+### Verification
+
+- Build warning-clean (callers ignoring a nodiscard-free enum are fine);
+  ctest green.
+
+---
+
+## TASK-2026-09-10-04: HISTORY-SNAPSHOT — read-only conversation history view (REQ-2)
+
+> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Created**: 2026-09-10
+> **Source**: prompt.txt REQ-2
+
+### Problem
+
+No public way to read back the persisted/restored conversation, so every
+GUI host keeps a parallel chat store that silently diverges after
+compression/sanitization.
+
+### Scope
+
+1. New public `daedalus::HistoryEntry { role, content }` in
+   `include/daedalus/types/HistoryEntry.h`.
+2. `src/core/Messages.{h,cpp}`: `history_snapshot()` projection —
+   user/assistant/system entries with their text content (array-form
+   content flattened to text parts; pure tool-call assistant messages and
+   `tool` role entries elided). Driving-thread contract.
+3. `src/api/LLMClient` + `AgentImpl` + `Agent::history_snapshot()`
+   forwarders; empty vector when no model configured.
+4. Tests: seed a Messages chain (incl. tool_calls, multipart content),
+   verify projection; Agent-level empty-without-model case.
+5. `CHANGELOG.md`.
+
+### Verification
+
+- New tests pass; full ctest green; warning-clean.
+
+---
+
+## TASK-2026-09-10-03: AUTO-FLUSH-CFG — public kill switch for the flush worker (REQ-1)
+
+> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Created**: 2026-09-10
+> **Source**: prompt.txt REQ-1
+
+### Problem
+
+`MessageCompressionConfig::auto_flush_enabled` is internal-only; tests
+and short-lived/embedded agents cannot disable the 100 ms-tick flush
+worker through the public API.
+
+### Scope
+
+1. `include/daedalus/types/AgentConfig.h`: `bool session_auto_flush = true;`.
+2. `src/api/LLMClient.h` `AppConfig`: matching field.
+3. `AgentImpl::make_app_config`: copy through.
+4. `src/api/LLMClient.cpp` (both Messages construction branches):
+   `messages_config.auto_flush_enabled = config.session_auto_flush;`
+   When disabled, saves still happen synchronously at existing quiescent
+   points (Messages already handles `auto_flush_enabled == false`).
+5. `CHANGELOG.md`.
+
+### Verification
+
+- Build + full ctest (existing Messages flush tests cover the
+  disabled-worker behaviour at the core level).
+
+---
+
+## TASK-2026-09-10-02: TURN-ERROR — terminal failure visible after `run_one_turn()` (BUG-4)
+
+> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Created**: 2026-09-10
+> **Source**: prompt.txt BUG-4
+
+### Problem
+
+A terminal LLM failure (fatal 4xx, retries exhausted) ends the turn with
+public `AgentState::Done`, indistinguishable from success. Hosts must
+track `on_error(will_retry=false)` themselves across the turn boundary.
+
+### Scope (query API — no state-machine semantics change)
+
+1. `src/api/LLMClient.{h,cpp}`: record terminal errors —
+   `emit_error(will_retry=false)` latches
+   `turn_terminal_error_{kind,message}` (mutex-guarded; emit_error may
+   run on HTTP worker threads); cleared at `run_one_turn()` entry.
+   Getters: `turn_had_terminal_error()`, `last_terminal_error()`.
+2. New public `daedalus::AgentError { kind, message }` in
+   `include/daedalus/types/AgentError.h`.
+3. `AgentImpl`: mirror the LLMClient outcome after each turn plus its
+   own pre-dispatch terminal errors (no-model path); public
+   `Agent::turn_had_terminal_error() const noexcept` and
+   `Agent::last_error() const -> std::optional<AgentError>`.
+   Driving-thread contract (same as the queue API).
+4. `include/daedalus/AgentSink.h`: update the `on_error` doc note that
+   currently tells hosts they MUST track terminal errors themselves.
+5. Tests: no-model turn sets the flag + last_error; successful/idle
+   paths leave it clear.
+6. `CHANGELOG.md`.
+
+### Verification
+
+- New tests pass; full ctest green; warning-clean.
+
+---
+
+## TASK-2026-09-10-01: QUEUE-MUTEX — `cancel()` queue race + synchronized queue API (BUG-3 / REQ-4)
+
+> **Status** DONE (2026-09-10, uncommitted working tree)
+> **Created**: 2026-09-10
+> **Source**: prompt.txt BUG-3 (fix option 1) + REQ-4
+
+### Problem
+
+`Agent::cancel()` reads `pending_user_messages_.empty()` unguarded while
+the driving thread may be inside `submit_user_message()` /
+`run_one_turn()` on the same vector — a data race (UB) through the one
+API entry point hosts are most likely to call cross-thread (a UI Stop
+button). Same root cause as the 2026-09-10 queue thread-safety report.
+
+### Scope
+
+1. `src/library/AgentImpl.h`: add `mutable std::mutex pending_mutex_`;
+   guard `submit_user_message` (both), `pending_count`,
+   `pending_messages`, `edit_pending_message`,
+   `remove_pending_message`, `clear_pending_messages`, the `cancel()`
+   `empty()` check, and the `run_one_turn()` peek/dequeue sequence
+   (lock released before dispatching the turn so cross-thread
+   submit/cancel stay live during the turn).
+2. `include/daedalus/Agent.h`: update the threading contract — the queue
+   API and `cancel()` become callable from any thread; keep
+   `run_one_turn()` driving-thread-only.
+3. `tests/test_pending_messages.cpp` (or new
+   `test_queue_thread_safety.cpp`): concurrent submit/clear/
+   pending_messages/cancel smoke test with invariant checks.
+4. `CHANGELOG.md`.
+
+### Verification
+
+- New concurrency test passes repeatedly; full ctest green;
+  warning-clean.
+
+---
+
 ## TASK-2026-08-31-02: SANITIZE-NOTHROW — malformed chain entries SIGABRT the flush worker
 
 > **Status**: DONE (2026-08-31, uncommitted working tree)

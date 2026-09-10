@@ -105,6 +105,16 @@ struct AgentConfig {
     std::optional<bool> auto_approve;
     bool memory_enabled = true;
     bool clear_memory = false;
+
+    // §AUTO-FLUSH-CFG (2026-09-10, MonkeyByte REQ-1): kill switch for the
+    // session-persistence flush worker. Default true: every message
+    // mutation is flushed to disk by a background thread within ~100 ms.
+    // Set false for deterministic saves in tests, for short-lived
+    // embedded agents where the worker is waste, or as a safety valve
+    // for persistence bugs. Saves still happen synchronously at
+    // quiescent points (turn end, shutdown) — only the background
+    // ticker is disabled.
+    bool session_auto_flush = true;
     // §ContextCache follow-up (2026-08-02): when false, the Session
     // Memory section is omitted from the composed system prompt while
     // memory collection continues. Lets hosts that surface memory

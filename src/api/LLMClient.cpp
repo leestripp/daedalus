@@ -280,6 +280,8 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
         // (see Messages::call_llm_for_summary).
         messages_config.compression_timeout = 30;
         messages_config.debug_output = true; // Enable for debugging
+        // §AUTO-FLUSH-CFG (2026-09-10): host kill switch for the worker.
+        messages_config.auto_flush_enabled = config.session_auto_flush;
         messages_config.api_url = config_.base_url + config_.chat_endpoint;
         messages_config.api_key = config_.api_key;
         // §Phase 8.7 / §BUG-COMPRESS-TEMP: the compression call posts its
@@ -308,6 +310,7 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
         MessageCompressionConfig messages_config;
         messages_config.max_context_size = 200000;
         messages_config.debug_output = true;
+        messages_config.auto_flush_enabled = config.session_auto_flush;  // §AUTO-FLUSH-CFG
         messages_config.temperature =  // §BUG-COMPRESS-TEMP: clamp like the main path
             plugin_->clamp_temperature(config_.model, config_.temperature);
         messages_config.on_compression_tokens =
@@ -1116,6 +1119,13 @@ bool LLMClient::handle_compress_context_result(const json& result) {
 void LLMClient::emit_error(daedalus::ErrorKind kind, const std::string& message, bool will_retry) {
     LOG_ERROR("[" + std::string(daedalus::to_string(kind)) + "] " + message
               + (will_retry ? " (will_retry=true)" : " (will_retry=false)"));
+    if (!will_retry) {
+        // §TURN-ERROR (2026-09-10): latch the terminal error so hosts can
+        // query the turn outcome after run_one_turn() returns — terminal
+        // failures still end the turn as public AgentState::Done.
+        std::lock_guard<std::mutex> lk(terminal_error_mutex_);
+        turn_terminal_error_ = daedalus::AgentError{kind, message};
+    }
     if (sink_) {
         sink_->on_error(kind, message, will_retry);
     }
@@ -2868,16 +2878,16 @@ CompressOutcome LLMClient::compress_now_unlocked() {
 // caller's thread. Busy → flag consumed at the end-of-cycle checkpoint
 // (also honored on the cancelled-turn path). Nothing to compress yet →
 // carry the request over to the next turn's first cycle.
-void LLMClient::compress_context() noexcept {
+daedalus::CompressResult LLMClient::compress_context() noexcept {
     if (turn_active_.load(std::memory_order_acquire)) {
         compress_requested_.store(true, std::memory_order_relaxed);
-        return;
+        return daedalus::CompressResult::Deferred;
     }
     std::unique_lock lk(turn_mutex_, std::try_to_lock);
     if (!lk.owns_lock()) {
         // A turn is just starting — defer to its first checkpoint.
         compress_requested_.store(true, std::memory_order_relaxed);
-        return;
+        return daedalus::CompressResult::Deferred;
     }
     try {
         const CompressOutcome outcome = compress_now_unlocked();
@@ -2891,9 +2901,23 @@ void LLMClient::compress_context() noexcept {
             // (§COMPRESS-REPORT).
             compress_requested_.store(true, std::memory_order_relaxed);
         }
+        // §COMPRESS-RESULT (2026-09-10): surface the outcome to the host.
+        switch (outcome) {
+            case CompressOutcome::Compressed:
+            case CompressOutcome::FallbackDeleted:
+                // FallbackDeleted IS a real context reduction — report it
+                // as Compressed (on_compaction already fired).
+                return daedalus::CompressResult::Compressed;
+            case CompressOutcome::NothingToCompress:
+                return daedalus::CompressResult::NothingToCompress;
+            case CompressOutcome::Failed:
+                return daedalus::CompressResult::Failed;
+        }
+        return daedalus::CompressResult::Failed;
     } catch (...) {
         // noexcept contract: a failed immediate compress is dropped, the
         // host can retry.
+        return daedalus::CompressResult::Failed;
     }
 }
 
@@ -2940,6 +2964,12 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
     // returned CANCELLED forever. Install a fresh source before any
     // token is taken from it (run_agent_cycle calls get_token()).
     cancel_source_ = std::stop_source{};
+
+    // §TURN-ERROR: fresh turn — clear the previous turn's terminal error.
+    {
+        std::lock_guard<std::mutex> lk(terminal_error_mutex_);
+        turn_terminal_error_.reset();
+    }
 
     // §BASH-CANCEL: hand the fresh token to the tool layer so blocking
     // tools (execute_bash synchronous run) can abort instantly when the

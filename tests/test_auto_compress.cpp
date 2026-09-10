@@ -718,8 +718,10 @@ TEST_CASE("Agent::compress_context triggers compression below threshold") {
     agent.initialize();
 
     // Set the flag before the turn: it is consumed at the compression
-    // checkpoint at the end of the turn's first cycle.
-    agent.compress_context();
+    // checkpoint at the end of the turn's first cycle. History is too
+    // short to compress right now, so the request carries over
+    // (§COMPRESS-RESULT: NothingToCompress still arms the carry-over).
+    CHECK(agent.compress_context() == daedalus::CompressResult::NothingToCompress);
 
     agent.submit_user_message("hello");
     agent.run_one_turn();
@@ -793,7 +795,7 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
     CHECK(server.compression_requests() == 0);
 
     // Idle: compression must happen NOW, synchronously on this thread.
-    agent.compress_context();
+    CHECK(agent.compress_context() == daedalus::CompressResult::Compressed);
 
     {
         std::lock_guard<std::mutex> lk(sink->mu);
@@ -884,8 +886,9 @@ TEST_CASE("Agent::compress_context reports fallback delete via on_compaction") {
         CHECK(server.compression_requests() == 0);
 
         // Idle: compression runs synchronously; all 3 summary attempts get
-        // HTTP 500, so compress() takes the fallback-delete path.
-        agent.compress_context();
+        // HTTP 500, so compress() takes the fallback-delete path — a real
+        // context reduction, reported as Compressed (§COMPRESS-RESULT).
+        CHECK(agent.compress_context() == daedalus::CompressResult::Compressed);
 
         CHECK(server.compression_requests() == 3);   // 3 attempts, all failed
         CHECK(server.main_requests() == 3);          // no extra turn was run

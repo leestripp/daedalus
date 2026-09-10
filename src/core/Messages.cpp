@@ -1192,6 +1192,48 @@ bool Messages::flush_if_dirty() const {
     return true;
 }
 
+// §HISTORY-SNAPSHOT (2026-09-10, MonkeyByte REQ-2): project the live
+// chain into host-renderable entries. Mirrors the persistence chain 1:1
+// (post-compression, post-sanitize), minus tool plumbing.
+std::vector<daedalus::HistoryEntry> Messages::history_snapshot() const {
+    std::vector<daedalus::HistoryEntry> out;
+    if (!messages_.is_array()) return out;
+    out.reserve(messages_.size());
+    for (const auto& m : messages_) {
+        if (!m.is_object() || !m.contains("role") || !m["role"].is_string()) {
+            continue;
+        }
+        const std::string role = m["role"].get<std::string>();
+        if (role != "system" && role != "user" && role != "assistant") {
+            continue;  // elide "tool" results and anything else
+        }
+        if (m.contains("tool_calls")) {
+            continue;  // elide pure tool-call assistant messages
+        }
+        std::string text;
+        if (m.contains("content")) {
+            const auto& c = m["content"];
+            if (c.is_string()) {
+                text = c.get<std::string>();
+            } else if (c.is_array()) {
+                // Multipart content (e.g. vision messages): keep the
+                // text parts only.
+                for (const auto& part : c) {
+                    if (part.is_object()
+                        && part.value("type", "") == "text"
+                        && part.contains("text") && part["text"].is_string()) {
+                        if (!text.empty()) text += '\n';
+                        text += part["text"].get<std::string>();
+                    }
+                }
+            }
+        }
+        if (text.empty()) continue;
+        out.push_back({role, std::move(text)});
+    }
+    return out;
+}
+
 void Messages::flush_worker_main() {
     // Worker thread entry point. Loops on flush_cv_ with a timeout,
     // exits cleanly when stop_flush_ is set.

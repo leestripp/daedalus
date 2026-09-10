@@ -89,7 +89,14 @@ std::vector<std::string> Agent::mcp_configured_servers() const
 
 ModelInfo Agent::active_model() const noexcept { return impl_->active_model(); }
 bool        Agent::auto_approve() const noexcept { return impl_->auto_approve(); }
-void        Agent::compress_context() noexcept { impl_->compress_context(); }
+CompressResult Agent::compress_context() noexcept { return impl_->compress_context(); }
+
+// §TURN-ERROR (2026-09-10, MonkeyByte BUG-4)
+bool Agent::turn_had_terminal_error() const noexcept { return impl_->turn_had_terminal_error(); }
+std::optional<AgentError> Agent::last_error() const  { return impl_->last_error(); }
+
+// §HISTORY-SNAPSHOT (2026-09-10, MonkeyByte REQ-2)
+std::vector<HistoryEntry> Agent::history_snapshot() const { return impl_->history_snapshot(); }
 void        Agent::set_thinking_level(ThinkingLevel level) { impl_->set_thinking_level(level); }
 
 // §BUG-006/007/008: approval control

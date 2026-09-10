@@ -29,6 +29,9 @@
 #include "daedalus/AgentSink.h"
 #include "daedalus/model_discovery.h"
 #include "daedalus/types/AgentConfig.h"
+#include "daedalus/types/AgentError.h"
+#include "daedalus/types/CompressResult.h"
+#include "daedalus/types/HistoryEntry.h"
 #include "daedalus/types/ProviderConfig.h"
 #include "daedalus/types/AgentState.h"
 #include "daedalus/types/AgentStats.h"
@@ -122,8 +125,11 @@ public:
     // submit_user_message() added and run_one_turn() has not consumed
     // yet — e.g. a chat UI that wants to show, rewrite or drop the
     // user's queued follow-ups. Index-based: index 0 is the message
-    // the next run_one_turn() will consume. Follows Agent's threading
-    // rules (not thread-safe; call from the driving thread).
+    // the next run_one_turn() will consume. §QUEUE-MUTEX (2026-09-10):
+    // the queue is internally synchronized — submit_user_message(),
+    // pending_count(), the management API below and cancel() are all
+    // callable from ANY thread (e.g. a UI thread). run_one_turn()
+    // remains driving-thread-only.
     // ------------------------------------------------------------------
 
     /// @brief Snapshot of the pending queue, oldest (next to drain) first.
@@ -148,7 +154,39 @@ public:
     void clear_pending_messages() noexcept;
 
     /// @brief Programmatic cancel. Equivalent to stop_token firing.
+    ///        Thread-safe: callable from any thread (e.g. a UI Stop
+    ///        button) — the pending-queue check it performs is guarded
+    ///        internally (§QUEUE-MUTEX, MonkeyByte BUG-3).
     void cancel() noexcept;
+
+    // ------------------------------------------------------------------
+    // Turn outcome (§TURN-ERROR, 2026-09-10 — MonkeyByte BUG-4)
+    // ------------------------------------------------------------------
+
+    /// @brief True when the current/most recent turn hit a terminal
+    ///        (non-retried) error — fatal HTTP 4xx, retries exhausted,
+    ///        no model configured. Terminal LLM failures still end the
+    ///        turn with public AgentState::Done (the internal state
+    ///        machine has no error state for those paths), so hosts
+    ///        that need to know the turn failed query this after
+    ///        run_one_turn() returns instead of tracking
+    ///        AgentSink::on_error(will_retry=false) themselves.
+    ///        Cleared when the next turn starts. Driving thread.
+    [[nodiscard]] bool turn_had_terminal_error() const noexcept;
+
+    /// @brief The terminal error of the current/most recent turn, if
+    ///        any (kind + full message). std::nullopt when the turn
+    ///        succeeded. Driving thread.
+    [[nodiscard]] std::optional<AgentError> last_error() const;
+
+    /// @brief Read-only snapshot of the conversation history the agent
+    ///        actually sees (post-restore, post-compression,
+    ///        post-sanitization) — §HISTORY-SNAPSHOT (2026-09-10,
+    ///        MonkeyByte REQ-2). Projection: system/user/assistant
+    ///        entries with their text content; tool calls and tool
+    ///        results are elided. Empty when no model is configured.
+    ///        Driving thread; do not call mid-turn.
+    [[nodiscard]] std::vector<HistoryEntry> history_snapshot() const;
 
     // ------------------------------------------------------------------
     // Read-only views
@@ -227,9 +265,15 @@ public:
     ///        compress yet, the request carries over to the next turn's
     ///        first cycle. Uses the same 70/30 split + LLM summary path
     ///        as the automatic 90%-threshold trigger (see
-    ///        docs/how_compress_works.md). No-op when no model is
-    ///        configured (no LLMClient yet).
-    void compress_context() noexcept;
+    ///        docs/how_compress_works.md).
+    /// @return §COMPRESS-RESULT (2026-09-10, MonkeyByte REQ-3): what
+    ///         actually happened — Compressed (context reduced),
+    ///         Deferred (a turn is running; happens at the cycle
+    ///         checkpoint), NothingToCompress (history too small; the
+    ///         request is carried over to the next turn), Failed
+    ///         (summary failed, history untouched; also carried over),
+    ///         NoModel (no model configured — no-op).
+    [[nodiscard]] CompressResult compress_context() noexcept;
 
     // ------------------------------------------------------------------
     // Approval control (§BUG-006/007/008)

@@ -103,6 +103,7 @@ AppConfig make_app_config(const AgentConfig& cfg,
         catch (...) { out.auto_mode = false; }
     }
     out.memory_disabled = !cfg.memory_enabled;
+    out.session_auto_flush = cfg.session_auto_flush;  // §AUTO-FLUSH-CFG
     out.memory_in_prompt = cfg.memory_in_prompt;
     out.system_prompt  = cfg.system_prompt;   // §Phase 6: host-supplied role
     if (!cfg.user_agent.empty()) out.user_agent = cfg.user_agent;  // §UA
@@ -164,7 +165,9 @@ void AgentImpl::set_state(AgentState s) noexcept
                   + " -> " + daedalus::to_string(s));
     }
     if (old != s && sink_) {
-        sink_->on_state_change(static_cast<int>(old), static_cast<int>(s));
+        // §STATECHANGE-TYPED: emit the typed overload; its default
+        // forwards to the legacy int overload for older hosts.
+        sink_->on_state_change(old, s);
         // §Phase 9.6: notify the host on turn completion. The CLI rings
         // the terminal bell, the webui plays a sound / flashes the
         // title — whatever the host's "attention please" gesture is.
@@ -627,6 +630,7 @@ void AgentImpl::uninstall_crash_handlers() {
 
 void AgentImpl::submit_user_message(std::string text)
 {
+    std::lock_guard<std::mutex> lk(pending_mutex_);
     pending_user_messages_.push_back({std::move(text), {}});
 }
 
@@ -636,6 +640,7 @@ void AgentImpl::submit_user_message(std::string text,
     // §READ-IMAGE-CORE follow-up (2026-08-10): attachments ride the queue
     // alongside the text and are handed to LLMClient::queue_image_attachments()
     // when the message drains — payload-only injection, vision-gated.
+    std::lock_guard<std::mutex> lk(pending_mutex_);
     pending_user_messages_.push_back({std::move(text), std::move(images)});
 }
 
@@ -644,6 +649,7 @@ bool AgentImpl::edit_pending_message(
     std::string new_text,
     std::optional<std::vector<daedalus::ImageAttachment>> new_images)
 {
+    std::lock_guard<std::mutex> lk(pending_mutex_);
     if (index >= pending_user_messages_.size()) {
         return false;
     }
@@ -657,6 +663,7 @@ bool AgentImpl::edit_pending_message(
 
 bool AgentImpl::remove_pending_message(size_t index)
 {
+    std::lock_guard<std::mutex> lk(pending_mutex_);
     if (index >= pending_user_messages_.size()) {
         return false;
     }
@@ -683,7 +690,17 @@ void AgentImpl::cancel() noexcept
                       s == AgentState::Documenting      ||
                       s == AgentState::AwaitingApproval ||
                       s == AgentState::Compressing;
-    if (busy || !pending_user_messages_.empty()) {
+    // §QUEUE-MUTEX (2026-09-10, MonkeyByte BUG-3): this empty() read
+    // raced the driving thread's submit/dequeue on the same vector —
+    // UB from the one entry point hosts call cross-thread (a UI Stop
+    // button). The queue is now internally synchronized; cancel() is
+    // safe to call from any thread.
+    bool queue_nonempty;
+    {
+        std::lock_guard<std::mutex> lk(pending_mutex_);
+        queue_nonempty = !pending_user_messages_.empty();
+    }
+    if (busy || queue_nonempty) {
         cancel_requested_.store(true, std::memory_order_release);
     }
     if (body_->cancel_source.stop_possible()) {
@@ -699,15 +716,20 @@ void AgentImpl::cancel() noexcept
     }
 }
 
+void AgentImpl::record_terminal_error(daedalus::ErrorKind kind,
+                                      std::string message)
+{
+    turn_terminal_error_ = daedalus::AgentError{kind, std::move(message)};
+}
+
 void AgentImpl::run_one_turn(std::stop_token st)
 {
     if (!initialized_) initialize();
+    // §TURN-ERROR: fresh turn — clear the previous turn's terminal error
+    // (the LLMClient half is cleared in LLMClient::run_one_turn entry).
+    turn_terminal_error_.reset();
     if (cancel_requested_.exchange(false)) {
         set_state(AgentState::Cancelled);
-        return;
-    }
-    if (pending_user_messages_.empty()) {
-        // No queued message — no-op.
         return;
     }
     if (st.stop_requested()) {
@@ -715,18 +737,35 @@ void AgentImpl::run_one_turn(std::stop_token st)
         return;
     }
 
-    LOG_DEBUG("run_one_turn: dispatching "
-              + std::to_string(pending_user_messages_.size())
-              + " pending message(s)");
+    // §QUEUE-MUTEX (2026-09-10): dequeue under the lock, then RELEASE it
+    // before dispatching — the turn body must not hold pending_mutex_ or
+    // cross-thread submit_user_message()/cancel() would block for the
+    // whole turn. A stop_requested token leaves the message queued
+    // (checked above, before consuming).
+    PendingUserMessage pending;
+    {
+        std::lock_guard<std::mutex> lk(pending_mutex_);
+        if (pending_user_messages_.empty()) {
+            // No queued message — no-op.
+            return;
+        }
+        LOG_DEBUG("run_one_turn: dispatching "
+                  + std::to_string(pending_user_messages_.size())
+                  + " pending message(s)");
+        pending = std::move(pending_user_messages_.front());
+        pending_user_messages_.erase(pending_user_messages_.begin());
+    }
 
     if (!body_->client) {
         // No LLMClient spun up (no model credentials configured). Surface
         // as Error rather than crashing. File-log unconditionally (also
         // covers the no-sink case, which was previously dropped silently).
-        std::string msg = std::move(pending_user_messages_.front().text);
-        pending_user_messages_.erase(pending_user_messages_.begin());
+        const std::string& msg = pending.text;
         LOG_ERROR("[Internal] Agent::run_one_turn() — no model configured; "
                   "cannot dispatch message: " + msg);
+        record_terminal_error(daedalus::ErrorKind::Internal,
+                              "Agent::run_one_turn() — no model configured; "
+                              "cannot dispatch message: " + msg);
         if (sink_) {
             sink_->on_error(daedalus::ErrorKind::Internal,
                             "Agent::run_one_turn() — no model configured; "
@@ -737,14 +776,16 @@ void AgentImpl::run_one_turn(std::stop_token st)
         return;
     }
 
-    PendingUserMessage pending = std::move(pending_user_messages_.front());
-    pending_user_messages_.erase(pending_user_messages_.begin());
-
     set_state(AgentState::Understanding);
     if (!pending.images.empty()) {
         body_->client->queue_image_attachments(pending.images);
     }
     ::AgentState r = body_->client->run_one_turn(pending.text);
+    // §TURN-ERROR: mirror the client's terminal-error record so the
+    // public Agent::turn_had_terminal_error()/last_error() reflect LLM
+    // failures (fatal 4xx, retries exhausted) even though those turns
+    // still end with state Done.
+    turn_terminal_error_ = body_->client->last_terminal_error();
     // §BUG-005: a cancel() that interrupted this turn has been fully
     // consumed — never let the flag leak into the next turn.
     cancel_requested_.store(false, std::memory_order_release);
@@ -893,13 +934,21 @@ void AgentImpl::set_thinking_level(daedalus::ThinkingLevel level) noexcept
     if (body_ && body_->client) body_->client->set_thinking_level(level);
 }
 
-void AgentImpl::compress_context() noexcept
+daedalus::CompressResult AgentImpl::compress_context() noexcept
 {
     // §AutoCompress: host-facing trigger. The LLMClient compresses
     // immediately when no turn is running; otherwise the request is
     // consumed at the end-of-cycle checkpoint (also on the cancelled-turn
     // path) — same code path as the automatic 90%-threshold trigger.
-    if (body_ && body_->client) body_->client->compress_context();
+    // §COMPRESS-RESULT (2026-09-10): the outcome is surfaced to the host.
+    if (!body_ || !body_->client) return daedalus::CompressResult::NoModel;
+    return body_->client->compress_context();
+}
+
+std::vector<daedalus::HistoryEntry> AgentImpl::history_snapshot() const
+{
+    if (!body_ || !body_->client) return {};
+    return body_->client->history_snapshot();
 }
 
 ModelInfo AgentImpl::active_model() const noexcept

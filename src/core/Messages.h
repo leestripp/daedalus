@@ -27,6 +27,7 @@
 #include <optional>
 #include <unordered_set>
 #include <nlohmann/json.hpp>
+#include "daedalus/types/HistoryEntry.h"   // §HISTORY-SNAPSHOT
 #include <future>
 #include <thread>
 #include <chrono>
@@ -209,6 +210,16 @@ public:
      */
     json& get_messages() { return messages_; }
     const json& get_messages() const { return messages_; }
+
+    /**
+     * §HISTORY-SNAPSHOT (2026-09-10, MonkeyByte REQ-2): read-only
+     * projection of the live chain for host UIs — system/user/assistant
+     * entries with their text content (array-form content flattened to
+     * its text parts). Pure tool-call assistant messages and `tool`
+     * role entries are elided. Same threading contract as
+     * get_messages(): driving thread only, not mid-turn.
+     */
+    std::vector<daedalus::HistoryEntry> history_snapshot() const;
     
     /**
      * @brief Get message count
