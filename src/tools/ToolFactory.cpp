@@ -1,5 +1,6 @@
 #include "tools/ToolFactory.h"
 #include "tools/McpProxiedTool.h"
+#include "tools/McpStatusTool.h"
 #include "tools/UserTool.h"
 #include "tools/SetStatusTool.h"
 #include "tools/BashTool.h"
@@ -166,11 +167,15 @@ json ToolFactory::execute_tool(const std::string& tool_name,
 }
 
 void ToolFactory::refresh_mcp_tools() {
-    // 1) Drop every previously-registered McpProxiedTool.
+    // 1) Drop every previously-registered McpProxiedTool and the
+    //    McpStatusTool (it is re-registered below, bound to the current
+    //    manager — the shared factory may serve agents with different
+    //    managers across turns).
     m_tools.erase(
         std::remove_if(m_tools.begin(), m_tools.end(),
             [](const std::shared_ptr<BaseTool>& t) {
-                return std::dynamic_pointer_cast<McpProxiedTool>(t) != nullptr;
+                return std::dynamic_pointer_cast<McpProxiedTool>(t) != nullptr
+                    || std::dynamic_pointer_cast<McpStatusTool>(t) != nullptr;
             }),
         m_tools.end());
 
@@ -178,6 +183,13 @@ void ToolFactory::refresh_mcp_tools() {
     // Previously called ::instance() — now uses the injected pointer.
     if (!mcp_manager_) return;
     auto& mgr = *mcp_manager_;
+
+    // §BUG-001 (2026-09-17): MCP introspection must be available even
+    // when ZERO servers are configured — that is exactly the case the
+    // agent needs to diagnose — so register mcp_status before the
+    // config-loaded early-return below.
+    register_tool(std::make_shared<McpStatusTool>(mcp_manager_));
+
     if (!mgr.is_config_loaded()) {
         return;
     }

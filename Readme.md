@@ -307,7 +307,7 @@ Two real-world tips:
 
 ## MCP Server Configuration
 
-daedalus supports connecting to MCP (Model Context Protocol) servers for extended capabilities like web search, image analysis, and more. v0.5.0+ stores MCP servers in the SQLite-backed `SettingsStore` (`mcp_servers` table). v0.4.x used a JSON file at `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` — that path is still supported as a one-release-cycle fallback. See [`docs/mcp_server.md`](docs/mcp_server.md) for full details.
+daedalus supports connecting to MCP (Model Context Protocol) servers for extended capabilities like web search, image analysis, and more. v0.5.0+ stores MCP servers in the SQLite-backed `SettingsStore` (`mcp_servers` table); the JSON file at `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (or `<daedalus_home>/mcp/servers.json` for per-agent homes) is merged in as a fallback — the store wins on name conflicts. Each server's tools appear to the agent as `mcp__<server>__<tool>` functions, and the built-in `mcp_status` tool reports configured servers, config sources, connection state, and load errors for self-diagnosis. Config is read at agent init (mid-session edits take effect next session; hosts can toggle servers live via `Agent::set_mcp_server_enabled()`). See [`docs/mcp_server.md`](docs/mcp_server.md) for full details.
 
 ### Configuration (programmatic, recommended)
 

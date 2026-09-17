@@ -284,6 +284,7 @@ set(TOOLS_SOURCES
 	src/tools/ToolFactory.cpp
 	src/tools/ToolFilter.cpp
 	src/tools/McpProxiedTool.cpp
+	src/tools/McpStatusTool.cpp
 	src/tools/UserTool.cpp
 	src/tools/SetStatusTool.cpp
 	src/tools/BashTool.cpp

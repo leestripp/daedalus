@@ -187,6 +187,28 @@ add_test(NAME skill_discovery_refresh_tests
          COMMAND daedalus_skill_discovery_refresh_tests)
 
 # ============================================================================
+# daedalus_mcp_servers_json_fallback_tests
+#
+# Regression test for BUG-001 (2026-09-17, MonkeyByte report): MCP tools
+# were never injected because the documented mcp/servers.json fallback
+# silently no-opped after the v0.5.0 SQLite migration, and the agent had
+# no MCP introspection tool. Hermetic — temp dirs only, no spawns.
+# ============================================================================
+add_executable(daedalus_mcp_servers_json_fallback_tests
+    test_mcp_servers_json_fallback.cpp
+)
+target_include_directories(daedalus_mcp_servers_json_fallback_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_mcp_servers_json_fallback_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME mcp_servers_json_fallback_tests
+         COMMAND daedalus_mcp_servers_json_fallback_tests)
+
+# ============================================================================
 # §Phase 14.7 (Q2, decided YES): per-project system_prompt override.
 # Verifies that <project_root>/.daedalus/daedalus/system_prompt.txt is
 # read during initialize() and appended to cfg.system_prompt (or used

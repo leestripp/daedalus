@@ -4,9 +4,56 @@ This document explains how the Model Context Protocol (MCP) works and
 how daedalus integrates with MCP servers. **v0.5.0+:** server
 configuration is stored in the `mcp_servers` table of the SQLite-backed
 `SettingsStore` (alongside models, kv_settings, etc.). The legacy
-`servers.json` file is still supported as a one-release-cycle
-fallback so existing installs keep working — see
+`servers.json` file is still supported as a fallback so existing
+installs keep working — see
 [`docs/storage.md`](storage.md) for the migration recipe.
+
+> **Fixed 2026-09-17 (BUG-001):** the v0.5.0 migration never actually
+> implemented the `servers.json` read — the file was silently ignored
+> and zero MCP tools appeared with zero diagnostics. The fallback is
+> now real (merged at agent init, store wins on name conflicts), load
+> outcomes are logged through the host sink, and the agent has a
+> built-in [`mcp_status`](#diagnosing-mcp-problems-mcp_status)
+> introspection tool.
+
+## Diagnosing MCP problems (`mcp_status`)
+
+The agent has a built-in `mcp_status` tool (no arguments). It reports:
+
+- every configured server with its transport, **config source**
+  (`sqlite_store` vs `servers.json`), connected/healthy state, and
+  discovered tool count / tool names,
+- the exact `servers.json` path the agent read, whether it existed,
+  and any parse/validation error,
+- the host-disabled server list, the `.env` file path, and the
+  manager's last error,
+- a hint naming the writable config locations when zero servers are
+  configured.
+
+`mcp_status` is registered whenever MCP is enabled — **including when
+zero servers are configured**, because that is exactly the case that
+needs diagnosing. If `mcp__<server>__<tool>` tools are missing, call
+`mcp_status` first.
+
+### Config locations and precedence (summary)
+
+| Source | Location | Notes |
+|--------|----------|-------|
+| SQLite store (authoritative) | `$XDG_DATA_HOME/daedalus/daedalus.db`, `mcp_servers` table | Written via `SettingsStore::upsert_mcp_server()`. Wins name conflicts. |
+| `servers.json` fallback | `<daedalus_home>/mcp/servers.json` when the host sets `AgentConfig::daedalus_home`, else `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` | Standard `mcpServers` JSON (see below). Read once at agent init. |
+| `.env` | `$XDG_CONFIG_HOME/daedalus/mcp/.env` | `${VAR}` substitution at connect time. |
+
+### Reload semantics
+
+- Config is read **once per agent at `initialize()`**; connects happen
+  lazily on the first turn (parallel, circuit-breaker protected).
+- Editing `servers.json` mid-session takes effect in the **next
+  session** (or new `Agent`). Hosts can change servers live via
+  `Agent::set_mcp_server_enabled()` / `SettingsStore::upsert_mcp_server()`
+  + `McpServerManager::force_reconnect()` — no app restart needed.
+- A server whose launch/handshake fails is recorded in its circuit
+  breaker and surfaced via `mcp_status` (`connected:false`) and the
+  host log sink — never silently.
 
 ## Overview
 

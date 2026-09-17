@@ -68,6 +68,39 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§BUG-001: MCP tools never injected — `servers.json` fallback
+  restored, `mcp_status` introspection tool added** (2026-09-17,
+  MonkeyByte report). The v0.5.0 migration moved MCP config into the
+  SettingsStore `mcp_servers` table but never implemented the
+  documented `mcp/servers.json` fallback (Readme and code comments both
+  claimed it existed) — hosts writing the documented standard
+  `mcpServers` file got zero servers, zero tools, and zero diagnostics.
+  Fixes:
+  - **`McpServerManager::load_servers_json_fallback()`**: parses the
+    standard `mcpServers` JSON shape (`command`/`args`/`env`,
+    `transport` or Claude-style `type`, `url`, `bearerToken`,
+    `description`, `enabled`/`disabled`) and merges entries not already
+    in the store — **the SQLite store stays authoritative on name
+    conflicts**. Host-disabled and invalid entries are skipped with a
+    logged reason. `AgentImpl` reads `<daedalus_home>/mcp/servers.json`
+    for per-agent homes, else `~/.config/daedalus/mcp/servers.json`.
+  - **New built-in `mcp_status` tool**: agent-visible introspection —
+    per-server transport/config-source/connected/healthy/tool-count,
+    the exact `servers.json` path + exists + parse error, host-disabled
+    list, `.env` path, last error, and a config-locations hint when
+    zero servers are configured. Registered whenever MCP is enabled,
+    deliberately including the zero-server case (that is the one that
+    needs diagnosing).
+  - **Sink-visible load logging**: agent init now logs the configured
+    server count and sources via the host sink, and warns when a
+    `servers.json` exists but fails to parse or yields no usable
+    servers — previously all diagnostics went to stderr, invisible to
+    GUI hosts.
+  - Reload semantics documented (config read at agent init; mid-session
+    file edits take effect next session; hosts toggle live via
+    `Agent::set_mcp_server_enabled()`). Regression test:
+    `mcp_servers_json_fallback_tests`.
+
 - **§SKILL-RESCAN: `discover_skills` rescans, honours `directory`, and
   finds project-local skills** (2026-09-17, HiveMind/MonkeyByte bug
   report). Three compounding bugs broke the documented

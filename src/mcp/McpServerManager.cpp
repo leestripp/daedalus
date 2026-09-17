@@ -256,6 +256,114 @@ bool McpServerManager::load_from_store_impl(void* store_ptr)
     return true;
 }
 
+// §BUG-001 fix (2026-09-17): servers.json fallback loader. See the header
+// for the contract. Store entries win on name conflict; host-disabled and
+// invalid entries are skipped with a logged reason.
+size_t McpServerManager::load_servers_json_fallback(
+    const std::filesystem::path& path)
+{
+    servers_json_path_   = path;
+    servers_json_exists_ = false;
+    servers_json_error_.clear();
+    fallback_servers_.clear();
+
+    std::error_code ec;
+    if (path.empty() || !std::filesystem::is_regular_file(path, ec)) {
+        return 0;  // the file is optional — absence is not an error
+    }
+    servers_json_exists_ = true;
+
+    std::ifstream file(path);
+    if (!file.is_open()) {
+        servers_json_error_ = "could not open file";
+        LOG_CERR(WARNING, "[MCP] servers.json fallback: cannot open "
+                          << path << "\n");
+        return 0;
+    }
+
+    json root;
+    try {
+        root = json::parse(file);
+    } catch (const std::exception& e) {
+        servers_json_error_ = std::string("JSON parse error: ") + e.what();
+        LOG_CERR(WARNING, "[MCP] servers.json fallback: "
+                          << servers_json_error_ << " (" << path << ")\n");
+        return 0;
+    }
+
+    if (!root.is_object() || !root.contains("mcpServers") ||
+        !root["mcpServers"].is_object()) {
+        servers_json_error_ = "missing top-level \"mcpServers\" object";
+        LOG_CERR(WARNING, "[MCP] servers.json fallback: "
+                          << servers_json_error_ << " (" << path << ")\n");
+        return 0;
+    }
+
+    size_t added = 0;
+    for (const auto& [name, entry] : root["mcpServers"].items()) {
+        if (!entry.is_object()) {
+            LOG_CERR(WARNING, "[MCP] servers.json fallback: entry '" << name
+                              << "' is not an object — skipped\n");
+            continue;
+        }
+        if (configs_.count(name)) {
+            // The SQLite store is authoritative on conflict.
+            continue;
+        }
+        if (is_server_disabled(name)) {
+            LOG_CERR(INFO, "[MCP] servers.json fallback: '" << name
+                           << "' is disabled by host config — skipped\n");
+            continue;
+        }
+
+        McpServerConfig sc;
+        sc.name    = name;
+        sc.command = entry.value("command", "");
+        if (entry.contains("args") && entry["args"].is_array()) {
+            for (const auto& a : entry["args"]) {
+                if (a.is_string()) sc.args.push_back(a.get<std::string>());
+            }
+        }
+        if (entry.contains("env") && entry["env"].is_object()) {
+            for (const auto& [k, v] : entry["env"].items()) {
+                if (v.is_string()) sc.env[k] = v.get<std::string>();
+            }
+        }
+        // Accept both the daedalus "transport" and the Claude-style "type".
+        sc.transport = entry.value("transport", entry.value("type", ""));
+        sc.url       = entry.value("url", "");
+        sc.bearer_token = entry.value("bearerToken",
+                                      entry.value("bearer_token", ""));
+        sc.description  = entry.value("description", "");
+        sc.enabled      = entry.value("enabled", true)
+                          && !entry.value("disabled", false);
+
+        if (!sc.enabled) {
+            LOG_CERR(INFO, "[MCP] servers.json fallback: '" << name
+                           << "' is enabled:false — skipped\n");
+            continue;
+        }
+        if (!sc.is_valid()) {
+            LOG_CERR(WARNING, "[MCP] servers.json fallback: rejected entry '"
+                              << name << "' — "
+                              << (sc.is_http()
+                                    ? "transport is http but 'url' is missing"
+                                    : "stdio requires a non-empty 'command'")
+                              << "\n");
+            continue;
+        }
+
+        configs_[name] = std::move(sc);
+        fallback_servers_.insert(name);
+        ++added;
+    }
+
+    if (added > 0) {
+        mark_mcp_tools_dirty();
+    }
+    return added;
+}
+
 // Explicit instantiation for the only concrete type we support now.
 template bool McpServerManager::load_from_store<daedalus::SettingsStore>(
     daedalus::SettingsStore& store);

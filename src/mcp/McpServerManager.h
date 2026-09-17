@@ -5,6 +5,7 @@
 #include "McpTransport.h"
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -123,6 +124,43 @@ public:
 
     // Check if configuration is loaded
     bool is_config_loaded() const { return config_loaded_; }
+
+    // §BUG-001 fix (2026-09-17, MonkeyByte report): servers.json fallback.
+    // The v0.5.0 migration moved MCP config into the SettingsStore
+    // `mcp_servers` table and silently dropped the documented
+    // `mcp/servers.json` file — hosts writing the documented file got
+    // zero servers with zero diagnostics. This loader restores the
+    // fallback: entries from the standard `mcpServers` JSON file are
+    // merged in for names NOT already configured from the store
+    // (the SQLite store wins on conflict). Host-disabled servers and
+    // invalid entries are skipped (with a logged reason).
+    //
+    // Accepted per-server fields (superset of the Claude-desktop shape):
+    //   command (string), args (string[]), env (object),
+    //   transport | type ("stdio" | "streamable-http" | "http"),
+    //   url (string), bearerToken | bearer_token (string),
+    //   description (string), enabled (bool, default true),
+    //   disabled (bool, inverse of enabled).
+    //
+    // Side effects for introspection: records the path attempted,
+    // whether it existed, the parse/validation error (if any), and
+    // which configured servers came from the file. Returns the number
+    // of servers added from the file.
+    size_t load_servers_json_fallback(const std::filesystem::path& path);
+
+    // --- Introspection for the mcp_status tool (§BUG-001) ---
+    [[nodiscard]] const std::filesystem::path& servers_json_path() const {
+        return servers_json_path_;
+    }
+    [[nodiscard]] bool servers_json_exists() const { return servers_json_exists_; }
+    [[nodiscard]] const std::string& servers_json_error() const {
+        return servers_json_error_;
+    }
+    // True when `name` was configured from the servers.json fallback
+    // rather than the SQLite store.
+    [[nodiscard]] bool is_fallback_sourced(const std::string& name) const {
+        return fallback_servers_.count(name) > 0;
+    }
 
     // Get path to .env file for loading environment variables
     std::string get_env_file_path() const;
@@ -294,6 +332,12 @@ private:
 
     // Per-server `listChanged` capability flag (§9.7.C).
     std::map<std::string, bool> list_changed_supported_;
+
+    // §BUG-001: servers.json fallback bookkeeping for mcp_status.
+    std::filesystem::path servers_json_path_;
+    bool                  servers_json_exists_ = false;
+    std::string           servers_json_error_;
+    std::set<std::string> fallback_servers_;
 
     // Sticky snapshot of the JSON-encoded capability surface, used by
     // estimated_token_count(). Rebuilt by refresh_mcp_tools().

@@ -415,6 +415,54 @@ void AgentImpl::initialize()
         // load_env_file() populates env_vars_ from $XDG_CONFIG_HOME/daedalus/mcp/.env
         body_->mcp->load_from_store(*body_->store);
         body_->mcp->load_env_file();
+
+        // §BUG-001 fix (2026-09-17, MonkeyByte report): the documented
+        // mcp/servers.json fallback was lost in the v0.5.0 SQLite
+        // migration — hosts writing the documented file got zero
+        // servers, silently. Merge it here (store wins on conflicts).
+        // Per-agent homes read <daedalus_home>/mcp/servers.json; the
+        // global install reads Paths::global().mcp_servers_file()
+        // (~/.config/daedalus/mcp/servers.json).
+        const fs::path servers_json =
+            !cfg_.daedalus_home.empty()
+                ? cfg_.daedalus_home / "mcp" / "servers.json"
+                : daedalus::Paths::global().mcp_servers_file();
+        const size_t from_file =
+            body_->mcp->load_servers_json_fallback(servers_json);
+
+        // §BUG-001: surface the configuration outcome via the sink —
+        // previously the only diagnostics went to stderr (invisible to
+        // GUI hosts) and a silent empty config looked identical to a
+        // misconfigured one.
+        if (sink_) {
+            if (body_->mcp->servers_json_exists() &&
+                !body_->mcp->servers_json_error().empty()) {
+                sink_->on_log(daedalus::LogLevel::Warn,
+                    "[MCP] " + servers_json.string() + " exists but could "
+                    "not be loaded: " + body_->mcp->servers_json_error());
+            }
+            const auto configured = body_->mcp->list_configured_servers();
+            if (!configured.empty()) {
+                std::string names;
+                for (const auto& n : configured) {
+                    if (!names.empty()) names += ", ";
+                    names += n;
+                }
+                sink_->on_log(daedalus::LogLevel::Info,
+                    "[MCP] " + std::to_string(configured.size())
+                    + " MCP server(s) configured ("
+                    + std::to_string(configured.size() - from_file)
+                    + " from store, " + std::to_string(from_file)
+                    + " from servers.json): " + names);
+            } else if (body_->mcp->servers_json_exists()) {
+                sink_->on_log(daedalus::LogLevel::Warn,
+                    "[MCP] " + servers_json.string() + " was read but "
+                    "yielded no usable servers (all entries disabled, "
+                    "invalid, or shadowed by the store) — no MCP tools "
+                    "will be available. The 'mcp_status' tool lists the "
+                    "config locations daedalus reads.");
+            }
+        }
         if (auto factory = ToolHandler::get_tool_factory()) {
             factory->set_mcp_manager(body_->mcp.get());
         }
