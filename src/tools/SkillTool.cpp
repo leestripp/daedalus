@@ -37,7 +37,7 @@ json DiscoverSkillsTool::get_definition() const {
     };
 }
 
-json DiscoverSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
+json DiscoverSkillsTool::execute(const json& args, FileIO& /*file_io*/) {
     SkillManager* skill_manager = SkillManager::current();
     if (!skill_manager) {
         return json::object({
@@ -45,11 +45,34 @@ json DiscoverSkillsTool::execute(const json& /*args*/, FileIO& /*file_io*/) {
             {"message", "SkillManager not initialized"}
         });
     }
-    
+
+    // §fix (2026-09-17): the handler used to return the session-start
+    // cache forever, so the documented workflow "create a skill, call
+    // discover_skills again to pick it up" could never work. Rescan.
+    // An explicit `directory` arg scans THAT dir (bypassing the cache).
     json result = json::object();
     result["status"] = "success";
     result["skills"] = json::array();
-    
+
+    if (args.is_object() && args.contains("directory")
+        && args["directory"].is_string()
+        && !args["directory"].get<std::string>().empty()) {
+        for (const auto& skill : skill_manager->discover_skills(
+                 args["directory"].get<std::string>())) {
+            result["skills"].push_back(json::object({
+                {"name", skill.metadata.name},
+                {"description", skill.metadata.description},
+                {"version", skill.metadata.version},
+                {"path", skill.path.string()},
+                {"is_active", skill_manager->is_skill_active(
+                    skill.metadata.name)},
+            }));
+        }
+        result["count"] = result["skills"].size();
+        return result;
+    }
+
+    skill_manager->refresh_cache();
     const auto& skills = skill_manager->get_all_cached_skills();
     for (const auto& [name, skill] : skills) {
         json skill_info = json::object();

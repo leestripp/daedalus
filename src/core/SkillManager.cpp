@@ -75,7 +75,7 @@ void SkillManager::delete_default() {
 // first call to a method that needs settings lazily calls
 // init_after_settings() if it hasn't been called yet.
 
-void SkillManager::init_after_settings() {
+void SkillManager::init_after_settings(const std::filesystem::path& project_root) {
     // §v0.5.0: Try to load skill settings from SettingsStore if available.
     // If SettingsStore isn't available or has no skill settings, use defaults.
     try {
@@ -101,7 +101,12 @@ void SkillManager::init_after_settings() {
     if (home) {
         settings_.directories.push_back(std::string(home) + "/.agents/skills/");
     }
-    settings_.directories.push_back(".agents/skills/");
+    if (!project_root.empty()) {
+        settings_.directories.push_back(
+            (project_root / ".agents" / "skills").string());
+    } else {
+        settings_.directories.push_back(".agents/skills/");
+    }
 }
 
 SkillManager::~SkillManager() {

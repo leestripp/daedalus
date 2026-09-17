@@ -164,6 +164,29 @@ add_test(NAME skill_manager_wiring_tests
          COMMAND daedalus_skill_manager_wiring_tests)
 
 # ============================================================================
+# daedalus_skill_discovery_refresh_tests
+#
+# Regression test for the 2026-09-17 skill-discovery bug (bug_report.md):
+# discover_skills served the session-start cache forever, the `directory`
+# argument was silently ignored, and the project-local `.agents/skills/`
+# default was resolved against the daemon CWD instead of project_root.
+# Hermetic — temp dirs only, no network.
+# ============================================================================
+add_executable(daedalus_skill_discovery_refresh_tests
+    test_skill_discovery_refresh.cpp
+)
+target_include_directories(daedalus_skill_discovery_refresh_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_skill_discovery_refresh_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME skill_discovery_refresh_tests
+         COMMAND daedalus_skill_discovery_refresh_tests)
+
+# ============================================================================
 # §Phase 14.7 (Q2, decided YES): per-project system_prompt override.
 # Verifies that <project_root>/.daedalus/daedalus/system_prompt.txt is
 # read during initialize() and appended to cfg.system_prompt (or used

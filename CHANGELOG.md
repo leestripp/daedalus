@@ -68,6 +68,25 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§SKILL-RESCAN: `discover_skills` rescans, honours `directory`, and
+  finds project-local skills** (2026-09-17, HiveMind/MonkeyByte bug
+  report). Three compounding bugs broke the documented
+  create-a-skill-then-rediscover workflow: (1) the tool returned the
+  session-start cache forever — `refresh_cache()` was never called, so
+  skills created mid-session were invisible; (2) the advertised
+  `directory` argument was silently ignored (`/*args*/`); (3) the
+  project-local `.agents/skills/` default was resolved against the
+  daemon process CWD instead of `AgentConfig.project_root`, so GUI
+  hosts (which launch the daemon from their own directory) never saw
+  project-local skills. Fixes: `DiscoverSkillsTool` now honours
+  `directory` with a fresh cache-bypassing scan and otherwise calls
+  `refresh_cache()` before reading the cache;
+  `SkillManager::init_after_settings()` takes an optional
+  `project_root` anchor (empty keeps the legacy CWD-relative behaviour
+  for tests and daedalus-cli) which `AgentImpl` populates from
+  `cfg_.project_root`. Regression test:
+  `skill_discovery_refresh_tests`.
+
 - **§QUEUE-MUTEX: `Agent::cancel()` no longer races the message
   queue** (2026-09-10, MonkeyByte BUG-3 + REQ-4). `cancel()` read
   `pending_user_messages_.empty()` unguarded while the driving thread

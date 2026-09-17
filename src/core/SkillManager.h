@@ -75,7 +75,11 @@ public:
     // MUST be called once before the manager is used (Agent's
     // initialize() does this after constructing settings).
     // For get_instance() default, the first call lazily invokes this.
-    void init_after_settings();
+    // project_root: anchor for project-local `.agents/skills/` — the
+    // daemon's CWD is NOT the project (hosts launch from their own
+    // dir), so a bare relative path silently never matches. Empty
+    // keeps the legacy CWD-relative behaviour (tests, daedalus-cli).
+    void init_after_settings(const std::filesystem::path& project_root = {});
 
     // Legacy singleton accessors (kept for tests + the daedalus-cli demo).
     // Production code should construct its own instance.

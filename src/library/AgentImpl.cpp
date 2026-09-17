@@ -469,7 +469,7 @@ void AgentImpl::initialize()
         !cfg_.skills_disabled.empty()) {
         try {
             body_->skill_manager = std::make_unique<SkillManager>();
-            body_->skill_manager->init_after_settings();
+            body_->skill_manager->init_after_settings(cfg_.project_root);
             auto* sm = body_->skill_manager.get();
 
             // §Phase 15: install the per-skill gate BEFORE discovery
