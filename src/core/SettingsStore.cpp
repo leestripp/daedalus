@@ -151,7 +151,7 @@ std::shared_ptr<ProviderPlugin> plugin_for_row(std::string_view hint,
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 6;
+constexpr int kSchemaVersion = 7;
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -201,6 +201,16 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 CREATE TABLE IF NOT EXISTS serper_config (
     id      INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
     api_key TEXT NOT NULL
+);
+
+-- §SEARXNG-CORE (schema v7): self-hosted SearXNG metasearch instance.
+-- Auth is HTTP Basic; empty username = no Authorization header sent.
+CREATE TABLE IF NOT EXISTS searxng_config (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
+    base_url TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
+    enabled  INTEGER NOT NULL DEFAULT 1
 );
 
 -- §TASK-2026-09-21-01 (schema v6): encrypted secrets vault. Metadata is
@@ -378,6 +388,19 @@ void migrate_to_v6(OmniNet::DB::Database& db)
         "updated_at TEXT NOT NULL)");
 }
 
+void migrate_to_v7(OmniNet::DB::Database& db)
+{
+    // v7: add searxng_config (self-hosted SearXNG metasearch instance).
+    // Idempotent — kSchemaSql also creates it on fresh DBs.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS searxng_config ("
+        " id INTEGER PRIMARY KEY CHECK (id = 1),"
+        " base_url TEXT NOT NULL,"
+        " username TEXT NOT NULL DEFAULT '',"
+        " password TEXT NOT NULL DEFAULT '',"
+        " enabled INTEGER NOT NULL DEFAULT 1)");
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -404,6 +427,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version < 4) migrate_to_v4(db);
     if (current_version < 5) migrate_to_v5(db);
     if (current_version < 6) migrate_to_v6(db);
+    if (current_version < 7) migrate_to_v7(db);
 
     // Update the stored version if it advanced.
     if (current_version != kSchemaVersion) {
@@ -1076,6 +1100,51 @@ void SettingsStore::set_serper_api_key(std::string_view api_key) {
             std::string(api_key));
     } catch (const std::exception& e) {
         LOG_WARNING("SettingsStore::set_serper_api_key failed: "
+                    + std::string(e.what()));
+    }
+}
+
+// ============================================================================
+// §SEARXNG-CORE (schema v7): SearXNG instance config (searxng_config table,
+// singleton row id=1)
+// ============================================================================
+
+SearxngSettings SettingsStore::get_searxng_settings() const {
+    SearxngSettings out;
+    if (!db_) return out;
+    try {
+        // Singleton row (id=1); if missing, return defaults.
+        auto result = query_one_prepared(*mutex_, *db_,
+            "SELECT base_url, username, password, enabled "
+            "FROM searxng_config WHERE id = 1");
+        if (!result || result->size() < 4) return out;
+        out.base_url = (*result)[0];
+        out.username = (*result)[1];
+        out.password = (*result)[2];
+        out.enabled  = ((*result)[3] != "0");
+        return out;
+    } catch (const std::exception& e) {
+        LOG_WARNING("SettingsStore::get_searxng_settings failed: "
+                    + std::string(e.what()));
+        return SearxngSettings{};
+    }
+}
+
+void SettingsStore::set_searxng_settings(const SearxngSettings& settings) {
+    if (!db_) return;
+    try {
+        exec_prepared(*mutex_, *db_,
+            "INSERT INTO searxng_config(id, base_url, username, password, enabled) "
+            "VALUES (1, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "base_url = excluded.base_url, "
+            "username = excluded.username, "
+            "password = excluded.password, "
+            "enabled  = excluded.enabled",
+            settings.base_url, settings.username, settings.password,
+            settings.enabled ? 1 : 0);
+    } catch (const std::exception& e) {
+        LOG_WARNING("SettingsStore::set_searxng_settings failed: "
                     + std::string(e.what()));
     }
 }

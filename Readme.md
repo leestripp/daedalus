@@ -251,7 +251,10 @@ cmake --build build --target daedalus_cppcheck
 > `~/.local/share/daedalus/daedalus.db`) — see
 > [`docs/settings.md`](docs/settings.md) for the `SettingsStore` API.
 > The same DB hosts the encrypted **secrets vault** (logins, notes, API
-> keys) — see [Secrets Vault](#secrets-vault) below.
+> keys) — see [Secrets Vault](#secrets-vault) below — plus the web-search
+> configuration: `serper_config` (Serper.dev API key) and `searxng_config`
+> (self-hosted SearXNG instance: base URL, optional HTTP Basic auth,
+> enabled switch).
 > Globally-installed skill packs live under `$XDG_DATA_HOME/daedalus/skills/`
 > (default `~/.local/share/daedalus/skills/`). Per-project state — **including
 > long-term memory** — lives under `<project_root>/.daedalus[-<agent_name>/]`.
@@ -761,6 +764,17 @@ cycle-boundary checkpoint: the automatic 90% threshold, the host via
 ### Skills
 - `discover_skills`, `load_skill`, `get_active_skills`, `search_skills`,
   `deactivate_skill`, `get_skill_context`
+
+### Web Search
+- `serper_search` - Google search via the Serper.dev API (needs an API key
+  in `serper_config`)
+- `searxng_search` - metasearch via your own SearXNG instance (§SEARXNG-CORE,
+  schema v7). Configure `searxng_config` in the SettingsStore with the
+  instance base URL and, for auth-protected instances, an HTTP Basic
+  username/password. No API key or account required — a self-hosted
+  SearXNG aggregates Google/Bing/DDG/Brave and returns clean JSON.
+  Unconfigured or disabled, the tool returns a descriptive error instead
+  of executing (same contract as `serper_search`).
 
 ### MCP Tools
 - `mcp__<server>__<tool>` - call any tool exposed by a configured MCP server

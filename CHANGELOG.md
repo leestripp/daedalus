@@ -8,6 +8,29 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **§SEARXNG-CORE: `searxng_search` — web search via a self-hosted
+  SearXNG instance** (2026-09-21). Keyless, account-free metasearch
+  counterpart to `serper_search`, for agents whose DuckDuckGo-scraping
+  search path is bot-blocked:
+  - **Storage**: new `searxng_config` table in the SettingsStore
+    (schema v7, singleton row): `base_url`, `username`/`password`
+    (HTTP Basic auth; empty username = unauthenticated instance),
+    `enabled` master switch. Accessor pair
+    `SettingsStore::get_searxng_settings()` /
+    `set_searxng_settings()` with a `SearxngSettings` struct.
+  - **Config helper** (`core/SearxngConfig.h`): `load_searxng_config()`
+    is the single source of truth, returning a `SearxngConfigResult`
+    with explicit statuses (`EMPTY_BASE_URL`, `INVALID_BASE_URL`,
+    `DISABLED`, …) — mirrors `SerperConfig`'s contract.
+  - **Agent tool**: built-in `searxng_search(query, max_results?)`
+    registered by default; GETs `{base_url}/search?q=…&format=json`
+    with an `Authorization: Basic` header when credentials are set.
+    Unconfigured/disabled, it returns a descriptive error instead of
+    executing (same contract as `serper_search`).
+  - **Tests**: `tests/test_searxng_settings.cpp` — store round-trip /
+    upsert / disabled persistence, URL validation + normalization,
+    v6→v7 migration. Hermetic (temp dirs, no network).
+
 - **§TASK-2026-09-21-01: SecretsVault — global encrypted password
   manager** (2026-09-21). daedalus now has a user-global,
   encrypted-at-rest store for logins, secure notes and API keys:

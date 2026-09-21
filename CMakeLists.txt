@@ -261,6 +261,7 @@ set(CORE_SOURCES
 	src/core/ThreadPool.cpp
 	src/core/Metrics.cpp
 	src/core/SerperConfig.cpp
+	src/core/SearxngConfig.cpp
 )
 
 set(API_SOURCES
@@ -297,6 +298,7 @@ set(TOOLS_SOURCES
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
 	src/tools/SerperSearchTool.cpp
+	src/tools/SearxngSearchTool.cpp
 	src/tools/ReadImageTool.cpp
 	src/tools/PDFTool.cpp
 	src/tools/TodoListTool.cpp

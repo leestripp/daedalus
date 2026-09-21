@@ -388,6 +388,14 @@ CREATE TABLE mcp_servers (
     url       TEXT
 );
 CREATE TABLE serper_config (id INTEGER PRIMARY KEY CHECK (id = 1), api_key TEXT NOT NULL);
+-- schema v7 (§SEARXNG-CORE): self-hosted SearXNG metasearch instance
+CREATE TABLE searxng_config (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    base_url TEXT NOT NULL,
+    username TEXT NOT NULL DEFAULT '',   -- HTTP Basic auth; empty = no auth
+    password TEXT NOT NULL DEFAULT '',
+    enabled  INTEGER NOT NULL DEFAULT 1
+);
 ```
 
 ---

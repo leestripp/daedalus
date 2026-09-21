@@ -267,6 +267,27 @@ target_link_libraries(daedalus_serper_settings_tests PRIVATE
 add_test(NAME serper_settings_tests COMMAND daedalus_serper_settings_tests)
 
 # ============================================================================
+# daedalus_searxng_settings_tests
+#
+# §SEARXNG-CORE (2026-09-21): SearXNG instance config — SettingsStore
+# round-trip/upsert/disabled, URL validation + normalization helpers,
+# v6→v7 migration. Hermetic — temp dirs only, no network, no spawns.
+# ============================================================================
+add_executable(daedalus_searxng_settings_tests
+    test_searxng_settings.cpp
+)
+target_include_directories(daedalus_searxng_settings_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_searxng_settings_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME searxng_settings_tests
+         COMMAND daedalus_searxng_settings_tests)
+
+# ============================================================================
 # MCP HTTP-transport config tests (regression for the "Loaded 3 configured
 # server(s)" bug — the user's apollocore entry was being silently dropped).
 # ============================================================================

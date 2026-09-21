@@ -52,6 +52,17 @@ struct ServerErrorSettings
     int max_retries_per_call = 10;
 };
 
+/// SearXNG metasearch instance configuration (§SEARXNG-CORE, schema v7).
+/// Mirrors the `searxng_config` table (singleton row, id=1).
+/// Auth is HTTP Basic; an empty username means no auth header is sent.
+struct SearxngSettings
+{
+    std::string base_url;   //!< e.g. "https://search.example.com" (no trailing slash)
+    std::string username;   //!< HTTP Basic auth username; empty = unauthenticated
+    std::string password;   //!< HTTP Basic auth password
+    bool enabled = true;    //!< Master switch for the searxng_search tool
+};
+
 /// Opaque handle to the settings database.
 ///
 /// Obtained via:
@@ -208,6 +219,20 @@ public:
 
     /// Set the Serper API key. Empty string clears the row.
     void set_serper_api_key(std::string_view api_key);
+
+    // -----------------------------------------------------------------------
+    // §SEARXNG-CORE (schema v7): self-hosted SearXNG metasearch instance.
+    //
+    // Stored in the `searxng_config` table (singleton row, id=1).
+    // Configured by the host's settings UI or via set_searxng_settings().
+
+    /// Get the SearXNG instance config. Default-constructed (empty base_url,
+    /// enabled=true) if no row exists.
+    SearxngSettings get_searxng_settings() const;
+
+    /// Set the SearXNG instance config. An empty base_url disables the tool
+    /// at request time (descriptive error), same contract as serper_search.
+    void set_searxng_settings(const SearxngSettings& settings);
 
     // -----------------------------------------------------------------------
     // v0.3.5: per-project persistence (session memory + messages).
