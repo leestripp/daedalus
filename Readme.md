@@ -250,6 +250,8 @@ cmake --build build --target daedalus_cppcheck
 > SQLite database at `$XDG_DATA_HOME/daedalus/daedalus.db` (default
 > `~/.local/share/daedalus/daedalus.db`) — see
 > [`docs/settings.md`](docs/settings.md) for the `SettingsStore` API.
+> The same DB hosts the encrypted **secrets vault** (logins, notes, API
+> keys) — see [Secrets Vault](#secrets-vault) below.
 > Globally-installed skill packs live under `$XDG_DATA_HOME/daedalus/skills/`
 > (default `~/.local/share/daedalus/skills/`). Per-project state — **including
 > long-term memory** — lives under `<project_root>/.daedalus[-<agent_name>/]`.
@@ -406,6 +408,37 @@ Add new servers to `$XDG_CONFIG_HOME/daedalus/mcp/servers.json` (default `~/.con
 See [docs/mcp_server.md](docs/mcp_server.md) for full documentation.
 
 ---
+
+## Secrets Vault
+
+daedalus ships a **user-global, encrypted-at-rest password manager** for
+logins, secure notes, and API keys — the agent's own credential store,
+shared by every project on the machine.
+
+- **Encrypted**: AES-256-GCM (OpenSSL, already a dependency). Only the
+  secret fields are encrypted; name/kind/description stay plaintext so
+  listing never decrypts. Ciphertexts are bound to their entry name
+  (GCM AAD), so rows cannot be swapped.
+- **Key**: auto-generated 256-bit master key at
+  `~/.config/daedalus/vault.key` (mode 0600) — filesystem permissions
+  are the boundary, exactly like `~/.ssh` keys. Back it up with the DB;
+  losing it makes stored secrets unrecoverable.
+- **Agent tool**: the built-in `vault` tool lets the agent **create,
+  read, edit, list and delete** entries autonomously:
+
+| Action | Call | Notes |
+|--------|------|-------|
+| list | `vault(action="list")` | Metadata for all entries — never secret values. |
+| get | `vault(action="get", name="github/api-token")` | Decrypts one entry (enters conversation history). |
+| store | `vault(action="store", name="...", kind="api_key", fields={"key": "..."})` | Create/replace a whole entry. |
+| edit | `vault(action="edit", name="...", fields={"key": "rotated"})` | Merge fields — rotate one secret without reading the rest. |
+| delete | `vault(action="delete", name="...")` | Remove an entry. |
+
+Hosts can use the C++ API directly (`#include <daedalus/vault.h>`,
+`daedalus::SecretsVault::global()`) or keep secrets out of chat context
+entirely via `AgentConfig::tools_disabled = {"vault"}`.
+
+Full details: [`docs/vault.md`](docs/vault.md).
 
 ## Running
 

@@ -17,6 +17,15 @@
 //   9. VaultTool actions end-to-end (create/edit/delete/list/get +
 //      error paths) via the public static handlers with an injected
 //      temp vault — the agent's create/edit/delete contract.
+//  10. Validation & defaults: empty name rejected, default kind,
+//      empty-fields entry round-trips.
+//  11. Unicode (UTF-8) + large (64 KiB) payloads round-trip exactly.
+//  12. Key file: persistence across vault instances; corrupt key file
+//      (wrong size) is refused, never silently replaced.
+//  13. AAD binding: rekeying a row under a different name (rename
+//      attack) fails decryption; re-storing an entry uses a fresh
+//      nonce (ciphertext differs).
+//  14. Multi-entry vault: list() ordering, per-kind entries coexist.
 //
 // Hermetic — temp dirs, no network, no process spawns.
 // ============================================================================
@@ -293,6 +302,178 @@ void test_tool_actions() {
     std::cout << "[ok] test_tool_actions" << std::endl;
 }
 
+// 10: validation & defaults.
+void test_validation_and_defaults() {
+    auto root = fresh_dir("defaults");
+    auto store = daedalus::SettingsStore::for_home(root / "home");
+    daedalus::SecretsVault vault(store, root / "cfg" / "vault.key");
+
+    // Empty name is rejected loudly.
+    daedalus::VaultEntry bad;
+    bad.fields = {{"k", "v"}};
+    bool threw = false;
+    try { vault.store(bad); }
+    catch (const std::runtime_error&) { threw = true; }
+    assert(threw && "empty name must throw");
+    assert(vault.list().empty());
+
+    // Default kind is "custom".
+    daedalus::VaultEntry e;
+    e.name   = "misc/note";
+    e.fields = {{"text", "remember the milk"}};
+    vault.store(e);
+    auto got = vault.get("misc/note");
+    assert(got->kind == "custom");
+
+    // An entry with an empty field set round-trips (metadata-only
+    // secret — unusual but must not corrupt the vault).
+    daedalus::VaultEntry empty;
+    empty.name        = "misc/empty";
+    empty.description = "no fields";
+    vault.store(empty);
+    got = vault.get("misc/empty");
+    assert(got.has_value());
+    assert(got->fields.empty());
+
+    fs::remove_all(root);
+    std::cout << "[ok] test_validation_and_defaults" << std::endl;
+}
+
+// 11: unicode + large payloads survive encrypt→decrypt byte-exactly.
+void test_unicode_and_large_payloads() {
+    auto root = fresh_dir("payloads");
+    auto store = daedalus::SettingsStore::for_home(root / "home");
+    daedalus::SecretsVault vault(store, root / "cfg" / "vault.key");
+
+    const std::string unicode_note =
+        "pässwörd ✓ — 密码 — пароль — \xF0\x9F\x94\x91 emoji key";
+    std::string big;
+    big.reserve(65536);
+    for (int i = 0; i < 65536; ++i) big += static_cast<char>('A' + (i % 26));
+
+    daedalus::VaultEntry e;
+    e.name   = "notes/mixed";
+    e.kind   = "note";
+    e.fields = {{"text", unicode_note}, {"blob", big}};
+    vault.store(e);
+
+    auto got = vault.get("notes/mixed");
+    assert(got.has_value());
+    assert(got->fields.at("text") == unicode_note);
+    assert(got->fields.at("blob") == big);
+    assert(got->fields.at("blob").size() == 65536);
+
+    fs::remove_all(root);
+    std::cout << "[ok] test_unicode_and_large_payloads" << std::endl;
+}
+
+// 12: key file lifecycle.
+void test_key_persistence_and_corruption() {
+    auto root = fresh_dir("keylife");
+    auto store = daedalus::SettingsStore::for_home(root / "home");
+
+    // Instance 1 writes; instance 2 (fresh object, same paths) reads —
+    // the generated key file is reused, not regenerated.
+    {
+        daedalus::SecretsVault v1(store, root / "cfg" / "vault.key");
+        v1.store(sample_login());
+    }
+    {
+        daedalus::SecretsVault v2(store, root / "cfg" / "vault.key");
+        auto got = v2.get("github/api-token");
+        assert(got.has_value());
+        assert(got->fields.at("key") == "ghp_supersecretvalue123");
+    }
+
+    // A corrupt (wrong-size) key file is refused, never overwritten.
+    fs::create_directories(root / "cfg2");
+    {
+        std::ofstream f(root / "cfg2" / "vault.key", std::ios::binary);
+        f.write("tooshort", 8);
+    }
+    bool threw = false;
+    try {
+        daedalus::SecretsVault bad(store, root / "cfg2" / "vault.key");
+        (void)bad.get("github/api-token");
+    } catch (const std::runtime_error&) { threw = true; }
+    assert(threw && "corrupt key file must throw");
+    // …and the file must be untouched (still 8 bytes).
+    std::error_code ec;
+    assert(fs::file_size(root / "cfg2" / "vault.key", ec) == 8 && !ec);
+
+    fs::remove_all(root);
+    std::cout << "[ok] test_key_persistence_and_corruption" << std::endl;
+}
+
+// 13: AAD binding + nonce freshness.
+void test_aad_binding_and_nonce_freshness() {
+    auto root = fresh_dir("aad");
+    auto store = daedalus::SettingsStore::for_home(root / "home");
+    daedalus::SecretsVault vault(store, root / "cfg" / "vault.key");
+    vault.store(sample_login());
+
+    // Rename attack: copy the encrypted blobs onto a row with a
+    // different name. AAD = name, so decryption must fail.
+    auto row = store.get_vault_row("github/api-token");
+    assert(row.has_value());
+    auto stolen = *row;
+    stolen.name = "evil/renamed";
+    store.upsert_vault_row(stolen);
+    bool threw = false;
+    try { (void)vault.get("evil/renamed"); }
+    catch (const std::runtime_error&) { threw = true; }
+    assert(threw && "renamed ciphertext must fail the AAD check");
+    // Original still decrypts fine.
+    assert(vault.get("github/api-token").has_value());
+
+    // Fresh nonce per store: identical plaintext re-stored produces a
+    // different payload (no nonce reuse).
+    const auto before = store.get_vault_row("github/api-token")->payload_b64;
+    vault.store(sample_login());
+    const auto after = store.get_vault_row("github/api-token")->payload_b64;
+    assert(before != after);
+
+    fs::remove_all(root);
+    std::cout << "[ok] test_aad_binding_and_nonce_freshness" << std::endl;
+}
+
+// 14: many entries of every kind coexist; list() is ordered by name.
+void test_multi_entry_listing() {
+    auto root = fresh_dir("multi");
+    auto store = daedalus::SettingsStore::for_home(root / "home");
+    daedalus::SecretsVault vault(store, root / "cfg" / "vault.key");
+
+    const char* kinds[] = {"login", "note", "api_key", "custom"};
+    for (int i = 0; i < 12; ++i) {
+        daedalus::VaultEntry e;
+        // Intentionally unordered names to exercise ORDER BY.
+        e.name   = "entry/" + std::string(1, static_cast<char>('l' - i));
+        e.kind   = kinds[i % 4];
+        e.fields = {{"secret", "value-" + std::to_string(i)}};
+        vault.store(e);
+    }
+
+    const auto metas = vault.list();
+    assert(metas.size() == 12);
+    for (size_t i = 1; i < metas.size(); ++i) {
+        assert(metas[i - 1].name < metas[i].name && "list must be name-ordered");
+    }
+    // Every entry decrypts independently.
+    for (int i = 0; i < 12; ++i) {
+        const std::string n = "entry/" + std::string(1, static_cast<char>('l' - i));
+        assert(vault.get(n)->fields.at("secret") == "value-" + std::to_string(i));
+    }
+    // remove() leaves the rest intact.
+    vault.remove("entry/a");
+    vault.remove("entry/k");
+    assert(vault.list().size() == 10);
+    assert(!vault.exists("entry/a"));
+    assert(vault.get("entry/b").has_value());
+
+    fs::remove_all(root);
+    std::cout << "[ok] test_multi_entry_listing" << std::endl;
+}
+
 }  // namespace
 
 int main() {
@@ -302,6 +483,11 @@ int main() {
     test_migration_from_v5();
     test_edit_merge();
     test_tool_actions();
+    test_validation_and_defaults();
+    test_unicode_and_large_payloads();
+    test_key_persistence_and_corruption();
+    test_aad_binding_and_nonce_freshness();
+    test_multi_entry_listing();
     std::cout << "all vault tests passed" << std::endl;
     return 0;
 }

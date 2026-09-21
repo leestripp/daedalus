@@ -59,6 +59,17 @@ vault.edit("github/api-token", {{"key", "ghp_rotated"}});  // merge, false if ab
 vault.remove("github/api-token");
 ```
 
+## Operational notes
+
+- **Backups**: back up `vault.key` together with `daedalus.db`. The DB
+  without the key (or vice versa) is unrecoverable by design.
+- **Lost key**: there is no recovery path — delete the affected rows
+  (`vault_entries` table) and re-store the secrets.
+- **Corrupt key**: a wrong-size `vault.key` is refused loudly
+  (`std::runtime_error`) and never silently regenerated.
+- **Rotation**: re-store entries after replacing the key; there is no
+  in-place re-key helper yet (future work with passphrase wrapping).
+
 Errors (tamper detected, wrong/missing key, IO failure) throw
 `std::runtime_error`; the agent tool converts them to tool errors.
 
