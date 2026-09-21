@@ -15,7 +15,8 @@ in each release. See `docs/storage.md` for the storage architecture,
 
 | Path | Contents |
 |------|----------|
-| `~/.local/share/daedalus/daedalus.db` | Settings store (models, key/value, MCP servers) — v0.4.0+ |
+| `~/.local/share/daedalus/daedalus.db` | Settings store (models, key/value, MCP servers, encrypted vault entries) — v0.4.0+ |
+| `~/.config/daedalus/vault.key` | Secrets-vault master key (0600, auto-generated) — see [`docs/vault.md`](docs/vault.md) |
 | `~/.local/share/daedalus/skills/` | Agent skills |
 | `~/.local/share/daedalus/memory/` | Session memory |
 | `<project>/.daedalus[-<agent_name>]/messages.json` | Conversation transcript (atomic-rename save; auto-flush every ~100 ms) |

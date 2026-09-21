@@ -209,6 +209,27 @@ add_test(NAME mcp_servers_json_fallback_tests
          COMMAND daedalus_mcp_servers_json_fallback_tests)
 
 # ============================================================================
+# daedalus_vault_tests
+#
+# §TASK-2026-09-21-01: SecretsVault encrypted password manager — crypto
+# round-trip, tamper/wrong-key detection, no-plaintext-in-DB, migration.
+# Hermetic — temp dirs only, no network, no spawns.
+# ============================================================================
+add_executable(daedalus_vault_tests
+    test_vault.cpp
+)
+target_include_directories(daedalus_vault_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_vault_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME vault_tests
+         COMMAND daedalus_vault_tests)
+
+# ============================================================================
 # §Phase 14.7 (Q2, decided YES): per-project system_prompt override.
 # Verifies that <project_root>/.daedalus/daedalus/system_prompt.txt is
 # read during initialize() and appended to cfg.system_prompt (or used

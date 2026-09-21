@@ -5,6 +5,86 @@
 
 ---
 
+## TASK-2026-09-21-01: VAULT — global encrypted secrets store (password manager)
+
+> **Status** DONE (2026-09-21; commit pending)
+> **Created**: 2026-09-21
+> **Source**: user request — daedalus needs a password manager for logins,
+> notes, API keys, etc.; secure; **global** (usable from every project,
+> not per-project); SQLite-backed (existing daedalus DB chosen).
+
+### Problem
+
+Agents constantly need credentials (API keys, logins) and there is no
+sanctioned place to keep them — they end up in cleartext `.env` files,
+skill notes, or chat history. Requirements:
+
+- **Secure at rest** — secrets encrypted, not plaintext rows.
+- **Global** — one vault per user, reachable from every project/agent,
+  independent of `AgentConfig::daedalus_home`.
+- **Agent-usable** — a tool so the agent can store/retrieve secrets
+  non-interactively, plus a public C++ API for hosts.
+
+### Design decisions
+
+- **Storage: the existing global DB.** New `vault_entries` table in the
+  `SettingsStore` SQLite DB (`$XDG_DATA_HOME/daedalus/daedalus.db`,
+  schema v6). The vault ALWAYS uses the global store +
+  `SettingsStore::instance()` regardless of per-agent `daedalus_home` —
+  that is what makes it global across projects. (Tests inject a
+  temp-home store explicitly.)
+- **Crypto: AES-256-GCM via OpenSSL EVP** — OpenSSL is already a public
+  dependency; no new deps. Random 12-byte nonce per entry, 16-byte tag,
+  AAD = entry name (ciphertext is bound to its key; rows cannot be
+  swapped). Binary (nonce ‖ ciphertext ‖ tag) is base64'd into TEXT
+  columns to match the store's string-only query helpers.
+- **Master key: `vault.key` file.** 32 random bytes (`RAND_bytes`),
+  written once to `<user_config_root>/vault.key` with 0600 perms (the
+  config root is already owner-only 0750). Security level ≈ `~/.ssh`
+  keys: filesystem permissions are the boundary, unlock is
+  non-interactive (required for unattended agent access). A
+  passphrase-wrapped key is explicitly future work.
+- **Plaintext metadata, encrypted payload.** `name`, `kind`
+  (`login`/`note`/`api_key`/`custom`), `description`, timestamps stay
+  plaintext so `list` is useful without decryption; the secret fields
+  (a JSON object) are the only encrypted blob.
+- **Agent surface: ONE `vault` tool** with `action` ∈
+  `list | get | store | edit | delete` (keeps the function-schema surface
+  small). `list` NEVER returns secret values; `store` confirms without
+  echoing; `get` returns the decrypted fields (they enter conversation
+  history — documented; hosts can strip via tools_disabled).
+
+### Scope
+
+1. `src/core/SettingsStore.cpp`: `kSchemaVersion` 5 → 6;
+   `migrate_to_v6()` + `kSchemaSql` gain `vault_entries(name PK, kind,
+   description, nonce_b64, payload_b64, created_at, updated_at)`.
+2. `include/daedalus/vault.h` + `src/core/Vault.cpp`: public
+   `daedalus::SecretsVault` —
+   `static SecretsVault global()` (global store + global key file) and
+   `SecretsVault(SettingsStore, key_file)` (tests/per-DB);
+   `store(VaultEntry)` / `get(name)` / `list()` (metadata only) /
+   `remove(name)` / `exists(name)`. Thread-safe; throws
+   `std::runtime_error` on crypto/IO failure. Key file auto-generated
+   on first use (0600), zeroised on destruction where practical.
+3. `src/tools/VaultTool.{h,cpp}`: `vault` tool with `action` enum;
+   registered in `ToolFactory` ctor. No secret value is ever logged or
+   included in `list`.
+4. `CMakeLists.txt`: new sources.
+5. `tests/test_vault.cpp`: hermetic temp-home — encrypt/decrypt
+   round-trip, tamper detection (flipped byte fails GCM), wrong-key
+   rejection, `list` hides fields, tool actions end-to-end, v5→v6
+   migration on an existing DB.
+6. `CHANGELOG.md`, `docs/vault.md`, Readme cross-ref.
+
+### Verification
+
+- New tests pass; full ctest green; warning-clean under project flags.
+- `strings`-level check: stored secret values do not appear in the DB
+  file as plaintext (base64-of-ciphertext only).
+
+---
+
 ## TASK-2026-09-10-06: STATECHANGE-TYPED — type-safe `AgentSink::on_state_change` (REQ-5)
 
 > **Status** DONE (2026-09-10, commit 2b25f27)

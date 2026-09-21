@@ -276,6 +276,40 @@ public:
     /// True if any MCP servers are registered.
     bool has_mcp_servers() const noexcept;
 
+    // -----------------------------------------------------------------------
+    // §TASK-2026-09-21-01 (schema v6): encrypted secrets vault — raw row
+    // accessors. These move OPAQUE base64 blobs only; all crypto lives in
+    // daedalus::SecretsVault (include/daedalus/vault.h). The vault table is
+    // global by convention (SecretsVault::global() always targets the
+    // process-wide store) so secrets are reachable from every project.
+    // ----------------------------------------------------------------------
+
+    /// One raw vault row. `nonce_b64`/`payload_b64` are base64'd binary
+    /// (12-byte nonce ‖ ciphertext ‖ 16-byte GCM tag). Never plaintext.
+    struct VaultRow
+    {
+        std::string name;
+        std::string kind = "custom";        // login | note | api_key | custom
+        std::string description;
+        std::string nonce_b64;
+        std::string payload_b64;
+        std::string created_at;             // ISO-8601 UTC
+        std::string updated_at;             // ISO-8601 UTC
+    };
+
+    /// Insert or replace one vault row (updated_at is refreshed; an
+    /// existing row's created_at is preserved).
+    void upsert_vault_row(const VaultRow& r);
+
+    /// Fetch one vault row by name.
+    std::optional<VaultRow> get_vault_row(std::string_view name) const;
+
+    /// All vault rows, ordered by name.
+    std::vector<VaultRow> list_vault_rows() const;
+
+    /// Delete one vault row by name (missing name is a no-op).
+    void delete_vault_row(std::string_view name);
+
 private:
     // §B2 fix (v0.5.1): Impl fields are now inlined directly into the class
     // (not pimpl'd). This makes SettingsStore copyable/movable so

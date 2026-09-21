@@ -249,6 +249,7 @@ set(CORE_SOURCES
 	src/core/FileIO.cpp
 	src/core/SettingsStore.cpp
 	src/core/SkillManager.cpp
+	src/core/Vault.cpp
 	src/core/utils.cpp
 	src/core/ImageProcessor.cpp
 	src/core/Subprocess.cpp
@@ -285,6 +286,7 @@ set(TOOLS_SOURCES
 	src/tools/ToolFilter.cpp
 	src/tools/McpProxiedTool.cpp
 	src/tools/McpStatusTool.cpp
+	src/tools/VaultTool.cpp
 	src/tools/UserTool.cpp
 	src/tools/SetStatusTool.cpp
 	src/tools/BashTool.cpp

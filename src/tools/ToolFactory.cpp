@@ -1,5 +1,6 @@
 #include "tools/ToolFactory.h"
 #include "tools/McpProxiedTool.h"
+#include "tools/VaultTool.h"
 #include "tools/McpStatusTool.h"
 #include "tools/UserTool.h"
 #include "tools/SetStatusTool.h"
@@ -90,6 +91,11 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<SearchSkillsTool>());
     register_tool(std::make_shared<DeactivateSkillTool>());
     register_tool(std::make_shared<GetSkillContextTool>());
+
+    // §TASK-2026-09-21-01: encrypted secrets vault (global password
+    // manager). The tool resolves SecretsVault::global() lazily inside
+    // execute() — no wiring needed at registration time.
+    register_tool(std::make_shared<VaultTool>());
 
     // Memory tools
     register_tool(std::make_shared<RememberTool>());

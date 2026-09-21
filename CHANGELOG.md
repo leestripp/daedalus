@@ -8,6 +8,36 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **§TASK-2026-09-21-01: SecretsVault — global encrypted password
+  manager** (2026-09-21). daedalus now has a user-global,
+  encrypted-at-rest store for logins, secure notes and API keys:
+  - **Storage**: new `vault_entries` table in the existing global
+    SettingsStore SQLite DB (schema v6) — one vault per user, shared by
+    every project regardless of per-agent `daedalus_home`.
+  - **Crypto**: AES-256-GCM via OpenSSL EVP (no new dependencies).
+    Random nonce per entry, AAD = entry name (no ciphertext
+    transplanting); only the secret fields blob is encrypted — metadata
+    stays plaintext so listing needs no decryption. Master key is a
+    0600-perm `vault.key` under the user config root (generated on
+    first use; ~/.ssh-style filesystem-permission boundary,
+    non-interactive unlock; passphrase wrap is future work).
+  - **Public API** (`include/daedalus/vault.h`):
+    `daedalus::SecretsVault::global()` plus injectable
+    store+key construction for tests; `store` / `get` / `list`
+    (metadata only) / `remove` / `exists`.
+  - **Agent tool**: built-in `vault` tool with `action` ∈
+    `list | get | store | edit | delete` — the agent can create, read,
+    edit and delete entries autonomously. `store` replaces a whole
+    entry; `edit` merges fields (rotate one secret without reading the
+    others into context). `list` never returns secret values; write
+    confirmations echo field NAMES only; `get` decryption is documented
+    as entering conversation history (hosts can disable via
+    `tools_disabled`). Tool handlers are statics with an injected vault
+    so the full action contract is covered hermetically in tests.
+  - Tests: `vault_tests` (round-trip, tamper GCM rejection, wrong-key
+    rejection, no-plaintext-in-DB check, v5→v6 migration). Docs:
+    `docs/vault.md`.
+
 - **MonkeyByte upstream report 2026-09-10 — new public API** (reported
   against d73d1ba):
 

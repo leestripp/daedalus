@@ -151,7 +151,7 @@ std::shared_ptr<ProviderPlugin> plugin_for_row(std::string_view hint,
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 5;
+constexpr int kSchemaVersion = 6;
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -201,6 +201,19 @@ CREATE TABLE IF NOT EXISTS mcp_servers (
 CREATE TABLE IF NOT EXISTS serper_config (
     id      INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row
     api_key TEXT NOT NULL
+);
+
+-- §TASK-2026-09-21-01 (schema v6): encrypted secrets vault. Metadata is
+-- plaintext so list() works without decryption; the secret payload is a
+-- base64'd AES-256-GCM blob (nonce ‖ ciphertext ‖ tag), AAD = name.
+CREATE TABLE IF NOT EXISTS vault_entries (
+    name        TEXT PRIMARY KEY,
+    kind        TEXT NOT NULL DEFAULT 'custom',
+    description TEXT NOT NULL DEFAULT '',
+    nonce_b64   TEXT NOT NULL,
+    payload_b64 TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
 );
 )sql";
 
@@ -350,6 +363,21 @@ void migrate_to_v5(OmniNet::DB::Database& db)
     }
 }
 
+void migrate_to_v6(OmniNet::DB::Database& db)
+{
+    // v6 (§TASK-2026-09-21-01): vault_entries table. CREATE IF NOT EXISTS
+    // — idempotent for DBs that already ran the updated kSchemaSql.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS vault_entries ("
+        "name TEXT PRIMARY KEY, "
+        "kind TEXT NOT NULL DEFAULT 'custom', "
+        "description TEXT NOT NULL DEFAULT '', "
+        "nonce_b64 TEXT NOT NULL, "
+        "payload_b64 TEXT NOT NULL, "
+        "created_at TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)");
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -375,6 +403,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version < 3) migrate_to_v3(db);
     if (current_version < 4) migrate_to_v4(db);
     if (current_version < 5) migrate_to_v5(db);
+    if (current_version < 6) migrate_to_v6(db);
 
     // Update the stored version if it advanced.
     if (current_version != kSchemaVersion) {
@@ -1150,6 +1179,79 @@ void SettingsStore::delete_mcp_server(std::string_view name)
         *mutex_,
         *db_,
         "DELETE FROM mcp_servers WHERE name = ?",
+        std::string(name));
+}
+
+// ============================================================================
+// §TASK-2026-09-21-01 (schema v6): vault_entries raw row accessors.
+// Crypto lives in daedalus::SecretsVault (src/core/Vault.cpp) — these
+// accessors only move opaque base64 blobs in/out of the table.
+// ============================================================================
+
+void SettingsStore::upsert_vault_row(const VaultRow& r)
+{
+    exec_prepared(
+        *mutex_,
+        *db_,
+        "INSERT INTO vault_entries(name, kind, description, nonce_b64, "
+        "payload_b64, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(name) DO UPDATE SET "
+        "kind=excluded.kind, description=excluded.description, "
+        "nonce_b64=excluded.nonce_b64, payload_b64=excluded.payload_b64, "
+        "updated_at=excluded.updated_at",
+        r.name, r.kind, r.description, r.nonce_b64, r.payload_b64,
+        r.created_at, r.updated_at);
+}
+
+namespace {
+SettingsStore::VaultRow vault_row_from(const std::vector<std::string>& r)
+{
+    // SELECT order: name, kind, description, nonce_b64, payload_b64,
+    //               created_at, updated_at
+    SettingsStore::VaultRow row;
+    if (r.size() >= 7) {
+        row.name        = r[0];
+        row.kind        = r[1];
+        row.description = r[2];
+        row.nonce_b64   = r[3];
+        row.payload_b64 = r[4];
+        row.created_at  = r[5];
+        row.updated_at  = r[6];
+    }
+    return row;
+}
+constexpr const char* kVaultCols =
+    "name, kind, description, nonce_b64, payload_b64, created_at, "
+    "updated_at FROM vault_entries";
+}  // namespace
+
+std::optional<SettingsStore::VaultRow>
+SettingsStore::get_vault_row(std::string_view name) const
+{
+    auto row = query_one_prepared(
+        *mutex_, *db_,
+        std::string("SELECT ") + kVaultCols + " WHERE name = ?",
+        std::string(name));
+    if (!row) return std::nullopt;
+    return vault_row_from(*row);
+}
+
+std::vector<SettingsStore::VaultRow> SettingsStore::list_vault_rows() const
+{
+    auto rows = query_all_prepared(
+        *mutex_, *db_,
+        std::string("SELECT ") + kVaultCols + " ORDER BY name");
+    std::vector<VaultRow> out;
+    out.reserve(rows.size());
+    for (const auto& r : rows) out.push_back(vault_row_from(r));
+    return out;
+}
+
+void SettingsStore::delete_vault_row(std::string_view name)
+{
+    exec_prepared(
+        *mutex_, *db_,
+        "DELETE FROM vault_entries WHERE name = ?",
         std::string(name));
 }
 
