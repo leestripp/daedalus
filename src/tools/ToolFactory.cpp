@@ -12,6 +12,7 @@
 #include "tools/ReadImageTool.h"
 #include "tools/PDFTool.h"
 #include "tools/TodoListTool.h"
+#include "tools/ListToolsTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
 #include "core/ThreadPool.h"
@@ -122,6 +123,12 @@ void ToolFactory::initialize_tools() {
 
     // §PDF-CORE: extract text from PDF files via poppler-cpp (required dep).
     register_tool(std::make_shared<ReadPDFTool>());
+
+    // §LIST-TOOLS-CORE (2026-09-21): agent-visible live tool roster —
+    // the self-service fix for "agent doesn't know its tools" on resumed
+    // sessions (the pinned system-prompt schema block is composed once
+    // and never rebuilt; see ListToolsTool.h).
+    register_tool(std::make_shared<ListToolsTool>());
 
     // Todo list tools
     register_tool(std::make_shared<TodoAddTool>());

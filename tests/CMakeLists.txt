@@ -288,6 +288,26 @@ add_test(NAME searxng_settings_tests
          COMMAND daedalus_searxng_settings_tests)
 
 # ============================================================================
+# daedalus_list_tools_tests
+#
+# §LIST-TOOLS-CORE (2026-09-21): list_tools tool — live tool roster,
+# filter/verbose params, description shortening. Hermetic.
+# ============================================================================
+add_executable(daedalus_list_tools_tests
+    test_list_tools.cpp
+)
+target_include_directories(daedalus_list_tools_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_list_tools_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME list_tools_tests
+         COMMAND daedalus_list_tools_tests)
+
+# ============================================================================
 # MCP HTTP-transport config tests (regression for the "Loaded 3 configured
 # server(s)" bug — the user's apollocore entry was being silently dropped).
 # ============================================================================

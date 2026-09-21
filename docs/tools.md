@@ -18,6 +18,7 @@ functional autonomous agent are registered automatically:
 | `tell_user` | Send text back to the host / user |
 | `compress_context` | Schedule context compression at the end of the current cycle |
 | `set_status` | Declare the agent's own state mid-turn |
+| `list_tools` | Live roster of registered tools (core, host, MCP) with one-line descriptions; `filter` substring + `verbose` full-schema options (§LIST-TOOLS-CORE) |
 | `stop` | End the agent loop cleanly |
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
@@ -445,6 +446,28 @@ in daedalus, tool definitions are:
 1. Created **once** at application startup
 2. Passed to every `run_agent_cycle()` call
 3. Included in every API request payload
+
+### Why agents can still "lose track" of their tools (§LIST-TOOLS-CORE)
+
+The API `tools` field is always live, but the human-readable `# Tool
+Definitions (JSON Schema)` block inside the **system prompt** is composed
+once — pinned as `messages[0]` on the first turn and never rebuilt. On
+session resume it comes back from `messages.json` unchanged, so tools and
+MCP servers that appeared later never enter it (compression deliberately
+preserves `messages[0]`, so this is staleness, not forgetting).
+
+Two mechanisms close the gap:
+
+- **Context Status roster row** — `LLMClient::inject_context_stats()`
+  adds a compact `| Tools | ... |` row to the transient per-iteration
+  status message (tail of the request, refreshed every cycle, cache-safe):
+  total count, core tool names, and per-server MCP counts. It respects
+  the per-agent `ToolFilter`.
+- **`list_tools` tool** — the agent can self-serve the full live roster
+  at any time: a markdown table of name + one-line description, with
+  `filter` (case-insensitive substring on name/description) and
+  `verbose` (full JSON schemas). Descriptions are shortened to their
+  first line so multi-paragraph MCP tool text can't bloat the table.
 
 ---
 

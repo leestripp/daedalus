@@ -8,6 +8,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **§LIST-TOOLS-CORE: `list_tools` tool + live tool roster in the
+  Context Status block** (2026-09-21). Fixes "agent doesn't know what
+  tools it has" on resumed sessions: the tool-schema block in the system
+  prompt is composed once (pinned as `messages[0]`) and never rebuilt,
+  so it goes stale when tools/MCP servers appear later.
+  - **`list_tools` core tool** (`src/tools/ListToolsTool.*`): returns
+    the LIVE registry (core + host-registered + MCP-proxied) as a
+    compact markdown roster of name + one-line description; optional
+    `filter` (case-insensitive substring on name/description) and
+    `verbose` (full JSON schemas). Descriptions are shortened to their
+    first line so multi-paragraph MCP tool text can't bloat the table.
+  - **Context Status roster row**: `LLMClient::inject_context_stats()`
+    now emits `| Tools | N (call `list_tools` for the roster) |` plus
+    core tool names and per-server MCP counts in the transient
+    per-iteration status message — refreshed every cycle at the
+    recency-favoured tail, cache-safe (§ContextCache), and respectful
+    of the per-agent `ToolFilter`.
+  - **Tests**: `tests/test_list_tools.cpp` — registration, roster
+    contents/counts, filter semantics, verbose schemas, description
+    shortening. Hermetic.
+
 - **§SEARXNG-CORE: `searxng_search` — web search via a self-hosted
   SearXNG instance** (2026-09-21). Keyless, account-free metasearch
   counterpart to `serper_search`, for agents whose DuckDuckGo-scraping

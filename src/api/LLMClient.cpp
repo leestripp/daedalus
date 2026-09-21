@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <future>
 #include <filesystem>
+#include <map>
 #include <set>
 #include <vector>
 #include <sys/select.h>
@@ -2768,6 +2769,53 @@ void LLMClient::inject_context_stats(json& messages) {
             }
             if (active.size() > 5) stats << " (+" << (active.size() - 5) << " more)";
             stats << " |\n";
+        }
+    }
+
+    // §LIST-TOOLS-CORE (2026-09-21): compact LIVE tool roster. The tool
+    // JSON schema block in the system prompt is pinned as messages[0] at
+    // session start and never rebuilt, so on resumed sessions it goes
+    // stale — this row rides the transient per-iteration status message
+    // (recency-favoured tail position), so the model always has a fresh
+    // "what can I call right now" reminder without breaking the static
+    // prompt prefix (§ContextCache). Core tool names are short enough to
+    // list verbatim; MCP-proxied tools are summarized per server. The
+    // full roster with descriptions is one `list_tools` call away.
+    {
+        auto factory = ToolHandler::get_tool_factory();
+        if (factory) {
+            std::vector<std::string> core_names;
+            std::map<std::string, int> mcp_counts;  // server -> tool count
+            size_t total = 0;
+            for (const auto& name : factory->get_tool_names()) {
+                if (tool_filter_ && !tool_filter_->is_tool_allowed(name)) continue;
+                ++total;
+                const std::string server = ToolFilter::extract_mcp_server(name);
+                if (server.empty()) {
+                    core_names.push_back(name);
+                } else {
+                    ++mcp_counts[server];
+                }
+            }
+            stats << "| Tools | " << total << " (call `list_tools` for the roster) |\n";
+            if (!core_names.empty()) {
+                stats << "| | core: ";
+                for (size_t i = 0; i < core_names.size(); i++) {
+                    if (i > 0) stats << ", ";
+                    stats << core_names[i];
+                }
+                stats << " |\n";
+            }
+            if (!mcp_counts.empty()) {
+                stats << "| | mcp: ";
+                bool first = true;
+                for (const auto& [server, count] : mcp_counts) {
+                    if (!first) stats << ", ";
+                    first = false;
+                    stats << server << " (" << count << ")";
+                }
+                stats << " |\n";
+            }
         }
     }
 
