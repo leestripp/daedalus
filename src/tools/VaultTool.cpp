@@ -47,8 +47,12 @@ json VaultTool::get_definition() const {
                     }},
                     {"fields", {
                         {"type", "object"},
-                        {"additionalProperties", {"type", "string"}},
-                        {"description", "Secret fields to encrypt (store/edit), e.g. {\"key\": \"sk-...\"}. store replaces the whole field set; edit merges. Values are never echoed back."}
+                        // NOTE: no object-valued "additionalProperties"
+                        // here — Moonshot rejects it with HTTP 400
+                        // ("must be a boolean or an object"), which takes
+                        // down EVERY turn since the tool schema rides on
+                        // every request (§TASK-2026-09-21-01 regression).
+                        {"description", "Secret fields to encrypt (store/edit) — an object mapping field names to STRING values, e.g. {\"key\": \"sk-...\"}. store replaces the whole field set; edit merges. Values are never echoed back."}
                     }}
                 }},
                 {"required", {"action"}}

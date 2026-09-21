@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 // Include ToolHandler after doctest
@@ -128,6 +129,40 @@ TEST_SUITE("ToolDefinitions") {
             CHECK(func["parameters"]["required"] == json::array({"reason"}));
         }
         CHECK(found);
+    }
+
+    TEST_CASE("tool schemas avoid object-valued additionalProperties (Moonshot compat)") {
+        // §TASK-2026-09-21-01 regression: the vault tool shipped with
+        // "additionalProperties": {"type": "string"} on its `fields`
+        // parameter. Moonshot ("moonshot flavored json schema") rejects
+        // object-valued additionalProperties with HTTP 400 — and because
+        // the tool schema rides on EVERY chat request, every turn failed
+        // with invalid_request_error. additionalProperties must be absent
+        // or a plain boolean in every tool schema we emit.
+        std::string defs = ToolHandler::get_tool_definitions();
+        json parsed = json::parse(defs);
+
+        std::vector<std::string> offenders;
+        std::function<void(const json&, const std::string&)> walk =
+            [&](const json& node, const std::string& path) {
+                if (node.is_object()) {
+                    for (const auto& [k, v] : node.items()) {
+                        if (k == "additionalProperties" && !v.is_boolean()) {
+                            offenders.push_back(path + "/additionalProperties");
+                        }
+                        walk(v, path + "/" + k);
+                    }
+                } else if (node.is_array()) {
+                    for (size_t i = 0; i < node.size(); ++i) {
+                        walk(node[i], path + "/" + std::to_string(i));
+                    }
+                }
+            };
+        walk(parsed, "");
+        for (const auto& o : offenders) {
+            MESSAGE("object-valued additionalProperties at: ", o);
+        }
+        CHECK(offenders.empty());
     }
 
     TEST_CASE("get_tool_definitions_filtered excludes specified tools") {

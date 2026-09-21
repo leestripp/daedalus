@@ -14,7 +14,11 @@ using json = nlohmann::json;
  *
  * Each instance is parameterised by (server_name, tool_definition) and
  * produces an OpenAI-compatible function schema whose `parameters` is the
- * tool's `inputSchema` returned by the server's `tools/list` JSON-RPC call.
+ * tool's `inputSchema` returned by the server's `tools/list` JSON-RPC call,
+ * normalised into the strict-provider subset (§MCP-SCHEMA-SANITIZE:
+ * anyOf/oneOf collapsed, local $ref inlined, schema-valued
+ * additionalProperties flattened to a boolean) so providers like Moonshot
+ * don't HTTP-400 every request.
  *
  * Names follow the canonical MCP-host convention:
  *

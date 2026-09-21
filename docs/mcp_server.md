@@ -644,6 +644,29 @@ The current implementation has:
 - ✅ Environment variable substitution
 - ✅ Per-agent runtime enable/disable of servers
 
+### Tool schema normalisation (§MCP-SCHEMA-SANITIZE)
+
+`McpProxiedTool::get_definition()` does **not** pass a server's
+`inputSchema` to the LLM provider verbatim — it first normalises the
+schema into the subset strict providers accept. Motivation: Moonshot
+("moonshot flavored json schema") answers every chat request with
+HTTP 400 when any tool schema contains constructs it cannot parse, and
+the tool schema rides on every request. The rewrite rules:
+
+- `anyOf` / `oneOf`: `{"type": "null"}` branches (the pydantic
+  `Optional[T]` pattern) are dropped — optionality is already expressed
+  by absence from `required`. One surviving branch is inlined; with
+  several survivors the first (primary) branch is kept. The other forms
+  remain usable server-side: the wire `tools/call` is never validated
+  against this schema.
+- Local `$ref` (`#/$defs/NAME`, `#/definitions/NAME`) is inlined;
+  top-level `$defs` / `definitions` are then dropped.
+- Schema-valued `additionalProperties` is flattened to `true`
+  (booleans pass through untouched).
+
+Schemas that were already clean come out byte-identical. Sibling
+metadata (`title`, `description`, `default`) survives every rewrite.
+
 ### Runtime enable/disable
 
 You can disable an MCP server at construction time:

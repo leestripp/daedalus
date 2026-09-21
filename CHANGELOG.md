@@ -98,6 +98,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§MCP-SCHEMA-SANITIZE + vault schema: Moonshot HTTP-400'd EVERY turn
+  after the recent tool additions** (2026-09-21). Two tool-schema
+  incompatibilities with Moonshot's "moonshot flavored json schema"
+  validator, each fatal to every chat request (the tool schema rides on
+  all of them):
+  - **vault tool (§TASK-2026-09-21-01 follow-up)**: the `fields`
+    parameter shipped with `"additionalProperties": {"type": "string"}`
+    — Moonshot rejects schema-valued `additionalProperties`
+    ("must be a boolean or an object"). Removed; the string-values
+    contract now lives in the parameter description. Hermetic
+    regression coverage: `test_tool_definitions` now walks every
+    default tool schema and fails on any non-boolean
+    `additionalProperties`.
+  - **MCP proxied tools**: `McpProxiedTool` piped server `inputSchema`s
+    through verbatim, so servers emitting pydantic-style schemas
+    (`anyOf: [T, {"type":"null"}]` Optionals, `anyOf` with `$ref` into
+    `$defs`) were rejected ("detected infinite recursion without
+    termination condition") — observed live with a 39-tool ComfyUI
+    server. `get_definition()` now normalises schemas into the
+    strict-provider subset: `anyOf`/`oneOf` null-branches dropped
+    (optionality is already expressed by `required`), multi-branch
+    combinators collapse to the primary branch, local
+    `$ref` (`#/$defs/…`, `#/definitions/…`) inlined, schema-valued
+    `additionalProperties` flattened to `true`, top-level `$defs`
+    dropped. The rewrite only steers the model — wire calls are never
+    validated against the schema — and is byte-identical for schemas
+    that were already clean. Tests: `test_mcp_proxied_tool` gains 4
+    sanitizer cases (and its assertions are now actually live in
+    Release builds — the file previously missed the project's
+    `#undef NDEBUG` convention). Docs: `docs/mcp_server.md`.
+
 - **§BUG-001: MCP tools never injected — `servers.json` fallback
   restored, `mcp_status` introspection tool added** (2026-09-17,
   MonkeyByte report). The v0.5.0 migration moved MCP config into the
