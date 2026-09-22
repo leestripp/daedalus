@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <vector>
 #include <string>
@@ -112,11 +113,31 @@ public:
     // refresh_mcp_tools(). nullptr = MCP disabled.
     void set_mcp_manager(mcp::McpServerManager* mcp_manager);
 
+    /// §MCP-CONTROL-CORE (2026-09-22): inject the per-agent handler that
+    /// mcp_control's enable/disable actions delegate to (AgentImpl wires
+    /// this to Agent::set_mcp_server_enabled so the ToolFilter and sink
+    /// logging stay consistent). Empty std::function = manager-only
+    /// fallback inside the tool. Rebound on the same per-turn cadence as
+    /// set_mcp_manager().
+    void set_mcp_control_handler(
+        std::function<bool(const std::string& name, bool enabled)> handler);
+
+    /// §MCP-CONTROL-CORE: release the MCP binding (manager pointer AND
+    /// control handler) — but only if `mgr` is the currently bound
+    /// manager. Called from AgentImpl::shutdown()/~AgentImpl() so a
+    /// destroyed agent never leaves a dangling manager pointer or a
+    /// `this`-capturing handler behind in this shared factory. A no-op
+    /// when another agent has already claimed the binding.
+    void clear_mcp_binding(const mcp::McpServerManager* mgr);
+
 private:
     std::vector<std::shared_ptr<BaseTool>> m_tools;
 
     // §Phase 11: injected McpServerManager* (nullptr = MCP disabled).
     mcp::McpServerManager* mcp_manager_ = nullptr;
+
+    // §MCP-CONTROL-CORE: per-agent enable/disable delegate (may be empty).
+    std::function<bool(const std::string&, bool)> mcp_control_handler_;
 
     void initialize_tools();
 };

@@ -1,5 +1,6 @@
 #include "tools/ToolFactory.h"
 #include "tools/McpProxiedTool.h"
+#include "tools/McpControlTool.h"
 #include "tools/VaultTool.h"
 #include "tools/McpStatusTool.h"
 #include "tools/UserTool.h"
@@ -29,6 +30,18 @@ ToolFactory::ToolFactory() {
 // §Phase 11: injected McpServerManager* (nullptr = MCP disabled).
 void ToolFactory::set_mcp_manager(mcp::McpServerManager* mcp_manager) {
     mcp_manager_ = mcp_manager;
+}
+
+void ToolFactory::set_mcp_control_handler(
+    std::function<bool(const std::string&, bool)> handler) {
+    mcp_control_handler_ = std::move(handler);
+}
+
+void ToolFactory::clear_mcp_binding(const mcp::McpServerManager* mgr) {
+    if (mcp_manager_ == mgr) {
+        mcp_manager_ = nullptr;
+        mcp_control_handler_ = nullptr;
+    }
 }
 
 void ToolFactory::register_tool(std::shared_ptr<BaseTool> tool) {
@@ -186,15 +199,16 @@ json ToolFactory::execute_tool(const std::string& tool_name,
 }
 
 void ToolFactory::refresh_mcp_tools() {
-    // 1) Drop every previously-registered McpProxiedTool and the
-    //    McpStatusTool (it is re-registered below, bound to the current
-    //    manager — the shared factory may serve agents with different
-    //    managers across turns).
+    // 1) Drop every previously-registered McpProxiedTool, McpStatusTool
+    //    and McpControlTool (the latter two are re-registered below,
+    //    bound to the current manager — the shared factory may serve
+    //    agents with different managers across turns).
     m_tools.erase(
         std::remove_if(m_tools.begin(), m_tools.end(),
             [](const std::shared_ptr<BaseTool>& t) {
                 return std::dynamic_pointer_cast<McpProxiedTool>(t) != nullptr
-                    || std::dynamic_pointer_cast<McpStatusTool>(t) != nullptr;
+                    || std::dynamic_pointer_cast<McpStatusTool>(t) != nullptr
+                    || std::dynamic_pointer_cast<McpControlTool>(t) != nullptr;
             }),
         m_tools.end());
 
@@ -208,6 +222,11 @@ void ToolFactory::refresh_mcp_tools() {
     // agent needs to diagnose — so register mcp_status before the
     // config-loaded early-return below.
     register_tool(std::make_shared<McpStatusTool>(mcp_manager_));
+
+    // §MCP-CONTROL-CORE: agent-driven runtime enable/disable. Bound to the
+    // current manager and (when wired) the current agent's control handler.
+    register_tool(std::make_shared<McpControlTool>(mcp_manager_,
+                                                   mcp_control_handler_));
 
     if (!mgr.is_config_loaded()) {
         return;

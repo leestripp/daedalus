@@ -54,10 +54,19 @@ namespace daedalus::detail {
 class AgentImpl {
 public:
     explicit AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink);
+    ~AgentImpl();
 
     // Lifecycle
     void initialize();
     void shutdown();
+
+    /// §MCP-CONTROL-CORE (2026-09-22): (re)bind the shared ToolFactory's
+    /// MCP surface (manager pointer + mcp_control handler) to THIS agent.
+    /// Called at initialize() and at the top of every run_one_turn() —
+    /// the factory is process-global, so multi-agent hosts must rebind
+    /// per turn or mcp_status/mcp_control would act on whichever agent
+    /// initialized last. No-op when MCP is disabled.
+    void rebind_mcp_factory();
     // §CRASH-4 (2026-07-16): forward to LLMClient::install_crash_handlers.
     // Idempotent. Call after initialize() and before run_one_turn().
     void install_crash_handlers();

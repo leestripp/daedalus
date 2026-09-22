@@ -35,6 +35,36 @@ zero servers are configured**, because that is exactly the case that
 needs diagnosing. If `mcp__<server>__<tool>` tools are missing, call
 `mcp_status` first.
 
+## Runtime enable/disable (`mcp_control`, §MCP-CONTROL-CORE)
+
+The agent can shed MCP context itself with the `mcp_control` tool —
+important because every connected server's tool schemas are sent with
+**every** request, and a busy server can contribute tens of thousands of
+tokens. When the agent is finished with a server it can disable it
+instead of asking the user:
+
+```json
+{"action": "list"}                              // servers + state + tool counts
+{"action": "disable", "name": "comfy-mcp"}      // disconnect, drop its tools
+{"action": "enable",  "name": "comfy-mcp"}      // reconnect
+```
+
+Semantics:
+
+- **Runtime-only.** The SettingsStore row (`mcp_servers.enabled`) is
+  never written — that column stays the host/user's persistent control.
+  A runtime-disabled server returns next session.
+- Takes effect on the **next request**: `disable_server()` marks the
+  tool surface dirty, `LLMClient` refreshes at the cycle boundary, and
+  the per-iteration Context Status roster (§LIST-TOOLS-CORE) reflects
+  the new count immediately.
+- The tool delegates to `Agent::set_mcp_server_enabled()` (the same
+  public host API) via an injected handler, so the per-agent
+  `ToolFilter` and sink logging stay consistent. Unknown server names
+  are rejected; repeating an action is a no-op success.
+- `mcp_status` remains the verbose diagnostic (config sources, errors);
+  `mcp_control` is the compact operational tool.
+
 ### Config locations and precedence (summary)
 
 | Source | Location | Notes |

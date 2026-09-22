@@ -463,9 +463,9 @@ void AgentImpl::initialize()
                     "config locations daedalus reads.");
             }
         }
-        if (auto factory = ToolHandler::get_tool_factory()) {
-            factory->set_mcp_manager(body_->mcp.get());
-        }
+        // §MCP-CONTROL-CORE: bind the shared factory's MCP surface to
+        // this agent (manager + mcp_control handler).
+        rebind_mcp_factory();
     }
 
     if (has_explicit_creds) {
@@ -627,6 +627,37 @@ void AgentImpl::initialize()
     }
 }
 
+void AgentImpl::rebind_mcp_factory()
+{
+    if (!body_ || !body_->mcp) return;
+    if (auto factory = ToolHandler::get_tool_factory()) {
+        factory->set_mcp_manager(body_->mcp.get());
+        // Give the mcp_control tool the full coordination path (store
+        // lookup + ToolFilter + sink log). The lambda captures `this`;
+        // the binding is released again in shutdown()/~AgentImpl() via
+        // ToolFactory::clear_mcp_binding(), and refreshed at the top of
+        // every run_one_turn().
+        factory->set_mcp_control_handler(
+            [this](const std::string& name, bool enabled) {
+                return set_mcp_server_enabled(name, enabled);
+            });
+    }
+}
+
+AgentImpl::~AgentImpl()
+{
+    // §MCP-CONTROL-CORE: never leave a dangling manager pointer or a
+    // `this`-capturing handler in the process-global factory. Hosts are
+    // not required to call shutdown() before destruction (monkeybyte's
+    // ~ChatController doesn't), so unbind here too. No-op when another
+    // agent already claimed the binding.
+    if (body_ && body_->mcp) {
+        if (auto factory = ToolHandler::get_tool_factory()) {
+            factory->clear_mcp_binding(body_->mcp.get());
+        }
+    }
+}
+
 void AgentImpl::shutdown()
 {
     if (!initialized_) return;
@@ -644,6 +675,14 @@ void AgentImpl::shutdown()
     if (body_->client) {
         body_->client->cleanup();
         body_->client.reset();
+    }
+    // §MCP-CONTROL-CORE: release the shared-factory binding BEFORE the
+    // manager is destroyed — clear_mcp_binding() only clears when this
+    // agent still owns the binding, so a peer agent is never disturbed.
+    if (body_->mcp) {
+        if (auto factory = ToolHandler::get_tool_factory()) {
+            factory->clear_mcp_binding(body_->mcp.get());
+        }
     }
     body_->mcp.reset();   // §Phase 11
     initialized_ = false;
@@ -773,6 +812,9 @@ void AgentImpl::record_terminal_error(daedalus::ErrorKind kind,
 void AgentImpl::run_one_turn(std::stop_token st)
 {
     if (!initialized_) initialize();
+    // §MCP-CONTROL-CORE: multi-agent hosts share the global tool factory;
+    // claim the MCP binding for THIS turn before anything executes.
+    rebind_mcp_factory();
     // §TURN-ERROR: fresh turn — clear the previous turn's terminal error
     // (the LLMClient half is cleared in LLMClient::run_one_turn entry).
     turn_terminal_error_.reset();

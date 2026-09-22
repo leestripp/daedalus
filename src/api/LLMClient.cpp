@@ -3277,7 +3277,13 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         if (mcp_tools_refresh_pending_ ||
             (mcp_manager_ && mcp_manager_->mcp_tools_dirty())) {
             refresh_mcp_tools();
-            tool_defs = json::parse(ToolHandler::get_tool_definitions());
+            // §MCP-CONTROL-CORE fix: use the same ToolFilter-aware fetch
+            // as the initial tool_defs build (see below) — the unfiltered
+            // call let host-disabled tools leak back onto the wire after
+            // every MCP refresh.
+            tool_defs = json::parse(tool_filter_
+                ? ToolHandler::get_tool_definitions_filtered(*tool_filter_)
+                : ToolHandler::get_tool_definitions());
         }
 
         AgentState result_state = run_agent_cycle(api_url, messages, tool_defs);

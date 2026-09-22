@@ -8,6 +8,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **§MCP-CONTROL-CORE: `mcp_control` tool — agent-driven MCP server
+  list/enable/disable** (2026-09-22). MCP tool schemas can dominate the
+  context window (sent with every request); the agent can now shed a
+  finished server's context itself instead of asking the user.
+  - **Tool** (`src/tools/McpControlTool.*`): `action='list'` shows
+    configured servers with transport, connected/enabled state and tool
+    counts; `'enable'`/`'disable'` toggle one server by name. Unknown
+    names are rejected; repeated toggles are no-op successes.
+  - **Runtime-only semantics**: the SettingsStore `mcp_servers.enabled`
+    column is never written — it stays the host/user's persistent
+    control; a runtime-disabled server returns next session.
+  - **Wiring**: enable/disable delegate through a new
+    `ToolFactory::set_mcp_control_handler()` hook to
+    `Agent::set_mcp_server_enabled()` (the existing public host API), so
+    the per-agent `ToolFilter` and sink logging stay consistent; the
+    tool is re-registered per refresh alongside `mcp_status`. Without a
+    handler (direct ToolHandler users) a manager-only fallback handles
+    disable and config-known enable.
+  - **Effect**: `disable_server()` marks the tool surface dirty; the
+    next request drops the server's proxied tools and the Context
+    Status roster row (§LIST-TOOLS-CORE) reflects the new count.
+  - **Tests**: `tests/test_mcp_control.cpp` — 10 hermetic cases over a
+    standalone McpServerManager (no connections, no spawns).
+
 - **§LIST-TOOLS-CORE: `list_tools` tool + live tool roster in the
   Context Status block** (2026-09-21). Fixes "agent doesn't know what
   tools it has" on resumed sessions: the tool-schema block in the system

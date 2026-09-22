@@ -300,6 +300,7 @@ set(TOOLS_SOURCES
 	src/tools/SerperSearchTool.cpp
 	src/tools/SearxngSearchTool.cpp
 	src/tools/ListToolsTool.cpp
+	src/tools/McpControlTool.cpp
 	src/tools/ReadImageTool.cpp
 	src/tools/PDFTool.cpp
 	src/tools/TodoListTool.cpp

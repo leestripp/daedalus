@@ -308,6 +308,27 @@ add_test(NAME list_tools_tests
          COMMAND daedalus_list_tools_tests)
 
 # ============================================================================
+# daedalus_mcp_control_tests
+#
+# §MCP-CONTROL-CORE (2026-09-22): mcp_control tool — agent-driven MCP
+# server list/enable/disable. Hermetic: standalone McpServerManager,
+# no connections, no spawns.
+# ============================================================================
+add_executable(daedalus_mcp_control_tests
+    test_mcp_control.cpp
+)
+target_include_directories(daedalus_mcp_control_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_mcp_control_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME mcp_control_tests
+         COMMAND daedalus_mcp_control_tests)
+
+# ============================================================================
 # MCP HTTP-transport config tests (regression for the "Loaded 3 configured
 # server(s)" bug — the user's apollocore entry was being silently dropped).
 # ============================================================================
