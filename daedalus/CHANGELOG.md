@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Build / Infrastructure
+
+- §Monorepo (2026-09-24): the `daedalus`, `icarus`, and `monkeybyte`
+  repositories were consolidated into a single monorepo rooted at this
+  repository (library history/tags preserved; hosts imported as
+  `icarus/` and `monkeybyte/` subtrees).
+  - New superbuild root `CMakeLists.txt`: one configure builds library +
+    demos + tests + both hosts (`DAEDALUS_BUILD_ICARUS` /
+    `DAEDALUS_BUILD_MONKEYBYTE`, both default OFF when this repo is
+    consumed via FetchContent — library-only embedders unaffected).
+  - Host CMake is dual-mode: in-tree they link the `daedalus` target;
+    standalone they FetchContent this repo (library only).
+  - Versioning uses prefixed tags: bare `x.y.z` for the library
+    (`git describe --match '[0-9]*'`), `icarus/x.y.z` and
+    `monkeybyte/x.y.z` for the hosts.
+  - All tests labelled `lib` / `cli` / `app` for `ctest -L` slices.
+
+
 All notable changes to CodeMax are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).

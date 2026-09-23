@@ -1,25 +1,32 @@
 <!-- monkeybyte:type: cpp -->
 
-# AGENTS.md — daedalus workspace (monorepo-style multi-repo guide)
+# AGENTS.md — daedalus monorepo guide
 
-This directory is a **workspace containing three independent git
-repositories** that together form one product family. Read this file
-first when a task may span more than one repo. For deep, repo-specific
-guidance always defer to each repository's own `AGENTS.md` — those are
-the authoritative, living documents for their codebases.
+This repository is a **monorepo** containing the daedalus agent library
+and both of its host applications. Read this file first when a task may
+span more than one component. For deep, component-specific guidance
+always defer to each component's own `AGENTS.md` — those are the
+authoritative, living documents for their codebases.
 
-## Workspace layout
+§Monorepo (2026-09-24): the three standalone repos were consolidated
+into this one (remote `gitlab.com/leestripp/daedalus`, library history
+and tags preserved). Standalone `icarus`/`monkeybyte` histories live in
+the archived GitLab repos and local backups.
+
+## Layout
 
 ```
-/projects/AI/daedalus/          ← workspace root (NOT a git repo itself)
-├── daedalus/    → git@gitlab.com:leestripp/daedalus.git    (the library)
-├── icarus/      → git@gitlab.com:leestripp/icarus.git      (the CLI host)
-└── monkeybyte/  → git@gitlab.com:leestripp/monkeybyte.git  (the desktop host)
+/                      ← THE daedalus repo (one git history, one remote)
+├── CMakeLists.txt     ← superbuild root (add_subdirectory of all three)
+├── daedalus/          ← the static library (libdaedalus.a), demos, docs, tests
+├── icarus/            ← CLI host (REPL + A2A server)
+├── monkeybyte/        ← GTK4/gtkmm desktop host
+├── Plan.md            ← monorepo consolidation plan
+└── AGENTS.md          ← this file
 ```
 
-Each subdirectory is a fully self-contained repo with its own history,
-tags, `CMakeLists.txt`, and `AGENTS.md`. **Commit, tag, and push per
-repo** — there is no top-level build or meta-repository.
+**Commit, tag, and push once** — one history covers everything. Tags are
+namespaced per component (see Versioning below).
 
 ## The architecture in one picture
 
@@ -51,38 +58,33 @@ repo** — there is no top-level build or meta-repository.
   an HTTP `ControlServer` for UI automation. It embeds the same
   `daedalus::Agent` via `ChatController`.
 
-## How the hosts consume daedalus
+## How the hosts consume daedalus (dual-mode)
 
-Both hosts fetch daedalus from GitLab **`main`** at configure time —
-**neither uses the local `daedalus/` checkout by default**:
+Each host's CMake works in **two modes**, selected automatically:
 
-| Host | Mechanism |
-|------|-----------|
-| icarus | `FetchContent_Populate` + `ExternalProject_Add` builds `libdaedalus.a`; also compiles the settings-TUI demo tab sources into the icarus binary |
-| monkeybyte | `FetchContent_MakeAvailable(daedalus)` with demos/tests off, `EXCLUDE_FROM_ALL` |
+| Mode | Trigger | Behaviour |
+|------|---------|-----------|
+| **In-tree** (default here) | root superbuild `add_subdirectory` — `TARGET daedalus` already exists | Hosts link the in-tree `daedalus` target directly; one configure builds everything |
+| **Standalone** | `cmake -S icarus …` / `cmake -S monkeybyte …` on the subdir alone | Host FetchContents this repo from GitLab `main`; the superbuild root detects it is not top-level and builds **only the library** (no GTK/CLI deps leak in) |
 
-**Local cross-repo development:** to test an uncommitted daedalus
-change in a host, reconfigure the host build with the standard CMake
-override:
+To point a standalone host build at a local checkout (e.g. uncommitted
+library changes), use the standard CMake override:
 
 ```bash
-# icarus
-cmake -S icarus -B icarus/build -DFETCHCONTENT_SOURCE_DIR_DAEDALUS=$PWD/daedalus
-# monkeybyte
-cmake -S monkeybyte -B monkeybyte/build -DFETCHCONTENT_SOURCE_DIR_DAEDALUS=$PWD/daedalus
+cmake -S icarus -B /tmp/icarus-build \
+    -DFETCHCONTENT_SOURCE_DIR_DAEDALUS=$PWD
 ```
 
-To ship a daedalus change: commit + push it to `daedalus` `main` first,
-then wipe the host's fetched copy (`rm -rf <host>/build/_deps/daedalus-*`
-for monkeybyte; icarus re-fetches via its ExternalProject stamp) and
-reconfigure the host. **There is no local patching mechanism** — API
-changes must land upstream in daedalus.
+**There is no local patching mechanism** for the fetched copy — API
+changes must land in the repo. In the monorepo that just means committing
+both sides together; the superbuild always builds hosts against the
+in-tree library.
 
 **Static-link gotcha:** `libdaedalus.a` does not propagate its PRIVATE
-dependencies, so both hosts must link daedalus's transitive system libs
-themselves (OpenSSL, libpng, libjpeg, poppler-cpp, sqlite3, curl/
-OmniNet pieces). When you add a new system dependency inside daedalus,
-expect matching `target_link_libraries` updates in **both** hosts.
+dependencies through plain `.a` linking, so hosts explicitly link
+daedalus's transitive system libs (OpenSSL, libpng, libjpeg, poppler-cpp,
+sqlite3). When you add a new system dependency inside daedalus, expect
+matching `target_link_libraries` updates in **both** hosts.
 
 ## Shared runtime state (important)
 
@@ -107,14 +109,19 @@ Consequences:
 - daedalus enforces a strict **two-tier rule**: user data in XDG paths,
   project data under `<project>/.daedalus/`. Never mix them.
 
-## Common conventions across all three repos
+## Common conventions
 
-- **C++23**, CMake ≥ 3.28, Ninja/Make; clang or gcc.
-- **Dated `§Marker` comments** (e.g. `§PDF-CORE`, `§BUG-006`,
-  `2026-08-31`) annotate non-obvious decisions and cross-repo contract
-  points. Keep them accurate; add one for subtle fixes.
-- Versioning: each repo derives its version from `git describe --tags`
-  at configure time and bakes it in as a compile definition. No
+- **C++23**, CMake ≥ 3.28, Ninja/Make; gcc preferred on Ubuntu.
+- **Dated `§Marker` comments** (e.g. `§Monorepo`, `§PDF-CORE`,
+  `§BUG-006`, `2026-08-31`) annotate non-obvious decisions and
+  cross-component contract points. Keep them accurate; add one for
+  subtle fixes.
+- **Versioning — prefixed tags.** One repo, three version streams:
+  - bare `x.y.z` tags → the **library** (`git describe --match '[0-9]*'`)
+  - `icarus/x.y.z` → the CLI host
+  - `monkeybyte/x.y.z` → the desktop host
+  Each component derives its version from its own tag stream at
+  configure time and bakes it in as a compile definition. No
   hand-maintained version files. User-Agents: `daedalus-icarus/<v>`,
   `daedalus-monkeybyte/<v>`.
 - `std::expected<T, std::string>`-style error handling, no exceptions
@@ -123,39 +130,51 @@ Consequences:
 - Error handling on network paths is non-fatal (JSON/expected errors,
   no asserts).
 
-## Build & test cheat sheet
+## Build & test (superbuild)
 
-| Repo | Configure + build | Test | Notes |
-|------|-------------------|------|-------|
-| daedalus | `cmake -S . -B build && cmake --build build -j$(nproc)` | `ctest --test-dir build --output-on-failure` | doctest suite (~100 tests); live-LLM tests skipped unless `DAEDALUS_RUN_LIVE_LLM_TESTS=1` |
-| icarus | `cmake -S . -B build && cmake --build build -j$(nproc)` | `ctest --test-dir build --output-on-failure` | doctest (`cli_args`, `system_prompt`, `migrate`); first configure fetches daedalus/linenoise/FTXUI — needs network |
-| monkeybyte | `cmake -B build -G Ninja && cmake --build build` | `cd build && ctest --output-on-failure` | hand-rolled assert runner (`unit_tests`); UI exercised via ControlServer HTTP commands; `./run.sh` to run with local GSettings schema |
+```bash
+cmake -S . -B build                 # hosts default ON for top-level builds
+                                    # (monkeybyte only if pkg-config finds
+                                    # gtkmm-4.0 + gtksourceview-5 +
+                                    # webkitgtk-6.0 + md4c; override with
+                                    # -DDAEDALUS_BUILD_MONKEYBYTE=ON/OFF)
+cmake --build build -j$(nproc)      # lib + demos + tests + icarus + monkeybyte
+ctest --test-dir build --output-on-failure   # all suites, one run
+ctest --test-dir build -L lib       # or cli / app slices
+cmake --build build --target static_analysis  # cppcheck umbrella
+```
 
-Verification bar before submitting anything, per repo: clean build +
-its test suite green, no new static-analysis warnings
-(`daedalus_static_analysis`, `icarus_cppcheck`, `monkeybyte_cppcheck`).
+Per-component test notes: daedalus is a doctest suite (~105 tests;
+live-LLM tests skipped unless `DAEDALUS_RUN_LIVE_LLM_TESTS=1`); icarus
+has doctest tests (`cli_args`, `system_prompt`, `migrate`); monkeybyte
+has a hand-rolled assert runner (`unit_tests`) plus the ControlServer
+HTTP API for UI automation (`./monkeybyte/run.sh` runs the app with its
+local GSettings schema).
+
+Verification bar before submitting anything: clean superbuild + full
+ctest green, no new static-analysis warnings.
 
 ## Where to change what
 
-| You want to… | Repo(s) |
-|--------------|---------|
-| Change agent-loop behavior, tools, providers, MCP, settings schema, compression | `daedalus` (then adopt in hosts) |
-| Change terminal UX, slash commands, A2A server | `icarus` |
-| Change editor UI, panels, chat rendering, browser tabs, desktop packaging | `monkeybyte` |
-| Add a provider/model/MCP capability | `daedalus` core — both hosts pick it up through the shared `daedalus.db` |
-| Expose a host-specific capability (UI control, web tools) as an agent tool | the host repo, via `ToolFactory::register_tool` (replace-by-name since daedalus 0.9.7) |
+| You want to… | Component(s) |
+|--------------|--------------|
+| Change agent-loop behavior, tools, providers, MCP, settings schema, compression | `daedalus/` (then adopt in hosts) |
+| Change terminal UX, slash commands, A2A server | `icarus/` |
+| Change editor UI, panels, chat rendering, browser tabs, desktop packaging | `monkeybyte/` |
+| Add a provider/model/MCP capability | `daedalus/` core — both hosts pick it up through the shared `daedalus.db` |
+| Expose a host-specific capability (UI control, web tools) as an agent tool | the host, via `ToolFactory::register_tool` (replace-by-name since daedalus 0.9.7) |
 
 ## Key documentation
 
-| Repo | Start here | Deep dives |
-|------|------------|------------|
-| daedalus | `daedalus/AGENTS.md`, `daedalus/Readme.md` | `daedalus/docs/` (library_design, storage, settings, tools, mcp_server, crash_resilience, …) + `CHANGELOG.md` |
+| Component | Start here | Deep dives |
+|-----------|------------|------------|
+| daedalus | `daedalus/AGENTS.md`, `daedalus/Readme.md` | `daedalus/docs/` (library_design, storage, settings, tools, mcp_server, crash_resilience, …) + `daedalus/CHANGELOG.md` |
 | icarus | `icarus/AGENTS.md`, `icarus/Readme.md` | `icarus/docs/` (cli, design, ui-design, a2a-protocol) |
 | monkeybyte | `monkeybyte/AGENTS.md`, `monkeybyte/docs/design.md` (authoritative spec) | `monkeybyte/README.md`, `monkeybyte/Plan.md` |
 
 ## Reserved directories
 
-`.daedalus/` directories (at workspace root, in each repo, and in any
-project an agent runs on) are **agent runtime state** — memory,
-transcripts, todos, logs. Never delete, rename, or hand-edit them, and
-never include them in cleanup tasks.
+`.daedalus/` directories (at the repo root and in any project an agent
+runs on) are **agent runtime state** — memory, transcripts, todos, logs.
+Never delete, rename, or hand-edit them, and never include them in
+cleanup tasks.
