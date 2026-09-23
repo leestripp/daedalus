@@ -61,6 +61,17 @@ option(DAEDALUS_BUILD_MONKEYBYTE "Build the monkeybyte GTK desktop host" ${_DAED
 # slices: lib / cli / app).
 enable_testing()
 
+# --- shared dependencies -----------------------------------------------------
+# §Monorepo (2026-09-24): declare OmniNet at the top level so the whole tree
+# shares ONE FetchContent declaration (and therefore one clone under
+# build/_deps). daedalus/cmake/FetchOmniNet.cmake is the single source of
+# truth — daedalus/CMakeLists.txt includes the same file for standalone
+# library builds; the second include is a no-op (first declaration wins).
+# Declaring here costs nothing when OmniNet is never populated (declaration
+# alone does no network I/O).
+include(FetchContent)
+include(${CMAKE_CURRENT_SOURCE_DIR}/daedalus/cmake/FetchOmniNet.cmake)
+
 # --- library (always built) --------------------------------------------------
 # DAEDALUS_SUPERBUILD tells daedalus/CMakeLists.txt to treat the monorepo
 # root like a standalone library build: demos + tests default ON, user-local

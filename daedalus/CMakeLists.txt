@@ -177,18 +177,13 @@ if(DEFINED OMNINET_LOCAL AND EXISTS "${OMNINET_LOCAL}/CMakeLists.txt")
     message(STATUS "[daedalus] Using local OmniNet at ${OMNINET_LOCAL}")
     add_subdirectory("${OMNINET_LOCAL}" omninet-build EXCLUDE_FROM_ALL)
 else()
+    # §Monorepo (2026-09-24): the declaration lives in cmake/FetchOmniNet.cmake,
+    # shared with the superbuild root. In a monorepo build the root already
+    # included it (first declaration wins — this include is a no-op and the
+    # root's is used); standalone daedalus builds declare it here. Either
+    # way exactly ONE declaration/fetch exists per build tree.
     message(STATUS "[daedalus] Fetching OmniNet from gitlab.com/leestripp/omninet")
-    FetchContent_Declare(
-        OmniNet
-        GIT_REPOSITORY https://gitlab.com/leestripp/omninet.git
-        GIT_TAG        main
-        # NOT shallow: OmniNet's CMakeLists detects its version via
-        # `git describe --tags --abbrev=0`. A shallow clone only carries
-        # the single branch tip and has no tag history, so the lookup
-        # fails and falls back to FALLBACK_VERSION ("0.1.0"). A full
-        # clone keeps all tags, so e.g. HEAD just past v0.8.2 reports
-        # `0.8.2` correctly instead of the misleading `0.1.0`.
-    )
+    include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchOmniNet.cmake)
     FetchContent_MakeAvailable(OmniNet)
 endif()
 
