@@ -1,11 +1,22 @@
 cmake_minimum_required(VERSION 3.28)
 
 # ============================================================================
-# icarus - CLI AI coding agent built on daedalus library
-# Uses FetchContent to get the latest daedalus from the main branch
+# icarus - CLI AI coding agent built on the daedalus library
+#
+# §Monorepo (2026-09-24): dual-mode daedalus consumption.
+#   - In-tree (monorepo superbuild): the `daedalus` target already exists
+#     (root added daedalus/ first) — link it directly.
+#   - Standalone (cmake -S icarus): FetchContent pulls the daedalus monorepo
+#     from GitLab main; its superbuild root builds only the library when it
+#     is not the top-level project, so no GTK/host deps leak in.
+# The old FetchContent_Populate + ExternalProject_Add double-build is gone:
+# both modes link the `daedalus` CMake target, which propagates OmniNet,
+# OpenSSL, nlohmann_json and the static lib's PRIVATE deps (png/jpeg/poppler)
+# transitively.
 # ============================================================================
 
-# Prefer gcc/g++ when no compiler was forced by the user
+# Prefer gcc/g++ when no compiler was forced by the user (standalone builds;
+# in the superbuild CMAKE_CXX_COMPILER is already set and this is a no-op)
 if(NOT DEFINED CMAKE_CXX_COMPILER)
     find_program(_ICARUS_GXX g++)
     if(_ICARUS_GXX)
@@ -71,27 +82,54 @@ pkg_check_modules(UUID REQUIRED uuid)
 pkg_check_modules(JPEG REQUIRED libjpeg)
 
 # ============================================================================
-# Fetch daedalus source
+# daedalus (dual-mode, see header comment)
 # ============================================================================
-# §Task A4 (CodeMax.md §16): CMP0169 set to OLD to silence the
-# FetchContent_Populate deprecation warning. We can't use
-# FetchContent_MakeAvailable here because daedalus is built via
-# ExternalProject_Add (below), not add_subdirectory.
-cmake_policy(SET CMP0169 OLD)
-
 include(FetchContent)
-FetchContent_Declare(
-    daedalus
-    GIT_REPOSITORY https://gitlab.com/leestripp/daedalus.git
-    GIT_TAG main
-)
-FetchContent_Populate(daedalus)
-set(DAEDALUS_SRC_DIR ${CMAKE_BINARY_DIR}/_deps/daedalus-src)
+if(TARGET daedalus)
+    # In-tree monorepo build.
+    set(DAEDALUS_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../daedalus)
+else()
+    # Standalone: fetch the monorepo, build only the library.
+    set(DAEDALUS_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
+    set(DAEDALUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(
+        daedalus
+        GIT_REPOSITORY https://gitlab.com/leestripp/daedalus.git
+        GIT_TAG main
+        # NOT shallow: daedalus derives its version via git describe.
+    )
+    FetchContent_MakeAvailable(daedalus)
+    set(DAEDALUS_SRC_DIR ${daedalus_SOURCE_DIR}/daedalus)
+endif()
+
+# Include dirs for headers that public daedalus headers pull in transitively
+# (<daedalus/settings.h> → OmniNet's <db/Database.h>, nlohmann/json.hpp).
+# Linking the `daedalus` target already propagates these; the explicit list
+# is for targets that need the headers WITHOUT linking the library (the
+# header-only icarus_test_util). Computed for both build modes — each entry
+# is added only when it actually exists (e.g. nlohmann_json may come from a
+# system package, sqlite_vec is fetched by OmniNet).
+set(DAEDALUS_DEP_INCLUDES "")
+FetchContent_GetProperties(OmniNet)
+FetchContent_GetProperties(nlohmann_json)
+FetchContent_GetProperties(sqlite_vec)
+foreach(_dep_inc
+        "${omninet_SOURCE_DIR}/src"
+        "${nlohmann_json_SOURCE_DIR}/include"
+        "${nlohmann_json_SOURCE_DIR}/single_include"
+        "${sqlite_vec_SOURCE_DIR}")
+    if(_dep_inc AND EXISTS "${_dep_inc}")
+        list(APPEND DAEDALUS_DEP_INCLUDES "${_dep_inc}")
+    endif()
+endforeach()
 
 # §Task 1 (CodeMax.md §16.3): linenoise — single-file guerrilla line
 # editing library. Pinned to commit a473823 (2026-05-02). BSD-2-Clause,
 # see copyright header in linenoise.c. Built as a static C library and
 # linked into icarus.
+# CMP0169 OLD silences the FetchContent_Populate deprecation warning (we
+# populate linenoise manually because it has no CMakeLists of its own).
+cmake_policy(SET CMP0169 OLD)
 FetchContent_Declare(
     linenoise
     GIT_REPOSITORY https://github.com/antirez/linenoise.git
@@ -107,7 +145,9 @@ set_target_properties(linenoise PROPERTIES C_STANDARD 99)
 # daedalus settings-demo uses (see daedalus demos/daedalus-settings-tui/
 # CMakeLists.txt). The demo's tab sources are compiled straight into the
 # icarus binary (below) so bare /settings can open the settings TUI
-# in-process instead of shelling out to a separate executable.
+# in-process instead of shelling out to a separate executable. In the
+# monorepo superbuild the demo may already have populated ftxui — the first
+# FetchContent declaration wins, and both pin v7.0.1.
 set(FTXUI_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_TESTS    OFF CACHE BOOL "" FORCE)
 set(FTXUI_BUILD_DOCS     OFF CACHE BOOL "" FORCE)
@@ -120,26 +160,6 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(ftxui)
-
-# ============================================================================
-# Build daedalus as external project
-# ============================================================================
-set(DAEDALUS_BUILD_DIR ${CMAKE_BINARY_DIR}/daedalus)
-
-include(ExternalProject)
-ExternalProject_Add(daedalus_build
-    SOURCE_DIR ${DAEDALUS_SRC_DIR}
-    BINARY_DIR ${DAEDALUS_BUILD_DIR}
-    INSTALL_COMMAND ""
-    CMAKE_ARGS -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DDAEDALUS_DEMO_SETTINGS_TUI=OFF
-    BUILD_BYPRODUCTS ${CMAKE_BINARY_DIR}/daedalus/libdaedalus.a
-)
-
-# ============================================================================
-# OmniNet paths (available after FetchContent_Populate)
-# ============================================================================
-set(OMNINET_BUILD_DIR ${DAEDALUS_BUILD_DIR}/_deps/omninet-build)
-set(FMT_DIR ${OMNINET_BUILD_DIR}/_deps/fmt-src)
 
 # ============================================================================
 # icarus executable
@@ -162,11 +182,13 @@ add_executable(icarus
     ${DAEDALUS_SRC_DIR}/demos/daedalus-settings-tui/AgentTab.cpp
 )
 
-# Link against all required libraries
+# Link against all required libraries. The `daedalus` target transitively
+# provides OmniNet, OpenSSL and nlohmann_json (PUBLIC) plus the static
+# lib's PRIVATE deps as link-only items; the explicit system libs below are
+# kept for clarity and for icarus's own direct uses (uuid, sqlite3, z).
 target_link_libraries(icarus
     PRIVATE
-        ${CMAKE_BINARY_DIR}/daedalus/libdaedalus.a
-        ${CMAKE_BINARY_DIR}/daedalus/_deps/omninet-build/libOmniNet.a
+        daedalus
         linenoise
         ftxui::screen
         ftxui::dom
@@ -190,20 +212,10 @@ target_include_directories(icarus
         ${DAEDALUS_SRC_DIR}/include
         ${DAEDALUS_SRC_DIR}/demos/common
         ${DAEDALUS_SRC_DIR}/demos/daedalus-settings-tui
-        # §Settings TUI (2026-07-30): <daedalus/settings.h> includes
-        # <db/Database.h>, which ships with the OmniNet sources inside the
-        # daedalus ExternalProject build tree.
-        ${DAEDALUS_BUILD_DIR}/_deps/omninet-src/src
-        ${OMNINET_BUILD_DIR}/_deps/fmt-src/include
-        ${OMNINET_BUILD_DIR}/_deps/nlohmann_json-src/include
-        ${OMNINET_BUILD_DIR}/_deps/sqlite_vec-src
-        ${DAEDALUS_BUILD_DIR}/_deps/sqlite-vec-src
+        ${DAEDALUS_DEP_INCLUDES}
         ${PNG_INCLUDE_DIRS}
         ${UUID_INCLUDE_DIRS}
 )
-
-# Make icarus depend on daedalus build.
-add_dependencies(icarus daedalus_build)
 
 # ============================================================================
 # Unit tests (§Tests 2026-08-20)
@@ -218,23 +230,26 @@ endif()
 
 # §UA 2026-07-29: derive the icarus version from the latest git tag so the
 # binary can identify itself in the HTTP User-Agent (AgentConfig::user_agent)
-# without a manually maintained version file. Falls back to "dev" when the
-# tree has no tags or git is unavailable.
+# without a manually maintained version file.
+# §Monorepo (2026-09-24): icarus tags are prefixed (`icarus/x.y.z`) so they
+# can't collide with the library's bare version tags; strip the prefix.
+# Falls back to "dev" when no icarus/* tag exists or git is unavailable.
 find_package(Git QUIET)
 set(ICARUS_VERSION "dev")
 if(GIT_FOUND)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
+        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "icarus/*"
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         OUTPUT_VARIABLE ICARUS_GIT_TAG
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
     if(ICARUS_GIT_TAG)
-        set(ICARUS_VERSION ${ICARUS_GIT_TAG})
+        string(REGEX REPLACE "^icarus/" "" ICARUS_VERSION "${ICARUS_GIT_TAG}")
     endif()
 endif()
 target_compile_definitions(icarus PRIVATE ICARUS_VERSION="${ICARUS_VERSION}")
+message(STATUS "[icarus] version: ${ICARUS_VERSION}")
 
 # Install icarus to <prefix>/bin — ~/.local by default, /usr/local when
 # -DCMAKE_INSTALL_PREFIX=/usr/local is passed (e.g. container builds).
@@ -250,8 +265,8 @@ if(CPPCHECK_EXECUTABLE)
     message(STATUS "[icarus] cppcheck found: ${CPPCHECK_EXECUTABLE}")
 
     file(GLOB_RECURSE _ICARUS_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/src/*.cpp"
-        "${CMAKE_SOURCE_DIR}/src/*.h")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/*.h")
 
     add_custom_target(icarus_cppcheck
         COMMAND ${CPPCHECK_EXECUTABLE}
@@ -263,11 +278,11 @@ if(CPPCHECK_EXECUTABLE)
             --suppress=unusedStructMember
             --suppress=noExplicitConstructor:*daedalus*
             --suppress=returnByReference:*daedalus*
-            -I ${CMAKE_SOURCE_DIR}/src
+            -I ${CMAKE_CURRENT_SOURCE_DIR}/src
             -I ${DAEDALUS_SRC_DIR}/include
             -I ${DAEDALUS_SRC_DIR}/demos/common
             ${_ICARUS_SOURCES}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         COMMENT "[icarus] Running cppcheck"
         VERBATIM
     )

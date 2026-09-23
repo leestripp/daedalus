@@ -2096,3 +2096,13 @@ target_link_libraries(daedalus_status_only_breaker_tests PRIVATE
     pthread
 )
 add_test(NAME status_only_breaker_tests COMMAND daedalus_status_only_breaker_tests)
+
+# ============================================================================
+# §Monorepo (2026-09-24): label every daedalus test "lib" so the superbuild
+# root can offer `ctest -L lib` slices. Must happen here — test names are
+# only visible to set_property in the directory that created them.
+# ============================================================================
+get_property(_daedalus_all_tests DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+if(_daedalus_all_tests)
+    set_property(TEST ${_daedalus_all_tests} APPEND PROPERTY LABELS lib)
+endif()

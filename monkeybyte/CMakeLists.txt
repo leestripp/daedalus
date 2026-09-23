@@ -3,17 +3,20 @@ project(monkeybyte VERSION 0.1.0 LANGUAGES CXX)
 
 # App version: latest git tag (e.g. "0.5.1"); fall back to the project
 # version above when git/tags are unavailable (source tarball builds).
+# §Monorepo (2026-09-24): monkeybyte tags are prefixed (`monkeybyte/x.y.z`)
+# so they can't collide with the library's bare version tags; strip the
+# prefix. PROJECT_VERSION fallback covers tarball builds with no git.
 find_package(Git QUIET)
 set(MONKEYBYTE_APP_VERSION "${PROJECT_VERSION}")
 if(Git_FOUND)
   execute_process(
-    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "monkeybyte/*"
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     OUTPUT_VARIABLE MONKEYBYTE_GIT_TAG
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET)
-  if(MONKEYBYTE_GIT_TAG MATCHES "^v?[0-9]+\\.[0-9]+\\.[0-9]+")
-    string(REGEX REPLACE "^v" "" MONKEYBYTE_APP_VERSION "${MONKEYBYTE_GIT_TAG}")
+  if(MONKEYBYTE_GIT_TAG MATCHES "^monkeybyte/v?[0-9]+\\.[0-9]+\\.[0-9]+")
+    string(REGEX REPLACE "^monkeybyte/" "" MONKEYBYTE_APP_VERSION "${MONKEYBYTE_GIT_TAG}")
   endif()
 endif()
 message(STATUS "monkeybyte version: ${MONKEYBYTE_APP_VERSION}")
@@ -38,28 +41,30 @@ find_package(nlohmann_json 3.11 REQUIRED)
 find_program(CPPCHECK cppcheck)
 
 # --- daedalus agent library (chat backend) ---
-# Fetches daedalus from GitLab; daedalus in turn fetches OmniNet from the
-# same user (see its own CMakeLists). Demos/tests disabled for embedding.
-include(FetchContent)
-set(DAEDALUS_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
-set(DAEDALUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-  daedalus
-  GIT_REPOSITORY https://gitlab.com/leestripp/daedalus.git
-  # Track main: every clean build pulls the latest daedalus. NEVER patch the
-  # fetched copy under build/_deps - write a bug report upstream instead.
-  GIT_TAG        main
-  GIT_SHALLOW    TRUE
-  # embedded dependency: build it, but don't install its libs/headers/tools
-  EXCLUDE_FROM_ALL
-)
-FetchContent_MakeAvailable(daedalus)
+# §Monorepo (2026-09-24): dual-mode. In-tree the superbuild root already
+# added daedalus/ — use the target directly. Standalone (cmake -S
+# monkeybyte) fetches the daedalus monorepo from GitLab; its superbuild
+# root builds only the library when it is not the top-level project.
+# NEVER patch the fetched copy under build/_deps - fix upstream instead.
+if(NOT TARGET daedalus)
+  include(FetchContent)
+  set(DAEDALUS_BUILD_DEMOS OFF CACHE BOOL "" FORCE)
+  set(DAEDALUS_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+  FetchContent_Declare(
+    daedalus
+    GIT_REPOSITORY https://gitlab.com/leestripp/daedalus.git
+    GIT_TAG        main
+    # embedded dependency: build it, but don't install its libs/headers/tools
+    EXCLUDE_FROM_ALL
+  )
+  FetchContent_MakeAvailable(daedalus)
+endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
 # --- core library (shared by app and tests) ---
 file(GLOB_RECURSE MONKEYBYTE_CORE_SOURCES CONFIGURE_DEPENDS src/monkeybyte/*.cpp)
-list(REMOVE_ITEM MONKEYBYTE_CORE_SOURCES ${CMAKE_SOURCE_DIR}/src/monkeybyte/main.cpp)
+list(REMOVE_ITEM MONKEYBYTE_CORE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/monkeybyte/main.cpp)
 if(MONKEYBYTE_CORE_SOURCES)
   add_library(monkeybyte_core STATIC ${MONKEYBYTE_CORE_SOURCES})
   target_include_directories(monkeybyte_core PUBLIC src)
@@ -86,10 +91,10 @@ file(MAKE_DIRECTORY ${SCHEMA_BUILD_DIR})
 add_custom_command(
   OUTPUT ${SCHEMA_BUILD_DIR}/gschemas.compiled
   COMMAND ${CMAKE_COMMAND} -E copy
-          ${CMAKE_SOURCE_DIR}/data/io.github.monkeybyte.gschema.xml
+          ${CMAKE_CURRENT_SOURCE_DIR}/data/io.github.monkeybyte.gschema.xml
           ${SCHEMA_BUILD_DIR}/
   COMMAND ${GLIB_COMPILE_SCHEMAS} ${SCHEMA_BUILD_DIR}
-  DEPENDS ${CMAKE_SOURCE_DIR}/data/io.github.monkeybyte.gschema.xml
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/data/io.github.monkeybyte.gschema.xml
   COMMENT "Compiling GSettings schema")
 add_custom_target(gschemas ALL DEPENDS ${SCHEMA_BUILD_DIR}/gschemas.compiled)
 add_dependencies(monkeybyte gschemas)
@@ -97,7 +102,7 @@ add_dependencies(monkeybyte gschemas)
 # --- theme / style-scheme data next to the binary ---
 add_custom_command(TARGET monkeybyte POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_directory
-          ${CMAKE_SOURCE_DIR}/data $<TARGET_FILE_DIR:monkeybyte>/data)
+          ${CMAKE_CURRENT_SOURCE_DIR}/data $<TARGET_FILE_DIR:monkeybyte>/data)
 
 # --- install (user-local friendly: cmake --install build --prefix ~/.local) ---
 # Default the prefix to the current user's ~/.local when none is given, so a
@@ -129,6 +134,8 @@ if(TEST_SOURCES)
   add_executable(unit_tests ${TEST_SOURCES})
   target_link_libraries(unit_tests PRIVATE ${MONKEYBYTE_CORE_LIB})
   add_test(NAME unit_tests COMMAND unit_tests)
+  # §Monorepo (2026-09-24): "app" label for `ctest -L app` slices.
+  set_tests_properties(unit_tests PROPERTIES LABELS app)
 endif()
 
 # --- static analysis ---
@@ -148,7 +155,7 @@ if(CPPCHECK)
             --suppress=passedByValueCallback
             --suppress=useStlAlgorithm
             ${ALL_SOURCES}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     COMMENT "Running cppcheck"
     VERBATIM)
 endif()

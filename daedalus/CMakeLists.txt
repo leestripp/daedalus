@@ -12,8 +12,10 @@ project(daedalus LANGUAGES CXX C)
 
 # Detect whether daedalus is being built stand-alone or consumed as a
 # dependency via add_subdirectory() / FetchContent. Several defaults below
-# change depending on this.
-if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR)
+# change depending on this. §Monorepo (2026-09-24): the superbuild root sets
+# DAEDALUS_SUPERBUILD so a top-level monorepo build behaves exactly like a
+# standalone library build.
+if(CMAKE_CURRENT_SOURCE_DIR STREQUAL CMAKE_SOURCE_DIR OR DAEDALUS_SUPERBUILD)
     set(DAEDALUS_IS_TOP_LEVEL ON)
 else()
     set(DAEDALUS_IS_TOP_LEVEL OFF)
@@ -24,8 +26,11 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Automatic version from git tags
+# §Monorepo (2026-09-24): the repo root now also carries prefixed host tags
+# (icarus/x.y.z, monkeybyte/x.y.z). --match '[0-9]*' restricts describe to the
+# library's own bare version tags so host tags never leak into GIT_VERSION.
 execute_process(
-    COMMAND git describe --tags --always --dirty
+    COMMAND git describe --tags --always --dirty --match "[0-9]*"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE

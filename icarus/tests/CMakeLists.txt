@@ -24,14 +24,14 @@ set(DOCTEST_NO_INSTALL ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(doctest)
 
 # Include dirs needed to compile src/util.h / src/migrate.h — mirrors the
-# icarus target (daedalus.h pulls fmt/nlohmann/json headers transitively).
+# icarus target (daedalus headers pull OmniNet/nlohmann-json headers
+# transitively). §Monorepo (2026-09-24): dep include dirs come from the
+# parent's DAEDALUS_DEP_INCLUDES, computed for both build modes.
 set(ICARUS_TEST_INCLUDES
-    ${CMAKE_SOURCE_DIR}/src
+    ${icarus_SOURCE_DIR}/src
     ${DAEDALUS_SRC_DIR}/include
     ${DAEDALUS_SRC_DIR}/demos/common
-    ${DAEDALUS_BUILD_DIR}/_deps/omninet-src/src
-    ${OMNINET_BUILD_DIR}/_deps/fmt-src/include
-    ${OMNINET_BUILD_DIR}/_deps/nlohmann_json-src/include
+    ${DAEDALUS_DEP_INCLUDES}
     ${PNG_INCLUDE_DIRS}
     ${UUID_INCLUDE_DIRS}
 )
@@ -47,15 +47,16 @@ target_link_libraries(icarus_test_util PRIVATE doctest::doctest)
 # --- migrate: needs src/migrate.cpp + libdaedalus.a (Paths::make_default) ---
 add_executable(icarus_test_migrate
     test_migrate.cpp
-    ${CMAKE_SOURCE_DIR}/src/migrate.cpp
+    ${icarus_SOURCE_DIR}/src/migrate.cpp
 )
-add_dependencies(icarus_test_migrate daedalus_build)
+# §Monorepo (2026-09-24): link the `daedalus` CMake target in both build
+# modes (it carries OmniNet/OpenSSL/nlohmann_json transitively) instead of
+# the old ExternalProject .a paths.
 target_include_directories(icarus_test_migrate PRIVATE ${ICARUS_TEST_INCLUDES})
 target_link_libraries(icarus_test_migrate
     PRIVATE
         doctest::doctest
-        ${CMAKE_BINARY_DIR}/daedalus/libdaedalus.a
-        ${CMAKE_BINARY_DIR}/daedalus/_deps/omninet-build/libOmniNet.a
+        daedalus
         OpenSSL::Crypto
         OpenSSL::SSL
         nlohmann_json::nlohmann_json
@@ -72,3 +73,10 @@ target_link_libraries(icarus_test_migrate
 add_test(NAME cli_args      COMMAND icarus_test_util --test-case="cli_args*")
 add_test(NAME system_prompt COMMAND icarus_test_util --test-case="system_prompt*")
 add_test(NAME migrate       COMMAND icarus_test_migrate)
+
+# §Monorepo (2026-09-24): label icarus tests "cli" for `ctest -L cli`
+# slices from the monorepo root build.
+get_property(_icarus_all_tests DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+if(_icarus_all_tests)
+    set_property(TEST ${_icarus_all_tests} APPEND PROPERTY LABELS cli)
+endif()
