@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- MonkeyByte icon: flat geometric monkey head -->
+  <!-- ears -->
+  <circle cx="104" cy="208" r="72" fill="#6B4A2F"/>
+  <circle cx="408" cy="208" r="72" fill="#6B4A2F"/>
+  <circle cx="104" cy="208" r="38" fill="#E8C39E"/>
+  <circle cx="408" cy="208" r="38" fill="#E8C39E"/>
+  <!-- head -->
+  <circle cx="256" cy="272" r="176" fill="#6B4A2F"/>
+  <!-- face: eye mask + muzzle (tan) -->
+  <ellipse cx="256" cy="238" rx="122" ry="98" fill="#E8C39E"/>
+  <ellipse cx="256" cy="338" rx="98" ry="80" fill="#E8C39E"/>
+  <!-- eyes -->
+  <circle cx="206" cy="242" r="18" fill="#3A2A1A"/>
+  <circle cx="306" cy="242" r="18" fill="#3A2A1A"/>
+  <circle cx="212" cy="236" r="6" fill="#FFFFFF"/>
+  <circle cx="312" cy="236" r="6" fill="#FFFFFF"/>
+  <!-- nostrils -->
+  <ellipse cx="238" cy="330" rx="9" ry="12" fill="#3A2A1A"/>
+  <ellipse cx="274" cy="330" rx="9" ry="12" fill="#3A2A1A"/>
+  <!-- mouth (filled crescent — renders everywhere, unlike a stroked arc) -->
+  <path d="M 202 366 Q 256 406 310 366 Q 256 386 202 366 Z" fill="#3A2A1A"/>
+</svg>

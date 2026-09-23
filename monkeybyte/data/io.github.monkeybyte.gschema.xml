@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="io.github.monkeybyte" path="/io/github/monkeybyte/">
+    <child name="window" schema="io.github.monkeybyte.window"/>
+    <child name="sidebar" schema="io.github.monkeybyte.sidebar"/>
+    <child name="chat-panel" schema="io.github.monkeybyte.chat-panel"/>
+    <child name="folder-picker" schema="io.github.monkeybyte.folder-picker"/>
+    <child name="editor" schema="io.github.monkeybyte.editor"/>
+    <child name="theme" schema="io.github.monkeybyte.theme"/>
+    <child name="chat" schema="io.github.monkeybyte.chat"/>
+  </schema>
+  <schema id="io.github.monkeybyte.window" path="/io/github/monkeybyte/window/">
+    <key name="width" type="i"><default>1100</default></key>
+    <key name="height" type="i"><default>720</default></key>
+  </schema>
+  <schema id="io.github.monkeybyte.sidebar" path="/io/github/monkeybyte/sidebar/">
+    <key name="width" type="i"><default>260</default></key>
+    <key name="active-panel" type="i"><default>0</default></key>
+  </schema>
+  <schema id="io.github.monkeybyte.chat-panel" path="/io/github/monkeybyte/chat-panel/">
+    <key name="width" type="i"><default>320</default></key>
+  </schema>
+  <schema id="io.github.monkeybyte.folder-picker" path="/io/github/monkeybyte/folder-picker/">
+    <key name="show-hidden" type="b"><default>false</default></key>
+  </schema>
+  <schema id="io.github.monkeybyte.editor" path="/io/github/monkeybyte/editor/">
+    <key name="font-size" type="i"><default>14</default></key>
+    <key name="tab-size" type="i"><default>2</default></key>
+    <key name="word-wrap" type="b"><default>true</default></key>
+    <key name="line-numbers" type="b"><default>true</default></key>
+    <key name="highlight-current-line" type="b"><default>true</default></key>
+  </schema>
+  <schema id="io.github.monkeybyte.theme" path="/io/github/monkeybyte/theme/">
+    <key name="name" type="s"><default>"system"</default></key>
+  </schema>
+  <schema id="io.github.monkeybyte.chat" path="/io/github/monkeybyte/chat/">
+    <key name="selected-model" type="s"><default>""</default></key>
+  </schema>
+</schemalist>

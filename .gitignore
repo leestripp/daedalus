@@ -1,26 +1,21 @@
-# .gitignore
-#
-# Goal: `git add .` should only stage source files. Anything else
-# (build artifacts, settings, scratch dirs, editor files, OS junk)
-# should be ignored automatically.
+# Root .gitignore — daedalus monorepo (library in daedalus/, hosts in icarus/ + monkeybyte/)
 
-# ---------------------------------------------------------------------------
-# Local-only state (settings, memory, scratch files)
-# ---------------------------------------------------------------------------
-.codemax/
-.codemax-*/
+# Agent runtime state (daedalus agents) — never commit
 .daedalus/
 .daedalus-*/
 .agents/
-prompt.txt                  # design source-of-truth, not source code
+.codemax/
+.codemax-*/
+prompt.txt
 Testing/
 
-# ---------------------------------------------------------------------------
-# Build artifacts
-# ---------------------------------------------------------------------------
+# Build trees (root-level superbuild + any stray per-host trees)
 build/
+build-*/
 out/
 dist/
+
+# Compiled artifacts
 *.o
 *.obj
 *.a
@@ -33,76 +28,13 @@ dist/
 *.pdb
 *.exp
 *.ilk
-*.pdb
 
-# ---------------------------------------------------------------------------
-# Auto-generated files
-# ---------------------------------------------------------------------------
-src/core/version.h
+# Tooling
 compile_commands.json
 .cxx/
-
-# ---------------------------------------------------------------------------
-# graphify / script outputs
-# ---------------------------------------------------------------------------
 graphify-out/
 
-# ---------------------------------------------------------------------------
-# OS / editor junk
-# ---------------------------------------------------------------------------
+# OS cruft
 .DS_Store
 Thumbs.db
 desktop.ini
-*~               # editor backups
-*.bak
-*.orig
-*.rej
-*.tmp
-*.swp
-*.swo
-*.swn
-.vscode/
-.idea/
-*.code-workspace
-.cursor/
-.aider*
-.cache/
-
-# ---------------------------------------------------------------------------
-# Test outputs
-# ---------------------------------------------------------------------------
-Testing/
-*.gcda
-*.gcno
-*.gcov
-lcov.info
-*.log
-/core
-/core.*
-/core.[0-9]*
-
-# ---------------------------------------------------------------------------
-# Languages / ecosystems that creep in but are not part of the build
-# ---------------------------------------------------------------------------
-__pycache__/
-*.pyc
-.venv/
-scripts/.venv/
-node_modules/
-.mypy_cache/
-.pytest_cache/
-
-# ---------------------------------------------------------------------------
-# Secrets (defence in depth — also kept out of source control)
-# ---------------------------------------------------------------------------
-.env
-.env.*
-*.pem
-*.key
-*.crt
-*.p12
-*.pfx
-
-# clang-tidy / clang-format — local developer ergonomics only, not committed
-.clang-tidy
-.clang-format

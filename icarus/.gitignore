@@ -1,0 +1,10 @@
+# Gitignore
+
+build/
+.codemax/
+.codemax-*/
+.daedalus/
+.daedalus-*/
+
+prompt.txt
+
