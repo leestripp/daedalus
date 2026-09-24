@@ -1,21 +1,38 @@
-# Root .gitignore — daedalus monorepo (library in daedalus/, hosts in icarus/ + monkeybyte/)
+# .gitignore — daedalus monorepo (ONE file for the whole repo)
+#
+# §Monorepo (2026-09-24): consolidated from the old per-component files
+# (daedalus/, icarus/, monkeybyte/ .gitignore). Patterns here have no
+# leading slash, so git applies them recursively to every subdirectory —
+# one ignore policy for library + both hosts.
+#
+# Goal: `git add .` should only stage source files. Anything else
+# (build artifacts, agent state, scratch dirs, editor files, OS junk,
+# secrets) is ignored automatically.
 
+# ---------------------------------------------------------------------------
 # Agent runtime state (daedalus agents) — never commit
+# ---------------------------------------------------------------------------
 .daedalus/
 .daedalus-*/
-.agents/
 .codemax/
 .codemax-*/
+.agents/
+# prompt.txt: design source-of-truth, not source code
 prompt.txt
 Testing/
 
-# Build trees (root-level superbuild + any stray per-host trees)
+# ---------------------------------------------------------------------------
+# Build trees (superbuild root + any stray per-component trees;
+# build-*/ also covers build-asan/, build-release/)
+# ---------------------------------------------------------------------------
 build/
 build-*/
 out/
 dist/
 
+# ---------------------------------------------------------------------------
 # Compiled artifacts
+# ---------------------------------------------------------------------------
 *.o
 *.obj
 *.a
@@ -29,12 +46,82 @@ dist/
 *.exp
 *.ilk
 
-# Tooling
+# ---------------------------------------------------------------------------
+# Auto-generated files
+# ---------------------------------------------------------------------------
+# daedalus generated header (anchored: patterns with slashes are
+# relative to this file's directory, i.e. the repo root)
+daedalus/src/core/version.h
 compile_commands.json
 .cxx/
-graphify-out/
 
+# ---------------------------------------------------------------------------
+# Tooling outputs / local developer ergonomics (not committed)
+# ---------------------------------------------------------------------------
+graphify-out/
+.clang-tidy
+.clang-format
+
+# ---------------------------------------------------------------------------
+# Test / coverage outputs
+# ---------------------------------------------------------------------------
+*.gcda
+*.gcno
+*.gcov
+lcov.info
+*.log
+/core
+/core.*
+/core.[0-9]*
+
+# ---------------------------------------------------------------------------
+# Editor junk
+# ---------------------------------------------------------------------------
+*~
+*.bak
+*.orig
+*.rej
+*.tmp
+*.swp
+*.swo
+*.swn
+.vscode/
+.idea/
+*.code-workspace
+.cursor/
+.aider*
+.cache/
+
+# ---------------------------------------------------------------------------
+# Languages / ecosystems that creep in but are not part of the build
+# ---------------------------------------------------------------------------
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+.mypy_cache/
+.pytest_cache/
+
+# ---------------------------------------------------------------------------
+# Secrets (defence in depth — also kept out of source control)
+# ---------------------------------------------------------------------------
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ---------------------------------------------------------------------------
+# monkeybyte .deb packaging artifacts (keep build-deb.sh tracked)
+# ---------------------------------------------------------------------------
+monkeybyte/packages/deb/*.deb
+monkeybyte/packages/deb/stage/
+
+# ---------------------------------------------------------------------------
 # OS cruft
+# ---------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
 desktop.ini
