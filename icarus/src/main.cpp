@@ -630,11 +630,12 @@ int main(int argc, char* argv[]) {
         std::string a = argv[i];
         if (a == "--help" || a == "-h") { print_help(argv[0]); return 0; }
         if (a == "--version" || a == "-v") {
-            // §version 2026-07-31: print icarus's own version (latest git
-            // tag via the ICARUS_VERSION compile definition) alongside the
-            // daedalus library version.
-            std::cout << "icarus " << ICARUS_VERSION
-                      << " (daedalus " << daedalus::Agent::library_version() << ")\n";
+            // §version 2026-07-31 / §Monorepo 2026-09-24: print icarus's
+            // version (latest git tag via the ICARUS_VERSION compile
+            // definition). Since the monorepo consolidation every component
+            // shares ONE tag stream, so the library version is always
+            // identical and no longer printed separately.
+            std::cout << "icarus " << ICARUS_VERSION << "\n";
             return 0;
         }
     }

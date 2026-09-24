@@ -118,7 +118,9 @@ inline void print_banner(const daedalus::Agent& agent,
     std::cout << "\n"
         << s.primary(border(box.top_left, box.top_right)) << "\n"
         << s.primary(row(title)) << "\n"
-        << s.primary(row(s.muted("Library: ") + daedalus::Agent::library_version())) << "\n"
+        // §Monorepo 2026-09-24: was "Library: <daedalus version>"; one
+        // unified tag stream means icarus's version IS the library's.
+        << s.primary(row(s.muted("Version:      ") + ICARUS_VERSION)) << "\n"
         << s.primary(sep()) << "\n"
         << s.primary(row(s.muted("Active model: ") + s.bold(active_name))) << "\n"
         << s.primary(row(s.muted("Model id:     ") + model_id)) << "\n"

@@ -173,7 +173,9 @@ public:
         daedalus::a2a::AgentCard card;
         card.name = "icarus";
         card.description = "Autonomous coding agent powered by daedalus";
-        card.version = daedalus::Agent::library_version();
+        // §Monorepo 2026-09-24: one tag stream — the card version is
+        // icarus's own (== the library's).
+        card.version = ICARUS_VERSION;
         card.capabilities.streaming = true;
         card.capabilities.push_notifications = false;
         card.capabilities.extended_agent_card = false;
