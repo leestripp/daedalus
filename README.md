@@ -22,6 +22,18 @@ ctest --test-dir build --output-on-failure    # or: -L lib | -L cli | -L app
 `-DDAEDALUS_BUILD_MONKEYBYTE=ON/OFF`; `-DDAEDALUS_BUILD_ICARUS=OFF`
 skips the CLI. Install prefix defaults to `~/.local`.
 
+## Install
+
+```bash
+./install.sh            # builds + installs everything to ~/.local
+./install.sh /opt/foo   # or a custom prefix
+```
+
+One pass installs icarus, monkeybyte, and the library, then handles
+monkeybyte's desktop integration (absolute `Exec` path in the `.desktop`
+file, GSettings schema compiled into the prefix, desktop/icon cache
+refresh).
+
 ## Use just the library
 
 Each subdir also builds standalone — and other CMake projects can embed

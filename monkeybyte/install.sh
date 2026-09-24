@@ -15,6 +15,13 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# §Monorepo (2026-09-24): inside the monorepo the root install.sh installs
+# icarus AND monkeybyte in one pass (and handles the desktop integration
+# below). Standalone checkouts keep the original single-app behaviour.
+if [[ -x ../install.sh && -d ../daedalus && -d ../icarus ]]; then
+    exec ../install.sh "$@"
+fi
+
 prefix="${1:-$HOME/.local}"
 
 cmake --build build
