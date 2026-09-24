@@ -202,4 +202,4 @@ cd build && ctest --output-on-failure   # all tests (incl. daedalus')
 
 ## License
 
-[MIT](LICENSE)
+[MIT](../LICENSE)
