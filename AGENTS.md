@@ -116,13 +116,12 @@ Consequences:
   `§BUG-006`, `2026-08-31`) annotate non-obvious decisions and
   cross-component contract points. Keep them accurate; add one for
   subtle fixes.
-- **Versioning — prefixed tags.** One repo, three version streams:
-  - bare `x.y.z` tags → the **library** (`git describe --match '[0-9]*'`)
-  - `icarus/x.y.z` → the CLI host
-  - `monkeybyte/x.y.z` → the desktop host
-  Each component derives its version from its own tag stream at
-  configure time and bakes it in as a compile definition. No
-  hand-maintained version files. User-Agents: `daedalus-icarus/<v>`,
+- **Versioning — ONE stream.** Bare `x.y.z` tags at the repo root are
+  the only tags; a release tags the whole monorepo once and the
+  library, icarus, and monkeybyte all derive their version from the
+  same `git describe --tags` at configure time, baked in as a compile
+  definition. No hand-maintained version files, no per-component tag
+  namespaces. User-Agents: `daedalus-icarus/<v>`,
   `daedalus-monkeybyte/<v>`.
 - `std::expected<T, std::string>`-style error handling, no exceptions
   for control flow; in monkeybyte, GTK callbacks must be wrapped in

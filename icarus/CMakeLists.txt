@@ -231,21 +231,21 @@ endif()
 # §UA 2026-07-29: derive the icarus version from the latest git tag so the
 # binary can identify itself in the HTTP User-Agent (AgentConfig::user_agent)
 # without a manually maintained version file.
-# §Monorepo (2026-09-24): icarus tags are prefixed (`icarus/x.y.z`) so they
-# can't collide with the library's bare version tags; strip the prefix.
-# Falls back to "dev" when no icarus/* tag exists or git is unavailable.
+# §Monorepo (2026-09-24): ONE version stream — icarus takes its version
+# from the same bare x.y.z tags as the library and monkeybyte.
+# Falls back to "dev" when no tag exists or git is unavailable.
 find_package(Git QUIET)
 set(ICARUS_VERSION "dev")
 if(GIT_FOUND)
     execute_process(
-        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "icarus/*"
+        COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
         OUTPUT_VARIABLE ICARUS_GIT_TAG
         OUTPUT_STRIP_TRAILING_WHITESPACE
         ERROR_QUIET
     )
     if(ICARUS_GIT_TAG)
-        string(REGEX REPLACE "^icarus/" "" ICARUS_VERSION "${ICARUS_GIT_TAG}")
+        set(ICARUS_VERSION "${ICARUS_GIT_TAG}")
     endif()
 endif()
 target_compile_definitions(icarus PRIVATE ICARUS_VERSION="${ICARUS_VERSION}")

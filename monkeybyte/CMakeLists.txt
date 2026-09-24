@@ -3,20 +3,20 @@ project(monkeybyte VERSION 0.1.0 LANGUAGES CXX)
 
 # App version: latest git tag (e.g. "0.5.1"); fall back to the project
 # version above when git/tags are unavailable (source tarball builds).
-# §Monorepo (2026-09-24): monkeybyte tags are prefixed (`monkeybyte/x.y.z`)
-# so they can't collide with the library's bare version tags; strip the
-# prefix. PROJECT_VERSION fallback covers tarball builds with no git.
+# §Monorepo (2026-09-24): ONE version stream — monkeybyte takes its version
+# from the same bare x.y.z tags as the library and icarus.
+# PROJECT_VERSION fallback covers tarball builds with no git.
 find_package(Git QUIET)
 set(MONKEYBYTE_APP_VERSION "${PROJECT_VERSION}")
 if(Git_FOUND)
   execute_process(
-    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0 --match "monkeybyte/*"
+    COMMAND ${GIT_EXECUTABLE} describe --tags --abbrev=0
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
     OUTPUT_VARIABLE MONKEYBYTE_GIT_TAG
     OUTPUT_STRIP_TRAILING_WHITESPACE
     ERROR_QUIET)
-  if(MONKEYBYTE_GIT_TAG MATCHES "^monkeybyte/v?[0-9]+\\.[0-9]+\\.[0-9]+")
-    string(REGEX REPLACE "^monkeybyte/" "" MONKEYBYTE_APP_VERSION "${MONKEYBYTE_GIT_TAG}")
+  if(MONKEYBYTE_GIT_TAG MATCHES "^v?[0-9]+\\.[0-9]+\\.[0-9]+")
+    string(REGEX REPLACE "^v" "" MONKEYBYTE_APP_VERSION "${MONKEYBYTE_GIT_TAG}")
   endif()
 endif()
 message(STATUS "monkeybyte version: ${MONKEYBYTE_APP_VERSION}")

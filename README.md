@@ -38,9 +38,10 @@ target_link_libraries(your_app PRIVATE daedalus)
 
 ## Versioning
 
-One repo, three tag streams: bare `x.y.z` = library, `icarus/x.y.z` and
-`monkeybyte/x.y.z` = hosts. Versions are derived from `git describe` at
-configure time — no hand-maintained version files.
+One repo, one version stream: a release tags the whole monorepo with a
+bare `x.y.z` tag, and the library, icarus, and monkeybyte all derive
+their version from the same `git describe` at configure time. No
+hand-maintained version files, no per-component tags.
 
 ## Documentation
 

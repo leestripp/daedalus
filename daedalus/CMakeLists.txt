@@ -26,11 +26,11 @@ endif()
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Automatic version from git tags
-# §Monorepo (2026-09-24): the repo root now also carries prefixed host tags
-# (icarus/x.y.z, monkeybyte/x.y.z). --match '[0-9]*' restricts describe to the
-# library's own bare version tags so host tags never leak into GIT_VERSION.
+# §Monorepo (2026-09-24): ONE version stream for the whole repo — bare
+# x.y.z tags at the root cover the library AND both hosts. No prefixed
+# per-component tags; every component describes the same tag set.
 execute_process(
-    COMMAND git describe --tags --always --dirty --match "[0-9]*"
+    COMMAND git describe --tags --always --dirty
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
     OUTPUT_VARIABLE GIT_VERSION
     OUTPUT_STRIP_TRAILING_WHITESPACE

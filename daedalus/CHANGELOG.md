@@ -14,9 +14,10 @@
     consumed via FetchContent — library-only embedders unaffected).
   - Host CMake is dual-mode: in-tree they link the `daedalus` target;
     standalone they FetchContent this repo (library only).
-  - Versioning uses prefixed tags: bare `x.y.z` for the library
-    (`git describe --match '[0-9]*'`), `icarus/x.y.z` and
-    `monkeybyte/x.y.z` for the hosts.
+  - Versioning is a single unified stream: bare `x.y.z` tags at the
+    repo root, with the library and both hosts deriving their version
+    from the same `git describe` (a brief prefixed-tag experiment was
+    reverted the same day).
   - All tests labelled `lib` / `cli` / `app` for `ctest -L` slices.
 
 

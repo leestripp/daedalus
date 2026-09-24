@@ -42,14 +42,17 @@ one CMake configure/build, one `ctest` run, one cppcheck/clang-tidy entry point.
 - [x] **monkeybyte**: `if(TARGET daedalus)` → skip its FetchContent block entirely. `else()` → standalone path as today.
 - [x] In-tree OmniNet include path for icarus (`<daedalus/settings.h>` → `<db/Database.h>`): resolve via `FetchContent_GetProperties(omninet)` (global properties work across sibling dirs).
 
-## Phase 4 — Versioning (prefixed tags) ✅ DONE (tags icarus/1.0.1, monkeybyte/0.9.11 created)
+## Phase 4 — Versioning ✅ DONE (REVISED: single unified stream)
 
-Tag namespace going forward: bare `x.y.z` = library, `icarus/x.y.z`, `monkeybyte/x.y.z` = hosts.
+**Decision change (2026-09-24):** the prefixed-tag scheme (`icarus/x.y.z`,
+`monkeybyte/x.y.z`) was implemented, then rejected by the user — a monorepo
+should have ONE version. The prefixed tags were deleted (local + remote).
+Going forward: bare `x.y.z` tags at the root cover the library AND both hosts.
 
-- [x] daedalus lib: `git describe --tags --match '[0-9]*'` (ignore prefixed host tags)
-- [x] icarus: `git describe --tags --abbrev=0 --match 'icarus/*'` → fallback `"dev"` until first `icarus/*` tag
-- [x] monkeybyte: same with `--match 'monkeybyte/*'`
-- [x] Ensure `git describe` runs against the repo root in both top-level and standalone-subdir configures (any subdir of the repo works)
+- [x] daedalus lib: `git describe --tags --always --dirty` (original behaviour)
+- [x] icarus: `git describe --tags --abbrev=0` → fallback `"dev"` (no `--match`)
+- [x] monkeybyte: same, `^v?[0-9]+\.[0-9]+\.[0-9]+` with `v` strip
+- [x] `git describe` runs against the repo in both top-level and standalone-subdir configures (any subdir works)
 
 ## Phase 5 — Verification (gate) ✅ DONE
 
