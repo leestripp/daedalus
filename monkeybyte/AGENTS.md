@@ -76,7 +76,13 @@ center → Chat panel docked right → Status Bar at the bottom.
 ## Build, run, test
 
 ```bash
-cmake -B build -G Ninja        # configure (fetches daedalus + OmniNet)
+# §Monorepo (2026-09-24): PREFERRED — build everything from the repo root:
+#   (cd .. && cmake -S . -B build && cmake --build build -j$(nproc))
+# One ./build for library + hosts. The standalone build below still works
+# (dual-mode) but creates a per-component build/ you must clean up yourself.
+# (run.sh auto-detects both build trees; superbuild binaries land in
+# build/icarus/ and build/monkeybyte/).
+cmake -B build -G Ninja        # configure (standalone: fetches daedalus monorepo)
 cmake --build build            # build app + unit_tests
 ./run.sh                       # rebuild + run with local GSettings schema
 cd build && ctest --output-on-failure   # run the test suite

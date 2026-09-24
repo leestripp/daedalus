@@ -107,6 +107,10 @@ into `build/_deps/` on first build.
 ```bash
 # Default: Release build, clang++ preferred
 
+# §Monorepo (2026-09-24): PREFERRED — build everything from the repo root:
+#   (cd .. && cmake -S . -B build && cmake --build build -j$(nproc))
+# One ./build for library + hosts. The standalone build below still works
+# (dual-mode) but creates a per-component build/ you must clean up yourself.
 cmake -S . -B build
 cmake --build build -j$(nproc)
 ```

@@ -121,11 +121,16 @@ is on the icarus include path.
 ### Standard build
 
 ```bash
+# §Monorepo (2026-09-24): PREFERRED — build everything from the repo root:
+#   (cd .. && cmake -S . -B build && cmake --build build -j$(nproc))
+# One ./build for library + hosts. The standalone build below still works
+# (dual-mode) but creates a per-component build/ you must clean up yourself.
 cmake -S . -B build
 cmake --build build -j$(nproc)
 ```
 
-The resulting binary is `build/icarus`. Default build type is `Release`
+The resulting binary is `build/icarus` (standalone) or `build/icarus/icarus`
+(superbuild at the repo root). Default build type is `Release`
 (`-O3`); use `-DCMAKE_BUILD_TYPE=Debug` for `-g`.
 
 ### Tests
