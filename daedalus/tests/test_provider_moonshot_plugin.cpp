@@ -113,8 +113,9 @@ void test_ms4_context_sizes() {
     // Kimi Code subscription endpoint model IDs (api.kimi.com/coding/v1).
     EXPECT(p->context_size_for("k3") == 1000000);
     EXPECT(p->context_size_for("k3-256k") == 262144);
-    EXPECT(p->context_size_for("kimi-for-coding") == 262144);
-    EXPECT(p->context_size_for("kimi-for-coding-highspeed") == 262144);
+    // §K2.8 (2026-09-30): kimi-for-coding is now K2.8 Preview (1M ctx).
+    EXPECT(p->context_size_for("kimi-for-coding") == 1000000);
+    EXPECT(p->context_size_for("kimi-for-coding-highspeed") == 1000000);
 
     const auto models = p->known_models();
     EXPECT(!models.empty());

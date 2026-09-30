@@ -27,6 +27,27 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **§K2.8 (2026-09-30): `kimi-for-coding` is now Kimi K2.8 Preview —
+  thinking effort levels and 1M context.** Moonshot silently re-pointed
+  the `kimi-for-coding` / `kimi-for-coding-highspeed` model IDs (Kimi
+  Code subscription endpoint, `api.kimi.com/coding/v1`) at the new K2.8
+  Preview model; the IDs are unchanged.
+  - `MoonshotPlugin::supported_thinking_levels()` now reports
+    **Low / High / Max** for the `kimi-for-coding` IDs (same structure
+    as K3; server default is Max, `None` remains ignored), so both hosts
+    offer the effort selector in model settings.
+  - `MoonshotPlugin::mutate_chat_payload()` sends the effort for
+    `kimi-for-coding` exactly like K3: `thinking.effort` on the Kimi
+    Code endpoint, top-level `reasoning_effort` on the platform.
+  - Static model table: `kimi-for-coding(-highspeed)` context size
+    256K -> 1M (K2.8 Preview ships 1M-token context on all tiers);
+    vision support was already flagged and remains.
+  - `kimi-k2.7-code` keeps its no-control behaviour (payload never
+    touched); the fixed-temperature clamp for the Kimi Code IDs is
+    unchanged.
+
 ### Added
 
 - **§MCP-CONTROL-CORE: `mcp_control` tool — agent-driven MCP server

@@ -10,8 +10,11 @@
  *
  *   - kimi-k3 / k3 / k3-256k:  Low / High / Max (thinking always on;
  *     None is ignored — K3 cannot disable thinking).
+ *   - kimi-for-coding (Kimi K2.8 Preview, §K2.8 2026-09-30):
+ *                              Low / High / Max, same as K3 (server
+ *     default is Max; None is ignored).
  *   - kimi-k2.5 / kimi-k2.6:   None only (thinking on/off switch).
- *   - kimi-k2.7-code / kimi-for-coding: no control (always thinks).
+ *   - kimi-k2.7-code:          no control (always thinks).
  *   - MiniMax-M3:              None only (thinking on/off switch).
  *   - MiniMax M2.x:            no control (always thinks).
  *

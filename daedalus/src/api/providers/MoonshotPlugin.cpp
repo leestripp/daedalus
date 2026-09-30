@@ -21,7 +21,12 @@ namespace {
 // https://www.kimi.com/code/docs/en/) uses its own model IDs — same
 // underlying models, different names:
 //   k3 / k3-256k                 Kimi K3 (1M / 256K context)
-//   kimi-for-coding(-highspeed)  Kimi K2.7 Code (256K context)
+//   kimi-for-coding(-highspeed)  Kimi K2.8 Preview (1M context; §K2.8 below)
+// §K2.8 (2026-09-30): the kimi-for-coding IDs now route to Kimi K2.8
+// Preview server-side (same model ID). K2.8 Preview adds 1M-token context
+// on all tiers and K3-style thinking effort levels low/high/max (max is
+// the server default), so the payload/capability logic below treats
+// kimi-for-coding like the K3 ids.
 // NOTE: the platform documents the "temperature fixed at 1.0" rule for
 // the kimi-k2.7-code IDs; the Kimi Code endpoint enforces the same rule
 // for kimi-for-coding (confirmed against the live server 2026-07-31), so
@@ -32,8 +37,8 @@ const ProviderModelInfo kModels[] = {
     {"k3-256k",                      262144, 1.0, true,  true},
     {"kimi-k2.7-code",               262144, 1.0, true,  true},
     {"kimi-k2.7-code-highspeed",     262144, 1.0, true,  true},
-    {"kimi-for-coding",              262144, 1.0, true,  true},
-    {"kimi-for-coding-highspeed",    262144, 1.0, true,  true},
+    {"kimi-for-coding",             1000000, 1.0, true,  true},
+    {"kimi-for-coding-highspeed",   1000000, 1.0, true,  true},
     {"kimi-k2.6",                    262144, 0.6, true,  true},
     {"kimi-k2.5",                    262144, 0.6, true,  true},
     {"moonshot-v1-8k",                 8192, 0.3, false, false},
@@ -79,12 +84,13 @@ double MoonshotPlugin::clamp_temperature(std::string_view model_id, double t) co
     // kimi-k2.7-code(-highspeed) uses a fixed temperature of 1.0 — any
     // other value is a hard API error (platform docs, "Parameters
     // Differences in Request Body"). The Kimi Code endpoint's
-    // kimi-for-coding IDs are the same K2.7 Code model and enforce the
-    // same rule; its k3/k3-256k IDs enforce it too (both confirmed
-    // empirically against the live server 2026-07-31: "invalid
-    // temperature: only 1 is allowed for this model"). Scoped to the
-    // exact Kimi Code k3 IDs so the platform's kimi-k3 (no documented
-    // or observed restriction) is left alone.
+    // kimi-for-coding IDs (K2.8 Preview since §K2.8) and its
+    // k3/k3-256k IDs enforce the same rule (confirmed empirically
+    // against the live server 2026-07-31: "invalid temperature: only
+    // 1 is allowed for this model"); the clamp is kept for K2.8 since
+    // a rejected temperature is a hard error. Scoped to the exact Kimi
+    // Code k3 IDs so the platform's kimi-k3 (no documented or observed
+    // restriction) is left alone.
     if (icontains(model_id, "k2.7-code") ||
         icontains(model_id, "kimi-for-coding") ||
         iequals(model_id, "k3") ||
@@ -114,12 +120,17 @@ void MoonshotPlugin::mutate_chat_payload(nlohmann::json& payload,
     //     receive a `thinking` object. None is ignored — K3 always thinks.
     //   - kimi-k2.5 / kimi-k2.6: on/off only (thinking.type). Effort
     //     levels are ignored.
-    //   - kimi-k2.7-code / kimi-for-coding: always thinks, no control —
-    //     never send anything (passing disabled is a hard error).
+    //   - kimi-k2.7-code: always thinks, no control — never send
+    //     anything (passing disabled is a hard error).
+    //   - kimi-for-coding: §K2.8 (2026-09-30) — now Kimi K2.8 Preview,
+    //     which takes the same low/high/max effort as K3 (same host
+    //     split: thinking.effort on api.kimi.com, reasoning_effort on
+    //     the platform). None is still ignored.
     if (ctx.thinking_level != ThinkingLevel::Default) {
         const std::string& id = ctx.model_id;
         const bool is_k3 = istarts_with(id, "kimi-k3") ||
-                           iequals(id, "k3") || istarts_with(id, "k3-");
+                           iequals(id, "k3") || istarts_with(id, "k3-") ||
+                           icontains(id, "kimi-for-coding");
         const bool is_k25_k26 = icontains(id, "k2.5") || icontains(id, "k2.6");
         if (is_k3 &&
             (ctx.thinking_level == ThinkingLevel::Low ||
@@ -143,7 +154,9 @@ void MoonshotPlugin::mutate_chat_payload(nlohmann::json& payload,
 std::vector<ThinkingLevel>
 MoonshotPlugin::supported_thinking_levels(std::string_view model_id) const {
     if (istarts_with(model_id, "kimi-k3") ||
-        iequals(model_id, "k3") || istarts_with(model_id, "k3-")) {
+        iequals(model_id, "k3") || istarts_with(model_id, "k3-") ||
+        // §K2.8: kimi-for-coding is now K2.8 Preview (K3-style effort).
+        icontains(model_id, "kimi-for-coding")) {
         return {ThinkingLevel::Low, ThinkingLevel::High, ThinkingLevel::Max};
     }
     if (icontains(model_id, "k2.5") || icontains(model_id, "k2.6")) {
