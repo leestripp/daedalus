@@ -2268,6 +2268,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             ThinkTagFilter::strip(message["content"].get<std::string>());
     }
 
+    // §MSG-HEADERS-ANTI-IMITATION: models imitate the wire header and
+    // open their reply with a literal `[from: ...]` line — strip it
+    // BEFORE the reply enters the stored chain, else every chat bubble
+    // renders the raw header as message text forever.
+    Messages::strip_leading_wire_header(message);
+
     // Add the assistant's message to history
     // §MSG-HEADERS: the provider-shaped message becomes ours here —
     // attach origin + receipt time before it enters the stored chain.
@@ -2314,12 +2320,17 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             if (function_name.empty()) {
                 LOG_ERROR("Skipping malformed tool_call (missing function/name): "
                           + tool_call.dump());
-                tool_results.push_back({
+                // §MSG-HEADERS: stamp like the main tool-result path
+                // (below) — this entry reaches the stored chain too.
+                // No function name survived, so the source is tool:unknown.
+                json malformed = {
                     {"role", "tool"},
                     {"tool_call_id", call_id},
                     {"content", "[ERROR] Malformed tool_call: missing function name"},
                     {"status", "error"}
-                });
+                };
+                Messages::stamp(malformed, "tool:unknown");
+                tool_results.push_back(std::move(malformed));
                 continue;  // Skip execution, go to next tool call
             }
             
@@ -2359,13 +2370,16 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             if (tool_call.contains("_invalid_args") && tool_call["_invalid_args"] == true) {
                 LOG_ERROR("Skipping tool_call " + call_id + " due to invalid arguments");
                 std::string parse_error = tool_call.value("_parse_error", "unknown parse error");
-                // Add error tool result - state derives from message chain
-                tool_results.push_back({
+                // Add error tool result - state derives from message chain.
+                // §MSG-HEADERS: stamp like the main tool-result path.
+                json invalid_args = {
                     {"role", "tool"},
                     {"tool_call_id", call_id},
                     {"content", "[ERROR] Invalid arguments JSON: " + parse_error},
                     {"status", "error"}
-                });
+                };
+                Messages::stamp(invalid_args, "tool:" + function_name);
+                tool_results.push_back(std::move(invalid_args));
                 continue;  // Skip execution, go to next tool call
             }
 

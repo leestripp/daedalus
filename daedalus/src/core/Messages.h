@@ -626,6 +626,23 @@ public:
     static void stamp(json& msg, std::string_view source);
 
     /**
+     * @brief §MSG-HEADERS-ANTI-IMITATION (2026-10-04): strip a leading
+     *        `[from: … · received …]` line from an assistant message's
+     *        string content. Models occasionally imitate the wire header
+     *        and open their reply with it; that line is runtime-written
+     *        metadata, never model output, and persisting it made every
+     *        chat bubble render the raw header as message text.
+     *        No-op for non-assistant messages, non-string content, or a
+     *        first line that is not a well-formed header. Applied at
+     *        assistant intake (LLMClient) and inside
+     *        sanitize_message_chain, so every load path (SQLite mirror,
+     *        JSON file, crash file) migrates already-poisoned sessions.
+     *        If stripping would leave the content empty the original is
+     *        kept — an empty assistant body is worse than the header.
+     */
+    static void strip_leading_wire_header(json& msg);
+
+    /**
      * @brief Current time as "%Y-%m-%d %H:%M:%S UTC" (thread-safe).
      *
      * §MSG-HEADERS-UTC (2026-10-04): ALWAYS UTC, never local time — the

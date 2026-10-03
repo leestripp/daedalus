@@ -167,6 +167,72 @@ TEST_SUITE("§MSG-HEADERS message origin envelope") {
         CHECK(!wire[0].contains("_meta"));
     }
 
+    TEST_CASE("§ANTI-IMITATION: wire_render gives assistant messages no header") {
+        json assistant = {{"role", "assistant"}, {"content", "plain reply"}};
+        Messages::stamp(assistant, "assistant");
+        json user = {{"role", "user"}, {"content", "hi"}};
+        Messages::stamp(user, "user:lee");
+
+        const json wire = Messages::wire_render(json::array({assistant, user}));
+
+        // Assistant: _meta stripped (strict providers), content untouched.
+        CHECK(!wire[0].contains("_meta"));
+        CHECK(wire[0].value("content", "") == "plain reply");
+        // User: header rendered as before.
+        CHECK(wire[1].value("content", "").find("[from: user:lee") == 0);
+        CHECK(!wire[1].contains("_meta"));
+        // The stored copies still carry _meta — wire_render must not
+        // mutate its input.
+        CHECK(assistant.contains("_meta"));
+        CHECK(user.contains("_meta"));
+    }
+
+    TEST_CASE("§ANTI-IMITATION: strip_leading_wire_header removes an imitated header") {
+        json msg = {{"role", "assistant"},
+                    {"content", "[from: assistant · received 2026-10-03 23:08:27 UTC]\n\n"
+                                "The actual reply text."}};
+        Messages::strip_leading_wire_header(msg);
+        CHECK(msg.value("content", "") == "The actual reply text.");
+    }
+
+    TEST_CASE("§ANTI-IMITATION: strip leaves ordinary text and edge shapes alone") {
+        // Mid-text mention, not a leading line: untouched.
+        json quoted = {{"role", "assistant"},
+                       {"content", "You asked about [from: something] earlier."}};
+        Messages::strip_leading_wire_header(quoted);
+        CHECK(quoted.value("content", "").find("You asked") == 0);
+
+        // '[from:' that never closes on its first line: not a header.
+        json unclosed = {{"role", "assistant"}, {"content", "[from: nowhere\nreal text"}};
+        Messages::strip_leading_wire_header(unclosed);
+        CHECK(unclosed.value("content", "") == "[from: nowhere\nreal text");
+
+        // Header-only reply: keep the original rather than store empty.
+        json only_header = {{"role", "assistant"},
+                            {"content", "[from: assistant · received 2026-10-03 23:08:27 UTC]"}};
+        Messages::strip_leading_wire_header(only_header);
+        CHECK(only_header.value("content", "").find("[from: assistant") == 0);
+
+        // Non-assistant roles are never stripped.
+        json user = {{"role", "user"},
+                     {"content", "[from: user:lee · received 2026-10-03 23:08:27 UTC]\n\nhi"}};
+        Messages::strip_leading_wire_header(user);
+        CHECK(user.value("content", "").find("[from: user:lee") == 0);
+    }
+
+    TEST_CASE("§ANTI-IMITATION: sanitize migrates a poisoned stored chain") {
+        Messages m = make_messages(make_scratch());
+        json poisoned = {
+            {{"role", "system"}, {"content", "sys"}},
+            {{"role", "user"}, {"content", "hello"}},
+            {{"role", "assistant"},
+             {"content", "[from: assistant · received 2026-10-03 23:08:27 UTC]\n\nanswer"}},
+        };
+        const json clean = m.sanitize_message_chain(poisoned);
+        REQUIRE(clean.size() == 3);
+        CHECK(clean[2].value("content", "") == "answer");
+    }
+
     TEST_CASE("_meta survives a save/load round-trip") {
         const fs::path dir = make_scratch();
         {

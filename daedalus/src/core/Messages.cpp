@@ -471,6 +471,15 @@ json Messages::wire_render(const json& messages) {
 
     for (auto& msg : wire) {
         if (!msg.is_object() || !msg.contains("_meta")) continue;
+        // §MSG-HEADERS-ANTI-IMITATION (2026-10-04): the assistant's own
+        // voice needs no origin header — its origin is obvious — and
+        // seeing its prior replies wear the format on the wire taught
+        // the model to imitate the header in its output. Strip `_meta`
+        // (strict providers must not see the key) and render nothing.
+        if (msg.value("role", "") == "assistant") {
+            msg.erase("_meta");
+            continue;
+        }
         const json meta = msg["_meta"];  // copy, then strip from the wire shape
         msg.erase("_meta");
 
@@ -492,6 +501,39 @@ json Messages::wire_render(const json& messages) {
         }
     }
     return wire;
+}
+
+void Messages::strip_leading_wire_header(json& msg) {
+    // Shape-defensive: malformed chain entries can carry role:null —
+    // json::value() would throw type_error.302 on a null role, and this
+    // runs inside sanitize_message_chain which MUST NOT throw (the
+    // SANITIZE-NOTHROW suite feeds it exactly such entries).
+    if (!msg.is_object()) return;
+    const auto role_it = msg.find("role");
+    if (role_it == msg.end() || !role_it->is_string() ||
+        role_it->get<std::string>() != "assistant")
+        return;
+    auto it = msg.find("content");
+    if (it == msg.end() || !it->is_string()) return;
+    const std::string content = it->get<std::string>();
+    // The first line must open with the header prefix and CLOSE with ']'
+    // on that same line — anything else is the model's own text. This
+    // shape check matters: a reply legitimately quoting "[from:" mid-
+    // paragraph must survive, and a '[from:' that never closes is not
+    // a header.
+    constexpr std::string_view prefix = "[from: ";
+    if (content.compare(0, prefix.size(), prefix) != 0) return;
+    const auto close = content.find(']');
+    const auto nl = content.find('\n');
+    if (close == std::string::npos || (nl != std::string::npos && nl < close))
+        return;
+    // Strip the header line and the blank line(s) the renderer puts
+    // after it; keep whatever real text follows.
+    size_t pos = close + 1;
+    while (pos < content.size() && (content[pos] == '\n' || content[pos] == '\r'))
+        ++pos;
+    if (pos >= content.size()) return; // header-only reply: keep original
+    *it = content.substr(pos);
 }
 
 void Messages::add_system(const std::string& content, std::string_view source) {
@@ -2133,11 +2175,16 @@ json Messages::sanitize_message_chain(const json& msgs) const {
     std::unordered_set<std::string> answered_in_block; // ids already answered
 
     for (size_t i = 0; i < msgs.size(); i++) {
-        const auto& msg = msgs[i];
+        json msg = msgs[i];  // copy — §MSG-HEADERS-ANTI-IMITATION may strip
         if (!msg.is_object()) {
             LOG_CERR(INFO,  "[Messages] Dropped non-object chain entry at index " << i << '\n');
             continue;
         }
+        // §MSG-HEADERS-ANTI-IMITATION: drop a leading imitated
+        // `[from: ...]` line (see strip_leading_wire_header). Runs on
+        // every load path, migrating sessions poisoned before the
+        // intake-strip existed; idempotent, no-op for clean messages.
+        strip_leading_wire_header(msg);
         std::string role = chain_safe_str(msg, "role");
 
         if (role == "tool") {

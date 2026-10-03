@@ -27,6 +27,35 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **§MSG-HEADERS-ANTI-IMITATION (2026-10-04): models imitated the wire
+  header and typed `[from: assistant · received …]` as the first line of
+  their own replies.** Because assistant output is stored verbatim,
+  every chat bubble then rendered the raw header as message text —
+  MonkeyByte's pretty `.message-origin` label could not remove text
+  baked into the message body. Four layers now stop it:
+  1. `wire_render()` renders **no header on assistant messages** — the
+     model's own voice needs no origin, and seeing its prior replies
+     wear the format on the wire was the imitation cue. `_meta` is
+     still stripped from the wire copy (strict providers). User /
+     system / tool / external messages keep their headers unchanged.
+  2. `Messages::strip_leading_wire_header()` strips a leading
+     `[from: …]` line from assistant content **at intake**, before the
+     reply enters the stored chain. Shape-defensive (a `role: null`
+     entry must not throw inside `sanitize_message_chain`) and
+     conservative: only a well-formed header on the first line is
+     removed; mid-text mentions, unclosed `[from:`, non-assistant
+     roles, and header-only replies are left untouched.
+  3. `sanitize_message_chain()` applies the strip on every load path
+     (SQLite mirror, JSON file, crash file), migrating sessions
+     poisoned before the intake strip existed — no `/clear` needed.
+  4. The `# Message Origin Headers` prompt section hardened: "Your own
+     replies carry NO header — yours is the only message without one."
+  Also: the two unstamped tool-result error paths (malformed call,
+  invalid arguments) now stamp `tool:unknown` / `tool:<name>` like the
+  main path. New §ANTI-IMITATION cases in `message_headers_tests`.
+
 ### Added
 
 - **§MSG-HEADERS (2026-10-04): every message now carries an origin
