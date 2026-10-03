@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <nlohmann/json.hpp>
 #include "daedalus/types/ImageAttachment.h"
 #include <filesystem>
@@ -505,7 +506,11 @@ public:
         std::stop_token stop_token = {},
         std::function<void(std::string_view)> streaming_callback = nullptr
     );
-    AgentState run_one_turn(const std::string& user_message);  // Phase 2.5: extracted agent cycle (returns when agent emits stop/cancel)
+    /// §MSG-HEADERS (2026-10-04): `source` is the free-form `kind:id`
+    /// origin of this user turn (default "user") — stamped into the
+    /// message's `_meta` so the model can tell who/what sent it and when.
+    AgentState run_one_turn(const std::string& user_message,
+                            std::string_view source = "user");  // Phase 2.5: extracted agent cycle (returns when agent emits stop/cancel)
 
     /// §READ-IMAGE-CORE follow-up (2026-08-10): queue host-supplied image
     /// attachments for the next chat request. Shares the read_image

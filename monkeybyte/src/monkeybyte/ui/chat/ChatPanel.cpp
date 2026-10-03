@@ -455,9 +455,13 @@ void ChatPanel::wire_controller() {
         }
         auto* bubble = Gtk::make_managed<ChatMessage>(ChatMessage::Role::User);
         bubble->set_text(text);
+        // §MSG-HEADERS — same origin the controller stamps into `_meta`,
+        // so this live bubble and its restored copy read identically.
+        const std::string origin = ChatController::interactive_source();
+        bubble->set_origin(origin, "");
         messages_.append(*bubble);
         active_assistant_ = nullptr;
-        history_.push_back({"user", text});
+        history_.push_back({"user", text, origin, ""});
         refresh_counts();
         scroll_to_bottom_forced(); // your own message always pins (§7.3)
     });
@@ -476,9 +480,13 @@ void ChatPanel::wire_controller() {
         finalize_active_bubble();
         auto* bubble = Gtk::make_managed<ChatMessage>(ChatMessage::Role::Assistant);
         bubble->set_text(summary);
+        // §MSG-HEADERS — the summary is a context-compression artifact
+        // (daedalus stamps `system:context-status`), not the model's
+        // voice; label it so it can't masquerade as a fresh reply.
+        bubble->set_origin("system:context-status", "");
         bubble->finalize();
         messages_.append(*bubble);
-        history_.push_back({"assistant", summary});
+        history_.push_back({"assistant", summary, "system:context-status", ""});
         refresh_counts();
         scroll_to_bottom();
     });
@@ -492,7 +500,7 @@ void ChatPanel::wire_controller() {
         bubble->set_text(msg);
         bubble->finalize();
         messages_.append(*bubble);
-        history_.push_back({"assistant", msg});
+        history_.push_back({"assistant", msg, "", ""});
         refresh_counts();
         scroll_to_bottom();
     });
@@ -587,7 +595,7 @@ ChatMessage& ChatPanel::ensure_assistant_bubble() {
 void ChatPanel::finalize_active_bubble() {
     if (!active_assistant_) return;
     active_assistant_->finalize();
-    history_.push_back({"assistant", ""});
+    history_.push_back({"assistant", "", "", ""});
     active_assistant_ = nullptr;
 }
 
@@ -1092,9 +1100,12 @@ void ChatPanel::restore_history() {
             e.role == "user" ? ChatMessage::Role::User
                              : ChatMessage::Role::Assistant);
         bubble->set_text(e.content);
+        // §MSG-HEADERS — `_meta` origin restored from the snapshot;
+        // empty for messages persisted before headers existed.
+        bubble->set_origin(e.source, e.received_at);
         bubble->finalize();
         messages_.append(*bubble);
-        history_.push_back({e.role, e.content});
+        history_.push_back({e.role, e.content, e.source, e.received_at});
     }
     refresh_counts();
     scroll_to_bottom_forced(); // startup: show the latest messages (§7.3)

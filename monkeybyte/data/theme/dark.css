@@ -245,6 +245,11 @@ scrollbar slider:hover { background-color: #6c7086; }
 
 .message-image { border-radius: 6px; }
 
+/* §MSG-HEADERS — origin line above a bubble whose message came from
+   outside the conversation (A2A peer, trigger, context compression).
+   Inherited color + opacity works on both themes. */
+.message-origin { font-size: 0.8em; opacity: 0.65; margin-bottom: 2px; }
+
 .message-user {
   background-color: #89b4fa;
   color: #11111b;

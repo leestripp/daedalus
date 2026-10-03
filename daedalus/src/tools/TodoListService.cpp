@@ -112,10 +112,15 @@ struct TodoListData {
 };
 
 static std::string current_timestamp() {
+    // §MSG-HEADERS-UTC (2026-10-04): UTC + explicit " UTC" indicator —
+    // every datetime string the agent reads names its zone, and UTC is
+    // the one standard reference across user/agent locations.
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
+    std::tm utc{};
+    gmtime_r(&time, &utc);  // thread-safe; std::gmtime is not
     std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time), "%Y-%m-%d %H:%M");
+    ss << std::put_time(&utc, "%Y-%m-%d %H:%M") << " UTC";
     return ss.str();
 }
 

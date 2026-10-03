@@ -14,11 +14,16 @@ SessionMemory* ForgetTool::session_memory_ = nullptr;
 SessionMemory* MemoriesTool::session_memory_ = nullptr;
 SessionMemory* MemoryStatsTool::session_memory_ = nullptr;
 
-// Helper to format timestamp
+// Helper to format timestamp. §MSG-HEADERS-UTC (2026-10-04): gmtime
+// (UTC) with an explicit " UTC" zone indicator — every datetime string
+// the agent reads must say which zone it is, and UTC is the single
+// standard reference regardless of where the agent runs.
 static std::string format_time(const std::chrono::system_clock::time_point& tp) {
     auto time = std::chrono::system_clock::to_time_t(tp);
+    std::tm utc{};
+    gmtime_r(&time, &utc);  // thread-safe; std::gmtime is not
     std::stringstream ss;
-    ss << std::put_time(std::gmtime(&time), "%Y-%m-%d %H:%M");
+    ss << std::put_time(&utc, "%Y-%m-%d %H:%M") << " UTC";
     return ss.str();
 }
 

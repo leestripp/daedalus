@@ -1447,7 +1447,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     }
 
     // Rebuild payload after truncation
-    request_payload["messages"] = messages;
+    // §MSG-HEADERS: the wire copy renders each message's `_meta` into a
+    // visible [from: … · received …] content header and strips `_meta`
+    // itself — strict providers never see the unknown key, while the
+    // model gains the origin/time context it needs to tell old messages
+    // from fresh ones. The stored chain keeps `_meta` untouched.
+    request_payload["messages"] = Messages::wire_render(messages);
 
     // §READ-IMAGE-CORE (2026-08-10): attach any images queued by the
     // read_image tool as a trailing user message with image_url parts —
@@ -1898,10 +1903,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                 "[API ERROR] This tool call was REJECTED by the API server with: " + error_type + " - " + error_message + ".\n\nThe arguments you provided were:\n" + last_tool_args + "\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call. Read the tool description and the error carefully, then use different arguments or a different tool.");
 
             // Also add a user message for additional context
-            messages.push_back({
-                {"role", "user"},
-                {"content", "[SYSTEM ERROR] Your last tool call (" + last_tool_name + ") was rejected by the API: " + error_message + ". Please try a different approach - do NOT repeat the same call."}
-            });
+            json err_msg = {{"role", "user"}, {"content", "[SYSTEM ERROR] Your last tool call (" + last_tool_name + ") was rejected by the API: " + error_message + ". Please try a different approach - do NOT repeat the same call."}};
+            Messages::stamp(err_msg, "system:error-recovery");  // §MSG-HEADERS
+            messages.push_back(std::move(err_msg));
 
             // Return ACT state to continue the agent loop
             return AgentState::ACT;
@@ -1995,10 +1999,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                         // append_tool_results_if_pending).
                         Messages::append_tool_results_if_pending(messages,
                             "[API ERROR] This tool call was REJECTED by the API server with: " + retry_error_type + " - " + retry_error_msg + ".\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call.");
-                        messages.push_back({
-                            {"role", "user"},
-                            {"content", "[SYSTEM ERROR] API error: " + retry_error_type + " - " + retry_error_msg + "\n\nLast tool: " + last_tool_name + " (id=" + last_tool_id + ")\n\nPlease try a DIFFERENT approach - do NOT repeat the same call."}
-                        });
+                        json err_msg = {{"role", "user"}, {"content", "[SYSTEM ERROR] API error: " + retry_error_type + " - " + retry_error_msg + "\n\nLast tool: " + last_tool_name + " (id=" + last_tool_id + ")\n\nPlease try a DIFFERENT approach - do NOT repeat the same call."}};
+                        Messages::stamp(err_msg, "system:error-recovery");  // §MSG-HEADERS
+                        messages.push_back(std::move(err_msg));
                         return AgentState::ACT;
                     }
                     std::ostringstream persist_msg;
@@ -2035,10 +2038,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             // append_tool_results_if_pending).
             Messages::append_tool_results_if_pending(messages,
                 "[API ERROR] All " + std::to_string(max_retries) + " retries failed.\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call.");
-            messages.push_back({
+            json err_msg = {
                 {"role", "user"},
                 {"content", "[SYSTEM ERROR] API error after " + std::to_string(max_retries) + " retries. Please try a DIFFERENT approach - do NOT repeat the same tool call."}
-            });
+            };
+            Messages::stamp(err_msg, "system:error-recovery");  // §MSG-HEADERS
+            messages.push_back(std::move(err_msg));
             // Return ACT state to continue the agent loop
             return AgentState::ACT;
         }
@@ -2181,10 +2186,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                             LOG_DEBUG(std::string("Error extracting tool call: ") + e.what());
                         }
                         // Add error message and RETURN immediately
-                        messages.push_back({
-                            {"role", "user"},
-                            {"content", "[SYSTEM ERROR] No choices + got error: " + retry_error_type + " - " + retry_error_msg + "\n\nLast tool: " + last_tool_name + " (id=" + last_tool_id + ")\n\nPlease re-read the file and try again with corrected parameters."}
-                        });
+                        json err_msg = {{"role", "user"}, {"content", "[SYSTEM ERROR] No choices + got error: " + retry_error_type + " - " + retry_error_msg + "\n\nLast tool: " + last_tool_name + " (id=" + last_tool_id + ")\n\nPlease re-read the file and try again with corrected parameters."}};
+                        Messages::stamp(err_msg, "system:error-recovery");  // §MSG-HEADERS
+                        messages.push_back(std::move(err_msg));
                         return AgentState::ACT;
                     }
                 }
@@ -2220,10 +2224,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             // misplaced tool result for an already-answered call.
             Messages::append_tool_results_if_pending(messages,
                 "[API ERROR] All " + std::to_string(max_retries) + " retries failed - API returned empty response.\n\nYou MUST try a DIFFERENT approach - do NOT retry this exact call.");
-            messages.push_back({
+            json err_msg = {
                 {"role", "user"},
                 {"content", "[SYSTEM ERROR] API returned empty response after " + std::to_string(max_retries) + " retries. Please try a DIFFERENT approach - do NOT repeat the same tool call."}
-            });
+            };
+            Messages::stamp(err_msg, "system:error-recovery");  // §MSG-HEADERS
+            messages.push_back(std::move(err_msg));
             // Return ACT state to continue the agent loop
             return AgentState::ACT;
         }
@@ -2263,6 +2269,10 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     }
 
     // Add the assistant's message to history
+    // §MSG-HEADERS: the provider-shaped message becomes ours here —
+    // attach origin + receipt time before it enters the stored chain.
+    // NOTE: push a COPY — `message` is read below (tool_calls dispatch).
+    Messages::stamp(message, "assistant");
     messages.push_back(message);
     // PERSIST-DIRTY: raw-reference push - keep the flush worker in the
     // loop so a crash/kill mid-turn doesn't lose the reply.
@@ -2562,12 +2572,15 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                           << " bytes removed [...]\n\n" << end_part;
                 result_content = truncated.str();
             }
-            tool_results.push_back({
+            json tool_msg = {
                 {"role", "tool"},
                 {"tool_call_id", call_id},
                 {"content", error_prefix + result_content},
                 {"status", is_error ? "error" : "success"}
-            });
+            };
+            // §MSG-HEADERS: precise origin — which tool produced this.
+            Messages::stamp(tool_msg, "tool:" + function_name);
+            tool_results.push_back(std::move(tool_msg));
             
             // DEBUG: Verify tool_result has correct tool_call_id
 
@@ -2728,13 +2741,8 @@ void LLMClient::inject_context_stats(json& messages) {
     // §ContextCache: current time moved here from the static prompt
     // header — a per-session timestamp in the system prompt defeats
     // cross-session prefix-cache reuse.
-    {
-        std::time_t now = std::time(nullptr);
-        std::tm* local_tm = std::localtime(&now);
-        std::ostringstream dt;
-        dt << std::put_time(local_tm, "%Y-%m-%d %H:%M:%S %Z");
-        stats << "| Date/Time | " << dt.str() << " |\n";
-    }
+    // §MSG-HEADERS-UTC: UTC, same reference as every message timestamp.
+    stats << "| Date/Time (UTC) | " << Messages::now_string() << " |\n";
 
     // §ContextCache: last-turn prompt-cache hit count, when the provider
     // reports it (Moonshot / MiniMax). Lets the model (and log readers)
@@ -2995,7 +3003,8 @@ void LLMClient::uninstall_crash_handlers() {
     // Accumulated assistant text goes to sink_->on_assistant_delta(text).
     // ===================================================================
 
-AgentState LLMClient::run_one_turn(const std::string& user_message) {
+AgentState LLMClient::run_one_turn(const std::string& user_message,
+                                   std::string_view source) {
     // §AutoCompress: hold the turn guard for the whole turn so
     // compress_context() can compress immediately when (and only when) no
     // turn is running. Also serializes concurrent turns.
@@ -3182,7 +3191,10 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
 
     // Add the user message provided by the host (the *one* input we accept).
     if (messages.empty()) {
-        messages.push_back({{"role", "system"}, {"content", system_instruction}});
+        // §MSG-HEADERS: even the system prompt carries origin + time.
+        json sys_msg = {{"role", "system"}, {"content", system_instruction}};
+        Messages::stamp(sys_msg, "system");
+        messages.push_back(std::move(sys_msg));
     }
     if (!user_message.empty()) {
         // §B19 fix: clean up a dangling tool result from an interrupted turn.
@@ -3209,7 +3221,12 @@ AgentState LLMClient::run_one_turn(const std::string& user_message) {
         for (const auto& ref : daedalus::image_refs::extract(user_message)) {
             queue_image_ref(ref, "user attachment");
         }
-        messages.push_back({{"role", "user"}, {"content", user_message}});
+        // §MSG-HEADERS: stamp the incoming user turn with its source
+        // (submit_user_message overload → pending queue → this param;
+        // the default marks it an interactive user message).
+        json user_msg = {{"role", "user"}, {"content", user_message}};
+        Messages::stamp(user_msg, source);
+        messages.push_back(std::move(user_msg));
     }
 
     // PERSIST-DIRTY (2026-08-31): the pushes above went through the raw

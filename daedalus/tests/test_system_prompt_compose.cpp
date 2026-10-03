@@ -39,12 +39,35 @@ TEST_SUITE("Host prompt passes through verbatim") {
         CHECK(prompt.find("autonomous coding agent") == std::string::npos);
         // State machine and reserved-dirs appear.
         CHECK(prompt.find("# State Machine")              != std::string::npos);
+        CHECK(prompt.find("# Message Origin Headers")     != std::string::npos);
         CHECK(prompt.find("# Reserved Agent Directories") != std::string::npos);
         // §ContextCache: NO per-iteration Context Status block — the
         // composed prompt must stay byte-static across the session so
         // provider prompt caches (MiniMax / Kimi) can match the prefix.
         // The stats ride as a transient trailing message instead.
         CHECK(prompt.find("# Context Status") == std::string::npos);
+    }
+
+    TEST_CASE("§MSG-HEADERS: message-origin section always present and forbids imitation") {
+        SystemPromptOptions opts;
+        opts.system_prompt = "Host text.";
+        const std::string prompt = SystemPromptBuilder::compose(opts);
+
+        // Section present, after the state machine, before reserved dirs.
+        const size_t hdr = prompt.find("# Message Origin Headers");
+        REQUIRE(hdr != std::string::npos);
+        CHECK(hdr > prompt.find("# State Machine"));
+        CHECK(hdr < prompt.find("# Reserved Agent Directories"));
+
+        // Explains the wire header format and UTC timestamps...
+        CHECK(prompt.find("[from:") != std::string::npos);
+        CHECK(prompt.find("UTC") != std::string::npos);
+        // ...and forbids the model from writing/imitating it itself.
+        CHECK(prompt.find("NEVER begin your reply") != std::string::npos);
+
+        // §ContextCache: the section is byte-static — composing twice
+        // with identical options must produce identical output.
+        CHECK(SystemPromptBuilder::compose(opts) == prompt);
     }
 
     TEST_CASE("Host prompt appears verbatim, first section") {

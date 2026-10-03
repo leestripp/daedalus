@@ -25,6 +25,14 @@ This doc covers four mechanisms layered on top of `Messages`:
 
 ## 1. Atomic save via temp + rename
 
+> §MSG-HEADERS (2026-10-04): each message in `messages.json` carries a
+> `_meta` origin envelope (`source` + `received_at`, always UTC with an
+> explicit ` UTC` indicator). Crash recovery preserves it verbatim —
+> replayed messages keep their original timestamps, which is exactly
+> what lets the model distinguish a restored old message from a fresh
+> one after a crash.
+
+
 `Messages::save()` writes to `messages.json.tmp` first, `fsync()`s it,
 then renames it over `messages.json`. POSIX `rename(2)` on the same
 filesystem is atomic — readers always see either the old file or the

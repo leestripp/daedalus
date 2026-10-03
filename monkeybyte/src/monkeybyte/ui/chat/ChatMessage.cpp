@@ -60,6 +60,37 @@ std::vector<ImageRef> find_local_images(const std::string& text) {
 // the Picture scales down for display.
 constexpr int kThumbMax = 320;
 
+// §MSG-HEADERS — human label for a message's `_meta.source` ("kind:id").
+// Returns "" for origins that need no header: the assistant's own voice,
+// bare system messages, and legacy messages persisted before headers
+// existed. The kind-specific wording is the whole point of the envelope —
+// an A2A peer or a trigger must not read like a fresh interactive prompt.
+std::string origin_label(const std::string& source,
+                         const std::string& received_at) {
+    std::string label;
+    const auto colon = source.find(':');
+    const std::string kind = source.substr(0, colon);
+    const std::string id =
+        colon == std::string::npos ? "" : source.substr(colon + 1);
+    if (source == "system:context-status") {
+        label = "Context status";
+    } else if (source.empty() || source == "assistant" || source == "system") {
+        return ""; // no header for the conversation's own voices
+    } else if (kind == "user") {
+        label = "You"; // "user" or "user:<name>" — this host's own user
+    } else if (kind == "a2a") {
+        label = "From " + id + " (A2A)";
+    } else if (kind == "trigger") {
+        label = "Trigger: " + id;
+    } else if (!id.empty()) {
+        label = "From " + id + " (" + kind + ")";
+    } else {
+        label = source; // unknown bare kind — show it verbatim
+    }
+    if (!received_at.empty()) label += " · " + received_at;
+    return label;
+}
+
 } // namespace
 
 // set_markup() itself throws Glib::Error on unparseable markup/invalid UTF-8
@@ -94,6 +125,12 @@ ChatMessage::ChatMessage(Role role)
     label_.set_selectable(true);
     label_.set_xalign(0.0f);
 
+    // §MSG-HEADERS — origin header sits above thumbnails and body.
+    origin_label_.set_visible(false); // shown on demand by set_origin()
+    origin_label_.set_xalign(0.0f);
+    origin_label_.add_css_class("message-origin");
+    prepend(origin_label_);
+
     images_.set_orientation(Gtk::Orientation::VERTICAL);
     images_.set_spacing(4);
     images_.set_visible(false); // shown on demand by show_user_text()
@@ -122,6 +159,14 @@ void ChatMessage::show_copy_menu(double x, double y) {
     popover->set_pointing_to(Gdk::Rectangle(
         static_cast<int>(x), static_cast<int>(y), 1, 1));
     popover->popup();
+}
+
+void ChatMessage::set_origin(const std::string& source,
+                             const std::string& received_at) {
+    const std::string label = origin_label(source, received_at);
+    if (label.empty()) return; // this origin needs no header
+    origin_label_.set_text(label);
+    origin_label_.set_visible(true);
 }
 
 void ChatMessage::set_text(const std::string& text) {

@@ -1412,6 +1412,28 @@ target_link_libraries(daedalus_messages_tests PRIVATE
 )
 add_test(NAME messages_tests COMMAND daedalus_messages_tests)
 
+# §MSG-HEADERS (2026-10-04): message origin envelope — stamp / wire_render
+add_executable(daedalus_message_headers_tests
+    test_message_headers.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Messages.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
+    ${PROJECT_SOURCE_DIR}/src/core/BackgroundProcessManager.cpp
+    ${PROJECT_SOURCE_DIR}/src/api/HttpSession.cpp
+)
+target_include_directories(daedalus_message_headers_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+    ${PROJECT_SOURCE_DIR}/src/api
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_message_headers_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+
+    pthread
+)
+add_test(NAME message_headers_tests COMMAND daedalus_message_headers_tests)
+
 # §fix (2026-07-30): position-aware chain validity tests (sanitize,
 # guarded tool-result injection, truncation block retention)
 add_executable(daedalus_message_chain_validity_tests

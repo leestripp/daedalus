@@ -84,6 +84,16 @@ Both checks were green as of 2026-07-16.
 
 ---
 
+## Rule — message timestamps are always UTC (§MSG-HEADERS-UTC, 2026-10-04)
+
+Any datetime string that can reach the model — message `_meta.received_at`,
+the Context Status `Date/Time (UTC)` row, memory and todo timestamps —
+is formatted from `gmtime` (never `localtime`) and carries an explicit
+` UTC` zone indicator. The user and the agent may run in different
+timezones (Sydney vs New York); UTC is the single standard reference.
+"Local time with %Z" is banned: zone abbreviations are ambiguous and
+platform-dependent. Use `Messages::now_string()` for message stamps.
+
 ## Adding a new rule
 
 1. Add a section above with the rule, the rationale, and an example.

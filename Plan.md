@@ -76,3 +76,80 @@ Going forward: bare `x.y.z` tags at the root cover the library AND both hosts.
 - Prefixed host tags (`icarus/x.y.z`, `monkeybyte/x.y.z`); bare tags stay the library's
 - Host subfolders remain standalone-configurable (dual-mode CMake) — no FetchContent of daedalus from GitLab inside this repo's own builds
 - Host histories are NOT merged (archived in backups + old GitLab repos); library history is the monorepo history
+
+---
+
+# Plan — Message headers: source + timestamp on every message (§MSG-HEADERS, 2026-10-04)
+
+**Problem.** Messages are bare `{role, content}` JSON. The model cannot tell an
+old/already-addressed message from a fresh one: compression summaries read like
+a repeating event, triggers/A2A messages are indistinguishable from the human
+user, crash-restored messages look new. Root cause: no origin, no time.
+
+**Decision (approved by user).**
+- (a) Header rendered into wire content + `_meta` stripped before send
+  (never send unknown keys to strict providers — LM Studio/qwen3 templates,
+  Anthropic conversion).
+- (b) Free-form `kind:id` source string (not an enum/object) so future sources
+  (devices, email, …) need zero schema change.
+
+## Envelope
+
+```json
+{
+  "role": "user",
+  "content": "…",
+  "_meta": { "source": "trigger:nightly-backup",
+             "received_at": "2026-10-04 07:27:44 AEST" }
+}
+```
+
+- `_meta` underscore-prefixed = internal, non-wire (matches `_invalid_args`).
+- `received_at` stamped by the library at creation, always **UTC**
+  (`%Y-%m-%d %H:%M:%S UTC`, §MSG-HEADERS-UTC — one standard reference
+  regardless of where in the world agent or user run). Hosts never pass
+  a timestamp.
+- Source conventions: `user:<name>`, `assistant`, `tool:<name>`,
+  `system:context-compression`, `system:context-status`, `a2a:<agent>`,
+  `trigger:<name>`, `email:<addr>` — extensible by convention.
+
+Wire rendering (payload-build time in `run_agent_cycle`):
+
+```
+[from: trigger:nightly-backup · received 2026-10-04 07:27:44 UTC]
+
+<original content>
+```
+
+`_meta` is stripped from the wire copy. Stored chain keeps it.
+
+## Changes by component
+
+1. **daedalus core — Messages** (`src/core/Messages.{h,cpp}`):
+   - `stamp(json& msg, std::string_view source)` static helper: writes
+     `_meta.source` + `_meta.received_at` (current local time).
+   - `add_system/add_user/add_assistant/add_tool_result` gain defaulted
+     `source` param; always stamp `received_at`.
+   - Compression synthetic summary message → `system:context-compression`.
+   - Old chains without `_meta` load untouched (absence = legacy signal).
+2. **daedalus api — LLMClient** (`src/api/LLMClient.cpp`, `ContextStatus.h`):
+   - Raw `push_back` sites in `run_one_turn` (system + user) stamp via helper.
+   - `run_agent_cycle`: build wire copy — expand `_meta` into the
+     `[from: … · received …]` content prefix, strip `_meta`, send copy.
+     Stored chain is never mutated by expansion (prefix-cache stability).
+   - Assistant/tool-result pushes during the cycle stamp with role/tool name.
+   - `upsert_context_status_message` → `system:context-status`.
+3. **daedalus api — Agent** (`include/daedalus/Agent.h`, `src/library/AgentImpl.{h,cpp}`):
+   - `submit_user_message(text, imgs, source)` overload; existing overloads
+     default source to `user:<username>`.
+   - `PendingUserMessage` gains `source` (queue/edit/clear API unchanged).
+4. **Hosts**: `HistoryEntry` gains `source` + `received_at` (additive);
+   icarus A2A backend passes `a2a:<peer>`; monkeybyte/icarus callers of
+   submit_user_message unchanged (default source applies).
+5. **Tests**: update exact-content expectations; add coverage: stamp on add_*,
+   wire expansion + strip, compression-summary source, submit overload source,
+   round-trip through save/load.
+
+## Verification bar
+
+Clean superbuild, full `ctest` green, `static_analysis` no new warnings.

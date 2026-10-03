@@ -13,6 +13,8 @@
 #include <daedalus/settings.h>
 #include <daedalus/types/ErrorKind.h>
 
+#include <glibmm/miscutils.h>
+
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -602,7 +604,10 @@ void ChatController::send_message(const std::string& text,
                     }
                 }
                 if (transitioned) break;
-                agent_->submit_user_message(std::move(next));
+                // §MSG-HEADERS — interactive origin, stamped into the
+                // message's `_meta` when the turn consumes the queue.
+                agent_->submit_user_message(std::move(next), {},
+                                            interactive_source());
                 agent_->run_one_turn();
                 const auto s = agent_->state();
                 if (s == daedalus::AgentState::Cancelled) {
@@ -755,6 +760,13 @@ std::optional<daedalus::AgentStats> ChatController::stats() const {
 // agent when needed — daedalus restores its persisted session on build,
 // so the snapshot is the same conversation the agent resumes, not a
 // host-side parallel copy.
+// §MSG-HEADERS — GLib's get_user_name() (getpwuid), NOT the $USER env:
+// a sudo/su shell can leave $USER pointing at the previous account, and
+// the stamped source is what the model sees on the wire.
+std::string ChatController::interactive_source() {
+    return "user:" + Glib::get_user_name();
+}
+
 std::vector<daedalus::HistoryEntry> ChatController::history_snapshot(
     const std::string& model_display) {
     try {

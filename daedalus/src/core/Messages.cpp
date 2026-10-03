@@ -20,6 +20,8 @@
 
 #include <fstream>
 #include <sstream>
+#include <iomanip>
+#include <ctime>
 #include <iostream>
 #include <cstdio>      // fileno(), ::fdopen()
 #include <unistd.h>    // fileno(), fsync(), ::dup()
@@ -439,14 +441,69 @@ std::string Messages::get_last_assistant_content() const {
 // Message Operations
 // ============================================================================
 
-void Messages::add_system(const std::string& content) {
+// §MSG-HEADERS (2026-10-04): message origin envelope — see Messages.h.
+
+std::string Messages::now_string() {
+    // §MSG-HEADERS-UTC (2026-10-04): ALWAYS UTC. The user and the agent
+    // may run in different timezones (Sydney vs New York) — a single
+    // standard reference is the only way the model can compare message
+    // times. " UTC" is appended literally: %Z under gmtime is platform-
+    // dependent ("GMT", or empty), which would defeat the point.
+    const std::time_t now = std::time(nullptr);
+    std::tm utc_tm{};
+    gmtime_r(&now, &utc_tm);  // thread-safe; std::gmtime is not
+    std::ostringstream dt;
+    dt << std::put_time(&utc_tm, "%Y-%m-%d %H:%M:%S") << " UTC";
+    return dt.str();
+}
+
+void Messages::stamp(json& msg, std::string_view source) {
+    if (source.empty()) return;  // replay path: preserve loaded _meta
+    msg["_meta"] = json{
+        {"source",     std::string(source)},
+        {"received_at", now_string()},
+    };
+}
+
+json Messages::wire_render(const json& messages) {
+    json wire = messages;  // deep copy — the stored chain is never touched
+    if (!wire.is_array()) return wire;
+
+    for (auto& msg : wire) {
+        if (!msg.is_object() || !msg.contains("_meta")) continue;
+        const json meta = msg["_meta"];  // copy, then strip from the wire shape
+        msg.erase("_meta");
+
+        const std::string source   = meta.value("source", "");
+        const std::string received = meta.value("received_at", "");
+        if (source.empty() && received.empty()) continue;
+
+        std::string header = "[from: " + source;
+        if (!received.empty()) header += " · received " + received;
+        header += "]\n\n";
+
+        auto it = msg.find("content");
+        if (it == msg.end()) continue;
+        if (it->is_string()) {
+            *it = header + it->get<std::string>();
+        } else if (it->is_array()) {
+            // Multimodal content: header rides as a leading text part.
+            it->insert(it->begin(), json{{"type", "text"}, {"text", header}});
+        }
+    }
+    return wire;
+}
+
+void Messages::add_system(const std::string& content, std::string_view source) {
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
         if (!messages_.empty()) {
             LOG_CERR(INFO,  "[Messages] Warning: System message already exists, not adding" << '\n');
             return;
         }
-        messages_.push_back({{"role", "system"}, {"content", content}});
+        json msg = {{"role", "system"}, {"content", content}};
+        stamp(msg, source);
+        messages_.push_back(std::move(msg));
         mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
     // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
@@ -455,7 +512,8 @@ void Messages::add_system(const std::string& content) {
     }
 }
 
-void Messages::add_user(const std::string& content, const std::string& image_url) {
+void Messages::add_user(const std::string& content, const std::string& image_url,
+                        std::string_view source) {
     json msg;
     msg["role"] = "user";
 
@@ -469,9 +527,10 @@ void Messages::add_user(const std::string& content, const std::string& image_url
         msg["content"] = content;
     }
 
+    stamp(msg, source);
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
-        messages_.push_back(msg);
+        messages_.push_back(std::move(msg));
         mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
     // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
@@ -480,10 +539,12 @@ void Messages::add_user(const std::string& content, const std::string& image_url
     }
 }
 
-void Messages::add_assistant(const std::string& content) {
+void Messages::add_assistant(const std::string& content, std::string_view source) {
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
-        messages_.push_back({{"role", "assistant"}, {"content", content}});
+        json msg = {{"role", "assistant"}, {"content", content}};
+        stamp(msg, source);
+        messages_.push_back(std::move(msg));
         mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
     // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
@@ -492,19 +553,22 @@ void Messages::add_assistant(const std::string& content) {
     }
 }
 
-void Messages::add_tool_result(const std::string& tool_call_id, const std::string& content, bool is_error) {
+void Messages::add_tool_result(const std::string& tool_call_id, const std::string& content, bool is_error,
+                               std::string_view source) {
     // Auto-detect error if not explicitly specified and content starts with "Error:"
     if (!is_error && content.find("Error:") == 0) {
         is_error = true;
     }
     {
         std::lock_guard<std::mutex> lk(messages_mutex_);
-        messages_.push_back({
+        json msg = {
             {"role", "tool"},
             {"tool_call_id", tool_call_id},
             {"content", content},
             {"status", is_error ? "error" : "success"}
-        });
+        };
+        stamp(msg, source);
+        messages_.push_back(std::move(msg));
         mark_dirty_locked();  // §PERSIST-RACE: publish snapshot at mark time
     }
     // §CRASH-2 (2026-07-16): notify the flush worker (dirty set under lock).
@@ -1229,7 +1293,14 @@ std::vector<daedalus::HistoryEntry> Messages::history_snapshot() const {
             }
         }
         if (text.empty()) continue;
-        out.push_back({role, std::move(text)});
+        // §MSG-HEADERS: surface the origin envelope to host UIs; empty
+        // for legacy messages persisted before headers existed.
+        std::string src, rcv;
+        if (m.contains("_meta") && m["_meta"].is_object()) {
+            src = m["_meta"].value("source", "");
+            rcv = m["_meta"].value("received_at", "");
+        }
+        out.push_back({role, std::move(text), std::move(src), std::move(rcv)});
     }
     return out;
 }
@@ -1822,13 +1893,18 @@ CompressResult Messages::compress() {
         //    message: no assistant/tool pair is emitted (the
         //    model-facing compress_context tool was removed), so the
         //    rebuilt chain stays valid for every provider.
-        new_messages.push_back({
+        // §MSG-HEADERS: the summary carries an explicit origin + time so
+        // the model can tell "compression happened ONCE at 07:20" from a
+        // fresh event — this is the exact confusion the envelope fixes.
+        json summary_msg = {
             {"role", "user"},
             {"content", "[Context compressed — the earlier conversation "
                         "was summarized. Summary of the removed messages:\n"
                         + summary +
                         "\nContinue the current task.]"}
-        });
+        };
+        stamp(summary_msg, "system:context-compression");
+        new_messages.push_back(std::move(summary_msg));
 
         // 3. Add suffix messages (last remaining messages already in messages_ after deletion)
         //    These are the messages AFTER the given messages we just deleted
@@ -2174,11 +2250,14 @@ bool Messages::append_tool_results_if_pending(json& messages,
     bool appended = false;
     for (const auto& id : block_ids) {
         if (answered.count(id) > 0) continue;
-        messages.push_back({
+        json inj = {
             {"role", "tool"},
             {"tool_call_id", id},
             {"content", content}
-        });
+        };
+        // §MSG-HEADERS: an injected recovery result still names its origin.
+        stamp(inj, "system:error-recovery");
+        messages.push_back(std::move(inj));
         appended = true;
     }
     return appended;

@@ -28,6 +28,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include "core/Messages.h"  // §MSG-HEADERS: Messages::now_string
+
 namespace daedalus::context_status {
 
 /// Marker prepended to the transient status message content so the next
@@ -119,10 +121,15 @@ inline void upsert_context_status_message(nlohmann::json& messages,
     }
 
     // 3. Append the fresh status message as the last message.
-    messages.push_back({
+    // §MSG-HEADERS (2026-10-04): transient, rebuilt every iteration —
+    // stamp it so the wire header marks it as the live status block.
+    json status_msg = {
         {"role", "system"},
         {"content", std::string(kBeginMarker) + stats_block},
-    });
+    };
+    status_msg["_meta"] = json{{"source", "system:context-status"},
+                               {"received_at", Messages::now_string()}};
+    messages.push_back(std::move(status_msg));
 }
 
 } // namespace daedalus::context_status

@@ -113,6 +113,21 @@ public:
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> imgs);
 
+    /// @brief Push a user message with an explicit origin (§MSG-HEADERS,
+    ///        2026-10-04). `source` is a free-form `kind:id` string —
+    ///        "user:<name>" for the interactive host, "a2a:<agent>",
+    ///        "trigger:<name>", "email:<addr>", ... — stamped into the
+    ///        message's `_meta` together with a library-generated
+    ///        timestamp when the turn consumes it. The model then sees
+    ///        who/what sent each message and when, so it can tell an
+    ///        old, already-addressed message from a fresh one. Future
+    ///        source kinds need no API change: new `kind:id` strings
+    ///        just work. Prefer this overload for any non-interactive
+    ///        ingress (webhooks, schedulers, device bridges, mail).
+    void submit_user_message(std::string text,
+                             std::vector<ImageAttachment> imgs,
+                             std::string source);
+
     /// @brief Number of submitted user messages not yet consumed by
     ///        run_one_turn(). Anything other than the expected 0/1 means
     ///        submits and turns have drifted out of sync.

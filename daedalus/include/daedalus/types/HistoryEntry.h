@@ -18,6 +18,12 @@ namespace daedalus {
 struct HistoryEntry {
     std::string role;     ///< "system" | "user" | "assistant"
     std::string content;  ///< text content; tool calls/results are elided
+
+    /// §MSG-HEADERS (2026-10-04): origin envelope of the underlying
+    /// message, straight from its `_meta`. Both empty for legacy
+    /// messages persisted before headers existed.
+    std::string source;      ///< free-form `kind:id`, e.g. "user:lee"
+    std::string received_at; ///< "YYYY-MM-DD HH:MM:SS ZZZ", "" if legacy
 };
 
 }  // namespace daedalus

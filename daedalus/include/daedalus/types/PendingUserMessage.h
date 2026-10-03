@@ -19,6 +19,14 @@ namespace daedalus {
 struct PendingUserMessage {
     std::string text;
     std::vector<ImageAttachment> images;   ///< optional attachments (may be empty)
+
+    /// §MSG-HEADERS (2026-10-04): free-form `kind:id` origin of this
+    /// message — "user:<name>" for the interactive host, "a2a:<agent>",
+    /// "trigger:<name>", "email:<addr>", ... Stamped into the message's
+    /// `_meta` (with a library-generated timestamp) when the turn
+    /// consumes it, so the model can tell who/what sent each message
+    /// and when. Empty = legacy interactive user message.
+    std::string source;
 };
 
 }  // namespace daedalus

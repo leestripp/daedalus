@@ -260,6 +260,40 @@ Agent Cycle Completes
 
 **Location:** `src/core/Messages.h` / `Messages.cpp`
 
+### Message origin envelope (§MSG-HEADERS, 2026-10-04)
+
+Every message carries a `_meta` origin envelope, stamped by the library
+at creation:
+
+```json
+{"role": "user", "content": "…",
+ "_meta": {"source": "trigger:nightly-backup",
+           "received_at": "2026-10-04 07:27:44 UTC"}}
+```
+
+- `source` — free-form `kind:id` string: `user:<name>`, `assistant`,
+  `tool:<name>`, `system:context-compression`, `system:context-status`,
+  `a2a:<agent>`, `trigger:<name>`, `email:<addr>`, ... New source kinds
+  need no schema change. Hosts tag non-interactive ingress via
+  `Agent::submit_user_message(text, imgs, source)`.
+- `received_at` — **always UTC** with an explicit ` UTC` zone indicator
+  (§MSG-HEADERS-UTC). The user and the agent may run in different
+  timezones (Sydney vs New York); UTC is the single standard reference
+  so the model can compare message times. Never local time.
+- At payload-build time `Messages::wire_render()` expands `_meta` into
+  a visible one-line wire header —
+  `[from: trigger:nightly-backup · received 2026-10-04 07:27:44 UTC]` —
+  and strips `_meta` from the wire copy, so strict providers never see
+  an unknown message key. The stored chain keeps `_meta` untouched, so
+  the rendered header is byte-stable across turns (prefix-cache safe).
+- Why: without origin/time the model cannot tell an old, already-
+  addressed message from a fresh one — a compression summary reads
+  like a repeating event, a re-fired trigger is indistinguishable from
+  the human user, a crash-restored prompt looks new. The compression
+  summary below is stamped `system:context-compression` for exactly
+  this reason.
+- Legacy histories without `_meta` load and pass through unchanged.
+
 ### Configuration
 
 ```cpp

@@ -109,6 +109,17 @@ public:
     /// non-empty string — there is no host option to disable it.
     static std::string getStateMachineSection();
 
+    /// `# Message Origin Headers` — ALWAYS appended (after the
+    /// state-machine section).  §MSG-HEADERS (2026-10-04): explains the
+    /// `[from: SOURCE · received TIMESTAMP UTC]` one-line header that
+    /// `Messages::wire_render()` prepends to every message on the wire,
+    /// and forbids the model from writing those headers itself.  Without
+    /// this the model imitates the pattern and pollutes its own replies
+    /// (observed in production: assistant text beginning with a fake
+    /// `[from: assistant · received ...]` line).  Returns a static,
+    /// non-empty, byte-stable string — §ContextCache-safe.
+    static std::string getMessageHeadersSection();
+
     /// `# Reserved Agent Directories (.daedalus*)` — ALWAYS appended
     /// last (after the state-machine section).  Explains that the
     /// `.daedalus/`, `.daedalus/daedalus/`, and

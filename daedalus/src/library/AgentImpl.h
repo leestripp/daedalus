@@ -78,6 +78,10 @@ public:
     void submit_user_message(std::string text);
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> images);
+    /// §MSG-HEADERS (2026-10-04): origin-tagged submit — see Agent.h.
+    void submit_user_message(std::string text,
+                             std::vector<ImageAttachment> images,
+                             std::string source);
     [[nodiscard]] size_t pending_count() const noexcept {
         // §QUEUE-MUTEX (2026-09-10): internally synchronized — any thread.
         std::lock_guard<std::mutex> lk(pending_mutex_);

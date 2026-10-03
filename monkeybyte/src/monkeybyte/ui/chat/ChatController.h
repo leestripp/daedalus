@@ -96,6 +96,13 @@ public:
     // every build so a fresh session keeps the selection.
     void set_thinking_level(daedalus::ThinkingLevel level);
 
+    // §MSG-HEADERS (2026-10-04) — origin stamped on every interactive
+    // user message ("user:<login>"). Exposed so the panel can label the
+    // echo bubble with the SAME source the agent will stamp into the
+    // message's `_meta`: a live bubble and its restored copy read
+    // identically. Static: derived from the environment only.
+    static std::string interactive_source();
+
     // §7.8 /compress — ask daedalus to compress the live session's history
     // (Agent::compress_context, daedalus §AutoCompress; no user message is
     // sent). Mid-turn it's a flag consumed at the end of the current cycle

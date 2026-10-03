@@ -23,6 +23,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 #include <filesystem>
 #include <optional>
 #include <unordered_set>
@@ -249,29 +250,44 @@ public:
     
     /**
      * @brief Add system message (only if messages empty)
+     * @param source §MSG-HEADERS (2026-10-04): free-form `kind:id`
+     *        origin string, stamped into `_meta.source` together with a
+     *        library-generated `_meta.received_at` timestamp.
      */
-    void add_system(const std::string& content);
-    
+    void add_system(const std::string& content, std::string_view source = "system");
+
     /**
      * @brief Add user message (supports multi-modal with image_url)
+     * @param source §MSG-HEADERS: origin of the message — "user:<name>"
+     *        for the interactive host, "a2a:<agent>", "trigger:<name>",
+     *        "email:<addr>", ... Free-form by convention so future
+     *        sources need no schema change.
      */
-    void add_user(const std::string& content, const std::string& image_url = "");
-    
+    void add_user(const std::string& content, const std::string& image_url = "",
+                  std::string_view source = "user");
+
     /**
      * @brief Add assistant message
      */
-    void add_assistant(const std::string& content);
-    
+    void add_assistant(const std::string& content, std::string_view source = "assistant");
+
     /**
      * @brief Add tool result message
      * @param tool_call_id The ID of the tool call this result is for
      * @param content The result content
      * @param is_error Whether this is an error result (defaults to false)
+     * @param source §MSG-HEADERS: pass the tool name for a precise
+     *        `tool:<name>` origin; the default marks it a generic tool.
      */
-    void add_tool_result(const std::string& tool_call_id, const std::string& content, bool is_error = false);
-    
+    void add_tool_result(const std::string& tool_call_id, const std::string& content, bool is_error = false,
+                         std::string_view source = "tool");
+
     /**
      * @brief Add raw message (for loading from file, etc.)
+     *
+     * §MSG-HEADERS: intentionally NOT stamped — this path replays
+     * persisted history (load/crash-restore), where the original
+     * timestamps must be preserved, not overwritten with "now".
      */
     void add_message(const json& msg);
     
@@ -592,6 +608,52 @@ public:
      * @brief Clear executing markers (called during compression)
      */
     void clear_executing_markers();
+
+    // =========================================================================
+    // §MSG-HEADERS (2026-10-04): message origin envelope
+    // =========================================================================
+
+    /**
+     * @brief Stamp `msg` with `_meta.source` + `_meta.received_at`.
+     *
+     * received_at is ALWAYS generated here (UTC,
+     * "%Y-%m-%d %H:%M:%S UTC") — hosts never pass a timestamp, so a
+     * message can never enter the chain without one. Callers choose
+     * only the source string. Existing `_meta` (e.g. loaded history)
+     * is overwritten ONLY when the caller passes a non-empty source;
+     * pass an empty source to leave loaded messages untouched.
+     */
+    static void stamp(json& msg, std::string_view source);
+
+    /**
+     * @brief Current time as "%Y-%m-%d %H:%M:%S UTC" (thread-safe).
+     *
+     * §MSG-HEADERS-UTC (2026-10-04): ALWAYS UTC, never local time — the
+     * user and the agent may be in different timezones, so all message
+     * timestamps share one standard reference.
+     */
+    static std::string now_string();
+
+    /**
+     * @brief Build the provider-wire copy of the chain.
+     *
+     * Every message carrying `_meta` gets a one-line header prefixed to
+     * its wire content:
+     *   [from: trigger:nightly-backup · received 2026-10-04 07:27:44 UTC]
+     * and the `_meta` field itself is REMOVED from the copy — strict
+     * providers (LM Studio/qwen3 jinja templates, Anthropic conversion)
+     * must never see unknown message keys. The STORED chain is never
+     * mutated, so the rendered header is byte-stable across turns
+     * (§ContextCache prefix reuse is unaffected). Messages without
+     * `_meta` (legacy history) pass through unmodified. Content may be
+     * a string or an array (multimodal) — the header becomes a leading
+     * text part in the array case.
+     *
+     * §MSG-HEADERS-UTC: the `received` time is ALWAYS UTC (`now_string`
+     * guarantees the " UTC" zone indicator) — one standard reference
+     * regardless of where in the world the agent or the user runs.
+     */
+    static json wire_render(const json& messages);
 
 private:
     /**

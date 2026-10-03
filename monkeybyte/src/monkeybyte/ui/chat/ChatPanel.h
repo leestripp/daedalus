@@ -161,7 +161,14 @@ private:
     Gtk::Label activity_label_;
     std::string activity_text_ = "Ready";
 
-    struct HistoryEntry { std::string role; std::string content; };
+    // §MSG-HEADERS — host-side mirror entry; source/received_at drive the
+    // origin header when a bubble is (re)built from history_.
+    struct HistoryEntry {
+        std::string role;
+        std::string content;
+        std::string source;
+        std::string received_at;
+    };
     std::vector<HistoryEntry> history_;
     int user_turns_ = 0;
     int total_messages_ = 0;

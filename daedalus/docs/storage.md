@@ -142,7 +142,7 @@ get different `agent_dir()` paths, so:
 
 | Path | Purpose | Safe to delete between sessions? |
 |---|---|---|
-| `agent_dir/messages.json` | Conversation transcript. Atomic write via temp + rename + `fsync`; survives `kill -9` mid-save. Write-through auto-flush keeps it within ~100 ms of every `add_*()` call. | Yes (rebuilds from the agent loop on next turn) |
+| `agent_dir/messages.json` | Conversation transcript. Atomic write via temp + rename + `fsync`; survives `kill -9` mid-save. Write-through auto-flush keeps it within ~100 ms of every `add_*()` call. §MSG-HEADERS (2026-10-04): each message carries a `_meta` origin envelope (`source` + `received_at`, always UTC with an explicit ` UTC` indicator) — see `docs/how_compress_works.md` → "Message origin envelope". | Yes (rebuilds from the agent loop on next turn) |
 | `agent_dir/messages.json.crash` | Crash mirror — written by the SIGSEGV/SIGABRT/SIGFPE/SIGILL signal handlers and re-written on every save. Read on next launch if `messages.json` is missing/corrupt. Defensive "drop last message" recovery. | Yes |
 | `agent_dir/memory/memory.json` | Long-term facts. Source of truth for `SessionMemory`. | No — losing this loses project memory |
 | `agent_dir/memory/daedalus.db` | SQLite mirror of `memory.json` under `mem.<session_id>` keys. Used for recovery if the JSON file is corrupt. | Yes (regenerable from `memory.json`) |

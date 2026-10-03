@@ -718,7 +718,7 @@ void AgentImpl::uninstall_crash_handlers() {
 void AgentImpl::submit_user_message(std::string text)
 {
     std::lock_guard<std::mutex> lk(pending_mutex_);
-    pending_user_messages_.push_back({std::move(text), {}});
+    pending_user_messages_.push_back({std::move(text), {}, "user"});
 }
 
 void AgentImpl::submit_user_message(std::string text,
@@ -728,7 +728,19 @@ void AgentImpl::submit_user_message(std::string text,
     // alongside the text and are handed to LLMClient::queue_image_attachments()
     // when the message drains — payload-only injection, vision-gated.
     std::lock_guard<std::mutex> lk(pending_mutex_);
-    pending_user_messages_.push_back({std::move(text), std::move(images)});
+    pending_user_messages_.push_back({std::move(text), std::move(images), "user"});
+}
+
+void AgentImpl::submit_user_message(std::string text,
+                                    std::vector<ImageAttachment> images,
+                                    std::string source)
+{
+    // §MSG-HEADERS (2026-10-04): hosts with exotic origins (A2A peers,
+    // triggers, email bridges, devices) tag the message here; the turn
+    // stamps it into `_meta.source` when it drains the queue.
+    std::lock_guard<std::mutex> lk(pending_mutex_);
+    pending_user_messages_.push_back(
+        {std::move(text), std::move(images), std::move(source)});
 }
 
 bool AgentImpl::edit_pending_message(
@@ -870,7 +882,10 @@ void AgentImpl::run_one_turn(std::stop_token st)
     if (!pending.images.empty()) {
         body_->client->queue_image_attachments(pending.images);
     }
-    ::AgentState r = body_->client->run_one_turn(pending.text);
+    // §MSG-HEADERS: forward the queued message's origin so the
+    // user message stamped into the chain names its real source.
+    ::AgentState r = body_->client->run_one_turn(pending.text,
+                                                 pending.source);
     // §TURN-ERROR: mirror the client's terminal-error record so the
     // public Agent::turn_had_terminal_error()/last_error() reflect LLM
     // failures (fatal 4xx, retries exhausted) even though those turns

@@ -328,7 +328,10 @@ private:
         }
 
         try {
-            agent->submit_user_message(prompt);
+            // §MSG-HEADERS (2026-10-04): tag inbound A2A traffic with its
+            // origin so the model can tell a remote peer's message from a
+            // local interactive user message.
+            agent->submit_user_message(prompt, {}, "a2a:peer");
             task.status.state = daedalus::a2a::TaskState::working;
             if (handler) {
                 daedalus::a2a::TaskStatusUpdateEvent working;

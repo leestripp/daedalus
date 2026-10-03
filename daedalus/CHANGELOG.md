@@ -27,6 +27,70 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **§MSG-HEADERS (2026-10-04): every message now carries an origin
+  envelope — `_meta.source` + `_meta.received_at`.** Messages were bare
+  `{role, content}` JSON, so the model could not tell an old,
+  already-addressed message from a fresh one: a context-compression
+  summary read like a repeating event, a re-fired trigger or an inbound
+  A2A message was indistinguishable from the human user, and a
+  crash-restored prompt looked new.
+  - The library stamps `received_at` (always **UTC**, `YYYY-MM-DD
+    HH:MM:SS UTC` — §MSG-HEADERS-UTC: the user and the agent may run in
+    different timezones, so all message timestamps share one standard
+    reference) at message creation; the caller chooses only the source. All
+    creation paths are covered: `Messages::add_*`, the turn entry in
+    `LLMClient::run_one_turn` (system + user), assistant replies,
+    tool results (`tool:<name>`), API-error recovery injections, the
+    compression summary (`system:context-compression`), and the
+    transient context-status block (`system:context-status`). Messages
+    replayed from disk (`add_message`) keep their original `_meta`.
+  - At payload-build time `Messages::wire_render()` expands `_meta`
+    into a visible one-line wire header —
+    `[from: trigger:nightly-backup · received 2026-10-04 07:27:44 UTC]`
+    — and strips the `_meta` key from the wire copy, so strict
+    providers never see an unknown message key while the model gains
+    the origin/time context. The stored chain is never mutated, keeping
+    the rendered header byte-stable across turns (prompt prefix-cache
+    reuse unaffected). Legacy histories without `_meta` pass through
+    unchanged.
+  - New public API: `Agent::submit_user_message(text, imgs, source)` —
+    hosts with non-interactive ingress (A2A peers, triggers, email
+    bridges, devices) tag the origin with a free-form `kind:id` string
+    (`user:<name>`, `a2a:<agent>`, `trigger:<name>`, `email:<addr>`,
+    ...). New source kinds need no schema or API change. The existing
+    overloads default to `user`. The icarus A2A daemon now tags inbound
+    peer traffic `a2a:peer`.
+  - §MSG-HEADERS-ANTI-IMITATION (2026-10-04): new always-appended
+    `# Message Origin Headers` system-prompt section explains the wire
+    header to the model and forbids writing/imitating it. Without this
+    the model pattern-matched the `[from: ... · received ...]` format
+    on every message and began its own replies with a fake header line,
+    polluting user-visible answers and feeding the fake line back into
+    the stored chain. Section is byte-static (§ContextCache-safe).
+  - §MSG-HEADERS-UTC: **every datetime string the agent reads now names
+    its zone** — memory and todo timestamps (already UTC via `gmtime`)
+    gain an explicit ` UTC` suffix, matching the message envelope and
+    the Context Status `Date/Time (UTC)` row. UTC is the single
+    standard reference regardless of where in the world the agent or
+    user runs (Sydney vs New York).
+  - `PendingUserMessage` gains `source`; `HistoryEntry` gains `source`
+    + `received_at` so host UIs can render the origin. New doctest
+    suite `message_headers_tests` (10 cases).
+  - MonkeyByte host UI: `ChatMessage::set_origin(source, received_at)`
+    renders a `.message-origin` header line above bubbles whose message
+    came from outside the conversation — "You · <time>" for the
+    interactive user, "From <peer> (A2A)", "Trigger: <name>", "Context
+    status" for the compression summary — so an old or external message
+    can't masquerade as a fresh interactive prompt; the assistant's own
+    voice and legacy unstamped messages get no header. ChatController
+    stamps interactive sends `user:<login>` (GLib `get_user_name()`,
+    not `$USER` — a sudo shell can leave that stale) via the new
+    `submit_user_message` source overload; the panel labels the echo
+    bubble with the same source so live and restored bubbles read
+    identically.
+
 ### Changed
 
 - **§K2.8 (2026-09-30): `kimi-for-coding` is now Kimi K2.8 Preview —
