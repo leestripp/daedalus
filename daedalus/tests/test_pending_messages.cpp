@@ -16,6 +16,9 @@
 //   4. remove_pending_message() — drops one entry, preserves the order
 //      of the rest, out-of-range index returns false.
 //   5. clear_pending_messages() — empties the queue.
+//   6. §QUEUE-JOIN join-on-drain — run_one_turn() consumes the WHOLE
+//      queue as ONE message: texts blank-line-joined FIFO, images
+//      concatenated, sources merged; queue left empty.
 
 #include <cstdlib>
 #include <filesystem>
@@ -159,6 +162,59 @@ int run() {
         agent.clear_pending_messages();  // idempotent
     }
     std::cout << "[5] clear OK\n";
+
+    // ---- 6. Join-on-drain (§QUEUE-JOIN) ----------------------------------
+    // run_one_turn() consumes the ENTIRE queue as one joined message —
+    // observable afterwards in history_snapshot() as a single user entry
+    // whose content is the FIFO blank-line join. DAEDALUS_HOME is pointed
+    // at an empty dir so the test is hermetic (no user-tier providers
+    // from the real store) and fast (no live network call to a configured
+    // endpoint).
+    {
+        const std::string isolated_home =
+            (std::filesystem::temp_directory_path() / "daedalus_qj_home")
+                .string();
+        std::filesystem::create_directories(isolated_home);
+        ::setenv("DAEDALUS_HOME", isolated_home.c_str(), 1);
+
+        // Fresh project root — a persisted chain from an earlier run of
+        // this binary would otherwise add stale user entries below.
+        const std::filesystem::path qj_root =
+            std::filesystem::temp_directory_path() / "daedalus_qj_proj";
+        std::filesystem::remove_all(qj_root);
+        daedalus::AgentConfig qj_cfg;
+        qj_cfg.project_root = qj_root;
+        daedalus::Agent agent(qj_cfg, std::make_shared<NullSink>());
+
+        agent.submit_user_message("do X");
+        agent.submit_user_message("also change Y", {make_image("/tmp/a.png")});
+        agent.submit_user_message("correction: actually Z", {},
+                                  "user:lee");
+
+        agent.run_one_turn();
+
+        // Whole queue consumed by the single turn.
+        CHECK_MSG(agent.pending_count() == 0);
+        CHECK_MSG(agent.pending_messages().empty());
+
+        // Joined text is dispatched as ONE user message (FIFO, blank
+        // line between parts) — observable in the history snapshot.
+        const auto hist = agent.history_snapshot();
+        size_t user_entries = 0;
+        std::string user_content;
+        for (const auto& h : hist) {
+            if (h.role == "user") {
+                ++user_entries;
+                user_content = h.content;
+            }
+        }
+        CHECK_MSG(user_entries == 1);
+        CHECK_MSG(user_content ==
+                  "do X\n\nalso change Y\n\ncorrection: actually Z");
+
+        ::unsetenv("DAEDALUS_HOME");
+    }
+    std::cout << "[6] join-on-drain OK\n";
 
     return 0;
 }

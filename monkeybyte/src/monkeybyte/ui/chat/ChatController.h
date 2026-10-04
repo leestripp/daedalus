@@ -184,8 +184,9 @@ private:
     // the remainder going FIRST on the next send, and sharing
     // state_mutex_ makes "busy -> enqueue" vs. "queue empty -> go Idle"
     // atomic so a message can never strand behind the drain loop's final
-    // empty check. The turn thread alone feeds daedalus, one
-    // submit + run_one_turn per message.
+    // empty check. The turn thread alone feeds daedalus; §QUEUE-JOIN
+    // (2026-10-04) — the drain loop joins the whole queue into ONE
+    // message per submit + run_one_turn, in FIFO order.
     std::deque<std::string> queued_messages_;
 };
 

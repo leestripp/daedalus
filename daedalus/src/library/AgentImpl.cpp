@@ -11,6 +11,7 @@
  */
 #include "AgentImpl.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <filesystem>
@@ -851,11 +852,35 @@ void AgentImpl::run_one_turn(std::stop_token st)
             // No queued message — no-op.
             return;
         }
+        // §QUEUE-JOIN (2026-10-04): drain the WHOLE queue as ONE message.
+        // Messages submitted while a turn was busy (a follow-up change, a
+        // correction to an earlier queued item, ...) are the user's single
+        // intent for the next turn — dispatching them one at a time made
+        // the model answer a stale message after newer ones and cost one
+        // full turn per queued item. Join texts FIFO with a blank line,
+        // concatenate images in queue order, and merge sources (identical
+        // → that source; mixed → distinct sources, first-appearance order,
+        // comma-joined, so the §MSG-HEADERS wire header stays truthful).
         LOG_DEBUG("run_one_turn: dispatching "
                   + std::to_string(pending_user_messages_.size())
-                  + " pending message(s)");
+                  + " pending message(s) as one joined message");
         pending = std::move(pending_user_messages_.front());
         pending_user_messages_.erase(pending_user_messages_.begin());
+        std::vector<std::string> sources;
+        sources.push_back(pending.source);
+        while (!pending_user_messages_.empty()) {
+            PendingUserMessage next =
+                std::move(pending_user_messages_.front());
+            pending_user_messages_.erase(pending_user_messages_.begin());
+            pending.text += "\n\n" + next.text;
+            pending.images.insert(pending.images.end(),
+                                  std::make_move_iterator(next.images.begin()),
+                                  std::make_move_iterator(next.images.end()));
+            if (std::ranges::find(sources, next.source) == sources.end()) {
+                pending.source += ", " + next.source;
+                sources.push_back(next.source);
+            }
+        }
     }
 
     if (!body_->client) {

@@ -578,13 +578,16 @@ void ChatController::send_message(const std::string& text,
             // when it rebuilds the agent).
             sink_->clear_errors();
             ensure_agent(model_display);
-            // Drain loop: each queued message gets exactly one daedalus
-            // submit + run_one_turn (daedalus warns any other ratio
-            // leaves its queue off-by-one). Stop only interrupts the
-            // CURRENT turn — queued tasks still run. An error ends the
-            // drain instead of hammering a failing backend; the remaining
-            // messages stay queued and go FIRST on the next send,
-            // preserving FIFO.
+            // Drain loop: §QUEUE-JOIN (2026-10-04) — pop the WHOLE host
+            // queue and join it into ONE message per daedalus submit +
+            // run_one_turn (daedalus drains its own queue the same way).
+            // Everything the user typed while a turn was busy — a
+            // follow-up, a correction to an earlier queued item — is the
+            // user's single intent for the next turn; one joined message,
+            // one turn. Stop only interrupts the CURRENT turn — queued
+            // tasks still run. An error ends the drain instead of
+            // hammering a failing backend; the remaining messages stay
+            // queued and go FIRST on the next send, preserving FIFO.
             for (;;) {
                 std::string next;
                 {
@@ -592,6 +595,11 @@ void ChatController::send_message(const std::string& text,
                     if (reason != "error" && !queued_messages_.empty()) {
                         next = std::move(queued_messages_.front());
                         queued_messages_.pop_front();
+                        while (!queued_messages_.empty()) {
+                            next += "\n\n" +
+                                    std::move(queued_messages_.front());
+                            queued_messages_.pop_front();
+                        }
                     } else {
                         // Final queue check and the resting-state
                         // transition are one atomic step: a main-thread

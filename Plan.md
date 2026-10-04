@@ -153,3 +153,66 @@ Wire rendering (payload-build time in `run_agent_cycle`):
 ## Verification bar
 
 Clean superbuild, full `ctest` green, `static_analysis` no new warnings.
+
+---
+
+# Plan — Queue join: drain ALL queued user messages as ONE message (§QUEUE-JOIN, 2026-10-04)
+
+**Problem.** When the agent is busy, user messages accumulate in a queue.
+On drain we dispatch exactly ONE message per turn, so a burst of messages
+("do X", "also change Y", "correction: actually Z") is answered one at a
+time — the model never sees the user's full intent in one context, answers
+to a stale message arrive after newer ones, and N queued messages cost N
+full turns. The agent doesn't care how many physical messages it receives;
+the user often wants to add a correction right after a message. Joining
+the whole queue into a single message at drain time is strictly better.
+
+**Decision (approved by user, prompt.txt).**
+- At drain time (agent becomes ready to run), JOIN every queued user
+  message into ONE message, send it as a single turn, then the queue is
+  empty. One turn per drain, not one turn per message.
+- Queue semantics (submit / edit / remove / clear, FIFO order) are
+  UNCHANGED while queued — joining happens only at the consume point.
+- Text parts are joined with a blank line in FIFO order. Image
+  attachments concatenate in queue order. No numbering/labels: the
+  user's own words are the content (§MSG-HEADERS still stamps the single
+  combined origin on the wire).
+
+## Changes by component
+
+1. **daedalus core — AgentImpl** (`src/library/AgentImpl.cpp`, §QUEUE-JOIN):
+   - `run_one_turn()` dequeue block: instead of taking `front()` and
+     erasing one element, consume the WHOLE `pending_user_messages_` under
+     `pending_mutex_`: join texts with `"\n\n"`, concatenate images,
+     merge `source` (all identical → that source; mixed → distinct
+     sources in first-appearance order joined with `", "`, so the wire
+     header stays truthful for e.g. `user:lee, a2a:peer`).
+   - Single message consumed → the `Agent.h` off-by-one warning relaxes:
+     run_one_turn() consumes the ENTIRE queue; extra submits while a turn
+     runs simply accumulate for the next drain. Update the doc comment.
+   - Host-facing queue API (`pending_count/pending_messages/edit/remove/
+     clear`) untouched — hosts still see and edit individual messages
+     while they wait.
+2. **monkeybyte — ChatController** (`src/monkeybyte/ui/chat/ChatController.cpp`):
+   - Turn-thread drain loop: pop ALL of `queued_messages_` in one
+     state_mutex_ hold, join with `"\n\n"`, single
+     `submit_user_message()` + `run_one_turn()`. Matches the daedalus
+     change: while the user was typing during a busy turn, their whole
+     burst becomes one message. FIFO preserved (error still stops the
+     drain with leftovers queued for next send).
+3. **icarus**: no change — the REPL blocks during `run_one_turn()` so its
+   queue never accumulates interactively; A2A submits land in the daedalus
+   queue and are covered by change 1.
+4. **Tests**:
+   - daedalus: extend `test_pending_messages.cpp` — submit 3 messages
+     (incl. one with an image), `run_one_turn()` with no model configured
+     (the existing no-client error path echoes `pending.text`): the
+     terminal error must contain the joined text, images/source merged,
+     and `pending_count()` must be 0 (whole queue consumed by one turn).
+   - monkeybyte: `unit_tests` — ChatController-level join test if the
+     drain loop is reachable headless; otherwise rely on the daedalus
+     test + manual smoke.
+
+## Verification bar
+
+Clean superbuild, full `ctest` green, `static_analysis` no new warnings.

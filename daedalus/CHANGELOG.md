@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Changed
+
+- §QUEUE-JOIN (2026-10-04): `Agent::run_one_turn()` now consumes the
+  ENTIRE pending user-message queue as ONE joined message instead of
+  draining one message per turn. Everything submitted while a turn was
+  busy (follow-ups, corrections to earlier queued items) becomes the
+  user's single intent for the next turn: texts blank-line-joined in
+  FIFO order, image attachments concatenated, `source` merged (distinct
+  origins comma-joined, so the §MSG-HEADERS wire header stays truthful).
+  Queue management while queued (`pending_messages()` / `edit` / `remove`
+  / `clear`) is unchanged; monkeybyte's host-side drain loop joins the
+  same way. The old off-by-one hazard (submitting without a matching
+  turn strands a message) narrows accordingly — a turn now always
+  consumes everything queued.
+
 ### Build / Infrastructure
 
 - §Monorepo (2026-09-24): the `daedalus`, `icarus`, and `monkeybyte`

@@ -94,11 +94,13 @@ public:
     /// @brief Push a user message into the conversation queue. The next
     ///        call to run_one_turn() will consume it.
     ///
-    /// @warning Each submit queues exactly one message and each
-    ///        run_one_turn() consumes exactly one. Submitting without a
-    ///        matching run_one_turn() leaves the queue off-by-one forever:
-    ///        every later turn then processes the *previous* queued message
-    ///        instead of the fresh prompt. Use pending_count() to check for
+    /// @note §QUEUE-JOIN (2026-10-04): run_one_turn() consumes the ENTIRE
+    ///        queue, not one message — everything queued while a turn was
+    ///        busy (follow-ups, corrections, ...) is joined into a single
+    ///        message (texts blank-line-joined FIFO, images concatenated,
+    ///        sources merged) and dispatched as ONE turn. Submitting while
+    ///        idle without a matching run_one_turn() still strands the
+    ///        message for the next turn; use pending_count() to check for
     ///        unconsumed messages.
     void submit_user_message(std::string text);
 
