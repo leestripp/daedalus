@@ -52,6 +52,7 @@ private:
     Gtk::Widget* build_workspace_tab(); // Plan.md P6: types + prompt overrides
     Gtk::Widget* build_mcp_tab();
     Gtk::Widget* build_agent_tab();
+    Gtk::Widget* build_web_search_tab(); // §WEB-SEARCH-CORE (2026-10-10)
     Gtk::Widget* build_search_tab();
     Gtk::Widget* build_paths_tab();
 

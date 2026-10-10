@@ -39,7 +39,6 @@ add_executable(daedalus_skill_auto_discovery_tests
     test_skill_auto_discovery.cpp
     ${PROJECT_SOURCE_DIR}/src/core/SkillManager.cpp
     
-    ${PROJECT_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
     ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
 )
@@ -70,7 +69,6 @@ add_executable(daedalus_skill_frontmatter_tests
     test_skill_frontmatter.cpp
     ${PROJECT_SOURCE_DIR}/src/core/SkillManager.cpp
     
-    ${PROJECT_SOURCE_DIR}/src/core/SerperConfig.cpp
     ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
     ${PROJECT_SOURCE_DIR}/src/core/ThreadPool.cpp
 )
@@ -250,42 +248,8 @@ add_test(NAME phase14_per_project_system_prompt_tests
          COMMAND daedalus_phase14_per_project_system_prompt_tests)
 
 # ============================================================================
-# Serper.dev settings tests (regression for the "serper-search" key bug)
-# ============================================================================
-
-add_executable(daedalus_serper_settings_tests
-    test_serper_settings.cpp
-)
-target_include_directories(daedalus_serper_settings_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/src
-    ${PROJECT_SOURCE_DIR}/src/core
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_serper_settings_tests PRIVATE
-    nlohmann_json::nlohmann_json
-)
-add_test(NAME serper_settings_tests COMMAND daedalus_serper_settings_tests)
 
 # ============================================================================
-# daedalus_searxng_settings_tests
-#
-# §SEARXNG-CORE (2026-09-21): SearXNG instance config — SettingsStore
-# round-trip/upsert/disabled, URL validation + normalization helpers,
-# v6→v7 migration. Hermetic — temp dirs only, no network, no spawns.
-# ============================================================================
-add_executable(daedalus_searxng_settings_tests
-    test_searxng_settings.cpp
-)
-target_include_directories(daedalus_searxng_settings_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/include
-    ${PROJECT_SOURCE_DIR}/src
-)
-target_link_libraries(daedalus_searxng_settings_tests PRIVATE
-    daedalus
-    pthread
-)
-add_test(NAME searxng_settings_tests
-         COMMAND daedalus_searxng_settings_tests)
 
 # ============================================================================
 # daedalus_list_tools_tests
@@ -423,28 +387,6 @@ target_link_libraries(daedalus_mcp_hub_hardening_tests PRIVATE
 add_test(NAME mcp_hub_hardening_tests COMMAND daedalus_mcp_hub_hardening_tests)
 
 # ============================================================================
-# Serper.dev STARTUP tests (behavioural: actually loads the user's settings
-# file and verifies the serper-search key is configured and valid)
-#
-# Skippable in CI by setting DAEDALUS_SKIP_SERPER_STARTUP_TEST=1.
-# ============================================================================
-
-add_executable(daedalus_serper_startup_tests
-    test_serper_startup.cpp
-    ${PROJECT_SOURCE_DIR}/src/core/SerperConfig.cpp
-    ${PROJECT_SOURCE_DIR}/src/core/Logger.cpp
-)
-target_include_directories(daedalus_serper_startup_tests PRIVATE
-    ${PROJECT_SOURCE_DIR}/src
-    ${PROJECT_SOURCE_DIR}/src/core
-    ${PROJECT_SOURCE_DIR}/src/tools
-    ${nlohmann_json_INCLUDE_DIR}
-)
-target_link_libraries(daedalus_serper_startup_tests PRIVATE
-    daedalus
-    nlohmann_json::nlohmann_json
-)
-add_test(NAME serper_startup_tests COMMAND daedalus_serper_startup_tests)
 
 # ============================================================================
 # HttpSession tests (uses OmniNet HTTP, network may be unavailable)
@@ -2128,3 +2070,30 @@ get_property(_daedalus_all_tests DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY 
 if(_daedalus_all_tests)
     set_property(TEST ${_daedalus_all_tests} APPEND PROPERTY LABELS lib)
 endif()
+
+# ============================================================================
+# §WEB-SEARCH-CORE (2026-10-10): unified web_search provider registry
+# (parsers, failover chain, schema v8 migration, ToolFactory roster)
+# ============================================================================
+
+add_executable(daedalus_web_search_tests
+    test_web_search.cpp
+)
+target_include_directories(daedalus_web_search_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+    ${OmniNet_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_web_search_tests PRIVATE
+    daedalus
+    OmniNet
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME web_search_tests COMMAND daedalus_web_search_tests)
+
+# ============================================================================
+# §WEB-SEARCH-CORE (2026-10-10): unified web_search provider registry —
+# parsers (canned fixtures), failover chain (injected fakes), schema v8
+# migration, ToolFactory roster. Hermetic: no network.
+# ============================================================================

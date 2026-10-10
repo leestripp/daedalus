@@ -216,3 +216,176 @@ the whole queue into a single message at drain time is strictly better.
 ## Verification bar
 
 Clean superbuild, full `ctest` green, `static_analysis` no new warnings.
+
+---
+
+# Plan — Unified `web_search` tool with provider registry (§WEB-SEARCH-CORE, 2026-10-10)
+
+**Problem.** Search today is a mess of one-tool-per-provider:
+
+| Tool | Provider | Problem |
+|------|----------|---------|
+| `web_search` (monkeybyte host) | DuckDuckGo HTML scrape | Host-only, fragile, no settings |
+| `searxng_search` (core) | Self-hosted SearXNG | **Instance keeps getting blocked/rate-limited** |
+| `serper_search` (core) | Serper.dev Google | Works, but its own tool |
+
+The model sees up to three search tools, none of which know about each
+other; when the SearXNG instance is blocked the agent just fails instead
+of falling back. Research (firecrawl.dev/blog/best-web-search-apis) shows
+several providers with free tiers better suited to AI agents.
+
+**Decision (per user).**
+- ONE tool, `web_search`, registered by the CORE library. It fans out to
+  whatever providers are enabled in Settings.
+- `searxng_search` REMOVED as a tool — SearXNG survives as a provider
+  ("self-hosted, no key, free") inside the unified tool.
+- `serper_search` REMOVED as a tool — Serper survives as a provider.
+- `web_fetch` STAYS untouched. NO other tool is removed or changed.
+- Settings gains a Web Search section: per-provider enable/disable
+  toggle + API key/base URL. Several providers ship; the user picks.
+
+## Provider set (chosen from the blog, weighted for agents)
+
+| id | Provider | Why | Free tier | Key? |
+|----|----------|-----|-----------|------|
+| `brave` | Brave Search API | Independent index, best-in-class quality for AI (tied top of AIMultiple benchmark), simple JSON | 2,000 q/mo | Yes |
+| `tavily` | Tavily | AI-native, citation-ready, LangChain/LlamaIndex standard | 1,000 q/mo | Yes |
+| `exa` | Exa | Neural/semantic search, best for research-style queries | 1,000 q/mo | Yes |
+| `firecrawl` | Firecrawl /search | AI-native, token-efficient Highlights, optional same-call page content | 1,000 credits/mo | Yes |
+| `serper` | Serper.dev | Cheap Google SERP ($0.30–1/1k), already integrated | 2,500 once | Yes |
+| `serpapi` | SerpAPI | 40+ engines, enterprise reliability | 250 q/mo | Yes |
+| `searxng` | SearXNG (self-hosted) | No key, no quota, user already runs one — keep as an option despite blocking issues | ∞ | No (URL + optional basic auth) |
+| `duckduckgo` | DuckDuckGo HTML | No key, no config — the always-available last resort (move monkeybyte's `WebSearch` HTML parser into core) | ∞ | No |
+
+All 8 ship; each is individually enable/disable-able. `duckduckgo` is
+enabled by default (zero config); everything else starts disabled so no
+existing user's behaviour silently changes... EXCEPT: existing
+`serper_config` (key set) and `searxng_config` (base_url set) rows
+migrate to enabled providers, preserving current working setups.
+
+## Selection semantics (§WEB-SEARCH-FAILOVER)
+
+- Enabled providers are tried in **priority order** (user-reorderable in
+  Settings; default: brave → tavily → exa → firecrawl → serper →
+  serpapi → searxng → duckduckgo).
+- First provider that returns results wins — one search costs one
+  provider call, not N. On error/block/empty, fall through to the next
+  enabled provider. This fixes the SearXNG-blocked outage: the chain
+  falls back automatically.
+- Optional `provider` argument on the tool forces one provider (agent
+  can pick when the user says "search with Brave"). Default = chain.
+- Result format is NORMALISED across providers: `[{title, url, snippet}]`
+  capped at `max_results` (default 8, max 25) — same shape the current
+  tools emit, so hosts and tests barely notice.
+- If every enabled provider fails: one descriptive error listing each
+  provider's failure reason + a hint to check Settings. Unconfigured
+  (no key) providers are skipped silently, not errors.
+
+## Changes by component
+
+### Phase 1 — Core plumbing (daedalus)
+
+1. **Settings schema v8** (`src/core/SettingsStore.cpp`, `settings.h`):
+   - New table `web_search_providers(id INTEGER PRIMARY KEY, name TEXT
+     UNIQUE, enabled INTEGER, api_key TEXT, base_url TEXT, username TEXT,
+     password TEXT, priority INTEGER)`.
+   - `migrate_to_v8`: seed all 8 rows (disabled, default priority);
+     copy `serper_config.api_key` → serper row (enabled=1 if key set);
+     copy `searxng_config` (base_url/username/password/enabled) →
+     searxng row. Old tables LEFT IN PLACE (read-only legacy) — no data
+     loss, downgrade-safe.
+   - `SettingsStore`: `get/set_web_search_providers()` returning
+     `std::vector<WebSearchProviderSettings>`; struct in settings.h
+     mirrors the row.
+2. **Provider abstraction** (new `src/tools/websearch/`):
+   - `WebSearchProvider.h`: interface — `id()`, `display_name()`,
+     `search(query, max_results, cfg) → expected<vector<Result>, string>`.
+     `Result{title,url,snippet}`.
+   - One .cpp per provider: `BraveProvider` (GET api.search.brave.com/res/v1/web/search, `X-Subscription-Token`),
+     `TavilyProvider` (POST api.tavily.com/search),
+     `ExaProvider` (POST api.exa.ai/search, `x-api-key`),
+     `FirecrawlProvider` (POST api.firecrawl.dev/v2/search, Bearer),
+     `SerperProvider` (refactor SerperSearchTool's HTTP body),
+     `SerpapiProvider` (GET serpapi.com/search.json),
+     `SearxngProvider` (refactor SearxngSearchTool's HTTP body),
+     `DuckDuckGoProvider` (move monkeybyte `WebSearch::parse` HTML
+     parser into core — pure parser stays unit-testable).
+   - HTTP via existing OmniNet `HTTP::Client` (same as current tools);
+     JSON via nlohmann. No new dependencies.
+3. **`WebSearchTool`** (`src/tools/WebSearchTool.{h,cpp}`): name
+   `web_search`, args `{query, max_results?, provider?}`; executes the
+   failover chain from Settings at request time (config read per call,
+   same contract as current tools — no restart needed after Settings
+   edits). Errors: descriptive JSON `{error, providers_tried:[...], detail}`.
+4. **ToolFactory**: register `WebSearchTool`; DELETE the
+   `SerperSearchTool` + `SearxngSearchTool` registrations and their
+   .cpp/.h files; keep `core/SerperConfig`/`SearxngConfig` ONLY as the
+   migration source (or fold migration into v8 and delete them too —
+   decide during impl, prefer delete).
+5. **MonkeyByte host tools**: delete `WebSearchTool` (its DuckDuckGo
+   `web_search`) — the core tool now provides `web_search`; keep
+   `WebFetch` + its tool untouched. Any `web_search`-named host
+   registration would collide → removed, not replaced.
+
+### Phase 2 — Hosts adopt
+
+6. **monkeybyte Settings UI** (`src/monkeybyte/ui/settings/*`): new
+   "Web Search" page — one row per provider: enable checkbox, API key /
+   base URL + credentials (searxng), up/down priority. Remove the old
+   Serper/SearXNG settings rows. GSettings store → SettingsStore via
+   existing setters.
+7. **icarus settings TUI**: same Web Search tab (mirrors the Serper tab
+   pattern it already has); remove Serper/SearXNG tabs.
+8. **migrate-data** (`daedalus` CLI + icarus): settings.json
+   `serper-search.api_key` path now seeds the new table too (schema v8
+   migration covers most cases; the JSON migrator seeds serper row
+   directly).
+
+### Phase 3 — Tests & docs
+
+9. **Tests**:
+   - Provider parsers: canned-response unit tests per provider (JSON or
+     HTML in fixtures — pattern already used by monkeybyte's WebSearch
+     parse test and the existing Serper tests).
+   - Failover chain: fake providers injected — first-success wins,
+     error falls through, all-fail error aggregates reasons, `provider`
+     arg bypasses chain, disabled/unconfigured providers skipped.
+   - Schema v8 migration: v7 DB with serper key + searxng URL migrates
+     to enabled rows; fresh DB seeds defaults; old tables untouched.
+   - ToolFactory: exactly one `web_search`, no `serper_search` /
+     `searxng_search` registered.
+   - Existing serper/searxng tests updated or deleted accordingly.
+10. **Docs**: `daedalus/docs/tools.md` web-search section rewrite;
+    `daedalus/CHANGELOG.md` (Breaking: `serper_search`/`searxng_search`
+    tools removed → `web_search`; settings migrate automatically);
+    monkeybyte design.md §6 update; this Plan.md.
+
+## Verification bar
+
+Clean superbuild, full `ctest` green (new provider/failover/migration
+tests included), `daedalus_cppcheck` + `monkeybyte_cppcheck` clean,
+live smoke: enable 2 providers, disable searxng, watch a query succeed
+via the chain while the SearXNG instance is down.
+
+## Amendments (2026-10-10, from user feedback during implementation)
+
+- **Browser-first guidance**: the `web_search` tool description now opens
+  by telling browser-equipped agents they can also search like a human
+  (open a search-engine page, type the query) and that `web_fetch` on a
+  search-engine URL works too (may be rate-limited). The chain backs the
+  tool; it is not the only way to search.
+- **SearXNG was never blocked**: the reported "block" was a missing
+  credential on the user's token-gated instance. The searxng provider
+  therefore also accepts an `api_key`, sent as `Authorization: Bearer`
+  + `X-API-Key` headers (SearXNG itself has no API-key concept — this
+  covers reverse-proxy gates). Priority: basic-auth username > api_key >
+  unauthenticated.
+- **icarus cppcheck**: fixed the pre-existing `ignoredReturnValue`
+  warning on `agent.compress_context()` (the `static_analysis` umbrella
+  target now passes clean).
+
+## Out of scope (do NOT touch)
+
+- `web_fetch` and any other existing tool.
+- MCP server tool surface (searxng_search may also exist as an MCP
+  server elsewhere — this plan only covers daedalus core + its hosts).

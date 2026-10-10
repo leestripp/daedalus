@@ -8,8 +8,7 @@
 #include "tools/BashTool.h"
 #include "tools/SkillTool.h"
 #include "tools/MemoryTool.h"
-#include "tools/SerperSearchTool.h"
-#include "tools/SearxngSearchTool.h"
+#include "tools/WebSearchTool.h"
 #include "tools/ReadImageTool.h"
 #include "tools/PDFTool.h"
 #include "tools/TodoListTool.h"
@@ -118,13 +117,11 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<MemoriesTool>());
     register_tool(std::make_shared<MemoryStatsTool>());
 
-    // §SERPER-CORE: web search via Serper.dev (see note above).
-    register_tool(std::make_shared<SerperSearchTool>());
-
-    // §SEARXNG-CORE (2026-09-21): web search via a self-hosted SearXNG
-    // instance (SettingsStore searxng_config table, core/SearxngConfig).
-    // Degrades to a descriptive error when no base_url is set.
-    register_tool(std::make_shared<SearxngSearchTool>());
+    // §WEB-SEARCH-CORE (2026-10-10): the single web_search tool. It walks
+    // the enabled providers from Settings (web_search_providers table,
+    // schema v8) in priority order with automatic failover — replacing
+    // the legacy serper_search/searxng_search one-tool-per-provider pair.
+    register_tool(std::make_shared<WebSearchTool>());
 
     // §READ-IMAGE-CORE (2026-08-10): local image -> base64 data URI so
     // vision-capable models (Kimi K3, moonshot-v1-*-vision) can see it.

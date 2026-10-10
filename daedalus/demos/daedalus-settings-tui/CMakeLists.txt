@@ -26,6 +26,7 @@ add_executable(daedalus-settings-tui
     ModelsTab.cpp
     McpTab.cpp
     AgentTab.cpp
+    WebSearchTab.cpp
 )
 
 target_link_libraries(daedalus-settings-tui

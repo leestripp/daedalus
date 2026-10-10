@@ -180,6 +180,7 @@ add_executable(icarus
     ${DAEDALUS_SRC_DIR}/demos/daedalus-settings-tui/ModelsTab.cpp
     ${DAEDALUS_SRC_DIR}/demos/daedalus-settings-tui/McpTab.cpp
     ${DAEDALUS_SRC_DIR}/demos/daedalus-settings-tui/AgentTab.cpp
+    ${DAEDALUS_SRC_DIR}/demos/daedalus-settings-tui/WebSearchTab.cpp
 )
 
 # Link against all required libraries. The `daedalus` target transitively

@@ -387,14 +387,27 @@ CREATE TABLE mcp_servers (
     env_json  TEXT,
     url       TEXT
 );
+-- legacy, pre-v8 (kept so migrate_to_v8 can copy values out):
 CREATE TABLE serper_config (id INTEGER PRIMARY KEY CHECK (id = 1), api_key TEXT NOT NULL);
--- schema v7 (§SEARXNG-CORE): self-hosted SearXNG metasearch instance
 CREATE TABLE searxng_config (
     id       INTEGER PRIMARY KEY CHECK (id = 1),
     base_url TEXT NOT NULL,
-    username TEXT NOT NULL DEFAULT '',   -- HTTP Basic auth; empty = no auth
+    username TEXT NOT NULL DEFAULT '',
     password TEXT NOT NULL DEFAULT '',
     enabled  INTEGER NOT NULL DEFAULT 1
+);
+-- schema v8 (§WEB-SEARCH-CORE): unified web-search provider registry.
+-- Seeded with the 8 built-in providers (duckduckgo enabled by default);
+-- migrate_to_v8 copies a legacy serper_config api_key / searxng_config
+-- row into the matching provider rows and marks them enabled.
+CREATE TABLE web_search_providers (
+    name     TEXT PRIMARY KEY,      -- brave|tavily|exa|firecrawl|serper|serpapi|searxng|duckduckgo
+    enabled  INTEGER NOT NULL DEFAULT 0,
+    api_key  TEXT NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL DEFAULT '',   -- searxng instance URL
+    username TEXT NOT NULL DEFAULT '',   -- searxng HTTP Basic auth (optional)
+    password TEXT NOT NULL DEFAULT '',
+    priority INTEGER NOT NULL            -- failover chain order, lower = tried first
 );
 ```
 

@@ -5,7 +5,6 @@
 #include "monkeybyte/backend/ModelBridge.h"
 #include "monkeybyte/ui/chat/AppUiTool.h"
 #include "monkeybyte/ui/chat/WebFetchTool.h"
-#include "monkeybyte/ui/chat/WebSearchTool.h"
 #include "monkeybyte/ui/UiGuard.h"
 
 #include <daedalus/default_paths.h>
@@ -516,10 +515,13 @@ void ChatController::ensure_agent(const std::string& model_display) {
     static bool host_tools_registered = false;
     if (!host_tools_registered) {
         agent_->register_tool(std::make_unique<AppUiTool>());
-        // Tab-less research tools (design §6): web_fetch + web_search run
-        // on the agent's tool thread, no GTK involved.
+        // Tab-less research tool (design §6): web_fetch runs on the
+        // agent's tool thread, no GTK involved.
+        // §WEB-SEARCH-CORE (2026-10-10): web_search is a CORE tool now
+        // (provider failover chain in the daedalus library) — the old
+        // host-side DuckDuckGo-only WebSearchTool was removed to avoid a
+        // name collision.
         agent_->register_tool(std::make_unique<WebFetchTool>());
-        agent_->register_tool(std::make_unique<WebSearchTool>());
         host_tools_registered = true;
     }
     active_model_display_ = model_display;

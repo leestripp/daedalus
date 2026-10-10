@@ -23,8 +23,7 @@ functional autonomous agent are registered automatically:
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
-| `serper_search` | Web search via the Serper.dev Google API (requires an API key in the SettingsStore; returns a descriptive error when unset) |
-| `searxng_search` | Web search via a self-hosted SearXNG metasearch instance (§SEARXNG-CORE; requires `searxng_config` in the SettingsStore — base_url, optional HTTP Basic auth, enabled switch; returns a descriptive error when unset or disabled). Accepts `query` and optional `max_results` (default 10, cap 25) |
+| `web_search` | Unified web search (§WEB-SEARCH-CORE): tries the enabled providers from the `web_search_providers` SettingsStore table in `priority` order with automatic failover — `brave`, `tavily`, `exa`, `firecrawl`, `serper`, `serpapi` (API-key services), `searxng` (self-hosted; base_url + optional Basic auth or bearer/API-key header), and `duckduckgo` (key-less HTML endpoint, enabled by default). Args: `query`, optional `max_results` (default 10, cap 25), optional `provider` to force one provider and bypass the chain. The description also points agents with a built-in browser at using a search-engine page directly, and notes `web_fetch` on a search URL as a fallback. Replaces the removed `serper_search` / `searxng_search` tools |
 | `read_image` | Load a local image (`png` / `jpeg` / `gif` / `bmp` / `webp`) and attach it to the next model request as an `image_url` content part, so vision-capable models (e.g. Kimi K3) can see it. PNGs and JPEGs are decoded and downscaled to ≤512px longest edge (libpng / libjpeg); `gif` / `bmp` / `webp` pass through as base64 (2MB cap). SVG is rejected — send SVG markup as text instead. The base64 payload rides one request only and is stripped from stored history. |
 | `read_pdf` | Extract text from a PDF file (poppler-cpp). Supports `start_page` / `max_pages` range selection; returns per-page text with page markers. |
 | `mcp_control` | Agent-driven MCP server `list` / `enable` / `disable` at runtime — lets the agent shed a finished server's tool-schema context without asking the user. Runtime-only (stored config untouched); see `docs/mcp_server.md` (§MCP-CONTROL-CORE) |
@@ -33,8 +32,8 @@ functional autonomous agent are registered automatically:
 All other tools — Git, grep/wiki search, system info, background
 process, and network tools — have been moved to `demos/example-tools/` as
 **reference implementations** that you can copy, adapt, or register one at
-a time. (`serper_search` moved back into core in v0.6.0-dev because its
-configuration and key lookup have always lived in the core SettingsStore;
+a time. (`web_search` lives in core because its provider configuration
+and key lookup have always lived in the core SettingsStore;
 `read_pdf` moved back into core in v1.0.2-dev (§PDF-CORE) because
 poppler-cpp is a REQUIRED dependency of the library build.)
 

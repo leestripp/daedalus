@@ -406,7 +406,8 @@ void ConsoleAgentSink::render_tool_result(std::string_view name,
         if (has_stderr) append_text_block(result.value("stderr", ""), err_label);
     }
 
-    // serper_search: the organic result list was completely invisible.
+    // web_search: show the result list (was serper_search; the unified
+    // tool emits the same {title,url,…} shape).
     if (result.contains("results") && result["results"].is_array()) {
         const auto& results = result["results"];
         constexpr std::size_t max_shown = 5;

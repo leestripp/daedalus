@@ -151,7 +151,21 @@ std::shared_ptr<ProviderPlugin> plugin_for_row(std::string_view hint,
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 7;
+constexpr int kSchemaVersion = 8;
+
+/// §WEB-SEARCH-CORE (schema v8): the 8 built-in web_search providers and
+/// their default priorities (lower = tried earlier in the failover chain).
+/// Only duckduckgo is enabled by default (key-less, zero config).
+constexpr const char* kWebSearchProviderSeeds[][2] = {
+    {"brave",      "10"},
+    {"tavily",     "20"},
+    {"exa",        "30"},
+    {"firecrawl",  "40"},
+    {"serper",     "50"},
+    {"serpapi",    "60"},
+    {"searxng",    "70"},
+    {"duckduckgo", "80"},
+};
 
 constexpr const char* kSchemaSql = R"sql(
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -211,6 +225,20 @@ CREATE TABLE IF NOT EXISTS searxng_config (
     username TEXT NOT NULL DEFAULT '',
     password TEXT NOT NULL DEFAULT '',
     enabled  INTEGER NOT NULL DEFAULT 1
+);
+
+-- §WEB-SEARCH-CORE (schema v8): unified web_search provider registry.
+-- One row per provider; enabled rows form the failover chain ordered by
+-- priority (lower first). api_key/base_url/username/password use is
+-- provider-dependent (see WebSearchProviderSettings in settings.h).
+CREATE TABLE IF NOT EXISTS web_search_providers (
+    name     TEXT PRIMARY KEY,
+    enabled  INTEGER NOT NULL DEFAULT 0,
+    api_key  TEXT NOT NULL DEFAULT '',
+    base_url TEXT NOT NULL DEFAULT '',
+    username TEXT NOT NULL DEFAULT '',
+    password TEXT NOT NULL DEFAULT '',
+    priority INTEGER NOT NULL DEFAULT 0
 );
 
 -- §TASK-2026-09-21-01 (schema v6): encrypted secrets vault. Metadata is
@@ -401,6 +429,84 @@ void migrate_to_v7(OmniNet::DB::Database& db)
         " enabled INTEGER NOT NULL DEFAULT 1)");
 }
 
+void migrate_to_v8(OmniNet::DB::Database& db)
+{
+    // v8 (§WEB-SEARCH-CORE): web_search_providers table replaces the
+    // serper_search/searxng_search singleton config tables. Seed the 8
+    // built-in providers (duckduckgo enabled, rest disabled), then copy
+    // any existing serper_config / searxng_config values across so
+    // working setups keep working. Old tables are LEFT IN PLACE
+    // (read-only legacy) — no data loss, downgrade-safe.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS web_search_providers ("
+        " name TEXT PRIMARY KEY,"
+        " enabled INTEGER NOT NULL DEFAULT 0,"
+        " api_key TEXT NOT NULL DEFAULT '',"
+        " base_url TEXT NOT NULL DEFAULT '',"
+        " username TEXT NOT NULL DEFAULT '',"
+        " password TEXT NOT NULL DEFAULT '',"
+        " priority INTEGER NOT NULL DEFAULT 0)");
+
+    auto seed = [&](const char* name, const char* priority,
+                    int enabled, const std::string& api_key,
+                    const std::string& base_url,
+                    const std::string& username,
+                    const std::string& password) {
+        // All values come from legacy DB reads or literals; parameterised
+        // via INSERT OR IGNORE so re-seeding never clobbers user edits.
+        try {
+            auto stmt = db.prepare(
+                "INSERT OR IGNORE INTO web_search_providers"
+                "(name, enabled, api_key, base_url, username, password,"
+                " priority) VALUES (?, ?, ?, ?, ?, ?, ?)");
+            stmt.bind(1, std::string(name));
+            stmt.bind(2, enabled);
+            stmt.bind(3, api_key);
+            stmt.bind(4, base_url);
+            stmt.bind(5, username);
+            stmt.bind(6, password);
+            stmt.bind(7, std::stoi(priority));
+            (void)stmt.step();
+        } catch (...) {
+            // Seeding is best-effort; a bad row must not abort migration.
+        }
+    };
+
+    // Legacy values to carry over.
+    std::string serper_key;
+    std::string sx_url, sx_user, sx_pass;
+    int sx_enabled = 1;
+    try {
+        auto row = db.queryOne(
+            "SELECT api_key FROM serper_config WHERE id = 1");
+        if (row.has_value() && !row->empty()) serper_key = (*row)[0];
+    } catch (...) { /* table absent on some v8-upgraded DBs — fine */ }
+    try {
+        auto row = db.queryOne(
+            "SELECT base_url, username, password, enabled"
+            " FROM searxng_config WHERE id = 1");
+        if (row.has_value() && row->size() >= 4) {
+            sx_url     = (*row)[0];
+            sx_user    = (*row)[1];
+            sx_pass    = (*row)[2];
+            sx_enabled = ((*row)[3] != "0") ? 1 : 0;
+        }
+    } catch (...) { /* ditto */ }
+
+    for (const auto& [name, prio] : kWebSearchProviderSeeds) {
+        const std::string id = name;
+        if (id == "serper")
+            seed(name, prio, serper_key.empty() ? 0 : 1, serper_key, "", "", "");
+        else if (id == "searxng")
+            seed(name, prio, (sx_url.empty() ? 0 : sx_enabled), "", sx_url,
+                 sx_user, sx_pass);
+        else if (id == "duckduckgo")
+            seed(name, prio, 1, "", "", "", "");
+        else
+            seed(name, prio, 0, "", "", "", "");
+    }
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -428,6 +534,21 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version < 5) migrate_to_v5(db);
     if (current_version < 6) migrate_to_v6(db);
     if (current_version < 7) migrate_to_v7(db);
+    if (current_version < 8) migrate_to_v8(db);
+
+    // §WEB-SEARCH-CORE: seed the provider registry whenever it is empty —
+    // covers fresh DBs (schema_version is written as v8 immediately, so
+    // migrate_to_v8 never fires) and DBs whose table was wiped.
+    // INSERT OR IGNORE inside migrate_to_v8 keeps this idempotent.
+    try {
+        auto cnt = db.queryOne("SELECT COUNT(*) FROM web_search_providers");
+        if (!cnt.has_value() || cnt->empty() || (*cnt)[0] == "0") {
+            migrate_to_v8(db);
+        }
+    } catch (...) {
+        // Table missing (shouldn't happen — kSchemaSql creates it): seed.
+        migrate_to_v8(db);
+    }
 
     // Update the stored version if it advanced.
     if (current_version != kSchemaVersion) {
@@ -1145,6 +1266,65 @@ void SettingsStore::set_searxng_settings(const SearxngSettings& settings) {
             settings.enabled ? 1 : 0);
     } catch (const std::exception& e) {
         LOG_WARNING("SettingsStore::set_searxng_settings failed: "
+                    + std::string(e.what()));
+    }
+}
+
+// ============================================================================
+// §WEB-SEARCH-CORE (schema v8): unified web_search provider registry
+// ============================================================================
+
+std::vector<WebSearchProviderSettings>
+SettingsStore::get_web_search_providers() const {
+    std::vector<WebSearchProviderSettings> out;
+    if (!db_) return out;
+    try {
+        auto rows = query_all_prepared(*mutex_, *db_,
+            "SELECT name, enabled, api_key, base_url, username, password,"
+            " priority FROM web_search_providers ORDER BY priority ASC");
+        out.reserve(rows.size());
+        for (const auto& r : rows) {
+            if (r.size() < 7) continue;
+            WebSearchProviderSettings p;
+            p.name     = r[0];
+            p.enabled  = (r[1] != "0");
+            p.api_key  = r[2];
+            p.base_url = r[3];
+            p.username = r[4];
+            p.password = r[5];
+            try { p.priority = std::stoi(r[6]); }
+            catch (...) { p.priority = 0; }
+            out.push_back(std::move(p));
+        }
+    } catch (const std::exception& e) {
+        LOG_WARNING("SettingsStore::get_web_search_providers failed: "
+                    + std::string(e.what()));
+        return {};
+    }
+    return out;
+}
+
+void SettingsStore::set_web_search_provider(
+    const WebSearchProviderSettings& settings) {
+    if (!db_) return;
+    try {
+        exec_prepared(*mutex_, *db_,
+            "INSERT INTO web_search_providers"
+            "(name, enabled, api_key, base_url, username, password, priority) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(name) DO UPDATE SET "
+            "enabled  = excluded.enabled, "
+            "api_key  = excluded.api_key, "
+            "base_url = excluded.base_url, "
+            "username = excluded.username, "
+            "password = excluded.password, "
+            "priority = excluded.priority",
+            settings.name,
+            settings.enabled ? 1 : 0,
+            settings.api_key, settings.base_url, settings.username,
+            settings.password, settings.priority);
+    } catch (const std::exception& e) {
+        LOG_WARNING("SettingsStore::set_web_search_provider failed: "
                     + std::string(e.what()));
     }
 }

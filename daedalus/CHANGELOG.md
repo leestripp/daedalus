@@ -4,6 +4,30 @@
 
 ### Changed
 
+- §WEB-SEARCH-CORE (2026-10-10): the per-provider search tools
+  (`serper_search`, `searxng_search`) are replaced by ONE unified core
+  `web_search` tool with a provider failover chain. Providers live in a
+  new `web_search_providers` SettingsStore table (schema v8): `brave`,
+  `tavily`, `exa`, `firecrawl`, `serper`, `serpapi` (API-key services),
+  `searxng` (self-hosted; base_url + optional HTTP Basic auth OR
+  bearer/API-key header for token-gated instances), and `duckduckgo`
+  (key-less HTML endpoint, enabled by default). Enabled providers are
+  tried in `priority` order; a provider error, block, or empty result
+  falls through to the next. Args: `query`, optional `max_results`
+  (default 10, cap 25), optional `provider` to force one provider and
+  bypass the chain. The tool description also points browser-equipped
+  agents at using a search-engine page directly and notes `web_fetch`
+  on a search URL as a fallback. `migrate_to_v8` copies a legacy
+  `serper_config` API key / `searxng_config` row into the matching
+  provider rows and enables them (legacy tables left in place;
+  `SerperConfig` / `SearxngConfig` helpers removed). Settings UI: new
+  "Web Search" tab in the settings TUI (per-provider enable, key, URL,
+  priority) and a Web Search section in monkeybyte's settings panel;
+  the serper row left the Agent tab. monkeybyte's host-side
+  DuckDuckGo-only `web_search` tool was removed (the core tool now
+  covers it; `web_fetch` untouched).
+
+
 - §QUEUE-JOIN (2026-10-04): `Agent::run_one_turn()` now consumes the
   ENTIRE pending user-message queue as ONE joined message instead of
   draining one message per turn. Everything submitted while a turn was

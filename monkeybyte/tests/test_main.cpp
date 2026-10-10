@@ -11,7 +11,6 @@
 #include "monkeybyte/backend/ModelBridge.h"
 #include "monkeybyte/backend/ProjectTypes.h"
 #include "monkeybyte/backend/SearchService.h"
-#include "monkeybyte/backend/WebSearch.h"
 #include "monkeybyte/backend/SettingsStore.h"
 #include "monkeybyte/backend/SkillDiscovery.h"
 #include "monkeybyte/tree/WorkspaceTree.h"
@@ -858,57 +857,6 @@ void test_html_to_text() {
           "comments dropped");
 }
 
-// ── WebSearch parse (§6 web_search; canned HTML, no network) ────────
-void test_web_search_parse() {
-    std::cout << "WebSearch\n";
-    using monkeybyte::WebSearch;
-
-    // Trimmed-down fixture matching html.duckduckgo.com markup: result__a
-    // anchors with /l/?uddg= redirect hrefs + result__snippet elements.
-    const std::string html = R"HTML(
-<html><body>
-<div class="result results_links results_links_deep web-result">
-  <div class="links_main links_deep result__body">
-    <h2 class="result__title">
-      <a rel="nofollow" class="result__a"
-         href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fgtk4&amp;rut=abc123">
-         GTK4 <b>Documentation</b></a>
-    </h2>
-    <a class="result__snippet"
-       href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fgtk4&amp;rut=abc123">
-       GTK4 is the latest <b>major</b> release of the toolkit.</a>
-  </div>
-</div>
-<div class="result results_links results_links_deep web-result">
-  <div class="links_main links_deep result__body">
-    <h2 class="result__title">
-      <a rel="nofollow" class="result__a"
-         href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.org%2Fmd4c%3Flang%3Den&amp;rut=def456">
-         MD4C Markdown parser</a>
-    </h2>
-  </div>
-</div>
-</body></html>)HTML";
-
-    const auto results = WebSearch::parse(html, 10);
-    check(results.size() == 2, "two results parsed");
-    if (results.size() == 2) {
-        check(results[0].title == "GTK4 Documentation",
-              "title tags stripped");
-        check(results[0].url == "https://example.com/gtk4",
-              "uddg redirect decoded");
-        check(results[0].snippet ==
-                  "GTK4 is the latest major release of the toolkit.",
-              "snippet extracted");
-        check(results[1].url == "https://example.org/md4c?lang=en",
-              "encoded query string survives decoding");
-        check(results[1].snippet.empty(), "missing snippet tolerated");
-    }
-    check(WebSearch::parse(html, 1).size() == 1, "max_results honored");
-    check(WebSearch::parse("<html><body>nothing here</body></html>", 10)
-              .empty(),
-          "no results markup yields empty list");
-}
 
 
 // ── FileTemplates (§4.2 "Add File from Template…") ──────────────────
@@ -1130,7 +1078,6 @@ int main() {
     test_user_commands();
     test_html_to_text();
     test_fountain_zoom();
-    test_web_search_parse();
 
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n"
                                 : "\n" + std::to_string(failures) + " FAILURES\n");

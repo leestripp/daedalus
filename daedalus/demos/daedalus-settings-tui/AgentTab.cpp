@@ -2,9 +2,10 @@
 // demos/daedalus-settings-tui/AgentTab.cpp
 //
 // Agent tab: typed form over the kv_settings-backed agent options
-// (auto_approve, thinking_level, size limits, MCP soft cap, Serper key,
-// current provider) plus the server_error retry/backoff group. Values
-// are loaded on open and written back with the "Save" button.
+// (auto_approve, thinking_level, size limits, MCP soft cap, current
+// provider) plus the server_error retry/backoff group. Values are loaded
+// on open and written back with the "Save" button. Web-search provider
+// keys live on the Web Search tab (§WEB-SEARCH-CORE).
 
 #include "SettingsApp.h"
 
@@ -33,7 +34,6 @@ struct AgentState
     std::string max_request_size;
     std::string max_response_size;
     std::string soft_cap_percent;
-    std::string serper_api_key;
 
     bool se_enabled = true;
     std::string se_initial_wait;
@@ -65,7 +65,6 @@ Component MakeAgentTab(AppContext& ctx)
         st->max_request_size     = std::to_string(ctx.store.get_max_request_size());
         st->max_response_size    = std::to_string(ctx.store.get_max_response_size());
         st->soft_cap_percent     = std::to_string(ctx.store.get_mcp_tool_schema_soft_cap_percent());
-        st->serper_api_key       = ctx.store.get_serper_api_key();
 
         const auto ses = ctx.store.get_server_error_settings();
         st->se_enabled      = ses.enabled;
@@ -126,7 +125,6 @@ Component MakeAgentTab(AppContext& ctx)
         ctx.store.set_max_request_size(request);
         ctx.store.set_max_response_size(response);
         ctx.store.set_mcp_tool_schema_soft_cap_percent(soft_cap);
-        ctx.store.set_serper_api_key(st->serper_api_key);
 
         // server_error has no typed setter — persist via the same kv keys
         // SettingsStore::get_server_error_settings() reads.
@@ -148,7 +146,6 @@ Component MakeAgentTab(AppContext& ctx)
     auto row_req_size   = FormRow("max_request_size", &st->max_request_size, false, save);
     auto row_res_size   = FormRow("max_response_size", &st->max_response_size, false, save);
     auto row_soft_cap   = FormRow("mcp soft cap %", &st->soft_cap_percent, false, save);
-    auto row_serper     = FormRow("serper_api_key", &st->serper_api_key, /*password=*/true, save);
     auto approve_check  = Checkbox("auto_approve (skip bash confirmations)", &st->auto_approve);
 
     auto se_enabled_check = Checkbox("server_error retry enabled", &st->se_enabled);
@@ -163,14 +160,14 @@ Component MakeAgentTab(AppContext& ctx)
     auto form = Container::Vertical({
         approve_check,
         row_provider, row_thinking, row_max_iter, row_tool_size, row_req_size, row_res_size,
-        row_soft_cap, row_serper,
+        row_soft_cap,
         se_enabled_check, row_se_initial, row_se_max, row_se_backoff, row_se_retries,
         Container::Horizontal({btn_save, btn_reload}),
     });
 
     return Renderer(form,
         [st, approve_check, row_provider, row_thinking, row_max_iter, row_tool_size, row_req_size,
-         row_res_size, row_soft_cap, row_serper, se_enabled_check, row_se_initial,
+         row_res_size, row_soft_cap, se_enabled_check, row_se_initial,
          row_se_max, row_se_backoff, row_se_retries, btn_save, btn_reload] {
             Elements rows;
             rows.push_back(text(" agent settings ") | bold);
@@ -183,7 +180,6 @@ Component MakeAgentTab(AppContext& ctx)
             rows.push_back(row_req_size->Render());
             rows.push_back(row_res_size->Render());
             rows.push_back(row_soft_cap->Render());
-            rows.push_back(row_serper->Render());
             rows.push_back(separator());
             rows.push_back(text(" server error retry ") | bold);
             rows.push_back(separator());

@@ -1018,7 +1018,7 @@ int main(int argc, char* argv[]) {
                 // turn running it defers to the end of the agent cycle.
                 std::cout << "[COMPRESS] Compressing conversation context...\n";
                 sink->start_agent_turn();  // spinner during the summary LLM call
-                agent.compress_context();
+                (void)agent.compress_context();  // result unused: fire-and-forget
                 sink->stop_agent_turn();
                 continue;
             }
@@ -1689,7 +1689,6 @@ int main(int argc, char* argv[]) {
                         store.get_max_request_size(),
                         store.get_max_response_size(),
                         store.get_mcp_tool_schema_soft_cap_percent(),
-                        store.get_serper_api_key(),
                     };
 
                     settings_tui::RunApp(store);
@@ -1809,18 +1808,20 @@ int main(int argc, char* argv[]) {
                         std::cout << ") fully apply on next launch.\n";
                     }
 
-                    // Remaining Agent-tab kv values (iterations, size caps,
-                    // Serper key) are read at initialize() — no runtime API.
+                    // Remaining Agent-tab kv values (iterations, size caps)
+                    // are read at initialize() — no runtime API.
+                    // (Web-search provider edits are NOT tracked here: the
+                    // §WEB-SEARCH-CORE web_search tool reads its provider
+                    // chain per call, so those apply immediately.)
                     const auto kv_after = std::tuple{
                         store.get_max_agent_iterations(),
                         store.get_max_tool_result_size(),
                         store.get_max_request_size(),
                         store.get_max_response_size(),
                         store.get_mcp_tool_schema_soft_cap_percent(),
-                        store.get_serper_api_key(),
                     };
                     if (kv_after != kv_before) {
-                        std::cout << "[SETTINGS] Agent limits/retry/API-key "
+                        std::cout << "[SETTINGS] Agent limits/retry "
                                      "changes apply on next launch.\n";
                     }
 

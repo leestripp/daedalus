@@ -229,11 +229,12 @@ SettingsPanel::SettingsPanel(AppServices& services)
     tabs->set_margin_start(8);
     tabs->set_margin_end(8);
     const char* names[] = {"Interface", "Providers", "Models", "Workspace",
-                           "MCP Servers", "Agent", "Search", "Paths"};
+                           "MCP Servers", "Agent", "Web Search", "Search",
+                           "Paths"};
     stack_ = Gtk::make_managed<Gtk::Stack>();
     const char* ids[] = {"interface", "providers", "models", "workspace", "mcp",
-                         "agent", "search", "paths"};
-    for (int i = 0; i < 8; ++i) {
+                         "agent", "websearch", "search", "paths"};
+    for (int i = 0; i < 9; ++i) {
         auto* b = Gtk::make_managed<Gtk::Button>(names[i]);
         b->set_has_frame(false);
         b->signal_clicked().connect([this, i, id = ids[i]] {
@@ -258,6 +259,7 @@ SettingsPanel::SettingsPanel(AppServices& services)
     stack_->add(*build_workspace_tab(), "workspace");
     stack_->add(*build_mcp_tab(), "mcp");
     stack_->add(*build_agent_tab(), "agent");
+    stack_->add(*build_web_search_tab(), "websearch");
     stack_->add(*build_search_tab(), "search");
     stack_->add(*build_paths_tab(), "paths");
     append(*stack_);
@@ -1375,6 +1377,156 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
 }
 
 // ── Tab 7: Search (§4.3) ────────────────────────────────────────────
+// ── Tab 7: Web Search (§WEB-SEARCH-CORE, 2026-10-10) ────────────────
+// Provider failover chain for the core web_search tool: per-provider
+// enable/disable, credentials, and priority order. Reads/writes the
+// SHARED daedalus SettingsStore (schema v8 web_search_providers table),
+// so icarus and the settings TUI see the same configuration.
+Gtk::Widget* SettingsPanel::build_web_search_tab() {
+    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    box->set_margin(12);
+
+    box->append(*group_header("WEB SEARCH PROVIDERS"));
+    auto* hint = Gtk::make_managed<Gtk::Label>(
+        "The web_search tool tries enabled providers in priority order "
+        "(lowest number first) until one returns results. DuckDuckGo "
+        "needs no key, SearXNG needs your instance URL, the rest need an "
+        "API key. Agents with a built-in browser can also search the web "
+        "like a human — this chain backs the web_search tool itself.");
+    hint->set_halign(Gtk::Align::START);
+    hint->set_wrap(true);
+    hint->add_css_class("dim-label");
+    box->append(*hint);
+
+    static const std::map<std::string, std::string> display_names = {
+        {"brave", "Brave Search"},     {"tavily", "Tavily"},
+        {"exa", "Exa"},                {"firecrawl", "Firecrawl"},
+        {"serper", "Serper (Google)"}, {"serpapi", "SerpApi (Google)"},
+        {"searxng", "SearXNG (self-hosted)"},
+        {"duckduckgo", "DuckDuckGo"},
+    };
+
+    // Re-read the row, mutate one field, write it back — keystroke-level
+    // auto-save without stale-copy clobbering between fields.
+    auto save_field =
+        [this](const std::string& name,
+               const std::function<void(
+                   daedalus::WebSearchProviderSettings&)>& mutate) {
+            ui_guard("save_web_search_provider", [&] {
+                auto& store = daedalus::SettingsStore::instance();
+                for (auto& row : store.get_web_search_providers()) {
+                    if (row.name == name) {
+                        mutate(row);
+                        store.set_web_search_provider(row);
+                        break;
+                    }
+                }
+            });
+        };
+
+    auto entry_row =
+        [](const std::string& label, const std::string& value, bool secret,
+           std::function<void(const std::string&)> on_change) {
+            auto* row =
+                Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+            row->set_margin_start(8);
+            auto* l = Gtk::make_managed<Gtk::Label>(label);
+            l->set_halign(Gtk::Align::START);
+            l->set_size_request(130, -1);
+            row->append(*l);
+            auto* e = Gtk::make_managed<Gtk::Entry>();
+            e->set_hexpand(true);
+            e->set_text(value);
+            if (secret) {
+                e->set_visibility(false);
+                e->set_input_purpose(Gtk::InputPurpose::PASSWORD);
+            }
+            e->signal_changed().connect([e, on_change = std::move(on_change)] {
+                on_change(e->get_text());
+            });
+            row->append(*e);
+            return row;
+        };
+
+    std::vector<daedalus::WebSearchProviderSettings> rows;
+    ui_guard("load_web_search_providers", [&] {
+        rows =
+            daedalus::SettingsStore::instance().get_web_search_providers();
+    });
+
+    for (const auto& p : rows) {
+        auto* card =
+            Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+        card->add_css_class("card");
+        card->set_margin_bottom(4);
+
+        const auto dn = display_names.find(p.name);
+        const std::string dname =
+            dn != display_names.end() ? dn->second : p.name;
+        std::string sub = "priority " + std::to_string(p.priority);
+        if (p.name == "duckduckgo") {
+            sub += " · free, no key needed";
+        } else if (p.name == "searxng") {
+            sub += p.base_url.empty() ? " · needs instance URL"
+                                      : " · " + p.base_url;
+        } else {
+            sub += p.api_key.empty() ? " · needs API key" : " · key set";
+        }
+
+        card->append(*make_toggle_row(
+            dname, sub, p.enabled, [save_field, name = p.name](bool on) {
+                save_field(name,
+                           [on](auto& r) { r.enabled = on; });
+            }));
+
+        if (p.name == "searxng") {
+            card->append(*entry_row(
+                "Instance URL", p.base_url, false,
+                [save_field, name = p.name](const std::string& v) {
+                    save_field(name, [v](auto& r) { r.base_url = v; });
+                }));
+            card->append(*entry_row(
+                "API key/token", p.api_key, true,
+                [save_field, name = p.name](const std::string& v) {
+                    save_field(name, [v](auto& r) { r.api_key = v; });
+                }));
+            card->append(*entry_row(
+                "Basic user", p.username, false,
+                [save_field, name = p.name](const std::string& v) {
+                    save_field(name, [v](auto& r) { r.username = v; });
+                }));
+            card->append(*entry_row(
+                "Basic pass", p.password, true,
+                [save_field, name = p.name](const std::string& v) {
+                    save_field(name, [v](auto& r) { r.password = v; });
+                }));
+        } else if (p.name != "duckduckgo") {
+            card->append(*entry_row(
+                "API key", p.api_key, true,
+                [save_field, name = p.name](const std::string& v) {
+                    save_field(name, [v](auto& r) { r.api_key = v; });
+                }));
+        }
+        card->append(*entry_row(
+            "Priority", std::to_string(p.priority), false,
+            [save_field, name = p.name](const std::string& v) {
+                int n = 0;
+                try {
+                    n = std::stoi(v);
+                } catch (...) {
+                    return;  // partial input mid-edit — ignore
+                }
+                save_field(name, [n](auto& r) { r.priority = n; });
+            }));
+
+        box->append(*card);
+    }
+
+    scroll->set_child(*box);
+    return scroll;
+}
+
 Gtk::Widget* SettingsPanel::build_search_tab() {
     auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);

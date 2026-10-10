@@ -2,6 +2,7 @@
 // demos/daedalus-settings-tui/SettingsApp.cpp
 
 #include "SettingsApp.h"
+#include "WebSearchTab.h"
 
 #include <ftxui/component/app.hpp>
 #include <ftxui/component/component_options.hpp>
@@ -127,7 +128,7 @@ int RunApp(daedalus::SettingsStore store)
     AppContext ctx{std::move(store), {}, {}, {}};
 
     static const std::vector<std::string> kTitles = {
-        "Providers", "Models", "MCP Servers", "Agent",
+        "Providers", "Models", "MCP Servers", "Agent", "Web Search",
     };
 
     int tab_index = 0;
@@ -138,6 +139,7 @@ int RunApp(daedalus::SettingsStore store)
             MakeModelsTab(ctx),
             MakeMcpTab(ctx),
             MakeAgentTab(ctx),
+            MakeWebSearchTab(ctx),
         },
         &tab_index);
 
@@ -272,7 +274,16 @@ int DumpSettings(daedalus::SettingsStore& store, std::ostream& out)
         << "  max_request_size                 = " << store.get_max_request_size() << "\n"
         << "  max_response_size                = " << store.get_max_response_size() << "\n"
         << "  mcp_tool_schema_soft_cap_percent = " << store.get_mcp_tool_schema_soft_cap_percent() << "\n"
-        << "  serper_api_key                   = " << MaskSecret(store.get_serper_api_key()) << "\n"
+        << "\n[web_search]\n";
+    for (const auto& wp : store.get_web_search_providers()) {
+        out << "  " << wp.name
+            << " (enabled=" << (wp.enabled ? "true" : "false")
+            << ", priority=" << wp.priority;
+        if (!wp.api_key.empty()) out << ", api_key=" << MaskSecret(wp.api_key);
+        if (!wp.base_url.empty()) out << ", base_url=" << wp.base_url;
+        out << ")\n";
+    }
+    out
         << "\n[server_error]\n"
         << "  enabled               = " << (ses.enabled ? "true" : "false") << "\n"
         << "  initial_wait_seconds  = " << ses.initial_wait_seconds << "\n"

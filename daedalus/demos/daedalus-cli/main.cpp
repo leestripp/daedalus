@@ -124,7 +124,7 @@ static void register_cli_tools()
     auto factory = ToolHandler::get_tool_factory();
     if (!factory) return;
 
-    // Search tools (serper_search is core again — registered by ToolFactory)
+    // Search tool (web_search is core — registered by ToolFactory, §WEB-SEARCH-CORE)
     factory->register_tool(std::make_shared<GrepSearchTool>());
     factory->register_tool(std::make_shared<WikiSearchTool>());
 

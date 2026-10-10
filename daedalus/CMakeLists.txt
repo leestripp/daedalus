@@ -260,8 +260,6 @@ set(CORE_SOURCES
 	src/core/SystemPromptBuilder.cpp
 	src/core/ThreadPool.cpp
 	src/core/Metrics.cpp
-	src/core/SerperConfig.cpp
-	src/core/SearxngConfig.cpp
 )
 
 set(API_SOURCES
@@ -297,8 +295,8 @@ set(TOOLS_SOURCES
 	src/tools/BashPathChecker.cpp
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
-	src/tools/SerperSearchTool.cpp
-	src/tools/SearxngSearchTool.cpp
+	src/tools/WebSearchTool.cpp
+	src/tools/websearch/WebSearchProvider.cpp
 	src/tools/ListToolsTool.cpp
 	src/tools/McpControlTool.cpp
 	src/tools/ReadImageTool.cpp

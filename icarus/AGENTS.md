@@ -328,7 +328,7 @@ docs/
   2026-08-02): bash `denied` shows its message like an error; bash
   poll/background add `process_id`/`pid`/`exited`/`signal` lines and render
   `stdout`/`stderr` through the same 30-line head/tail elision as `output`;
-  `serper_search` shows up to 5 `title — url` lines plus any `answer_box`;
+  `web_search` shows up to 5 `title — url` lines plus which provider served them (§WEB-SEARCH-CORE unified provider chain);
   MCP tools (`mcp__*`) render their string `result` payload; `remember`
   shows the saved `memory.category`/`memory.content`.
 - Handles terminal save/restore around bash command execution.

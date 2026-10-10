@@ -63,6 +63,29 @@ struct SearxngSettings
     bool enabled = true;    //!< Master switch for the searxng_search tool
 };
 
+/// One row of the `web_search_providers` table (§WEB-SEARCH-CORE, schema v8).
+///
+/// The unified `web_search` tool walks enabled providers in priority order
+/// and returns the first provider's results that succeeds (failover chain).
+/// `name` is the stable provider id: "brave", "tavily", "exa", "firecrawl",
+/// "serper", "serpapi", "searxng", "duckduckgo".
+///
+/// Field use is provider-dependent:
+///   - api_key:    brave, tavily, exa, firecrawl, serper, serpapi
+///   - base_url:   searxng only (self-hosted instance)
+///   - username/password: searxng optional HTTP Basic auth
+///   - duckduckgo: no fields needed (key-less HTML scrape)
+struct WebSearchProviderSettings
+{
+    std::string name;          //!< Stable provider id (see list above)
+    bool enabled = false;      //!< Participates in the failover chain
+    std::string api_key;       //!< API key where required
+    std::string base_url;      //!< searxng only; no trailing slash
+    std::string username;      //!< searxng optional basic-auth user
+    std::string password;      //!< searxng optional basic-auth pass
+    int priority = 0;          //!< Lower = tried earlier in the chain
+};
+
 /// Opaque handle to the settings database.
 ///
 /// Obtained via:
@@ -233,6 +256,24 @@ public:
     /// Set the SearXNG instance config. An empty base_url disables the tool
     /// at request time (descriptive error), same contract as serper_search.
     void set_searxng_settings(const SearxngSettings& settings);
+
+    // -----------------------------------------------------------------------
+    // §WEB-SEARCH-CORE (schema v8): unified web_search provider registry.
+    //
+    // Stored in the `web_search_providers` table (one row per provider).
+    // The unified `web_search` tool reads the full chain per call — Settings
+    // edits take effect without a restart. The legacy serper_config /
+    // searxng_config tables are copied into this table by migrate_to_v8 and
+    // are no longer consulted by the tool.
+
+    /// All provider rows ordered by priority (lower first). Empty when the
+    /// store is unreadable; on a fresh schema the 8 built-in providers are
+    /// seeded (duckduckgo enabled, everything else disabled).
+    std::vector<WebSearchProviderSettings> get_web_search_providers() const;
+
+    /// Upsert one provider row (matched by name). Unknown names are stored
+    /// verbatim — forward-compatible with providers added later.
+    void set_web_search_provider(const WebSearchProviderSettings& settings);
 
     // -----------------------------------------------------------------------
     // v0.3.5: per-project persistence (session memory + messages).
