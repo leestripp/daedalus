@@ -419,6 +419,14 @@ public:
     }
 };
 
+// Forward decl — defined next to parse_bing_html below; used by
+// HybridProvider::search for the soft-block relevance guard. (Bare
+// decl: we are already inside the providers' anonymous namespace —
+// wrapping this in another anonymous namespace would declare a
+// DISTINCT function and fail to link.)
+bool mentions_query(const WebSearchResults& results,
+                    const std::string& query);
+
 // §WEB-SEARCH-HYBRID (2026-10-11): the key-less fallback is no longer a
 // single engine. DuckDuckGo's HTML endpoint answers HTTP 202 (anti-bot
 // challenge) to most datacenter traffic and Mojeek serves a Captcha page,
@@ -471,9 +479,18 @@ public:
                 continue;
             }
             auto results = e.parse(resp->body, max_results);
-            if (!results.empty()) return results;
+            // §WEB-SEARCH-HYBRID relevance guard: Bing shadow-blocks
+            // automated traffic with a 200 SERP of generic,
+            // query-unrelated results (verified 2026-10-11: q=gtkmm →
+            // phone-plan ads; q=wikipedia → real hits). Confident garbage
+            // is worse than a clean failure, so require at least one
+            // result to mention a query word (>=3 chars) before trusting
+            // the page; otherwise fall through to the next engine.
+            if (!results.empty() && mentions_query(results, query))
+                return results;
             errors += (errors.empty() ? "" : "; ") + e.label +
-                      ": no results parsed";
+                      (results.empty() ? ": no results parsed"
+                                       : ": results failed relevance check");
         }
         return std::unexpected(errors.empty()
                                    ? std::string("all key-less engines failed")
@@ -683,6 +700,37 @@ std::string bing_decode_redirect(std::string href) {
         return *decoded;
     }
     return href;
+}
+
+//! True when at least one result mentions a query word (>=3 chars),
+//! case-insensitively. Queries with no such word are trusted as-is.
+bool mentions_query(const WebSearchResults& results,
+                    const std::string& query) {
+    std::vector<std::string> words;
+    std::string w;
+    const auto flush = [&] {
+        if (w.size() >= 3) words.push_back(w);
+        w.clear();
+    };
+    for (const char c : query) {
+        if (std::isalnum(static_cast<unsigned char>(c))) {
+            w += static_cast<char>(std::tolower(c));
+        } else {
+            flush();
+        }
+    }
+    flush();
+    if (words.empty()) return true;
+
+    for (const auto& r : results) {
+        std::string hay = r.title + " " + r.snippet + " " + r.url;
+        std::transform(hay.begin(), hay.end(), hay.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        for (const auto& qw : words) {
+            if (hay.find(qw) != std::string::npos) return true;
+        }
+    }
+    return false;
 }
 
 }  // namespace

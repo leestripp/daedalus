@@ -14,6 +14,12 @@
   The Bing parser decodes /ck/a redirect URLs (u= param, "a1" +
   base64url). Schema v9 migrates the duckduckgo row to hybrid,
   preserving enabled/priority. Settings UIs and tool messages updated.
+  A relevance guard (mentions_query) rejects shadow-blocked SERPs:
+  Bing answers automated traffic with 200 + generic query-unrelated
+  results (verified: q=gtkmm → phone-plan ads, q=wikipedia → real
+  hits), so a result page is only trusted when at least one result
+  mentions a query word; otherwise the chain falls through to the
+  next engine instead of returning confident garbage.
 
 ### Changed
 
