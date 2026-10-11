@@ -48,6 +48,12 @@ std::string web_search_html_to_text(std::string_view html);
 WebSearchResults parse_duckduckgo_html(std::string_view html,
                                        std::size_t max_results);
 
+//! Bing HTML results page parser (key-less). Extracts b_algo blocks,
+//! decoding /ck/a redirect URLs (u= param, "a1" + base64url).
+//! §WEB-SEARCH-HYBRID (2026-10-11).
+WebSearchResults parse_bing_html(std::string_view html,
+                                 std::size_t max_results);
+
 //! Brave Search API (api.search.brave.com/res/v1/web/search) JSON body.
 WebSearchResults parse_brave_response(std::string_view body,
                                       std::size_t max_results);

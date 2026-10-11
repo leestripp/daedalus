@@ -217,7 +217,7 @@ TEST_CASE("registry: all 8 ids construct; unknown -> nullptr") {
     sx.base_url = "http://localhost:8888";
     CHECK(make_web_search_provider("searxng")->is_configured(sx));
 
-    CHECK(make_web_search_provider("duckduckgo")->is_configured({}));
+    CHECK(make_web_search_provider("hybrid")->is_configured({}));
 }
 
 // ---------------------------------------------------------------------------
@@ -365,11 +365,11 @@ TEST_CASE("schema v8: fresh DB seeds 8 providers, duckduckgo enabled") {
     const auto chain = store.get_web_search_providers();
 
     REQUIRE(chain.size() == 8);
-    // priority order: brave first, duckduckgo last
+    // priority order: brave first, hybrid last (§WEB-SEARCH-HYBRID)
     CHECK(chain.front().name == "brave");
-    CHECK(chain.back().name == "duckduckgo");
+    CHECK(chain.back().name == "hybrid");
     for (const auto& p : chain) {
-        CHECK(p.enabled == (p.name == "duckduckgo"));
+        CHECK(p.enabled == (p.name == "hybrid"));
         CHECK(p.api_key.empty());
     }
 }
@@ -442,4 +442,72 @@ TEST_CASE("schema v8: legacy serper_config/searxng_config rows migrate") {
     CHECK(searxng->base_url == "https://search.example.com");
     CHECK(searxng->username == "u");
     CHECK(searxng->password == "p");
+}
+
+TEST_CASE("schema v9: duckduckgo row converts to hybrid (§WEB-SEARCH-HYBRID)") {
+    const auto dir = make_temp_dir("v9migrate");
+    const auto db_path = (dir / "daedalus.db").string();
+
+    // Hand-build a v8-era DB: duckduckgo row disabled at priority 42 —
+    // the migration must carry BOTH values to the new hybrid row.
+    {
+        OmniNet::DB::Database db;
+        db.open(db_path);
+        db.execute("CREATE TABLE schema_version (version INTEGER PRIMARY KEY)");
+        db.execute("INSERT INTO schema_version(version) VALUES (8)");
+        db.execute("CREATE TABLE web_search_providers ("
+                   " name TEXT PRIMARY KEY,"
+                   " enabled INTEGER NOT NULL DEFAULT 0,"
+                   " api_key TEXT NOT NULL DEFAULT '',"
+                   " base_url TEXT NOT NULL DEFAULT '',"
+                   " username TEXT NOT NULL DEFAULT '',"
+                   " password TEXT NOT NULL DEFAULT '',"
+                   " priority INTEGER NOT NULL DEFAULT 0)");
+        db.execute("INSERT INTO web_search_providers"
+                   "(name, enabled, priority) VALUES ('duckduckgo', 0, 42)");
+        db.close();
+    }
+
+    auto store = SettingsStore::for_home(dir);
+    const auto chain = store.get_web_search_providers();
+
+    const auto ddg = std::find_if(
+        chain.begin(), chain.end(),
+        [](const auto& p) { return p.name == "duckduckgo"; });
+    CHECK(ddg == chain.end());  // old row gone
+
+    const auto hybrid = std::find_if(
+        chain.begin(), chain.end(),
+        [](const auto& p) { return p.name == "hybrid"; });
+    REQUIRE(hybrid != chain.end());
+    CHECK(!hybrid->enabled);          // disabled state carried over
+    CHECK(hybrid->priority == 42);    // priority carried over
+}
+
+TEST_CASE("parse_bing_html: b_algo blocks, ck/a redirect decode") {
+    // Fixture mirrors www.bing.com/search markup. The first result's href
+    // is a /ck/a redirect whose u= param is "a1" + base64url of
+    // https://example.com/gtk4 ("aHR0cHM6Ly9leGFtcGxlLmNvbS9ndGs0").
+    const std::string html = R"HTML(
+<html><body><ol id="b_results">
+<li class="b_algo" data-id iid=SERP.1>
+  <h2><a href="https://www.bing.com/ck/a?!&amp;&amp;p=abc&amp;u=a1aHR0cHM6Ly9leGFtcGxlLmNvbS9ndGs0&amp;ntb=1">
+  GTK4 <b>Documentation</b></a></h2>
+  <p class="b_lineclamp2">GTK4 is the latest major release.</p>
+</li>
+<li class="b_algo" data-id iid=SERP.2>
+  <h2><a href="https://direct.example.org/md4c">MD4C Markdown parser</a></h2>
+</li>
+</ol></body></html>)HTML";
+
+    const auto results = parse_bing_html(html, 10);
+    REQUIRE(results.size() == 2);
+    CHECK(results[0].title == "GTK4 Documentation");
+    CHECK(results[0].url == "https://example.com/gtk4");  // ck/a decoded
+    CHECK(results[0].snippet == "GTK4 is the latest major release.");
+    CHECK(results[1].url == "https://direct.example.org/md4c");  // direct kept
+    CHECK(results[1].snippet.empty());
+
+    CHECK(parse_bing_html(html, 1).size() == 1);
+    CHECK(parse_bing_html("<html><body>nothing</body></html>", 10).empty());
 }

@@ -151,11 +151,14 @@ std::shared_ptr<ProviderPlugin> plugin_for_row(std::string_view hint,
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 8;
+constexpr int kSchemaVersion = 9;
 
 /// §WEB-SEARCH-CORE (schema v8): the 8 built-in web_search providers and
 /// their default priorities (lower = tried earlier in the failover chain).
 /// Only duckduckgo is enabled by default (key-less, zero config).
+/// §WEB-SEARCH-HYBRID (schema v9): migrate_to_v9 replaces the duckduckgo
+/// row with "hybrid" (Bing→DuckDuckGo key-less HTML chain) — the seed
+/// list keeps duckduckgo for historical v8 DBs; v9 always converts.
 constexpr const char* kWebSearchProviderSeeds[][2] = {
     {"brave",      "10"},
     {"tavily",     "20"},
@@ -507,6 +510,36 @@ void migrate_to_v8(OmniNet::DB::Database& db)
     }
 }
 
+void migrate_to_v9(OmniNet::DB::Database& db)
+{
+    // v9 (§WEB-SEARCH-HYBRID): DuckDuckGo's HTML endpoint 202-blocks most
+    // datacenter traffic, so the key-less fallback provider is now
+    // "hybrid" (Bing → DuckDuckGo HTML, first non-empty wins). Replace
+    // the duckduckgo row, preserving the user's enabled/priority choice.
+    int enabled = 1;
+    int priority = 80;
+    try {
+        auto row = db.queryOne(
+            "SELECT enabled, priority FROM web_search_providers"
+            " WHERE name = 'duckduckgo'");
+        if (row.has_value() && row->size() >= 2) {
+            enabled = ((*row)[0] != "0") ? 1 : 0;
+            priority = std::stoi((*row)[1]);
+        }
+    } catch (...) { /* table absent (pre-v8 DB) — defaults are fine */ }
+
+    try {
+        db.execute(
+            "DELETE FROM web_search_providers WHERE name = 'duckduckgo'");
+        auto stmt = db.prepare(
+            "INSERT OR IGNORE INTO web_search_providers"
+            "(name, enabled, priority) VALUES ('hybrid', ?, ?)");
+        stmt.bind(1, enabled);
+        stmt.bind(2, priority);
+        (void)stmt.step();
+    } catch (...) { /* best-effort, same discipline as v8 seeding */ }
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -535,6 +568,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version < 6) migrate_to_v6(db);
     if (current_version < 7) migrate_to_v7(db);
     if (current_version < 8) migrate_to_v8(db);
+    if (current_version < 9) migrate_to_v9(db);
 
     // §WEB-SEARCH-CORE: seed the provider registry whenever it is empty —
     // covers fresh DBs (schema_version is written as v8 immediately, so
@@ -544,10 +578,12 @@ void ensure_schema(OmniNet::DB::Database& db)
         auto cnt = db.queryOne("SELECT COUNT(*) FROM web_search_providers");
         if (!cnt.has_value() || cnt->empty() || (*cnt)[0] == "0") {
             migrate_to_v8(db);
+            migrate_to_v9(db);
         }
     } catch (...) {
         // Table missing (shouldn't happen — kSchemaSql creates it): seed.
         migrate_to_v8(db);
+        migrate_to_v9(db);
     }
 
     // Update the stored version if it advanced.

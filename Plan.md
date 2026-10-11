@@ -384,6 +384,18 @@ via the chain while the SearXNG instance is down.
   warning on `agent.compress_context()` (the `static_analysis` umbrella
   target now passes clean).
 
+## Amendment — §WEB-SEARCH-HYBRID (2026-10-11)
+
+DuckDuckGo's HTML endpoint proved unreliable in practice (HTTP 202
+anti-bot for datacenter IPs; Mojeek Captcha — both verified with curl).
+Per user direction, the `duckduckgo` provider is replaced by `hybrid`:
+the key-less fallback crafts search-engine URLs directly (the
+"web_fetch hybrid" idea) and walks an ordered engine list — Bing HTML
+(primary, verified 200) then DuckDuckGo HTML (last resort) — first
+non-empty result set wins. The Bing parser decodes /ck/a redirect URLs
+("a1" + base64url in the u= param). Schema v9 converts the duckduckgo
+row (preserving enabled/priority); UIs and tool text follow.
+
 ## Out of scope (do NOT touch)
 
 - `web_fetch` and any other existing tool.

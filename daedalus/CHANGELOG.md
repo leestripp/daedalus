@@ -4,6 +4,19 @@
 
 ### Changed
 
+- §WEB-SEARCH-HYBRID (2026-10-11): the key-less `duckduckgo` provider is
+  replaced by `hybrid` — an ordered chain of key-less HTML engines
+  (Bing → DuckDuckGo) fetched with a browser user-agent, first non-empty
+  result wins (same idea as web_fetch on a crafted search URL).
+  DuckDuckGo's HTML endpoint 202-blocks most datacenter traffic and
+  Mojeek serves Captcha pages (both verified live), so Bing is the
+  primary with DDG kept as the last resort for networks where it works.
+  The Bing parser decodes /ck/a redirect URLs (u= param, "a1" +
+  base64url). Schema v9 migrates the duckduckgo row to hybrid,
+  preserving enabled/priority. Settings UIs and tool messages updated.
+
+### Changed
+
 - §WEB-SEARCH-CORE (2026-10-10): the per-provider search tools
   (`serper_search`, `searxng_search`) are replaced by ONE unified core
   `web_search` tool with a provider failover chain. Providers live in a

@@ -1390,8 +1390,9 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
     box->append(*group_header("WEB SEARCH PROVIDERS"));
     auto* hint = Gtk::make_managed<Gtk::Label>(
         "The web_search tool tries enabled providers in priority order "
-        "(lowest number first) until one returns results. DuckDuckGo "
-        "needs no key, SearXNG needs your instance URL, the rest need an "
+        "(lowest number first) until one returns results. The hybrid "
+        "provider (Bing/DuckDuckGo HTML) needs no key, SearXNG needs your "
+        "instance URL, the rest need an "
         "API key. Agents with a built-in browser can also search the web "
         "like a human — this chain backs the web_search tool itself.");
     hint->set_halign(Gtk::Align::START);
@@ -1404,7 +1405,7 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
         {"exa", "Exa"},                {"firecrawl", "Firecrawl"},
         {"serper", "Serper (Google)"}, {"serpapi", "SerpApi (Google)"},
         {"searxng", "SearXNG (self-hosted)"},
-        {"duckduckgo", "DuckDuckGo"},
+        {"hybrid", "Web HTML (Bing/DuckDuckGo)"},
     };
 
     // Re-read the row, mutate one field, write it back — keystroke-level
@@ -1465,7 +1466,7 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
         const std::string dname =
             dn != display_names.end() ? dn->second : p.name;
         std::string sub = "priority " + std::to_string(p.priority);
-        if (p.name == "duckduckgo") {
+        if (p.name == "hybrid") {
             sub += " · free, no key needed";
         } else if (p.name == "searxng") {
             sub += p.base_url.empty() ? " · needs instance URL"
@@ -1501,7 +1502,7 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
                 [save_field, name = p.name](const std::string& v) {
                     save_field(name, [v](auto& r) { r.password = v; });
                 }));
-        } else if (p.name != "duckduckgo") {
+        } else if (p.name != "hybrid") {
             card->append(*entry_row(
                 "API key", p.api_key, true,
                 [save_field, name = p.name](const std::string& v) {

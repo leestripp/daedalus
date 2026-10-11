@@ -419,10 +419,20 @@ public:
     }
 };
 
-class DuckDuckGoProvider final : public WebSearchProvider {
+// §WEB-SEARCH-HYBRID (2026-10-11): the key-less fallback is no longer a
+// single engine. DuckDuckGo's HTML endpoint answers HTTP 202 (anti-bot
+// challenge) to most datacenter traffic and Mojeek serves a Captcha page,
+// so "hybrid" walks a small ordered list of key-less engines — plain
+// browser-UA GETs, same as web_fetch on a crafted search URL — and the
+// first engine to return results wins. Verified live 2026-10-11:
+// bing 200 (works), mojeek Captcha (dropped), ddg 202 (kept last — it
+// still works from some residential IPs).
+class HybridProvider final : public WebSearchProvider {
 public:
-    std::string name() const override { return "duckduckgo"; }
-    std::string display_name() const override { return "DuckDuckGo (key-less)"; }
+    std::string name() const override { return "hybrid"; }
+    std::string display_name() const override {
+        return "Web HTML (Bing/DuckDuckGo, key-less)";
+    }
 
     bool is_configured(const WebSearchProviderSettings&) const override {
         return true;  // no key, no config — the always-available fallback
@@ -431,18 +441,43 @@ public:
     std::expected<WebSearchResults, std::string>
     search(const std::string& query, std::size_t max_results,
            const WebSearchProviderSettings&) const override {
-        const std::string url = "https://html.duckduckgo.com/html/?q=" +
-                                OmniNet::Utils::urlEncode(query);
-        auto resp = http_send("GET", url,
-                              {{"User-Agent", "Mozilla/5.0 (X11; Linux x86_64) "
-                                              "AppleWebKit/537.36 (KHTML, like "
-                                              "Gecko) Chrome/124.0 Safari/537.36"}},
-                              "");
-        if (!resp) return std::unexpected(resp.error());
-        if (resp->status != 200)
-            return std::unexpected("DuckDuckGo returned HTTP " +
-                                   std::to_string(resp->status));
-        return parse_duckduckgo_html(resp->body, max_results);
+        static const std::string kUa =
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, "
+            "like Gecko) Chrome/126.0 Safari/537.36";
+        const std::string q = OmniNet::Utils::urlEncode(query);
+
+        struct Engine {
+            std::string label;
+            std::string url;
+            WebSearchResults (*parse)(std::string_view, std::size_t);
+        };
+        const std::vector<Engine> engines = {
+            {"Bing", "https://www.bing.com/search?q=" + q, &parse_bing_html},
+            {"DuckDuckGo", "https://html.duckduckgo.com/html/?q=" + q,
+             &parse_duckduckgo_html},
+        };
+
+        std::string errors;
+        for (const auto& e : engines) {
+            auto resp = http_send("GET", e.url, {{"User-Agent", kUa}}, "");
+            if (!resp) {
+                errors += (errors.empty() ? "" : "; ") + e.label + ": " +
+                          resp.error();
+                continue;
+            }
+            if (resp->status != 200) {
+                errors += (errors.empty() ? "" : "; ") + e.label +
+                          ": HTTP " + std::to_string(resp->status);
+                continue;
+            }
+            auto results = e.parse(resp->body, max_results);
+            if (!results.empty()) return results;
+            errors += (errors.empty() ? "" : "; ") + e.label +
+                      ": no results parsed";
+        }
+        return std::unexpected(errors.empty()
+                                   ? std::string("all key-less engines failed")
+                                   : errors);
     }
 };
 
@@ -616,6 +651,91 @@ WebSearchResults parse_searxng_response(std::string_view body,
                               "title", "url", "content");
 }
 
+// §WEB-SEARCH-HYBRID: Bing HTML results. Each organic hit is a
+// <li class="b_algo"> block holding <h2><a href="…">title</a></h2> plus a
+// <p class="b_lineclamp…"> snippet. Bing wraps outbound links as
+// /ck/a redirect URLs; the real URL rides in the u= query param as
+// "a1" + base64url — decode it, fall back to the raw href when absent.
+namespace {
+
+std::string bing_decode_redirect(std::string href) {
+    if (href.find("bing.com/ck/a") == std::string::npos) return href;
+    // HTML may escape the query string separators.
+    std::string::size_type pos = 0;
+    while ((pos = href.find("&amp;", pos)) != std::string::npos) {
+        href.replace(pos, 5, "&");
+        pos += 1;
+    }
+    const auto u = href.find("u=a1");
+    if (u == std::string::npos) return href;
+    auto end = href.find('&', u);
+    std::string b64 = href.substr(u + 4, end == std::string::npos
+                                              ? end : end - (u + 4));
+    // base64url → base64
+    for (auto& c : b64) {
+        if (c == '-') c = '+';
+        else if (c == '_') c = '/';
+    }
+    while (b64.size() % 4 != 0) b64 += '=';
+    auto decoded = OmniNet::Utils::base64DecodeToString(b64);
+    if (decoded && (decoded->starts_with("http://") ||
+                    decoded->starts_with("https://"))) {
+        return *decoded;
+    }
+    return href;
+}
+
+}  // namespace
+
+WebSearchResults parse_bing_html(std::string_view html,
+                                 std::size_t max_results) {
+    WebSearchResults results;
+    const std::string h(html);
+    std::size_t pos = 0;
+    while (results.size() < max_results) {
+        const auto li = h.find("<li class=\"b_algo\"", pos);
+        if (li == std::string::npos) break;
+        const auto li_end = h.find("<li class=\"b_algo\"", li + 1);
+        const std::string block = h.substr(
+            li, li_end == std::string::npos ? li_end : li_end - li);
+
+        const auto a = block.find("<h2><a");
+        if (a == std::string::npos) { pos = li + 1; continue; }
+        const auto href_at = block.find("href=\"", a);
+        const auto href_end = block.find('\"', href_at + 6);
+        if (href_at == std::string::npos || href_end == std::string::npos) {
+            pos = li + 1;
+            continue;
+        }
+        const std::string url =
+            bing_decode_redirect(block.substr(href_at + 6,
+                                              href_end - (href_at + 6)));
+        const auto gt = block.find('>', href_end);
+        const auto a_end = block.find("</a>", gt);
+        if (gt == std::string::npos || a_end == std::string::npos) {
+            pos = li + 1;
+            continue;
+        }
+        const std::string title =
+            web_search_html_to_text(block.substr(gt + 1, a_end - gt - 1));
+
+        std::string snippet;
+        const auto p = block.find("<p class=\"b_lineclamp");
+        if (p != std::string::npos) {
+            const auto p_gt = block.find('>', p);
+            const auto p_end = block.find("</p>", p_gt);
+            if (p_gt != std::string::npos && p_end != std::string::npos)
+                snippet = web_search_html_to_text(
+                    block.substr(p_gt + 1, p_end - p_gt - 1));
+        }
+
+        if (!title.empty() && !url.empty())
+            results.push_back({title, url, snippet});
+        pos = li + 1;
+    }
+    return results;
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -623,7 +743,7 @@ WebSearchResults parse_searxng_response(std::string_view body,
 const std::vector<std::string>& web_search_provider_ids() {
     static const std::vector<std::string> kIds = {
         "brave", "tavily", "exa", "firecrawl",
-        "serper", "serpapi", "searxng", "duckduckgo",
+        "serper", "serpapi", "searxng", "hybrid",
     };
     return kIds;
 }
@@ -637,7 +757,7 @@ make_web_search_provider(std::string_view id) {
     if (id == "serper")     return std::make_unique<SerperProvider>();
     if (id == "serpapi")    return std::make_unique<SerpapiProvider>();
     if (id == "searxng")    return std::make_unique<SearxngProvider>();
-    if (id == "duckduckgo") return std::make_unique<DuckDuckGoProvider>();
+    if (id == "hybrid")     return std::make_unique<HybridProvider>();
     return nullptr;
 }
 
@@ -703,7 +823,7 @@ std::string web_search_startup_status() {
     }
     if (!any) {
         return "[WEB-SEARCH] WARNING: no web_search providers enabled — "
-               "configure one in Settings (duckduckgo works key-less)";
+               "configure one in Settings (hybrid works key-less)";
     }
     return "[WEB-SEARCH] failover chain: " + line.str();
 }

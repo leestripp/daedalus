@@ -116,7 +116,7 @@ json WebSearchTool::execute(const json& args, FileIO& file_io) {
              failures.empty()
                  ? "web_search: no providers available — none of the "
                    "enabled providers in Settings are configured "
-                   "(duckduckgo needs no key and works out of the box)"
+                   "(hybrid needs no key and works out of the box)"
                  : "web_search: every enabled provider failed — see "
                    "'failures' for per-provider reasons"},
             {"failures", failures}});

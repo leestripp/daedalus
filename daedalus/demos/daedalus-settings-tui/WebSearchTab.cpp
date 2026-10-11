@@ -88,7 +88,7 @@ Component MakeWebSearchTab(AppContext& ctx)
         // not clear it afterwards).
         auto* row = &r;
         const bool is_searxng = (row->name == "searxng");
-        const bool is_ddg     = (row->name == "duckduckgo");
+        const bool is_hybrid  = (row->name == "hybrid");
 
         auto enabled_check = Checkbox(row->name + " enabled", &row->enabled);
         auto row_priority  = FormRow("  priority (lower = tried earlier)",
@@ -103,7 +103,7 @@ Component MakeWebSearchTab(AppContext& ctx)
                                     &row->username, false, save));
             parts.push_back(FormRow("  basic-auth password (optional)",
                                     &row->password, /*password=*/true, save));
-        } else if (!is_ddg) {
+        } else if (!is_hybrid) {
             parts.push_back(FormRow("  API key", &row->api_key,
                                     /*password=*/true, save));
         }
@@ -126,11 +126,11 @@ Component MakeWebSearchTab(AppContext& ctx)
                  "non-empty result wins.") | dim);
         blocks.push_back(
             text(" A failing or blocked provider falls through to the next. "
-                 "duckduckgo needs no key.") | dim);
+                 "hybrid needs no key.") | dim);
         for (std::size_t i = 0; i < row_components.size(); ++i) {
             blocks.push_back(separator());
             blocks.push_back(row_components[i]->Render());
-            if (st->rows[i].name == "duckduckgo")
+            if (st->rows[i].name == "hybrid")
                 blocks.push_back(text("  key-less — always available") | dim);
         }
         if (!st->form_error.empty())
