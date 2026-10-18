@@ -23,6 +23,10 @@
 //   B13. Lenient frontmatter: unknown keys ignored, missing keys default,
 //        a file with no frontmatter at all still reads as a note.
 //   B14. Schema v10: a v9 DB gains brain_notes + brain_fts on open.
+//   B15. (sweep) A hand-edited frontmatter id NEVER overrides the
+//        filename stem — no traversal into note_path(), no reindex churn.
+//   B16. (sweep) UTF-8 search: non-ASCII terms (accented Latin, CJK)
+//        reach FTS5 whole and match.
 
 // The default build is Release (-DNDEBUG), which would compile assert()
 // away and make the whole file a no-op — force it back on (project
@@ -275,6 +279,37 @@ int main() {
         assert(!s10.get_brain_note("migrated-note").has_value());
     }
 
-    std::cout << "All SecondBrain tests passed (B1-B14)\n";
+    // ── B15: frontmatter id is NOT authoritative — filename stem is ──
+    {
+        write(brain.root() / "inbox" / "real-stem.md",
+              "---\nid: ../../tmp/brain-pwn\ntitle: Evil\n---\n\nbody\n");
+        auto evil = brain.read("real-stem");
+        assert(evil.has_value());
+        assert(evil->id == "real-stem");          // stem wins, always
+        // update() writes ONLY the stem file — nothing outside the root.
+        assert(brain.update("real-stem", std::nullopt, std::nullopt,
+                            std::string("new body")));
+        assert(!fs::exists(fs::temp_directory_path() / "brain-pwn.md"));
+        assert(!fs::exists(brain.root() / ".." / "tmp" / "brain-pwn.md"));
+        // No reindex churn: after one settle pass, the next is a no-op.
+        (void)brain.reindex();
+        auto settle = brain.reindex();
+        assert(settle.indexed == 0 && settle.removed == 0);
+    }
+
+    // ── B16: UTF-8 search reaches FTS5 whole ──
+    {
+        brain.capture("resources", "Unicode Notes", {},
+                      "Der K\u00fchlschrank ist leer. \u65e5\u672c\u8a9e"
+                      "\u306e\u30ce\u30fc\u30c8. Caf\u00e9 menu.");
+        auto de = brain.search("K\u00fchlschrank");   // accented Latin
+        assert(!de.empty() && de[0].note.id == "unicode-notes");
+        auto jp = brain.search("\u65e5\u672c\u8a9e"); // CJK
+        assert(!jp.empty() && jp[0].note.id == "unicode-notes");
+        auto fr = brain.search("caf\u00e9");
+        assert(!fr.empty() && fr[0].note.id == "unicode-notes");
+    }
+
+    std::cout << "All SecondBrain tests passed (B1-B16)\n";
     return 0;
 }

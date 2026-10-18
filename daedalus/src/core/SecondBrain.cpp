@@ -544,7 +544,6 @@ std::optional<BrainNote> SecondBrain::parse_file(const fs::path& path,
         std::istringstream lines(text);
         std::string line;
         std::getline(lines, line);  // consume opening "---"
-        std::string rest;
         bool closed = false;
         while (std::getline(lines, line)) {
             const auto t = trim(line);
@@ -555,8 +554,12 @@ std::optional<BrainNote> SecondBrain::parse_file(const fs::path& path,
                 std::string_view(line).substr(0, colon)));
             const auto value = trim(std::string_view(line).substr(colon + 1));
 
-            if (key == "id")         note.id      = yaml_unquote(value);
-            else if (key == "title") note.title   = yaml_unquote(value);
+            // NB: the "id" key is deliberately NOT honoured on read.
+            // Design: filename = note id. A hand-edited frontmatter id
+            // could otherwise (a) inject "../" into note_path() via
+            // update()/move() — an arbitrary-write traversal — and
+            // (b) desync reindex (row id vs filename stem churn).
+            if (key == "title")      note.title   = yaml_unquote(value);
             else if (key == "tags")  note.tags    = parse_tag_list(value);
             else if (key == "created") note.created = yaml_unquote(value);
             else if (key == "updated") note.updated = yaml_unquote(value);
@@ -669,14 +672,17 @@ std::string SecondBrain::slugify(std::string_view title)
 
 std::string SecondBrain::sanitise_fts_query(std::string_view query)
 {
-    // ASCII alnum runs become prefix tokens ("term*"), joined with AND.
-    // Quoting is unnecessary because tokens are pure alnum; special FTS5
-    // characters in the raw query (", *, AND, OR, NEAR…) can never reach
-    // the MATCH clause.
+    // Term characters: ASCII alnum plus ANY byte >= 0x80. Every FTS5
+    // query-syntax metacharacter ( " ( ) : * ^ + - whitespace ) is
+    // ASCII, so UTF-8 bytes can never inject syntax — they flow into
+    // terms whole (multi-byte sequences are never split: each byte
+    // simply joins the current run), letting unicode61-tokenised
+    // non-ASCII text (CJK, Cyrillic, accented Latin) actually match.
+    // Terms become prefix tokens ("term*") joined with AND.
     std::vector<std::string> terms;
     std::string current;
     for (const unsigned char c : query) {
-        if (std::isalnum(c)) {
+        if (std::isalnum(c) || c >= 0x80) {
             current += char(std::tolower(c));
         } else if (!current.empty()) {
             terms.push_back(std::move(current));
