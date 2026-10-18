@@ -128,6 +128,15 @@ TEST_CASE("filter narrows by name and description, case-insensitive") {
         CHECK(roster.find("`vault`") != std::string::npos);
     }
 
+    // §SECOND-BRAIN: the brain tool is core-registered (filter by a
+    // description substring unique to it).
+    {
+        const json r = tool.execute({{"filter", "Second Brain"}}, fio);
+        REQUIRE(r.value("status", "") == "success");
+        const std::string roster = r.value("roster", "");
+        CHECK(roster.find("`brain`") != std::string::npos);
+    }
+
     // No match → empty roster but success.
     {
         const json r = tool.execute({{"filter", "zzz-no-such-tool-zzz"}}, fio);

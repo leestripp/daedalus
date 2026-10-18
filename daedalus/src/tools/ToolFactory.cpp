@@ -2,6 +2,7 @@
 #include "tools/McpProxiedTool.h"
 #include "tools/McpControlTool.h"
 #include "tools/VaultTool.h"
+#include "tools/BrainTool.h"
 #include "tools/McpStatusTool.h"
 #include "tools/UserTool.h"
 #include "tools/SetStatusTool.h"
@@ -110,6 +111,11 @@ void ToolFactory::initialize_tools() {
     // manager). The tool resolves SecretsVault::global() lazily inside
     // execute() — no wiring needed at registration time.
     register_tool(std::make_shared<VaultTool>());
+
+    // §SECOND-BRAIN: Global Second Brain (markdown KB + FTS5, schema
+    // v10). Like the vault, the tool resolves SecondBrain::global()
+    // lazily inside execute() — no wiring needed at registration time.
+    register_tool(std::make_shared<BrainTool>());
 
     // Memory tools
     register_tool(std::make_shared<RememberTool>());

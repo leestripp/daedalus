@@ -376,6 +376,61 @@ public:
     /// Delete one vault row by name (missing name is a no-op).
     void delete_vault_row(std::string_view name);
 
+    // -----------------------------------------------------------------------
+    // §SECOND-BRAIN (schema v10): Global Second Brain index. The markdown
+    // files under <user_data_root>/brain/ are the SOURCE OF TRUTH; these
+    // tables are a rebuildable cache (metadata + FTS5 full-text index) so
+    // search/list stay fast. File I/O and frontmatter parsing live in
+    // daedalus::SecondBrain (src/core/SecondBrain.h) — these accessors only
+    // move rows in/out of brain_notes / brain_fts. Global by convention,
+    // like the vault: SecondBrain::global() targets the process-wide store.
+    // -----------------------------------------------------------------------
+
+    /// One brain_notes metadata row. `tags` is comma-separated.
+    struct BrainNoteRow
+    {
+        std::string id;                   // filename stem, unique across folders
+        std::string folder = "inbox";     // inbox|projects|areas|resources|archives
+        std::string title;
+        std::string tags;                 // comma-separated, may be empty
+        std::string created;              // ISO-8601 UTC
+        std::string updated;              // ISO-8601 UTC
+        int64_t     mtime = 0;            // file mtime (seconds) — reindex diff
+        int64_t     size  = 0;            // file size (bytes)   — reindex diff
+    };
+
+    /// One search hit: the metadata row plus an FTS5 snippet and bm25 rank.
+    struct BrainSearchHit
+    {
+        BrainNoteRow note;
+        std::string  snippet;             // body excerpt with **match** markers
+        double       rank = 0.0;          // bm25 score (lower = better in FTS5)
+    };
+
+    /// Insert or replace one note in the index: brain_notes metadata plus
+    /// the brain_fts full-text row (title/tags/body). `body` is the raw
+    /// markdown without frontmatter.
+    void upsert_brain_note(const BrainNoteRow& r, std::string_view body);
+
+    /// Fetch one metadata row by id.
+    std::optional<BrainNoteRow> get_brain_note(std::string_view id) const;
+
+    /// Metadata rows, newest-updated first. Empty folder = all folders.
+    std::vector<BrainNoteRow> list_brain_notes(std::string_view folder = {},
+                                               int limit = 100) const;
+
+    /// All metadata rows (reindex diffs need mtime/size for every file).
+    std::vector<BrainNoteRow> all_brain_notes() const;
+
+    /// Full-text search. `fts_query` must already be FTS5-sanitised
+    /// (SecondBrain quotes terms); it is bound as a MATCH parameter, never
+    /// concatenated into SQL. Ordered by bm25 rank, best first.
+    std::vector<BrainSearchHit> search_brain_notes(std::string_view fts_query,
+                                                   int limit = 20) const;
+
+    /// Delete one note from metadata + FTS index (missing id is a no-op).
+    void delete_brain_note(std::string_view id);
+
 private:
     // §B2 fix (v0.5.1): Impl fields are now inlined directly into the class
     // (not pimpl'd). This makes SettingsStore copyable/movable so

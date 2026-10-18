@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Added
+
+- §SECOND-BRAIN (2026-10-18): the Global Second Brain — a plain-markdown
+  knowledge base, GLOBAL across all projects and shared by every agent
+  on this machine (the vault pattern). Design follows Tiago Forte's BASB
+  (CODE workflow, PARA folders) + Zettelkasten atomic notes with
+  [[wiki-links]], per Plan.md. Source of truth is the markdown tree at
+  `<user_data_root>/brain/{inbox,projects,areas,resources,archives}/` —
+  human-readable and editable with any editor. YAML frontmatter
+  (id/title/tags/created/updated) parsed leniently; filename = note id =
+  slug unique across folders. Search runs on SQLite FTS5 (new
+  `brain_notes` metadata + `brain_fts` index tables, schema v10,
+  porter+unicode61 tokenizer, bm25 weighted title>tags>body, snippet()
+  excerpts) held in the existing global daedalus.db as a REBUILDABLE
+  CACHE — `reindex` diffs mtime+size and drops vanished files. New core:
+  `daedalus::SecondBrain` (src/core/SecondBrain.{h,cpp}) with capture /
+  read / update / append / remove / move / backlinks / list / search /
+  reindex; `SecondBrain::global()` targets the process-wide store like
+  `SecretsVault::global()`. New `brain` tool (one action-dispatched
+  tool, the VaultTool pattern): capture, search, read, list, update,
+  append, file, backlinks, delete, reindex. Path-traversal-safe ids
+  (slug chars only); FTS queries sanitised to alnum prefix tokens so
+  MATCH metacharacters can never inject. Session memory (`remember`)
+  stays for short session-scoped facts; the brain is for long-term
+  knowledge. Tests: test_second_brain.cpp (B1-B14: CRUD, FTS5 stemming,
+  reindex, traversal guard, lenient frontmatter, v9→v10 migration) and
+  test_brain_tool.cpp (T1-T6: schema shape, JSON happy path, error
+  contract); roster pin in test_list_tools.cpp.
+
 ### Changed
 
 - §WEB-SEARCH-HYBRID (2026-10-11): the key-less `duckduckgo` provider is

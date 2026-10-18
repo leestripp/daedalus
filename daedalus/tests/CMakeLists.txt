@@ -55,6 +55,37 @@ target_link_libraries(daedalus_skill_auto_discovery_tests PRIVATE
 add_test(NAME skill_auto_discovery_tests COMMAND daedalus_skill_auto_discovery_tests)
 
 # ============================================================================
+# §SECOND-BRAIN: Global Second Brain (markdown KB + FTS5 index, schema v10)
+# ============================================================================
+add_executable(daedalus_second_brain_tests
+    test_second_brain.cpp
+)
+target_include_directories(daedalus_second_brain_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_second_brain_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME second_brain_tests COMMAND daedalus_second_brain_tests)
+
+add_executable(daedalus_brain_tool_tests
+    test_brain_tool.cpp
+)
+target_include_directories(daedalus_brain_tool_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_brain_tool_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME brain_tool_tests COMMAND daedalus_brain_tool_tests)
+
+# ============================================================================
 # Regression: SettingsStore preserves all fields
 # (previously omitted, causing user settings to be wiped on /models switch)
 # ============================================================================

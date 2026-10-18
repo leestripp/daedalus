@@ -151,7 +151,13 @@ std::shared_ptr<ProviderPlugin> plugin_for_row(std::string_view hint,
 // ============================================================================
 namespace {
 
-constexpr int kSchemaVersion = 9;
+constexpr int kSchemaVersion = 10;
+
+/// §SECOND-BRAIN (schema v10): brain_notes metadata + brain_fts FTS5
+/// index. The markdown files are the source of truth; these tables
+/// are a rebuildable cache. FTS5 is compiled into every mainstream
+/// SQLite (verified: system libsqlite3 on this project), and OmniNet
+/// links the system SQLite3 — no amalgamation risk.
 
 /// §WEB-SEARCH-CORE (schema v8): the 8 built-in web_search providers and
 /// their default priorities (lower = tried earlier in the failover chain).
@@ -255,6 +261,30 @@ CREATE TABLE IF NOT EXISTS vault_entries (
     payload_b64 TEXT NOT NULL,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
+);
+
+-- §SECOND-BRAIN (schema v10): Second Brain index. Source of truth is the
+-- markdown tree (<user_data_root>/brain/<folder>/<id>.md); these tables
+-- are a rebuildable cache. brain_notes holds metadata for list/reindex
+-- diffs (mtime+size); brain_fts is the FTS5 full-text index over
+-- title/tags/body. porter unicode61 tokenizer: stemming + Unicode folding.
+CREATE TABLE IF NOT EXISTS brain_notes (
+    id      TEXT PRIMARY KEY,
+    folder  TEXT NOT NULL DEFAULT 'inbox',
+    title   TEXT NOT NULL DEFAULT '',
+    tags    TEXT NOT NULL DEFAULT '',
+    created TEXT NOT NULL DEFAULT '',
+    updated TEXT NOT NULL DEFAULT '',
+    mtime   INTEGER NOT NULL DEFAULT 0,
+    size    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS brain_fts USING fts5(
+    id UNINDEXED,
+    title,
+    tags,
+    body,
+    tokenize = 'porter unicode61'
 );
 )sql";
 
@@ -540,6 +570,27 @@ void migrate_to_v9(OmniNet::DB::Database& db)
     } catch (...) { /* best-effort, same discipline as v8 seeding */ }
 }
 
+void migrate_to_v10(OmniNet::DB::Database& db)
+{
+    // v10 (§SECOND-BRAIN): brain_notes + brain_fts. CREATE IF NOT EXISTS
+    // is idempotent; the tables start empty and SecondBrain::reindex()
+    // fills them from the markdown tree on first use.
+    db.execute(
+        "CREATE TABLE IF NOT EXISTS brain_notes ("
+        "id TEXT PRIMARY KEY, "
+        "folder TEXT NOT NULL DEFAULT 'inbox', "
+        "title TEXT NOT NULL DEFAULT '', "
+        "tags TEXT NOT NULL DEFAULT '', "
+        "created TEXT NOT NULL DEFAULT '', "
+        "updated TEXT NOT NULL DEFAULT '', "
+        "mtime INTEGER NOT NULL DEFAULT 0, "
+        "size INTEGER NOT NULL DEFAULT 0)");
+    db.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS brain_fts USING fts5("
+        "id UNINDEXED, title, tags, body, "
+        "tokenize = 'porter unicode61')");
+}
+
 void ensure_schema(OmniNet::DB::Database& db)
 {
     db.execute(kSchemaSql);
@@ -569,6 +620,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version < 7) migrate_to_v7(db);
     if (current_version < 8) migrate_to_v8(db);
     if (current_version < 9) migrate_to_v9(db);
+    if (current_version < 10) migrate_to_v10(db);
 
     // §WEB-SEARCH-CORE: seed the provider registry whenever it is empty —
     // covers fresh DBs (schema_version is written as v8 immediately, so
@@ -1538,6 +1590,169 @@ void SettingsStore::delete_vault_row(std::string_view name)
         *mutex_, *db_,
         "DELETE FROM vault_entries WHERE name = ?",
         std::string(name));
+}
+
+// ============================================================================
+// §SECOND-BRAIN (schema v10): brain_notes / brain_fts raw row accessors.
+// File I/O and frontmatter parsing live in daedalus::SecondBrain — these
+// accessors only move rows in/out of the index tables.
+// ============================================================================
+
+void SettingsStore::upsert_brain_note(const BrainNoteRow& r,
+                                      std::string_view body)
+{
+    // Metadata row (UPSERT preserves nothing — every field is rewritten
+    // from the file, which is the source of truth).
+    exec_prepared(
+        *mutex_, *db_,
+        "INSERT INTO brain_notes(id, folder, title, tags, created, updated,"
+        " mtime, size) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "folder=excluded.folder, title=excluded.title, tags=excluded.tags, "
+        "created=excluded.created, updated=excluded.updated, "
+        "mtime=excluded.mtime, size=excluded.size",
+        r.id, r.folder, r.title, r.tags, r.created, r.updated,
+        r.mtime, r.size);
+
+    // FTS5 rows have no UNIQUE constraint to conflict on, so delete-then-
+    // insert is the idempotent upsert for the full-text index.
+    exec_prepared(
+        *mutex_, *db_,
+        "DELETE FROM brain_fts WHERE id = ?",
+        r.id);
+    exec_prepared(
+        *mutex_, *db_,
+        "INSERT INTO brain_fts(id, title, tags, body) VALUES(?, ?, ?, ?)",
+        r.id, r.title, r.tags, std::string(body));
+}
+
+namespace {
+SettingsStore::BrainNoteRow brain_row_from(const std::vector<std::string>& r)
+{
+    // SELECT order: id, folder, title, tags, created, updated, mtime, size
+    SettingsStore::BrainNoteRow row;
+    if (r.size() >= 8) {
+        row.id      = r[0];
+        row.folder  = r[1];
+        row.title   = r[2];
+        row.tags    = r[3];
+        row.created = r[4];
+        row.updated = r[5];
+        try { row.mtime = std::stoll(r[6]); } catch (...) { row.mtime = 0; }
+        try { row.size  = std::stoll(r[7]); } catch (...) { row.size  = 0; }
+    }
+    return row;
+}
+
+constexpr const char* kBrainNoteCols =
+    "id, folder, title, tags, created, updated, mtime, size";
+}  // anonymous namespace
+
+std::optional<SettingsStore::BrainNoteRow>
+SettingsStore::get_brain_note(std::string_view id) const
+{
+    auto row = query_one_prepared(
+        *mutex_, *db_,
+        std::string("SELECT ") + kBrainNoteCols +
+            " FROM brain_notes WHERE id = ?",
+        std::string(id));
+    if (!row.has_value()) return std::nullopt;
+    return brain_row_from(*row);
+}
+
+std::vector<SettingsStore::BrainNoteRow>
+SettingsStore::list_brain_notes(std::string_view folder, int limit) const
+{
+    std::vector<std::vector<std::string>> rows;
+    if (folder.empty()) {
+        rows = query_all_prepared(
+            *mutex_, *db_,
+            std::string("SELECT ") + kBrainNoteCols +
+                " FROM brain_notes ORDER BY updated DESC LIMIT " +
+                std::to_string(limit));
+    } else {
+        // limit is an int parameter bound by us — but the folder filter
+        // needs a bound string, so use a prepared query with two params.
+        std::lock_guard<std::recursive_mutex> lk(*mutex_);
+        auto stmt = db_->prepare(
+            std::string("SELECT ") + kBrainNoteCols +
+            " FROM brain_notes WHERE folder = ?"
+            " ORDER BY updated DESC LIMIT ?");
+        stmt.bind(1, std::string(folder));
+        stmt.bind(2, limit);
+        while (stmt.step()) {
+            std::vector<std::string> row;
+            for (int i = 0; i < stmt.columnCount(); ++i)
+                row.push_back(stmt.columnText(i));
+            rows.push_back(std::move(row));
+        }
+        throw_on_step_error(db_, SQLITE_DONE);
+    }
+    std::vector<BrainNoteRow> out;
+    out.reserve(rows.size());
+    for (const auto& r : rows) out.push_back(brain_row_from(r));
+    return out;
+}
+
+std::vector<SettingsStore::BrainNoteRow>
+SettingsStore::all_brain_notes() const
+{
+    auto rows = query_all_prepared(
+        *mutex_, *db_,
+        std::string("SELECT ") + kBrainNoteCols + " FROM brain_notes");
+    std::vector<BrainNoteRow> out;
+    out.reserve(rows.size());
+    for (const auto& r : rows) out.push_back(brain_row_from(r));
+    return out;
+}
+
+std::vector<SettingsStore::BrainSearchHit>
+SettingsStore::search_brain_notes(std::string_view fts_query, int limit) const
+{
+    // snippet(brain_fts, 3, ...) — column 3 is `body`. bm25() ranks title
+    // and tags matches above body matches via the column weights.
+    std::lock_guard<std::recursive_mutex> lk(*mutex_);
+    auto stmt = db_->prepare(
+        "SELECT brain_notes.id, brain_notes.folder, brain_notes.title,"
+        " brain_notes.tags, brain_notes.created, brain_notes.updated,"
+        " brain_notes.mtime, brain_notes.size,"
+        " snippet(brain_fts, 3, '**', '**', ' … ', 12) AS snip,"
+        " bm25(brain_fts, 0.0, 10.0, 5.0, 1.0) AS rank"
+        " FROM brain_fts"
+        " JOIN brain_notes ON brain_notes.id = brain_fts.id"
+        " WHERE brain_fts MATCH ?"
+        " ORDER BY rank"
+        " LIMIT ?");
+    stmt.bind(1, std::string(fts_query));
+    stmt.bind(2, limit);
+
+    std::vector<BrainSearchHit> out;
+    while (stmt.step()) {
+        std::vector<std::string> row;
+        for (int i = 0; i < stmt.columnCount(); ++i)
+            row.push_back(stmt.columnText(i));
+        BrainSearchHit hit;
+        hit.note = brain_row_from(row);   // first 8 columns, same order
+        if (row.size() >= 10) {
+            hit.snippet = row[8];
+            try { hit.rank = std::stod(row[9]); } catch (...) {}
+        }
+        out.push_back(std::move(hit));
+    }
+    throw_on_step_error(db_, SQLITE_DONE);
+    return out;
+}
+
+void SettingsStore::delete_brain_note(std::string_view id)
+{
+    exec_prepared(
+        *mutex_, *db_,
+        "DELETE FROM brain_fts WHERE id = ?",
+        std::string(id));
+    exec_prepared(
+        *mutex_, *db_,
+        "DELETE FROM brain_notes WHERE id = ?",
+        std::string(id));
 }
 
 bool SettingsStore::has_mcp_servers() const noexcept

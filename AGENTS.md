@@ -93,7 +93,8 @@ daedalus's **user-tier store**:
 
 | Path | Shared by | Contents |
 |------|-----------|----------|
-| `$XDG_DATA_HOME/daedalus/daedalus.db` | both hosts | Providers, models, MCP servers, encrypted vault, tuning limits |
+| `$XDG_DATA_HOME/daedalus/daedalus.db` | both hosts | Providers, models, MCP servers, encrypted vault, brain index (FTS5), tuning limits |
+| `$XDG_DATA_HOME/daedalus/brain/` | both hosts | §SECOND-BRAIN: global markdown knowledge base (PARA folders; `brain` tool) — source of truth, safe to edit by hand |
 | `$XDG_CONFIG_HOME/daedalus/vault.key` | both hosts | Vault master key |
 | `$XDG_DATA_HOME/daedalus/skills/`, `memory/` | both hosts | Global skills + session memory |
 | `<project>/.daedalus/daedalus[-<name>]/` | per workspace | Transcript (`messages.json`), crash mirror, per-project memory, logs |

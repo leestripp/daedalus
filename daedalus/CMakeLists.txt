@@ -250,6 +250,7 @@ set(CORE_SOURCES
 	src/core/SettingsStore.cpp
 	src/core/SkillManager.cpp
 	src/core/Vault.cpp
+	src/core/SecondBrain.cpp
 	src/core/utils.cpp
 	src/core/ImageProcessor.cpp
 	src/core/Subprocess.cpp
@@ -295,6 +296,7 @@ set(TOOLS_SOURCES
 	src/tools/BashPathChecker.cpp
 	src/tools/SkillTool.cpp
 	src/tools/MemoryTool.cpp
+	src/tools/BrainTool.cpp
 	src/tools/WebSearchTool.cpp
 	src/tools/websearch/WebSearchProvider.cpp
 	src/tools/ListToolsTool.cpp

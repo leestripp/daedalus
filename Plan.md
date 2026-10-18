@@ -1,403 +1,169 @@
-# Plan.md — daedalus monorepo consolidation
+# Plan.md — daedalus Second Brain (Global Knowledge Base)
 
-**Goal:** one repo (`/projects/AI/daedalus`, remote `gitlab.com/leestripp/daedalus`)
-containing the library and both hosts, with a single clean build system:
-one CMake configure/build, one `ctest` run, one cppcheck/clang-tidy entry point.
-
-## Layout
-
-```
-/                      ← the daedalus repo (library history + tags preserved)
-├── daedalus/          ← the static library (libdaedalus.a), demos, docs, tests
-├── icarus/            ← CLI host (REPL + A2A server)
-├── monkeybyte/        ← GTK4/gtkmm desktop host
-├── CMakeLists.txt     ← NEW: superbuild root
-├── Plan.md            ← this file
-└── AGENTS.md          ← workspace guide (update at the end)
-```
-
-## Phase 1 — Git restructure ✅ DONE (commit 85c5130)
-
-- [x] Backups of all three old `.git` dirs → `~/daedalus-git-backups-20260924/`
-- [x] `daedalus/.git` moved to root (keeps library history, tags, GitLab remote — plain push, no force)
-- [x] Old `icarus/.git` / `monkeybyte/.git` deleted (standalone histories in the backups + archived GitLab repos)
-- [x] Root `.gitignore`; reorg committed as pure renames + new host trees
-
-## Phase 2 — Superbuild root CMakeLists.txt ✅ DONE
-
-- [x] `cmake_minimum_required(3.28)`, `project(daedalus-suite)`, C++23
-- [x] Options:
-  - `DAEDALUS_BUILD_ICARUS` — default **ON** when top-level, OFF when consumed via FetchContent (`PROJECT_IS_TOP_LEVEL`)
-  - `DAEDALUS_BUILD_MONKEYBYTE` — default **ON** when top-level AND pkg-config finds gtkmm-4.0, else skip with a status message; OFF when consumed via FetchContent
-  - Library's existing options (`DAEDALUS_BUILD_DEMOS`, per-demo switches, tests) unchanged
-- [x] `add_subdirectory(daedalus)` → `icarus` → `monkeybyte` (gated)
-- [x] Umbrella `static_analysis` target aggregating `daedalus_static_analysis` (clang-tidy), `icarus_cppcheck`, `monkeybyte_cppcheck` when their tools exist
-- [x] ctest: label every test `lib` / `cli` / `app` so `ctest -L app` etc. works
-  (deviation: labels are set in each component's own tests CMake — test names are
-  not visible to `set_property` from the root scope)
-
-## Phase 3 — Host CMake → dual-mode ✅ DONE
-
-- [x] **icarus**: `if(TARGET daedalus)` → link the in-tree `daedalus` target, use `../daedalus` sources for the settings-TUI tabs, drop the `FetchContent_Populate` + `ExternalProject_Add` double-build. `else()` → keep today's standalone FetchContent path untouched (subfolder stays independently buildable).
-- [x] **monkeybyte**: `if(TARGET daedalus)` → skip its FetchContent block entirely. `else()` → standalone path as today.
-- [x] In-tree OmniNet include path for icarus (`<daedalus/settings.h>` → `<db/Database.h>`): resolve via `FetchContent_GetProperties(omninet)` (global properties work across sibling dirs).
-
-## Phase 4 — Versioning ✅ DONE (REVISED: single unified stream)
-
-**Decision change (2026-09-24):** the prefixed-tag scheme (`icarus/x.y.z`,
-`monkeybyte/x.y.z`) was implemented, then rejected by the user — a monorepo
-should have ONE version. The prefixed tags were deleted (local + remote).
-Going forward: bare `x.y.z` tags at the root cover the library AND both hosts.
-
-- [x] daedalus lib: `git describe --tags --always --dirty` (original behaviour)
-- [x] icarus: `git describe --tags --abbrev=0` → fallback `"dev"` (no `--match`)
-- [x] monkeybyte: same, `^v?[0-9]+\.[0-9]+\.[0-9]+` with `v` strip
-- [x] `git describe` runs against the repo in both top-level and standalone-subdir configures (any subdir works)
-
-## Phase 5 — Verification (gate) ✅ DONE
-
-- [x] Clean top-level configure + build: `cmake -S . -B build && cmake --build build -j$(nproc)` builds lib + demos + tests + icarus + monkeybyte
-- [x] `ctest --test-dir build --output-on-failure` — all three suites green in one run
-- [x] `cmake --build build --target static_analysis` green (or tool-absent skips)
-- [x] Standalone smoke tests: configure `icarus/` alone and `monkeybyte/` alone in scratch build dirs (dual-mode `else()` paths still work)
-- [x] FetchContent smoke test: scratch consumer project fetching this repo builds **only** the library (no GTK required)
-- [x] `./monkeybyte/run.sh`-style workflows still function (run.sh now supports both superbuild and standalone build trees) (GSETTINGS_SCHEMA_DIR, data dir resolution)
-
-## Phase 6 — Docs & release
-
-- [ ] Root `README.md` (GitLab front page: monorepo overview, build instructions, links into subfolders)
-- [ ] Update root `AGENTS.md` (now describes the actual single repo, not a 3-repo workspace)
-- [ ] Pointer edits in `daedalus/AGENTS.md`, `icarus/AGENTS.md`, `monkeybyte/AGENTS.md` (monorepo paths, new build commands)
-- [ ] CHANGELOG entry (daedalus/CHANGELOG.md Unreleased: monorepo restructure)
-- [ ] Push to GitLab; archive the old standalone `icarus` / `monkeybyte` repos (manual, user)
-
-## Decisions locked in
-
-- Prefixed host tags (`icarus/x.y.z`, `monkeybyte/x.y.z`); bare tags stay the library's
-- Host subfolders remain standalone-configurable (dual-mode CMake) — no FetchContent of daedalus from GitLab inside this repo's own builds
-- Host histories are NOT merged (archived in backups + old GitLab repos); library history is the monorepo history
+> **Status**: IMPLEMENTED (2026-10-18) — Phases 1–3 done: SecondBrain core,
+> schema v10 (brain_notes + brain_fts), `brain` tool registered, 21 new tests
+> (B1-B14, T1-T6), ctest 109/109 green, static_analysis clean. Design deviations
+> from §2/§3 below: ONE action-dispatched `brain` tool instead of seven
+> brain_* tools (VaultTool pattern — one compact schema riding every request);
+> note id = clean slug with -2/-3 collision suffixes (no timestamp component);
+> reindex diffs mtime+size (no sha256 — cheap and sufficient for a local cache);
+> no SystemPromptBuilder prose section ("no prose" philosophy — usage guidance
+> rides in the tool's own description, like the vault).
+> **Supersedes**: the monorepo-consolidation plan previously in this file
+> (all phases DONE; preserved in git history, last at commit 556b317).
 
 ---
 
-# Plan — Message headers: source + timestamp on every message (§MSG-HEADERS, 2026-10-04)
+## 1. Research — what a "Second Brain" is
 
-**Problem.** Messages are bare `{role, content}` JSON. The model cannot tell an
-old/already-addressed message from a fresh one: compression summaries read like
-a repeating event, triggers/A2A messages are indistinguishable from the human
-user, crash-restored messages look new. Root cause: no origin, no time.
+The term was popularised by Tiago Forte's *Building a Second Brain* (BASB):
+an external, trusted system that stores everything you learn so your
+biological brain can forget it. Forte's workflow is **CODE** —
+**C**apture, **O**rganize, **D**istill, **E**xpress — and his organization
+scheme is **PARA**: **P**rojects, **A**reas, **R**esources, **A**rchives
+(sorted by *actionability*, not by topic).
 
-**Decision (approved by user).**
-- (a) Header rendered into wire content + `_meta` stripped before send
-  (never send unknown keys to strict providers — LM Studio/qwen3 templates,
-  Anthropic conversion).
-- (b) Free-form `kind:id` source string (not an enum/object) so future sources
-  (devices, email, …) need zero schema change.
+The other major school is **Zettelkasten** (Niklas Luhmann's slip-box):
+many small *atomic notes* (one idea per note), each with a unique ID,
+densely interlinked, so structure *emerges* from links instead of being
+imposed by folders. Modern digital implementations (Obsidian, Logseq,
+Foam, Zettlr) are all **plain-markdown file stores with wiki-links and
+full-text search** — no database required as the source of truth.
 
-## Envelope
+A third, newer pattern matters most for daedalus: **agent memory
+runtimes**. Current open-source practice (sqliteai/sqlite-memory,
+tigerless-labs/agent-memory, and numerous agent-memory writeups) has
+converged on exactly the same architecture, deliberately *without* a
+vector database:
 
-```json
-{
-  "role": "user",
-  "content": "…",
-  "_meta": { "source": "trigger:nightly-backup",
-             "received_at": "2026-10-04 07:27:44 AEST" }
-}
+> **Plain Markdown files are the source of truth; a SQLite FTS5 index
+> provides fast ranked search and is rebuildable from the files at any
+> time.**
+
+Semantic/vector search is consistently listed as an *optional later
+layer*, not a prerequisite — FTS5 keyword search over well-titled atomic
+notes is good enough, and keeps everything local, inspectable, and
+git-friendly.
+
+### Comparison of candidate approaches
+
+| Approach | Pros | Cons | Verdict for daedalus |
+|---|---|---|---|
+| PARA folders | Simple, actionable, zero tooling | Shallow linking, notes can only live in one place | Good for top-level layout |
+| Zettelkasten | Emergent knowledge web, atomic notes, links | Needs discipline; IDs/links need tooling | Good for note *format* |
+| Digital garden | Notes evolve in public | Not goal-oriented | Not needed |
+| Plain markdown + FTS5 | Local-first, human-readable, diffable, rebuildable index, no new deps | Keyword search only (for now) | **Chosen core** |
+| Vector DB / embeddings | Semantic recall | New heavy dependency, opaque, overkill at this scale | Later, optional layer |
+
+## 2. Decision — the daedalus Second Brain
+
+**A global, markdown-file knowledge base indexed by SQLite FTS5, living
+in the user's XDG data home next to the existing global database.**
+
+Concretely:
+
+```
+~/.local/share/daedalus/            (or $XDG_DATA_HOME/daedalus)
+├── daedalus.db                     ← existing global DB (vault, providers, …)
+│                                     + NEW brain_fts FTS5 index table
+└── brain/                          ← NEW: the Second Brain (source of truth)
+    ├── projects/                   ← PARA: active work (per-effort knowledge)
+    ├── areas/                      ← PARA: ongoing responsibilities (this codebase, fleet ops…)
+    ├── resources/                  ← PARA: reference material (research, how-tos, snippets)
+    ├── archives/                   ← PARA: inactive/completed material
+    └── inbox/                      ← quick captures, unsorted (CODE: Capture first)
 ```
 
-- `_meta` underscore-prefixed = internal, non-wire (matches `_invalid_args`).
-- `received_at` stamped by the library at creation, always **UTC**
-  (`%Y-%m-%d %H:%M:%S UTC`, §MSG-HEADERS-UTC — one standard reference
-  regardless of where in the world agent or user run). Hosts never pass
-  a timestamp.
-- Source conventions: `user:<name>`, `assistant`, `tool:<name>`,
-  `system:context-compression`, `system:context-status`, `a2a:<agent>`,
-  `trigger:<name>`, `email:<addr>` — extensible by convention.
+Design principles borrowed from the research:
 
-Wire rendering (payload-build time in `run_agent_cycle`):
+1. **Markdown files are the source of truth** — human-readable,
+   editable in any editor, diffable, never locked in. The SQLite index is
+   a *derived cache*: `brain_reindex` rebuilds it from disk at any time.
+2. **Atomic notes, Zettelkasten-style** — one idea per note, unique ID,
+   `[[wiki-links]]` between notes so knowledge webs emerge.
+3. **PARA-lite folders** — five top-level folders give actionability
+   ordering without deep hierarchies. Notes can be *filed* (moved between
+   folders) as they age from inbox → resources → archives.
+4. **Global, not per-project** — exactly like the vault: one brain per
+   user, reachable from every project and every agent, independent of
+   `AgentConfig::daedalus_home`. Precedent: `Vault` + `SettingsStore`
+   already do this via the XDG path logic in `src/library/paths.cpp`.
 
-```
-[from: trigger:nightly-backup · received 2026-10-04 07:27:44 UTC]
+### Note format (YAML frontmatter + body)
 
-<original content>
-```
-
-`_meta` is stripped from the wire copy. Stored chain keeps it.
-
-## Changes by component
-
-1. **daedalus core — Messages** (`src/core/Messages.{h,cpp}`):
-   - `stamp(json& msg, std::string_view source)` static helper: writes
-     `_meta.source` + `_meta.received_at` (current local time).
-   - `add_system/add_user/add_assistant/add_tool_result` gain defaulted
-     `source` param; always stamp `received_at`.
-   - Compression synthetic summary message → `system:context-compression`.
-   - Old chains without `_meta` load untouched (absence = legacy signal).
-2. **daedalus api — LLMClient** (`src/api/LLMClient.cpp`, `ContextStatus.h`):
-   - Raw `push_back` sites in `run_one_turn` (system + user) stamp via helper.
-   - `run_agent_cycle`: build wire copy — expand `_meta` into the
-     `[from: … · received …]` content prefix, strip `_meta`, send copy.
-     Stored chain is never mutated by expansion (prefix-cache stability).
-   - Assistant/tool-result pushes during the cycle stamp with role/tool name.
-   - `upsert_context_status_message` → `system:context-status`.
-3. **daedalus api — Agent** (`include/daedalus/Agent.h`, `src/library/AgentImpl.{h,cpp}`):
-   - `submit_user_message(text, imgs, source)` overload; existing overloads
-     default source to `user:<username>`.
-   - `PendingUserMessage` gains `source` (queue/edit/clear API unchanged).
-4. **Hosts**: `HistoryEntry` gains `source` + `received_at` (additive);
-   icarus A2A backend passes `a2a:<peer>`; monkeybyte/icarus callers of
-   submit_user_message unchanged (default source applies).
-5. **Tests**: update exact-content expectations; add coverage: stamp on add_*,
-   wire expansion + strip, compression-summary source, submit overload source,
-   round-trip through save/load.
-
-## Verification bar
-
-Clean superbuild, full `ctest` green, `static_analysis` no new warnings.
-
+```markdown
+---
+id: 2026-10-18-sqlite-fts5-unicode61
+title: SQLite FTS5 unicode61 tokenizer quirks
+tags: [sqlite, search, daedalus]
+created: 2026-10-18
+updated: 2026-10-18
+links: []
 ---
 
-# Plan — Queue join: drain ALL queued user messages as ONE message (§QUEUE-JOIN, 2026-10-04)
+FTS5's unicode61 tokenizer strips punctuation from terms, so C++ symbol
+searches ("std::string_view") match poorly; quote the phrase or use
+trigram tokenizer instead. See [[2026-10-18-brain-search-design]].
+```
 
-**Problem.** When the agent is busy, user messages accumulate in a queue.
-On drain we dispatch exactly ONE message per turn, so a burst of messages
-("do X", "also change Y", "correction: actually Z") is answered one at a
-time — the model never sees the user's full intent in one context, answers
-to a stale message arrive after newer ones, and N queued messages cost N
-full turns. The agent doesn't care how many physical messages it receives;
-the user often wants to add a correction right after a message. Joining
-the whole queue into a single message at drain time is strictly better.
+- `id` doubles as the filename: `<id>.md` inside a PARA folder.
+- Frontmatter is parsed leniently (title/tags/dates only — no full YAML
+  dependency; the existing code style avoids new deps).
 
-**Decision (approved by user, prompt.txt).**
-- At drain time (agent becomes ready to run), JOIN every queued user
-  message into ONE message, send it as a single turn, then the queue is
-  empty. One turn per drain, not one turn per message.
-- Queue semantics (submit / edit / remove / clear, FIFO order) are
-  UNCHANGED while queued — joining happens only at the consume point.
-- Text parts are joined with a blank line in FIFO order. Image
-  attachments concatenate in queue order. No numbering/labels: the
-  user's own words are the content (§MSG-HEADERS still stamps the single
-  combined origin on the wire).
+### Search: FTS5 in the existing global DB
 
-## Changes by component
+- New schema migration (next version after current) adding:
+  - `brain_notes` — metadata table (id, path, folder, title, tags, created, updated, sha256, mtime) so reindexing is incremental.
+  - `brain_fts` — FTS5 virtual table (`title`, `tags`, `body`) with `porter unicode61` tokenization, external-content or contentless mode keyed by note id.
+- `snippet()`/`bm25()` give ranked results with context excerpts.
+- Verified on this machine: system SQLite has FTS5 (`FTS5_OK`).
 
-1. **daedalus core — AgentImpl** (`src/library/AgentImpl.cpp`, §QUEUE-JOIN):
-   - `run_one_turn()` dequeue block: instead of taking `front()` and
-     erasing one element, consume the WHOLE `pending_user_messages_` under
-     `pending_mutex_`: join texts with `"\n\n"`, concatenate images,
-     merge `source` (all identical → that source; mixed → distinct
-     sources in first-appearance order joined with `", "`, so the wire
-     header stays truthful for e.g. `user:lee, a2a:peer`).
-   - Single message consumed → the `Agent.h` off-by-one warning relaxes:
-     run_one_turn() consumes the ENTIRE queue; extra submits while a turn
-     runs simply accumulate for the next drain. Update the doc comment.
-   - Host-facing queue API (`pending_count/pending_messages/edit/remove/
-     clear`) untouched — hosts still see and edit individual messages
-     while they wait.
-2. **monkeybyte — ChatController** (`src/monkeybyte/ui/chat/ChatController.cpp`):
-   - Turn-thread drain loop: pop ALL of `queued_messages_` in one
-     state_mutex_ hold, join with `"\n\n"`, single
-     `submit_user_message()` + `run_one_turn()`. Matches the daedalus
-     change: while the user was typing during a busy turn, their whole
-     burst becomes one message. FIFO preserved (error still stops the
-     drain with leftovers queued for next send).
-3. **icarus**: no change — the REPL blocks during `run_one_turn()` so its
-   queue never accumulates interactively; A2A submits land in the daedalus
-   queue and are covered by change 1.
-4. **Tests**:
-   - daedalus: extend `test_pending_messages.cpp` — submit 3 messages
-     (incl. one with an image), `run_one_turn()` with no model configured
-     (the existing no-client error path echoes `pending.text`): the
-     terminal error must contain the joined text, images/source merged,
-     and `pending_count()` must be 0 (whole queue consumed by one turn).
-   - monkeybyte: `unit_tests` — ChatController-level join test if the
-     drain loop is reachable headless; otherwise rely on the daedalus
-     test + manual smoke.
+## 3. Implementation phases
 
-## Verification bar
+### Phase 1 — Core library (`daedalus/src/core/`)
+- [ ] `SecondBrain.h/.cpp` — owns the brain dir (creates the five PARA
+      folders on first use), CRUD for notes, lenient frontmatter
+      parse/emit, `[[link]]` extraction, move-between-folders ("file").
+- [ ] Schema migration in `SettingsStore.cpp`: `brain_notes` + `brain_fts`;
+      incremental reindex (compare mtime/sha256), full rebuild fallback.
+- [ ] Unit tests: round-trip frontmatter, capture/list/read/update,
+      FTS5 ranking, reindex-after-external-edit.
 
-Clean superbuild, full `ctest` green, `static_analysis` no new warnings.
+### Phase 2 — Agent tools (`daedalus/src/tools/BrainTool.h/.cpp`)
+Modeled on `MemoryTool` / `Vault` wiring (static service pointer set by
+ToolFactory):
+- [ ] `brain_capture(folder?, title, tags?, body)` → creates note, indexes it. Default folder `inbox` (Capture first, Organize later — CODE).
+- [ ] `brain_search(query, limit?)` → ranked results with snippets.
+- [ ] `brain_read(id)` → full note.
+- [ ] `brain_list(folder?, tag?)` → browse.
+- [ ] `brain_update(id, body?/tags?/title?)` → edit + reindex (Distill).
+- [ ] `brain_file(id, folder)` → move between PARA folders (Organize).
+- [ ] `brain_reindex()` → rebuild index from disk (recovery path).
 
----
+### Phase 3 — Integration
+- [ ] Register tools in `ToolFactory` for icarus + monkeybyte.
+- [ ] `SystemPromptBuilder`: one-paragraph hint that a global Second Brain
+      exists (when to capture, when to search before answering).
+- [ ] `AGENTS.md` / docs update; CHANGELOG entry; version bump.
 
-# Plan — Unified `web_search` tool with provider registry (§WEB-SEARCH-CORE, 2026-10-10)
+### Phase 4 — Later / optional (explicitly out of scope now)
+- [ ] Semantic search layer (local embeddings via llama.cpp) over the same
+      notes, merged with bm25 ranking (hybrid retrieval).
+- [ ] Backlink graph ("notes that link here") UI in monkeybyte.
+- [ ] Auto-capture at session end (distill session into a note).
 
-**Problem.** Search today is a mess of one-tool-per-provider:
+## 4. Why this and not the alternatives
 
-| Tool | Provider | Problem |
-|------|----------|---------|
-| `web_search` (monkeybyte host) | DuckDuckGo HTML scrape | Host-only, fragile, no settings |
-| `searxng_search` (core) | Self-hosted SearXNG | **Instance keeps getting blocked/rate-limited** |
-| `serper_search` (core) | Serper.dev Google | Works, but its own tool |
-
-The model sees up to three search tools, none of which know about each
-other; when the SearXNG instance is blocked the agent just fails instead
-of falling back. Research (firecrawl.dev/blog/best-web-search-apis) shows
-several providers with free tiers better suited to AI agents.
-
-**Decision (per user).**
-- ONE tool, `web_search`, registered by the CORE library. It fans out to
-  whatever providers are enabled in Settings.
-- `searxng_search` REMOVED as a tool — SearXNG survives as a provider
-  ("self-hosted, no key, free") inside the unified tool.
-- `serper_search` REMOVED as a tool — Serper survives as a provider.
-- `web_fetch` STAYS untouched. NO other tool is removed or changed.
-- Settings gains a Web Search section: per-provider enable/disable
-  toggle + API key/base URL. Several providers ship; the user picks.
-
-## Provider set (chosen from the blog, weighted for agents)
-
-| id | Provider | Why | Free tier | Key? |
-|----|----------|-----|-----------|------|
-| `brave` | Brave Search API | Independent index, best-in-class quality for AI (tied top of AIMultiple benchmark), simple JSON | 2,000 q/mo | Yes |
-| `tavily` | Tavily | AI-native, citation-ready, LangChain/LlamaIndex standard | 1,000 q/mo | Yes |
-| `exa` | Exa | Neural/semantic search, best for research-style queries | 1,000 q/mo | Yes |
-| `firecrawl` | Firecrawl /search | AI-native, token-efficient Highlights, optional same-call page content | 1,000 credits/mo | Yes |
-| `serper` | Serper.dev | Cheap Google SERP ($0.30–1/1k), already integrated | 2,500 once | Yes |
-| `serpapi` | SerpAPI | 40+ engines, enterprise reliability | 250 q/mo | Yes |
-| `searxng` | SearXNG (self-hosted) | No key, no quota, user already runs one — keep as an option despite blocking issues | ∞ | No (URL + optional basic auth) |
-| `duckduckgo` | DuckDuckGo HTML | No key, no config — the always-available last resort (move monkeybyte's `WebSearch` HTML parser into core) | ∞ | No |
-
-All 8 ship; each is individually enable/disable-able. `duckduckgo` is
-enabled by default (zero config); everything else starts disabled so no
-existing user's behaviour silently changes... EXCEPT: existing
-`serper_config` (key set) and `searxng_config` (base_url set) rows
-migrate to enabled providers, preserving current working setups.
-
-## Selection semantics (§WEB-SEARCH-FAILOVER)
-
-- Enabled providers are tried in **priority order** (user-reorderable in
-  Settings; default: brave → tavily → exa → firecrawl → serper →
-  serpapi → searxng → duckduckgo).
-- First provider that returns results wins — one search costs one
-  provider call, not N. On error/block/empty, fall through to the next
-  enabled provider. This fixes the SearXNG-blocked outage: the chain
-  falls back automatically.
-- Optional `provider` argument on the tool forces one provider (agent
-  can pick when the user says "search with Brave"). Default = chain.
-- Result format is NORMALISED across providers: `[{title, url, snippet}]`
-  capped at `max_results` (default 8, max 25) — same shape the current
-  tools emit, so hosts and tests barely notice.
-- If every enabled provider fails: one descriptive error listing each
-  provider's failure reason + a hint to check Settings. Unconfigured
-  (no key) providers are skipped silently, not errors.
-
-## Changes by component
-
-### Phase 1 — Core plumbing (daedalus)
-
-1. **Settings schema v8** (`src/core/SettingsStore.cpp`, `settings.h`):
-   - New table `web_search_providers(id INTEGER PRIMARY KEY, name TEXT
-     UNIQUE, enabled INTEGER, api_key TEXT, base_url TEXT, username TEXT,
-     password TEXT, priority INTEGER)`.
-   - `migrate_to_v8`: seed all 8 rows (disabled, default priority);
-     copy `serper_config.api_key` → serper row (enabled=1 if key set);
-     copy `searxng_config` (base_url/username/password/enabled) →
-     searxng row. Old tables LEFT IN PLACE (read-only legacy) — no data
-     loss, downgrade-safe.
-   - `SettingsStore`: `get/set_web_search_providers()` returning
-     `std::vector<WebSearchProviderSettings>`; struct in settings.h
-     mirrors the row.
-2. **Provider abstraction** (new `src/tools/websearch/`):
-   - `WebSearchProvider.h`: interface — `id()`, `display_name()`,
-     `search(query, max_results, cfg) → expected<vector<Result>, string>`.
-     `Result{title,url,snippet}`.
-   - One .cpp per provider: `BraveProvider` (GET api.search.brave.com/res/v1/web/search, `X-Subscription-Token`),
-     `TavilyProvider` (POST api.tavily.com/search),
-     `ExaProvider` (POST api.exa.ai/search, `x-api-key`),
-     `FirecrawlProvider` (POST api.firecrawl.dev/v2/search, Bearer),
-     `SerperProvider` (refactor SerperSearchTool's HTTP body),
-     `SerpapiProvider` (GET serpapi.com/search.json),
-     `SearxngProvider` (refactor SearxngSearchTool's HTTP body),
-     `DuckDuckGoProvider` (move monkeybyte `WebSearch::parse` HTML
-     parser into core — pure parser stays unit-testable).
-   - HTTP via existing OmniNet `HTTP::Client` (same as current tools);
-     JSON via nlohmann. No new dependencies.
-3. **`WebSearchTool`** (`src/tools/WebSearchTool.{h,cpp}`): name
-   `web_search`, args `{query, max_results?, provider?}`; executes the
-   failover chain from Settings at request time (config read per call,
-   same contract as current tools — no restart needed after Settings
-   edits). Errors: descriptive JSON `{error, providers_tried:[...], detail}`.
-4. **ToolFactory**: register `WebSearchTool`; DELETE the
-   `SerperSearchTool` + `SearxngSearchTool` registrations and their
-   .cpp/.h files; keep `core/SerperConfig`/`SearxngConfig` ONLY as the
-   migration source (or fold migration into v8 and delete them too —
-   decide during impl, prefer delete).
-5. **MonkeyByte host tools**: delete `WebSearchTool` (its DuckDuckGo
-   `web_search`) — the core tool now provides `web_search`; keep
-   `WebFetch` + its tool untouched. Any `web_search`-named host
-   registration would collide → removed, not replaced.
-
-### Phase 2 — Hosts adopt
-
-6. **monkeybyte Settings UI** (`src/monkeybyte/ui/settings/*`): new
-   "Web Search" page — one row per provider: enable checkbox, API key /
-   base URL + credentials (searxng), up/down priority. Remove the old
-   Serper/SearXNG settings rows. GSettings store → SettingsStore via
-   existing setters.
-7. **icarus settings TUI**: same Web Search tab (mirrors the Serper tab
-   pattern it already has); remove Serper/SearXNG tabs.
-8. **migrate-data** (`daedalus` CLI + icarus): settings.json
-   `serper-search.api_key` path now seeds the new table too (schema v8
-   migration covers most cases; the JSON migrator seeds serper row
-   directly).
-
-### Phase 3 — Tests & docs
-
-9. **Tests**:
-   - Provider parsers: canned-response unit tests per provider (JSON or
-     HTML in fixtures — pattern already used by monkeybyte's WebSearch
-     parse test and the existing Serper tests).
-   - Failover chain: fake providers injected — first-success wins,
-     error falls through, all-fail error aggregates reasons, `provider`
-     arg bypasses chain, disabled/unconfigured providers skipped.
-   - Schema v8 migration: v7 DB with serper key + searxng URL migrates
-     to enabled rows; fresh DB seeds defaults; old tables untouched.
-   - ToolFactory: exactly one `web_search`, no `serper_search` /
-     `searxng_search` registered.
-   - Existing serper/searxng tests updated or deleted accordingly.
-10. **Docs**: `daedalus/docs/tools.md` web-search section rewrite;
-    `daedalus/CHANGELOG.md` (Breaking: `serper_search`/`searxng_search`
-    tools removed → `web_search`; settings migrate automatically);
-    monkeybyte design.md §6 update; this Plan.md.
-
-## Verification bar
-
-Clean superbuild, full `ctest` green (new provider/failover/migration
-tests included), `daedalus_cppcheck` + `monkeybyte_cppcheck` clean,
-live smoke: enable 2 providers, disable searxng, watch a query succeed
-via the chain while the SearXNG instance is down.
-
-## Amendments (2026-10-10, from user feedback during implementation)
-
-- **Browser-first guidance**: the `web_search` tool description now opens
-  by telling browser-equipped agents they can also search like a human
-  (open a search-engine page, type the query) and that `web_fetch` on a
-  search-engine URL works too (may be rate-limited). The chain backs the
-  tool; it is not the only way to search.
-- **SearXNG was never blocked**: the reported "block" was a missing
-  credential on the user's token-gated instance. The searxng provider
-  therefore also accepts an `api_key`, sent as `Authorization: Bearer`
-  + `X-API-Key` headers (SearXNG itself has no API-key concept — this
-  covers reverse-proxy gates). Priority: basic-auth username > api_key >
-  unauthenticated.
-- **icarus cppcheck**: fixed the pre-existing `ignoredReturnValue`
-  warning on `agent.compress_context()` (the `static_analysis` umbrella
-  target now passes clean).
-
-## Amendment — §WEB-SEARCH-HYBRID (2026-10-11)
-
-DuckDuckGo's HTML endpoint proved unreliable in practice (HTTP 202
-anti-bot for datacenter IPs; Mojeek Captcha — both verified with curl).
-Per user direction, the `duckduckgo` provider is replaced by `hybrid`:
-the key-less fallback crafts search-engine URLs directly (the
-"web_fetch hybrid" idea) and walks an ordered engine list — Bing HTML
-(primary, verified 200) then DuckDuckGo HTML (last resort) — first
-non-empty result set wins. The Bing parser decodes /ck/a redirect URLs
-("a1" + base64url in the u= param). Schema v9 converts the duckduckgo
-row (preserving enabled/priority); UIs and tool text follow.
-
-## Out of scope (do NOT touch)
-
-- `web_fetch` and any other existing tool.
-- MCP server tool surface (searxng_search may also exist as an MCP
-  server elsewhere — this plan only covers daedalus core + its hosts).
+- **Not a pure-DB design**: notes must survive outside daedalus — the user
+  can open `~/…/brain/` in Obsidian/Logseq/VS Code and it *is* a valid
+  vault. Markdown-as-truth is the single most agreed-upon principle in
+  the research.
+- **Not vector-first**: every current agent-memory project treats
+  embeddings as an add-on. FTS5 is already in our SQLite, needs no new
+  dependencies (per project conventions), and is rebuildable.
+- **Not per-project**: the whole point is cross-project recall — same
+  reasoning that made the vault global. Per-project notes already exist
+  (`SessionMemory` in `.daedalus/`); the brain is the layer above them.
+- **PARA+Zettelkasten hybrid**: PARA answers "where does this note live?"
+  (actionability), Zettelkasten answers "how does knowledge compound?"
+  (atomic, linked notes). Using both is the mainstream recommendation.
