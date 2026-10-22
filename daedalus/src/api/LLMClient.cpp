@@ -3257,7 +3257,14 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
 
     // Reset per-turn state
     iteration_count_ = 0;
-    last_total_tokens_ = 0;
+    // §CTX-ZERO-RESET (2026-10-22): do NOT zero the token counters at
+    // turn start — the context-status block for iteration 1 is built
+    // BEFORE this turn's first API response, and 0 reads as "context
+    // was reset" to the model (it wasn't; the message history persists
+    // across turns). Seed from the live history estimate instead; the
+    // first real response replaces it with the provider's count.
+    last_total_tokens_ = messages_
+        ? static_cast<int>(messages_->estimate_tokens()) : 0;
     last_cached_tokens_ = 0;
     consecutive_compress_count_ = 0;  // §BUG-COMPRESS-LOOP
 
@@ -3404,7 +3411,11 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
                 }
             }
             iteration_count_ = 0;
-            last_total_tokens_ = 0;
+            // §CTX-ZERO-RESET: same seed after a compaction cycle — the
+            // estimate reflects the freshly reduced history rather than
+            // a bogus 0 for the post-compress status block.
+            last_total_tokens_ = messages_
+                ? static_cast<int>(messages_->estimate_tokens()) : 0;
             last_cached_tokens_ = 0;
             continue;
         }

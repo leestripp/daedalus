@@ -116,6 +116,19 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§CTX-ZERO-RESET (2026-10-22, lee: "context shows 0% on the first
+  message after every Agent Loop end"): `LLMClient` hard-zeroed
+  `last_total_tokens_` at every turn start,** and the per-iteration
+  context-status block is built BEFORE the turn's first API response —
+  so every new loop reported `0/max (0.0%)` on iteration 1 and the true
+  value from iteration 2 on. The model read the zero as "context was
+  reset" and narrated bogus percentages. The turn-start (and
+  post-compaction) reset now seeds from the live history estimate —
+  which reflects the actual persisted conversation — until the first
+  real response replaces it with the provider's count. Side benefit:
+  the 90% auto-compression gate at iteration 1 now sees a real number
+  instead of always-safe zero.
+
 - **§RESTORE-RETRY + §RESTORE-SCROLL (2026-10-22, MonkeyByte "no old
   messages load on a fresh project" + 100-message smoke test): the host
   restored the persisted chat exactly once, in the ChatPanel
