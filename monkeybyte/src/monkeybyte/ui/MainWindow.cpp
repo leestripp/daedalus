@@ -999,6 +999,10 @@ void MainWindow::on_workspace_changed(const std::string& path) {
     ui_guard("on_workspace_changed",
              [&] { services_.store.set("workspace", path); });
     services_.files.set_workspace(path);
+    // §RESTORE-RETRY — the cleared view shows the NEW workspace's session
+    // history (nothing was reloaded here, so a pre-existing conversation
+    // in the target workspace never appeared).
+    chat_panel_->reload_history();
     sidebar_->refresh_workspace();
     update_status_branch();
     update_title();

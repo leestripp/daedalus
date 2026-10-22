@@ -24,6 +24,10 @@ public:
 
     void cancel_session(); // §12.1 — safe when idle
     void clear_history();
+    // §RESTORE-RETRY — re-run the session restore after teardown; used
+    // when the workspace switches and the new workspace's history should
+    // replace the current view. Safe when nothing was restored yet.
+    void reload_history();
     // Tear down the cached agent so the next message rebuilds it with
     // current settings (e.g. after MCP servers change). Chat is kept.
     void reset_agent();
@@ -105,6 +109,10 @@ private:
     std::string current_model_display();
 
     void restore_history();
+    // Tear the messages box back to empty (bubbles, tool cards, welcome,
+    // history_) WITHOUT touching the persisted session — clear_history
+    // wipes it; this only rebuilds the view (§RESTORE-RETRY).
+    void teardown_messages();
     void build_messages_welcome_only();
     void refresh_counts();
 

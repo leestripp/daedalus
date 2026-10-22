@@ -1289,6 +1289,18 @@ A class encapsulating the agent lifecycle — mirrors `ChatController` in
 > turn clears `queued_messages_` (Stop drops the pipeline, it does not
 > just interrupt the current turn). A `chat.cancel` control-server
 > command drives the same path as the Stop button for headless tests.
+>
+> §RESTORE-RETRY (2026-10-22, "no old messages load on a fresh project"):
+> `restore_history()` ran once at construction; anything not ready by
+> then (workspace picked later, model added in Settings) left the chat
+> empty for the whole session. The restore is now re-entrant
+> (`teardown_messages()` rebuilds the view without wiping the persisted
+> session) and re-runs on panel map when nothing rendered yet and on
+> workspace switch (`reload_history()`). §RESTORE-SCROLL: the startup
+> pin fired before the scroller had an allocation (upper()≈0), so a
+> history taller than the viewport opened at the TOP; the pin now fires
+> on the scroller's first map, with the 150 ms pass and the
+> `signal_changed` re-pin absorbing late layout growth.
 
 ```
 enum class ChatState {

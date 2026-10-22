@@ -116,6 +116,24 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§RESTORE-RETRY + §RESTORE-SCROLL (2026-10-22, MonkeyByte "no old
+  messages load on a fresh project" + 100-message smoke test): the host
+  restored the persisted chat exactly once, in the ChatPanel
+  constructor.** Any readiness the constructor predated — workspace bound
+  after startup (fresh project via the folder picker), model configured
+  in Settings, or the "Model not configured" agent-build race — left the
+  welcome screen up forever, and switching workspaces cleared the view
+  without loading the target workspace's history. The restore now re-runs
+  (idempotently: teardown_messages rebuilds the view without touching the
+  persisted session) on panel map when nothing rendered yet, and on
+  workspace switch. Separately, a large restored history (100 bubbles)
+  rendered pinned to the TOP: the constructor-time pin computed
+  upper()≈0 before the scroller had an allocation, so the pin now fires
+  once the scroller maps, with the existing 150 ms second pass and
+  signal_changed re-pin covering late layout growth. Verified live:
+  100-message history restores fully and lands at the latest message;
+  a 3-turn conversation in a brand-new project survives restart.
+
 - **§HISTORY-SNAPSHOT-FIX (2026-10-22, MonkeyByte "first load is a mess"
   report): assistant messages that carry BOTH text and `tool_calls`
   vanished from `history_snapshot()`.** The snapshot skipped every

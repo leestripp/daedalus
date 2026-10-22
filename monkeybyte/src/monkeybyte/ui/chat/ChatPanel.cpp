@@ -262,7 +262,15 @@ void ChatPanel::build_header() {
 
     // Re-populate when the panel is shown again (e.g. after adding a model
     // in Settings) — the dropdown is stale otherwise.
-    signal_map().connect([this] { populate_models(); });
+    signal_map().connect([this] {
+        populate_models();
+        // §RESTORE-RETRY — the constructor-time restore may have found no
+        // workspace or model yet (fresh project picked after startup, model
+        // configured in Settings); the map is the first moment both are
+        // certain to be ready. Skipped when history already rendered so a
+        // live conversation is never rebuilt.
+        if (history_.empty()) restore_history();
+    });
 
     {
         auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 6);
@@ -1090,10 +1098,10 @@ void ChatPanel::restore_history() {
         controller_->history_snapshot(current_model_display());
     if (snapshot.empty()) return;
 
-    if (welcome_) {
-        messages_.remove(*welcome_);
-        welcome_ = nullptr;
-    }
+    // §RESTORE-RETRY — a later attempt (map retry, workspace switch)
+    // rebuilds the view: tear down whatever the previous restore or
+    // conversation left so bubbles never duplicate.
+    teardown_messages();
     for (const auto& e : snapshot) {
         if (e.role == "system" || e.content.empty()) continue;
         auto* bubble = Gtk::make_managed<ChatMessage>(
@@ -1108,7 +1116,30 @@ void ChatPanel::restore_history() {
         history_.push_back({e.role, e.content, e.source, e.received_at});
     }
     refresh_counts();
-    scroll_to_bottom_forced(); // startup: show the latest messages (§7.3)
+    // §RESTORE-SCROLL — at construction the scroller has no allocation
+    // yet; an immediate pin computes upper()≈0 and lands at the TOP,
+    // and the idle/150 ms passes fire before a large history's layout
+    // settles (a 100-bubble restore stayed at message 1). Pin once the
+    // scroller is actually mapped.
+    if (scroller_.get_mapped()) {
+        scroll_to_bottom_forced(); // startup: show the latest messages (§7.3)
+    } else {
+        scroller_.signal_map().connect(
+            [this] { scroll_to_bottom_forced(); });
+    }
+}
+
+void ChatPanel::reload_history() {
+    restore_history();
+}
+
+void ChatPanel::teardown_messages() {
+    tool_cards_.clear();
+    active_assistant_ = nullptr;
+    while (auto* child = messages_.get_first_child())
+        messages_.remove(*child);
+    history_.clear();
+    welcome_ = nullptr; // removed with the other children
 }
 
 void ChatPanel::refresh_counts() {
