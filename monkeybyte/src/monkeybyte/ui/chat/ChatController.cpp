@@ -614,6 +614,15 @@ void ChatController::send_message(const std::string& text,
                     }
                 }
                 if (transitioned) break;
+                // §STOP-BTN-FIX: the drain loop can pick up a queued
+                // message while the state is still Cancelling (from a
+                // Stop press that ended the previous turn). The new turn
+                // IS processing — say so, or the UI would sit on
+                // "Cancelling…" and every Stop press would keep re-firing
+                // the cancel of a turn the user now wants to watch/interrupt
+                // on its own terms.
+                if (state() == ChatState::Cancelling)
+                    set_state(ChatState::Processing);
                 // §MSG-HEADERS — interactive origin, stamped into the
                 // message's `_meta` when the turn consumes the queue.
                 agent_->submit_user_message(std::move(next), {},
@@ -622,6 +631,15 @@ void ChatController::send_message(const std::string& text,
                 const auto s = agent_->state();
                 if (s == daedalus::AgentState::Cancelled) {
                     reason = "cancelled";
+                    // §STOP-BTN-FIX: drop messages queued behind the
+                    // cancelled turn. The pre-2026-10 behavior ran them
+                    // ("Stop only interrupts the CURRENT turn"), which is
+                    // exactly how a dead Stop button felt: pressing Stop
+                    // never actually stopped the pipeline.
+                    {
+                        std::lock_guard lock(state_mutex_);
+                        queued_messages_.clear();
+                    }
                     // A cancel landing between submit_user_message() and
                     // run_one_turn()'s consume strands the message in
                     // daedalus's own queue — the next turn would then run
@@ -830,7 +848,14 @@ std::vector<std::string> ChatController::mcp_servers() const {
 }
 
 void ChatController::cancel() {
-    if (state() != ChatState::Processing) return;
+    // §STOP-BTN-FIX (2026-10-22, "Stop works once then dead" report):
+    // accept Cancelling too, not just Processing. The first press sets
+    // Cancelling and — while a queued follow-up turn keeps the drain
+    // loop running — nothing ever moves the state back to Processing, so
+    // the old `!= Processing` guard turned every later press into a no-op.
+    // Each press re-fires the cancel: N clicks on Stop cancel N times.
+    const auto s = state();
+    if (s != ChatState::Processing && s != ChatState::Cancelling) return;
     set_state(ChatState::Cancelling);
     sink_->cancel_all_approvals();
     if (agent_) agent_->cancel();

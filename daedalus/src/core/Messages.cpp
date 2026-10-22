@@ -1313,9 +1313,6 @@ std::vector<daedalus::HistoryEntry> Messages::history_snapshot() const {
         if (role != "system" && role != "user" && role != "assistant") {
             continue;  // elide "tool" results and anything else
         }
-        if (m.contains("tool_calls")) {
-            continue;  // elide pure tool-call assistant messages
-        }
         std::string text;
         if (m.contains("content")) {
             const auto& c = m["content"];
@@ -1334,7 +1331,14 @@ std::vector<daedalus::HistoryEntry> Messages::history_snapshot() const {
                 }
             }
         }
-        if (text.empty()) continue;
+        // §HISTORY-SNAPSHOT-FIX (2026-10-22, MonkeyByte "first load is a
+        // mess" report): elide tool plumbing only when there is no
+        // renderable text. daedalus appends the final answer to the SAME
+        // assistant message that carries the terminating `stop` tool call,
+        // so skipping every message with tool_calls dropped every final
+        // answer from the restored history (only user bubbles survived a
+        // restart). A text-carrying tool-call message is real content.
+        if (text.empty()) continue;  // elide pure tool-call assistant messages
         // §MSG-HEADERS: surface the origin envelope to host UIs; empty
         // for legacy messages persisted before headers existed.
         std::string src, rcv;

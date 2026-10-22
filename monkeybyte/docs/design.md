@@ -1278,6 +1278,18 @@ with a small syntax highlighter port (`highlightCode()`) and you're done.
 A class encapsulating the agent lifecycle — mirrors `ChatController` in
 `static/js/chat.js`.
 
+> §STOP-BTN-FIX (2026-10-22, upstream "Stop works once then dead"
+> report): `cancel()` accepts `Processing` **or** `Cancelling` and
+> re-fires the agent cancel on every press — the first press sets
+> `Cancelling` and, with a queued follow-up draining behind the
+> cancelled turn, nothing moved the state back, so the old
+> `!= Processing` guard turned every later press into a no-op. The
+> drain loop also transitions back to `Processing` when it actually
+> dispatches a queued message from a `Cancelling` state, and a cancelled
+> turn clears `queued_messages_` (Stop drops the pipeline, it does not
+> just interrupt the current turn). A `chat.cancel` control-server
+> command drives the same path as the Stop button for headless tests.
+
 ```
 enum class ChatState {
     Idle,         // no session

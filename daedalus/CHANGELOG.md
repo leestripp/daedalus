@@ -116,6 +116,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **§HISTORY-SNAPSHOT-FIX (2026-10-22, MonkeyByte "first load is a mess"
+  report): assistant messages that carry BOTH text and `tool_calls`
+  vanished from `history_snapshot()`.** The snapshot skipped every
+  message containing `tool_calls` ("elide pure tool-call assistant
+  messages"), but daedalus attaches the terminating `stop` tool call to
+  the SAME assistant message that holds the final answer text — so a
+  restarted host restored user bubbles only and the conversation looked
+  broken. The snapshot now extracts the text first and elides only when
+  there is no renderable text (true tool plumbing). Regression test in
+  test_history_snapshot.cpp ("assistant text+tool_calls keeps the text").
+
 - **§MSG-HEADERS-ANTI-IMITATION (2026-10-04): models imitated the wire
   header and typed `[from: assistant · received …]` as the first line of
   their own replies.** Because assistant output is stored verbatim,

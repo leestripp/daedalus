@@ -121,4 +121,34 @@ TEST_CASE("malformed entries are skipped, not fatal") {
     fs::remove_all(proj);
 }
 
+TEST_CASE("assistant text+tool_calls keeps the text (final answers)") {
+    const fs::path proj = make_test_project();
+    {
+        auto msgs = make_messages(proj);
+        msgs.add_user("ping");
+        // daedalus terminates a turn by attaching the `stop` tool call to
+        // the assistant message that ALSO carries the final answer text —
+        // the restored host UI must show that text, not elide it.
+        msgs.add_message({
+            {"role", "assistant"},
+            {"content", "PONG"},
+            {"tool_calls", json::array({{
+                {"id", "call_stop"},
+                {"type", "function"},
+                {"function", {{"name", "stop"},
+                              {"arguments", R"({"summary":"done"})"}}},
+            }})},
+        });
+        msgs.add_tool_result("call_stop", R"({"status":"stop"})");
+
+        const auto snap = msgs.history_snapshot();
+        // user + assistant answer; tool plumbing elided.
+        REQUIRE(snap.size() == 2);
+        CHECK(snap[0].role == "user");
+        CHECK(snap[1].role == "assistant");
+        CHECK(snap[1].content == "PONG");
+    }
+    fs::remove_all(proj);
+}
+
 }  // TEST_SUITE

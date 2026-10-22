@@ -846,6 +846,12 @@ void MainWindow::register_ui_commands() {
                 std::clamp(args.value("timeout_s", 120), 5, 600);
             return chat_panel_->send_message_sync(text, model, timeout_s);
         });
+    ctl.register_command("chat.cancel",
+        "Cancel the in-flight turn (same path as the Stop button) {}",
+        [this](const nlohmann::json&) {
+            chat_panel_->cancel_session();
+            return nlohmann::json{{"cancelled", true}};
+        });
     ctl.register_command("app.commands", "List available control commands {}",
         [](const nlohmann::json&) {
             const auto& c = UiControl::instance();
