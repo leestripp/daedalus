@@ -1,6 +1,7 @@
 #pragma once
 
 #include "monkeybyte/ui/chat/ChatController.h"
+#include "monkeybyte/backend/SpeechStream.h"
 
 #include <gtkmm.h>
 #include <map>
@@ -152,6 +153,7 @@ private:
     Gtk::Button mic_btn_;          // §CHIMPFLOW — dictation toggle
 
     ChatMessage* active_assistant_ = nullptr;
+    SpeechStreamSegmenter speech_stream_; // §CHIMPFLOW-STREAM
     std::map<std::string, ToolCard*> tool_cards_;
     bool processing_ = false;
     bool updating_models_ = false;

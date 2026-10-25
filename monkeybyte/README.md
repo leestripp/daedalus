@@ -88,9 +88,11 @@ loud voices do not clip.
 
 The chat microphone records on the first click and transcribes on the
 second. The transcript is inserted at the input cursor for review and is
-**never sent automatically**. With read-aloud enabled, each newly finalized
-live assistant bubble is spoken in FIFO order; restored history, user
-messages, tool cards, and status notices are not spoken.
+**never sent automatically**. With read-aloud enabled, complete assistant
+sentences are queued for speech as they stream in; the final partial sentence
+is spoken when the bubble closes. `tell_user` messages are included. Speech
+stays FIFO, and restored history, user messages, tool cards, and status
+notices are not spoken.
 
 ## Multiple instances
 

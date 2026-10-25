@@ -219,7 +219,7 @@ Verification passed:
   is covered by the service tests, real native capture, and live STT instead.
 - Installed to `~/.local/bin/monkeybyte`; installed and tested binaries have
   identical SHA-256
-  `6e2b87a1a516121b4d4c8f890d2ab55f373418df7e6c28aa0c5ae3bd8c10cdd9`.
+  `6c7b5f83aec0ef635d1f1a9529f6709dd685b114c525a820d2e1170257a4cff4`.
 
 Follow-up voice-loudness normalisation targets 0.12 RMS, caps amplification
 at 4x, and limits peaks to 0.98 for consistent non-clipping playback.
@@ -227,3 +227,18 @@ at 4x, and limits peaks to 0.98 for consistent non-clipping playback.
 The ChimpFlow gateway repair remains deployed with the corrected voices
 directory; no ChimpFlow source/worktree change was made. Unrelated K3.1 and
 §STATUS-KIND-BREAKER changes remain preserved and uncommitted.
+
+## Chat narration follow-up (2026-10-25)
+
+Live testing found that the first user-facing message could be skipped:
+`tell_user` creates a complete assistant bubble through a separate handler
+that lacked a `speak()` call. That handler now narrates directly. Normal
+`text_delta` messages additionally use `SpeechStreamSegmenter` to speak
+complete sentences while the model is still writing; bubble close flushes
+only the unspoken remainder, preventing duplicate narration. UTF-8,
+Markdown closers, decimals, ellipses, code fences, paragraph separators,
+split deltas, and stale-buffer clearing have regression coverage.
+
+The follow-up passed the full 109/109 CTest suite and static analysis. The
+installed/tested binary SHA-256 is
+`6c7b5f83aec0ef635d1f1a9529f6709dd685b114c525a820d2e1170257a4cff4`.

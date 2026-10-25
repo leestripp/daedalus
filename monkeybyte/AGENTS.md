@@ -161,6 +161,9 @@ src/monkeybyte/
     VoiceService           shared AppServices owner for Settings + Chat; worker
                            threads, Glib::Dispatcher completions, FIFO speech,
                            preview/dictation cancellation and generation guards
+    SpeechStream           incremental assistant sentence/paragraph segmentation;
+                           UTF-8-safe boundaries, code-fence holding, remainder-
+                           only final flush, no duplicate streamed narration
                            for unit tests (§6)
     Logger                 append-only error log at
                            $XDG_DATA_HOME/monkeybyte/monkeybyte.log (§7.2);
@@ -422,6 +425,9 @@ re-configure (`CONFIGURE_DEPENDS`).
 - ChimpFlow is loopback-only. Use a dedicated `tts` + `stt` key; never log it
   or fall back to an admin/other app's key. Dictation inserts review text
   only—never auto-send. History restoration must not trigger read-aloud.
+  Normal deltas use SpeechStream; complete `tell_user` bubbles need their own
+  direct `speak()` call (the separate-handler omission caused silent first
+  messages). Bubble close flushes only the segmenter's unspoken remainder.
 
 
 - daedalus's `ToolFactory` is **process-global**; since daedalus 0.9.7

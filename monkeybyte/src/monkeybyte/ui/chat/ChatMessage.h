@@ -32,7 +32,6 @@ public:
     void append_text(const std::string& delta); // streaming assistant
     void finalize(); // stop the streaming caret
     bool has_text() const { return !raw_.empty(); }
-    const std::string& raw_text() const { return raw_; }
 
 private:
     void show_copy_menu(double x, double y);

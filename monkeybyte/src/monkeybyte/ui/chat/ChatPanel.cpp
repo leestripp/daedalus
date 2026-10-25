@@ -491,6 +491,10 @@ void ChatPanel::wire_controller() {
         activity_text_ = "Streaming…";
         poke_activity();
         ensure_assistant_bubble().append_text(delta);
+        // §CHIMPFLOW-STREAM — speak complete sentences while the model is
+        // still writing. The final bubble close flushes only the remainder.
+        for (const auto& chunk : speech_stream_.append(delta))
+            services_.voice->speak(chunk);
         scroll_to_bottom();
     });
 
@@ -520,6 +524,9 @@ void ChatPanel::wire_controller() {
         auto* bubble = Gtk::make_managed<ChatMessage>(ChatMessage::Role::Assistant);
         bubble->set_text(msg);
         bubble->finalize();
+        // tell_user creates a complete bubble directly (no text_delta), so
+        // it needs its own narration path. This was the silent-chat gap.
+        services_.voice->speak(msg);
         messages_.append(*bubble);
         history_.push_back({"assistant", msg, "", ""});
         refresh_counts();
@@ -680,6 +687,7 @@ void ChatPanel::update_microphone(DictationState state) {
 
 ChatMessage& ChatPanel::ensure_assistant_bubble() {
     if (!active_assistant_) {
+        speech_stream_.clear();
         active_assistant_ = Gtk::make_managed<ChatMessage>(ChatMessage::Role::Assistant);
         messages_.append(*active_assistant_);
     }
@@ -692,7 +700,7 @@ ChatMessage& ChatPanel::ensure_assistant_bubble() {
 void ChatPanel::finalize_active_bubble() {
     if (!active_assistant_) return;
     active_assistant_->finalize();
-    services_.voice->speak(active_assistant_->raw_text());
+    services_.voice->speak(speech_stream_.take_remainder());
     history_.push_back({"assistant", "", "", ""});
     active_assistant_ = nullptr;
 }
@@ -1227,6 +1235,7 @@ void ChatPanel::reload_history() {
 }
 
 void ChatPanel::teardown_messages() {
+    speech_stream_.clear();
     tool_cards_.clear();
     active_assistant_ = nullptr;
     while (auto* child = messages_.get_first_child())

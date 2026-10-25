@@ -1469,8 +1469,11 @@ or clipping.
   Generation counters plus lifetime tokens suppress stale work. Destruction
   cancels and joins workers. Exceptions are contained per operation so one
   failed utterance does not head-of-line-block later speech.
-* Finalized **live** assistant bubbles call `speak(raw_markdown)` exactly
-  once. Markdown becomes speech-friendly UTF-8 prose (no byte truncation).
+* Live `text_delta` feeds `SpeechStreamSegmenter`: complete sentences call
+  `speak()` while the model is still writing, and bubble finalization flushes
+  only the unspoken remainder (no duplicate narration). `tell_user` creates a
+  complete bubble without deltas, so its handler calls `speak(msg)` directly.
+  Markdown becomes speech-friendly UTF-8 prose (no byte truncation).
   Utterances synthesize/play one at a time in FIFO order, including prose
   around tool cards. History restore, user messages, tool cards and host
   notices never enter this path.

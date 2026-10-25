@@ -15,6 +15,7 @@
 #include "monkeybyte/backend/SearchService.h"
 #include "monkeybyte/backend/Wav.h"
 #include "monkeybyte/backend/SettingsStore.h"
+#include "monkeybyte/backend/SpeechStream.h"
 #include "monkeybyte/backend/VoiceService.h"
 #include "monkeybyte/backend/SkillDiscovery.h"
 #include "monkeybyte/tree/WorkspaceTree.h"
@@ -435,6 +436,63 @@ void test_wav_contract() {
 
 
 // ── ChimpFlow orchestration (§CHIMPFLOW) ────────────────────────────
+void test_speech_stream() {
+    std::cout << "Speech stream segmentation\n";
+    monkeybyte::SpeechStreamSegmenter stream;
+    check(stream.append("First sen").empty(),
+          "partial sentence stays buffered across deltas");
+    auto chunks = stream.append("tence. Second sen");
+    check(chunks.size() == 1 && chunks[0] == "First sentence.",
+          "first complete sentence streams before the bubble closes");
+    chunks = stream.append("tence! Final");
+    check(chunks.size() == 1 && chunks[0] == " Second sentence!",
+          "second sentence is emitted once in FIFO order");
+    check(stream.take_remainder() == " Final" && stream.take_remainder().empty(),
+          "bubble close takes only the unspoken remainder");
+
+    chunks = stream.append("**Bold sentence.** Next");
+    check(chunks.size() == 1 && chunks[0] == "**Bold sentence.**",
+          "Markdown closing markers stay with the streamed sentence");
+    check(stream.take_remainder() == " Next", "Markdown tail remains ordered");
+
+    chunks = stream.append("Value 3.14 is fine. Next");
+    check(chunks.size() == 1 && chunks[0] == "Value 3.14 is fine.",
+          "decimal point is not a sentence boundary");
+    check(stream.take_remainder() == " Next", "decimal tail remains for final flush");
+
+    chunks = stream.append("Café 🐒 works! Next");
+    check(chunks.size() == 1 && chunks[0] == "Café 🐒 works!",
+          "UTF-8 text is split only at a valid sentence boundary");
+    check(stream.take_remainder() == " Next", "UTF-8 tail remains intact");
+
+    chunks = stream.append("Wait… Next");
+    check(chunks.size() == 1 && chunks[0] == "Wait…",
+          "complete UTF-8 ellipsis is a streaming boundary");
+    check(stream.take_remainder() == " Next", "ellipsis tail remains intact");
+
+    check(stream.append("Not yet.").empty(),
+          "terminal punctuation waits for confirmation or bubble close");
+    check(stream.take_remainder() == "Not yet.",
+          "unconfirmed terminal sentence is preserved for final narration");
+
+    chunks = stream.append("Before.\n```cpp\nx.y();\n```\nAfter.");
+    check(chunks.size() == 1 && chunks[0] == "Before.",
+          "prose before a code fence streams independently");
+    const auto code_remainder = stream.take_remainder();
+    check(code_remainder.find("x.y();") != std::string::npos &&
+              code_remainder.find("After.") != std::string::npos,
+          "fenced code is not split into misleading partial utterances");
+
+    chunks = stream.append("First paragraph.\n\nSecond");
+    check(chunks.size() == 1 && chunks[0] == "First paragraph.",
+          "paragraph separators do not create whitespace-only TTS chunks");
+    check(stream.take_remainder() == "Second", "paragraph tail remains ordered");
+
+    stream.append("Discard this partial sentence");
+    stream.clear();
+    check(stream.take_remainder().empty(), "clear drops stale stream state");
+}
+
 void test_audio_normalisation() {
     std::cout << "Audio normalisation\n";
     const auto near = [](float actual, float expected) {
@@ -1673,6 +1731,7 @@ int main() {
     test_chimpflow_settings_and_client();
     test_chimpflow_http_contract();
     test_wav_contract();
+    test_speech_stream();
     test_audio_normalisation();
     test_chimpflow_voice_service();
     test_settings_store();
