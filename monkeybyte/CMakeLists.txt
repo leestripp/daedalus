@@ -33,6 +33,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(GTKMM REQUIRED IMPORTED_TARGET gtkmm-4.0)
 pkg_check_modules(SOURCEVIEW REQUIRED IMPORTED_TARGET gtksourceview-5)
 pkg_check_modules(CURL REQUIRED IMPORTED_TARGET libcurl)
+pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 pkg_check_modules(SQLITE3 REQUIRED IMPORTED_TARGET sqlite3)
 pkg_check_modules(WEBKIT REQUIRED IMPORTED_TARGET webkitgtk-6.0)
 pkg_check_modules(MD4C REQUIRED IMPORTED_TARGET md4c)
@@ -71,6 +72,7 @@ if(MONKEYBYTE_CORE_SOURCES)
   target_compile_definitions(monkeybyte_core PUBLIC MONKEYBYTE_VERSION="${MONKEYBYTE_APP_VERSION}")
   target_link_libraries(monkeybyte_core PUBLIC
     PkgConfig::GTKMM PkgConfig::SOURCEVIEW PkgConfig::CURL PkgConfig::SQLITE3
+    PkgConfig::PIPEWIRE
     PkgConfig::WEBKIT PkgConfig::MD4C md4c-html
     nlohmann_json::nlohmann_json
     daedalus)

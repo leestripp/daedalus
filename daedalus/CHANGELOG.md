@@ -2,7 +2,40 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **§STATUS-KIND-BREAKER (2026-10-25): correct `set_status` terminal and
+  runaway semantics.** `set_status("Done")` is now an intentional immediate
+  loop exit, matching models that use it instead of `stop`. Non-terminal
+  states remain UI-only, but the former §IdleExitBreaker could end a turn
+  after any two status-only iterations, killing legitimate
+  `Planning → Acting → Verifying` transitions. The replacement trips only on
+  the **third consecutive status-only iteration of the SAME non-terminal
+  state**. Changing state, calling any other tool, a text response, and a
+  new turn reset the streak; the existing max-iteration guard remains the
+  final backstop. Regression coverage includes immediate `Done`, mixed
+  states followed by `stop`, third-identical-state suppression, streak
+  reset, cross-turn reset, and cycling-state max-iteration behavior.
+  Unknown state names return corrective error tool-results listing valid
+  states; an end-to-end regression proves that feedback reaches the next
+  model request and the loop continues to an explicit `stop`.
+
 ### Added
+
+- **§K3.1 (2026-10-25): Kimi K3.1 Pro and Highspeed support across
+  daedalus, icarus, and monkeybyte.** The Moonshot plugin now knows the
+  platform IDs `kimi-k3.1-pro[-highspeed]` and Kimi Code IDs
+  `k3.1-pro[-highspeed]` on both `api.kimi.com` and `api.kimi.ai`, with
+  vision/thinking metadata, fixed `temperature = 1.0`, and the exact
+  1,048,576-token maximum context window (Kimi Code plans may cap it at
+  256K). `Low`/`High`/`Max` map to top-level `reasoning_effort` on both
+  endpoint families; `Default` preserves the server default (`max` on the
+  platform, `high` on Kimi Code), and `None` sends nothing because K3.1
+  cannot disable thinking. Existing K3/K2.8 payload dialects are unchanged.
+  Streaming/tool-loop support reuses the tested `reasoning_content`
+  round-trip. icarus `/levels` and monkeybyte's thinking dropdown expose
+  the new capabilities through their existing generic provider-plugin
+  paths; provider, host-bridge, CLI, and payload tests cover the release.
 
 - §SECOND-BRAIN (2026-10-18): the Global Second Brain — a plain-markdown
   knowledge base, GLOBAL across all projects and shared by every agent

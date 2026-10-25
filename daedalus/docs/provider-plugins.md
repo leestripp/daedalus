@@ -36,7 +36,7 @@ The active plugin for a running session is logged
 |--------|---------|--------------|
 | `openai-compatible` (default) | — (fallback) | `stream_options.include_usage` when streaming; classic SSE parser; classic error mapping. |
 | `minimax` | name `minimax`, host containing `minimax` | Adds `reasoning_split: true` (§BUG-MINIMAX-105) and `stream_options.continuous_usage_stats`; static M3/M2.x context-size table. |
-| `moonshot` | name `moonshot`, host containing `moonshot` or `kimi` | Forces `temperature = 1.0` for `kimi-k2.7-code` **and** the Kimi Code endpoint's `kimi-for-coding` IDs (the server rejects other values); sends `prompt_cache_key` from the agent name; static table for the pay-as-you-go platform (`api.moonshot.ai`/`api.moonshot.cn`: kimi-k3, k2.x, moonshot-v1) **and** the Kimi Code subscription endpoint (`api.kimi.com/coding/v1`: `k3`, `k3-256k`, `kimi-for-coding[-highspeed]`). |
+| `moonshot` | name `moonshot`, host containing `moonshot` or `kimi` | Forces `temperature = 1.0` for K3.1 Pro, `kimi-k2.7-code`, and the constrained Kimi Code IDs; sends `prompt_cache_key` from the agent name; static table for the pay-as-you-go platform (`api.moonshot.ai`/`api.moonshot.cn`: `kimi-k3.1-pro[-highspeed]`, `kimi-k3`, k2.x, moonshot-v1) **and** Kimi Code (`api.kimi.com`/`api.kimi.ai` `/coding/v1`: `k3.1-pro[-highspeed]`, `k3`, `k3-256k`, `kimi-for-coding[-highspeed]`). |
 | `lmstudio` | name `lmstudio`, loopback hosts (`localhost`, `127.0.0.1`) | `requires_auth() = false`; strips extension fields (`reasoning_split`, `prompt_cache_key`, `thinking`, `reasoning_effort`) so local servers get a plain OpenAI payload, **but** forces `stream_options.include_usage` when streaming — token accounting and auto-compression depend on the usage chunk; no static model table (discovery is the source of truth). |
 
 ## The hook interface
@@ -76,11 +76,23 @@ reject (Kimi answers unknown/invalid fields with HTTP 400):
 
 | Model | Wire parameter | Supported levels |
 |-------|----------------|------------------|
-| `kimi-k3`, `k3`, `k3-*` | `reasoning_effort` (platform: `api.moonshot.*`) / `thinking: {"type":"enabled","effort":...}` (Kimi Code: `api.kimi.com`) | `Low`, `High`, `Max` (default `Max`; `None` ignored — K3 always thinks) |
+| `kimi-k3.1-pro[-highspeed]`, `k3.1-pro[-highspeed]` | Top-level `reasoning_effort` on both platform and Kimi Code | `Low`, `High`, `Max` (`Default` = server default: `Max` platform / `High` Kimi Code; `None` ignored — K3.1 always thinks) |
+| `kimi-k3`, `k3`, `k3-*` | `reasoning_effort` (platform: `api.moonshot.*`) / legacy `thinking: {"type":"enabled","effort":...}` (Kimi Code: `api.kimi.com`) | `Low`, `High`, `Max` (`None` ignored — K3 always thinks) |
+| `kimi-for-coding*` | Same host split as K3 | `Low`, `High`, `Max` (K2.8 Preview; `None` ignored) |
 | `kimi-k2.5`, `kimi-k2.6` | `thinking: {"type":"disabled"}` | `None` only |
-| `kimi-k2.7-code`, `kimi-for-coding*` | — (always thinks; `disabled` is a hard error) | none |
+| `kimi-k2.7-code*` | — (always thinks; `disabled` is a hard error) | none |
 | `MiniMax-M3` | `thinking: {"type":"disabled"}` | `None` only |
 | MiniMax M2.x | — (cannot disable thinking) | none |
+
+§K3.1 (2026-10-25): all four K3.1 Pro/Highspeed IDs have static vision and
+thinking metadata, fixed `temperature = 1.0`, and a maximum context window of
+**1,048,576 tokens**. Kimi Code membership tiers can cap that window at
+262,144 tokens; the static value describes the model maximum, not the plan
+entitlement. Changing effort invalidates prefix-cache hits, so Moonshot
+recommends keeping one effort per session and starting a new session after a
+change. K3.1 uses top-level `reasoning_effort` on `api.kimi.com` as well as
+`api.kimi.ai`; the older `thinking.effort` branch remains scoped to existing
+K3/K2.8 IDs for compatibility.
 
 `Agent::supported_thinking_levels()` returns the current model's row from
 this table (empty when the model has no thinking control), so host UIs
@@ -93,8 +105,8 @@ reject unknown fields.
 ## Temperature clamping covers EVERY request path (§BUG-COMPRESS-TEMP)
 
 `clamp_temperature()` is not optional garnish — for models with a fixed
-server-side temperature (Kimi `kimi-for-coding*` / `k3` / `kimi-k2.7-code`
-= 1.0) any other value is a **hard API error**. There are two request
+server-side temperature (Kimi K3.1 `kimi-k3.1-pro*` / `k3.1-pro*`,
+`kimi-for-coding*` / `k3` / `kimi-k2.7-code` = 1.0) any other value is a **hard API error**. There are two request
 paths and both must clamp:
 
 | Path | Where the clamp happens |

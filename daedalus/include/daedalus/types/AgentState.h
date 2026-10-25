@@ -20,7 +20,7 @@ enum class AgentState : std::uint8_t {
     Documenting,      ///< Documentation / changelog / README updates
     AwaitingApproval, ///< bash approval in flight (sink->request_command_approval blocked)
     Compressing,      ///< Context compression in progress
-    Done,             ///< Agent emitted stop() cleanly
+    Done,             ///< Agent emitted stop() or set_status(Done) cleanly
     Cancelled,        ///< Cancelled by host (cancel() or stop_token)
     Error,            ///< Unrecoverable error
 };

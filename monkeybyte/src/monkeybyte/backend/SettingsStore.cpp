@@ -234,6 +234,45 @@ void SettingsStore::save_interface(const InterfaceSettings& s) {
     set("chat.assistant_text", s.chat_assistant_text);
 }
 
+ChimpFlowSettings SettingsStore::load_chimpflow() const {
+    ChimpFlowSettings s;
+    const auto boolean = [](const std::string& value, bool fallback) {
+        if (value == "1" || value == "true") return true;
+        if (value == "0" || value == "false") return false;
+        return fallback;
+    };
+    if (auto v = get("chimpflow.enabled")) s.enabled = boolean(*v, s.enabled);
+    if (auto v = get("chimpflow.read_assistant"))
+        s.read_assistant = boolean(*v, s.read_assistant);
+    if (auto v = get("chimpflow.dictation_enabled"))
+        s.dictation_enabled = boolean(*v, s.dictation_enabled);
+    if (auto v = get("chimpflow.server_url")) s.server_url = *v;
+    if (auto v = get("chimpflow.port")) {
+        try {
+            s.port = std::stoi(*v);
+        } catch (...) {
+            // Keep the safe default on corrupt values, matching load_interface().
+        }
+    }
+    if (auto v = get("chimpflow.api_key")) s.api_key = *v;
+    if (auto v = get("chimpflow.tts_model")) s.tts_model = *v;
+    if (auto v = get("chimpflow.stt_model")) s.stt_model = *v;
+    if (auto v = get("chimpflow.voice")) s.voice = *v;
+    return s;
+}
+
+void SettingsStore::save_chimpflow(const ChimpFlowSettings& s) {
+    set("chimpflow.enabled", s.enabled ? "1" : "0");
+    set("chimpflow.read_assistant", s.read_assistant ? "1" : "0");
+    set("chimpflow.dictation_enabled", s.dictation_enabled ? "1" : "0");
+    set("chimpflow.server_url", s.server_url);
+    set("chimpflow.port", std::to_string(s.port));
+    set("chimpflow.api_key", s.api_key);
+    set("chimpflow.tts_model", s.tts_model);
+    set("chimpflow.stt_model", s.stt_model);
+    set("chimpflow.voice", s.voice);
+}
+
 std::vector<LegacyModelConfig> SettingsStore::read_legacy_models() const {
     std::vector<LegacyModelConfig> out;
     {

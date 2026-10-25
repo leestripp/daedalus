@@ -102,14 +102,14 @@ TEST_CASE("cli_args: --no-stream / --stream, last one wins") {
 }
 
 TEST_CASE("cli_args: value flags store their argument") {
-    Argv a{"--home", "/tmp/dhome", "--model", "kimi-k3",
+    Argv a{"--home", "/tmp/dhome", "--model", "kimi-k3.1-pro",
            "--agent-name", "tester", "--threads", "8",
            "--system-prompt", "/tmp/prompt.md",
            "--a2a-url", "http://localhost:9000", "--a2a-port", "9000"};
     CliArgs args = parse_cli_args(a.argc(), a.argv());
 
     CHECK(args.daedalus_home == fs::path("/tmp/dhome"));
-    CHECK(args.model_override == "kimi-k3");
+    CHECK(args.model_override == "kimi-k3.1-pro");
     CHECK(args.agent_name == "tester");
     CHECK(args.thread_count_override == 8);
     CHECK(args.system_prompt_file == fs::path("/tmp/prompt.md"));

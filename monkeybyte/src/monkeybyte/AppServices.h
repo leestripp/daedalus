@@ -4,6 +4,7 @@
 #include "monkeybyte/backend/ModelBridge.h"
 #include "monkeybyte/backend/ProjectTypes.h"
 #include "monkeybyte/backend/SettingsStore.h"
+#include "monkeybyte/backend/VoiceService.h"
 #include "monkeybyte/ui/theme/ThemeManager.h"
 
 #include <daedalus/settings.h>
@@ -23,6 +24,8 @@ struct AppServices {
     ProjectTypeLibrary project_types;
     FileService files;     // workspace file service
     ThemeManager theme;
+    // §CHIMPFLOW — one shared STT/TTS owner for Settings and Chat.
+    std::shared_ptr<VoiceService> voice;
 
     // GSettings (UI cache only, design §10.2/§13)
     Glib::RefPtr<Gio::Settings> win;
@@ -34,7 +37,8 @@ struct AppServices {
     Glib::RefPtr<Gio::Settings> chat;
 
     AppServices()
-        : win(Gio::Settings::create("io.github.monkeybyte.window")),
+        : voice(std::make_shared<VoiceService>(store)),
+          win(Gio::Settings::create("io.github.monkeybyte.window")),
           sidebar(Gio::Settings::create("io.github.monkeybyte.sidebar")),
           chat_panel(Gio::Settings::create("io.github.monkeybyte.chat-panel")),
           folder_picker(Gio::Settings::create("io.github.monkeybyte.folder-picker")),

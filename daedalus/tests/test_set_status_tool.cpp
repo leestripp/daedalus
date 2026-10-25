@@ -129,10 +129,10 @@ TEST_SUITE("SetStatusTool — runtime-owned states rejected") {
         CHECK(r["status"] == "error");
         REQUIRE(r.contains("message"));
         std::string msg = r["message"].get<std::string>();
-        // The model must learn: runtime-owned + set_status never exits
-        // the loop + stop is the exit hatch.
+        // The model must learn that runtime-owned Idle is not terminal;
+        // Done/stop are the intentional exit paths.
         CHECK(msg.find("runtime-owned") != std::string::npos);
-        CHECK(msg.find("does NOT exit the agent loop") != std::string::npos);
+        CHECK(msg.find("does NOT end the agent loop") != std::string::npos);
         CHECK(msg.find("stop") != std::string::npos);
         // …and it must list the states it CAN use so it can self-correct.
         CHECK(msg.find("Planning") != std::string::npos);

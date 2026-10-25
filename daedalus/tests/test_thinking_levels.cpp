@@ -14,6 +14,8 @@
 //       reports none.
 //   T7. Runtime toggle: LLMClient::set_thinking_level() applies without
 //       rebuilding the client.
+//   T8. Moonshot K3.1 Pro/Highspeed: Low/High/Max on platform and Kimi
+//       Code, always top-level reasoning_effort; None/Default send nothing.
 
 #include <filesystem>
 #include <iostream>
@@ -252,6 +254,56 @@ void test_t6_capability_query() {
     std::cout << "[ok] T6: supported_thinking_levels capability matrix\n";
 }
 
+void test_t8_moonshot_k31() {
+    auto p = daedalus::ProviderRegistry::plugin_for_name("moonshot");
+    EXPECT(p != nullptr);
+
+    struct Case {
+        const char* id;
+        const char* base_url;
+    };
+    // Cover both model-ID namespaces and both Kimi Code hostnames.
+    for (const auto& c : {
+             Case{"kimi-k3.1-pro", "https://api.moonshot.ai"},
+             Case{"kimi-k3.1-pro-highspeed", "https://api.moonshot.cn"},
+             Case{"k3.1-pro", "https://api.kimi.com/coding/v1"},
+             Case{"k3.1-pro-highspeed", "https://api.kimi.com/coding/v1"},
+             Case{"k3.1-pro", "https://api.kimi.ai/coding/v1"},
+             Case{"k3.1-pro-highspeed", "https://api.kimi.ai/coding/v1"},
+         }) {
+        const auto levels = p->supported_thinking_levels(c.id);
+        EXPECT(levels.size() == 3);
+        if (levels.size() == 3) {
+            EXPECT(levels[0] == ThinkingLevel::Low);
+            EXPECT(levels[1] == ThinkingLevel::High);
+            EXPECT(levels[2] == ThinkingLevel::Max);
+        }
+
+        for (ThinkingLevel lvl : {ThinkingLevel::Low, ThinkingLevel::High,
+                                  ThinkingLevel::Max}) {
+            json payload = {{"model", c.id}, {"messages", json::array()}};
+            p->mutate_chat_payload(payload, make_ctx(c.id, c.base_url, lvl));
+            const std::string effort = lvl == ThinkingLevel::Low ? "low"
+                : lvl == ThinkingLevel::High ? "high" : "max";
+            // §K3.1: current Kimi Code docs use the same top-level field as
+            // the platform; the legacy thinking.effort dialect stays K3-only.
+            EXPECT(payload.value("reasoning_effort", "") == effort);
+            EXPECT(!payload.contains("thinking"));
+        }
+
+        // K3.1 always thinks: None must not emit a disabling object, and
+        // Default leaves the endpoint-specific server default untouched.
+        for (ThinkingLevel lvl : {ThinkingLevel::None, ThinkingLevel::Default}) {
+            json payload = {{"model", c.id}, {"messages", json::array()}};
+            p->mutate_chat_payload(payload, make_ctx(c.id, c.base_url, lvl));
+            EXPECT(!payload.contains("thinking"));
+            EXPECT(!payload.contains("reasoning_effort"));
+        }
+    }
+    EXPECT(p->supported_thinking_levels("K3.1-Pro").size() == 3);
+    std::cout << "[ok] T8: Moonshot K3.1 effort mapping and capabilities\n";
+}
+
 void test_t7_runtime_toggle() {
     // Hosts flip the level mid-session via Agent::set_thinking_level(),
     // which forwards to LLMClient::set_thinking_level(). The payload hook
@@ -290,6 +342,7 @@ int main() {
     test_t5_lmstudio_strips();
     test_t6_capability_query();
     test_t7_runtime_toggle();
+    test_t8_moonshot_k31();
     if (failures > 0) {
         std::cerr << failures << " failure(s)\n";
         return 1;

@@ -320,7 +320,7 @@ States:
 | Acting       | Running tools (file edits, bash, MCP, etc.). |
 | Verifying    | Compiling, testing, inspecting output — a decision gate. |
 | Documenting  | Updating README, CHANGELOG, comments, docs after verification. |
-| Done         | Turn complete — emit your final assistant message and stop. |
+| Done         | Final response complete — terminal state, like stop. |
 | Cancelled    | Host cancelled the turn; stop work and ack. |
 | Error        | Unrecoverable error; report to host and stop. |
 
@@ -346,9 +346,12 @@ Rules:
 5. Never stay in `Acting` forever. If you have no more tools to
    call, transition to `Verifying` (and then `Done` or
    `Documenting`) or back to `Planning` if more work is needed.
-6. Always end with `Done`. Call `set_status` with `Done`
-   immediately before your final assistant message; otherwise the
-   host UI will leave the stage chips stuck.
+6. Finish before declaring `Done`. Emit your final assistant response
+   first, then call `stop` or use `set_status("Done")` as the terminal
+   signal if that is your model's convention. `Done` exits immediately;
+   never call it before the response. Every other state is UI-only.
+   Three consecutive status-only calls of the SAME non-terminal state
+   trigger the runaway safety breaker; changing state resets the streak.
 ```
 
 **Why the library owns this.** The host UI (webui demo, plus any host

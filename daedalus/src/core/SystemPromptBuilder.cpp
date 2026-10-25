@@ -111,7 +111,7 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "| `Acting` | Running tools (file edits, bash, MCP, etc.). |\n"
         "| `Verifying` | Compiling, testing, inspecting output — this is a decision gate. |\n"
         "| `Documenting` | Updating README, CHANGELOG, comments, docs after verification. |\n"
-        "| `Done` | Turn complete — emit your final assistant message, then call the `stop` tool. |\n"
+        "| `Done` | Final response complete — terminal state, like `stop`. |\n"
         "| `Cancelled` | Host cancelled the turn; stop work and ack. |\n"
         "| `Error` | Unrecoverable error; report to host and stop. |\n"
         "\n"
@@ -124,10 +124,11 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "| `AwaitingApproval` | A bash command is waiting for host approval. |\n"
         "| `Compressing` | Context compaction in flight. |\n"
         "\n"
-        "**`set_status` never exits the agent loop** — no state does, not\n"
-        "even `Done`. The turn only ends when you call the `stop` tool\n"
-        "(or the host cancels). `set_status` exists purely to keep the\n"
-        "host UI stage chip in sync.\n"
+        "**Terminal `Done`:** `set_status(\"Done\")` exits the agent loop\n"
+        "like `stop`, so call it ONLY after your final assistant response.\n"
+        "Every other state is UI-only. Three consecutive status-only calls\n"
+        "of the SAME non-terminal state trigger the runaway safety breaker;\n"
+        "changing state or doing other work resets that streak.\n"
         "\n"
         "Workflow:\n"
         "\n"
@@ -157,10 +158,10 @@ std::string SystemPromptBuilder::getStateMachineSection() {
         "5. **Never stay in `Acting` forever.** If you have no more tools to\n"
         "   call, transition to `Verifying` (and then `Done` or `Documenting`)\n"
         "   or back to `Planning` if more work is needed.\n"
-        "6. **Always end with `Done`, then `stop`.** Call `set_status` with\n"
-        "   `Done` immediately before your final assistant message, then call\n"
-        "   the `stop` tool — `set_status` alone does not end the loop, and\n"
-        "   without `stop` the turn never terminates.\n";
+        "6. **Finish before declaring `Done`.** Emit your final assistant\n"
+        "   response first. Then call `stop`, or use `set_status(\"Done\")`\n"
+        "   as the terminal signal if that is your model's convention — both\n"
+        "   end the loop immediately. Never call `Done` before the response.\n";
 }
 
 std::string SystemPromptBuilder::getMessageHeadersSection() {

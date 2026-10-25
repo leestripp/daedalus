@@ -1,6 +1,7 @@
 #include "monkeybyte/ui/panels/SettingsPanel.h"
 
 #include "monkeybyte/AppServices.h"
+#include "monkeybyte/backend/ChimpFlowClient.h"
 #include "monkeybyte/backend/ProjectTypes.h"
 #include "monkeybyte/backend/McpBridge.h"
 #include "monkeybyte/backend/ModelBridge.h"
@@ -25,6 +26,7 @@
 #include <fstream>
 #include <iterator>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 
@@ -77,6 +79,36 @@ Gtk::Box* field_row(const Glib::ustring& label, Gtk::Widget& control) {
     row->append(*l);
     row->append(control);
     return row;
+}
+
+std::string selected_dropdown_text(const Gtk::DropDown& dropdown) {
+    if (auto item = dropdown.get_selected_item()) {
+        if (auto text = std::dynamic_pointer_cast<const Gtk::StringObject>(item))
+            return text->get_string();
+    }
+    return {};
+}
+
+void replace_dropdown_items(Gtk::DropDown& dropdown,
+                            Glib::RefPtr<Gtk::StringList>& model,
+                            std::vector<std::string> items,
+                            const std::string& preferred,
+                            bool& updating) {
+    if (!preferred.empty() &&
+        std::find(items.begin(), items.end(), preferred) == items.end()) {
+        items.push_back(preferred);
+    }
+    updating = true;
+    model = Gtk::StringList::create({});
+    unsigned selected = GTK_INVALID_LIST_POSITION;
+    for (const auto& item : items) {
+        model->append(item);
+        if (item == preferred) selected = model->get_n_items() - 1;
+    }
+    dropdown.set_model(model);
+    if (selected != GTK_INVALID_LIST_POSITION) dropdown.set_selected(selected);
+    else if (model->get_n_items() > 0) dropdown.set_selected(0);
+    updating = false;
 }
 
 // Provider leading icon (§4.5).
@@ -215,6 +247,12 @@ void fetch_models_async(Gtk::Window* parent, UiProvider p,
 
 } // namespace
 
+SettingsPanel::~SettingsPanel() {
+    *alive_ = false;
+    ++chimpflow_discovery_generation_;
+    ++chimpflow_preview_generation_;
+}
+
 SettingsPanel::SettingsPanel(AppServices& services)
     : Gtk::Box(Gtk::Orientation::VERTICAL), services_(services) {
     auto* header = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL);
@@ -229,16 +267,17 @@ SettingsPanel::SettingsPanel(AppServices& services)
     tabs->set_margin_start(8);
     tabs->set_margin_end(8);
     const char* names[] = {"Interface", "Providers", "Models", "Workspace",
-                           "MCP Servers", "Agent", "Web Search", "Search",
-                           "Paths"};
+                           "MCP Servers", "Agent", "Web Search", "ChimpFlow",
+                           "Search", "Paths"};
     stack_ = Gtk::make_managed<Gtk::Stack>();
     const char* ids[] = {"interface", "providers", "models", "workspace", "mcp",
-                         "agent", "websearch", "search", "paths"};
-    for (int i = 0; i < 9; ++i) {
+                         "agent", "websearch", "chimpflow", "search", "paths"};
+    for (int i = 0; i < 10; ++i) {
         auto* b = Gtk::make_managed<Gtk::Button>(names[i]);
         b->set_has_frame(false);
         b->signal_clicked().connect([this, i, id = ids[i]] {
             stack_->set_visible_child(id);
+            if (std::string_view(id) == "chimpflow") refresh_chimpflow_catalog();
             for (size_t j = 0; j < tab_buttons_.size(); ++j) {
                 if (static_cast<int>(j) == i)
                     tab_buttons_[j]->add_css_class("active");
@@ -260,6 +299,7 @@ SettingsPanel::SettingsPanel(AppServices& services)
     stack_->add(*build_mcp_tab(), "mcp");
     stack_->add(*build_agent_tab(), "agent");
     stack_->add(*build_web_search_tab(), "websearch");
+    stack_->add(*build_chimpflow_tab(), "chimpflow");
     stack_->add(*build_search_tab(), "search");
     stack_->add(*build_paths_tab(), "paths");
     append(*stack_);
@@ -1684,9 +1724,191 @@ Gtk::Widget* SettingsPanel::build_paths_tab() {
     return scroll;
 }
 
+// ── ChimpFlow (§CHIMPFLOW) ──────────────────────────────────────────
+Gtk::Widget* SettingsPanel::build_chimpflow_tab() {
+    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
+    box->set_margin(12);
+
+    ChimpFlowSettings current;
+    ui_guard("settings load_chimpflow",
+             [&] { current = services_.store.load_chimpflow(); });
+
+    box->append(*group_header("CHIMPFLOW"));
+    chimpflow_enabled_ = Gtk::make_managed<Gtk::Switch>();
+    chimpflow_enabled_->set_active(current.enabled);
+    box->append(*field_row("Enable local voice support", *chimpflow_enabled_));
+    chimpflow_read_assistant_ = Gtk::make_managed<Gtk::Switch>();
+    chimpflow_read_assistant_->set_active(current.read_assistant);
+    box->append(*field_row("Read assistant replies aloud", *chimpflow_read_assistant_));
+    chimpflow_dictation_ = Gtk::make_managed<Gtk::Switch>();
+    chimpflow_dictation_->set_active(current.dictation_enabled);
+    box->append(*field_row("Enable microphone dictation", *chimpflow_dictation_));
+
+    box->append(*group_header("CONNECTION"));
+    chimpflow_server_ = Gtk::make_managed<Gtk::Entry>();
+    chimpflow_server_->set_text(current.server_url);
+    chimpflow_server_->set_width_chars(24);
+    chimpflow_server_->set_tooltip_text(
+        "Loopback only: http://127.0.0.1, http://localhost, or http://[::1]");
+    box->append(*field_row("Server URL (no port)", *chimpflow_server_));
+
+    chimpflow_port_ = Gtk::make_managed<Gtk::SpinButton>();
+    chimpflow_port_->set_adjustment(
+        Gtk::Adjustment::create(current.port, 1, 65535, 1, 100, 0));
+    chimpflow_port_->set_numeric(true);
+    box->append(*field_row("Port", *chimpflow_port_));
+
+    chimpflow_key_ = Gtk::make_managed<Gtk::PasswordEntry>();
+    chimpflow_key_->set_text(current.api_key);
+    chimpflow_key_->set_show_peek_icon(true);
+    chimpflow_key_->property_placeholder_text().set_value("Scoped key, or empty for CHIMPFLOW_KEY");
+    box->append(*field_row("API key (tts + stt scopes)", *chimpflow_key_));
+
+    box->append(*group_header("MODELS & VOICE"));
+    chimpflow_tts_model_ = Gtk::make_managed<Gtk::DropDown>();
+    replace_dropdown_items(*chimpflow_tts_model_, chimpflow_tts_items_, {},
+                           current.tts_model, updating_chimpflow_);
+    box->append(*field_row("TTS model", *chimpflow_tts_model_));
+
+    chimpflow_stt_model_ = Gtk::make_managed<Gtk::Entry>();
+    chimpflow_stt_model_->set_text(current.stt_model);
+    box->append(*field_row("STT model", *chimpflow_stt_model_));
+
+    chimpflow_voice_ = Gtk::make_managed<Gtk::DropDown>();
+    replace_dropdown_items(*chimpflow_voice_, chimpflow_voice_items_, {},
+                           current.voice, updating_chimpflow_);
+    box->append(*field_row("Agent voice", *chimpflow_voice_));
+    chimpflow_voice_->property_selected().signal_changed().connect([this] {
+        if (!updating_chimpflow_) preview_chimpflow_voice();
+    });
+
+    auto* buttons = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    buttons->set_margin_start(8);
+    chimpflow_refresh_ = Gtk::make_managed<Gtk::Button>("Refresh Models / Voices");
+    chimpflow_refresh_->signal_clicked().connect(
+        [this] { refresh_chimpflow_catalog(); });
+    chimpflow_preview_ = Gtk::make_managed<Gtk::Button>("Preview Voice");
+    chimpflow_preview_->set_sensitive(!current.voice.empty());
+    chimpflow_preview_->signal_clicked().connect(
+        [this] { preview_chimpflow_voice(); });
+    buttons->append(*chimpflow_refresh_);
+    buttons->append(*chimpflow_preview_);
+    box->append(*buttons);
+
+    chimpflow_status_ = Gtk::make_managed<Gtk::Label>(
+        "Discovery and previews run locally. Selecting a voice plays a sample.");
+    chimpflow_status_->set_halign(Gtk::Align::START);
+    chimpflow_status_->set_wrap(true);
+    chimpflow_status_->add_css_class("dim-label");
+    box->append(*chimpflow_status_);
+
+    scroll->set_child(*box);
+    return scroll;
+}
+
+ChimpFlowSettings SettingsPanel::chimpflow_from_widgets() const {
+    ChimpFlowSettings config;
+    config.enabled = chimpflow_enabled_->get_active();
+    config.read_assistant = chimpflow_read_assistant_->get_active();
+    config.dictation_enabled = chimpflow_dictation_->get_active();
+    config.server_url = chimpflow_server_->get_text();
+    config.port = chimpflow_port_->get_value_as_int();
+    config.api_key = chimpflow_key_->get_text();
+    config.tts_model = selected_dropdown_text(*chimpflow_tts_model_);
+    config.stt_model = chimpflow_stt_model_->get_text();
+    config.voice = selected_dropdown_text(*chimpflow_voice_);
+    return config;
+}
+
+void SettingsPanel::refresh_chimpflow_catalog() {
+    if (chimpflow_discovery_busy_) return;
+    const auto config = chimpflow_from_widgets();
+    try {
+        (void)chimpflow_base_url(config);
+    } catch (const std::exception& e) {
+        chimpflow_status_->set_text(e.what());
+        return;
+    }
+    chimpflow_discovery_busy_ = true;
+    const auto generation = ++chimpflow_discovery_generation_;
+    chimpflow_refresh_->set_sensitive(false);
+    chimpflow_status_->set_text("Refreshing ChimpFlow models and voices…");
+    services_.voice->discover(config,
+        [this, generation, alive = alive_](
+            const VoiceCatalog& catalog, const std::string& error) {
+            if (!*alive || generation != chimpflow_discovery_generation_) return;
+            chimpflow_discovery_busy_ = false;
+            chimpflow_refresh_->set_sensitive(true);
+            if (!error.empty()) {
+                chimpflow_status_->set_text(error);
+                return;
+            }
+            const auto current = chimpflow_from_widgets();
+            replace_dropdown_items(*chimpflow_tts_model_, chimpflow_tts_items_,
+                                   catalog.models, current.tts_model,
+                                   updating_chimpflow_);
+            replace_dropdown_items(*chimpflow_voice_, chimpflow_voice_items_,
+                                   catalog.voices, current.voice,
+                                   updating_chimpflow_);
+            chimpflow_preview_->set_sensitive(
+                !selected_dropdown_text(*chimpflow_voice_).empty());
+            chimpflow_status_->set_text(
+                "Discovered " + std::to_string(catalog.models.size()) +
+                " model(s) and " + std::to_string(catalog.voices.size()) +
+                " voice(s).");
+        });
+}
+
+void SettingsPanel::preview_chimpflow_voice() {
+    auto config = chimpflow_from_widgets();
+    if (config.voice.empty()) {
+        chimpflow_status_->set_text("Select a ChimpFlow voice first");
+        return;
+    }
+    try {
+        (void)chimpflow_base_url(config);
+    } catch (const std::exception& e) {
+        chimpflow_status_->set_text(e.what());
+        return;
+    }
+    chimpflow_preview_busy_ = true;
+    const auto generation = ++chimpflow_preview_generation_;
+    chimpflow_preview_->set_sensitive(false);
+    chimpflow_status_->set_text("Generating voice preview…");
+    services_.voice->preview(config, config.voice,
+        [this, generation, alive = alive_](const std::string& error) {
+            if (!*alive || generation != chimpflow_preview_generation_) return;
+            chimpflow_preview_busy_ = false;
+            chimpflow_preview_->set_sensitive(true);
+            chimpflow_status_->set_text(error.empty() ? "Voice preview finished" : error);
+        });
+}
+
 void SettingsPanel::on_save() {
     try {
-        // Most settings auto-save (§4.5); this is parity with the web UI.
+        const auto config = chimpflow_from_widgets();
+        (void)chimpflow_base_url(config);
+        if (config.enabled) {
+            if (resolved_chimpflow_api_key(config).empty())
+                throw std::runtime_error(
+                    "ChimpFlow API key is required (or set CHIMPFLOW_KEY)");
+            if (config.tts_model.empty())
+                throw std::runtime_error("Select a ChimpFlow TTS model");
+            if (config.voice.empty())
+                throw std::runtime_error("Select a ChimpFlow voice");
+            if (config.dictation_enabled && config.stt_model.empty())
+                throw std::runtime_error("Enter a ChimpFlow STT model");
+        }
+        services_.store.save_chimpflow(config);
+        ++chimpflow_discovery_generation_;
+        ++chimpflow_preview_generation_;
+        chimpflow_discovery_busy_ = false;
+        chimpflow_preview_busy_ = false;
+        chimpflow_refresh_->set_sensitive(true);
+        chimpflow_preview_->set_sensitive(!config.voice.empty());
+        services_.voice->reload();
+        chimpflow_status_->set_text("ChimpFlow settings saved and reloaded");
         status_label_.set_text("Settings saved successfully");
     } catch (const std::exception& e) {
         status_label_.set_text(Glib::ustring("Failed to save: ") + e.what());

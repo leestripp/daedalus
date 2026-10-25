@@ -1,7 +1,9 @@
 #include "monkeybyte/ui/chat/ChatPanel.h"
 
 #include "monkeybyte/AppServices.h"
+#include "monkeybyte/backend/ChimpFlowClient.h"
 #include "monkeybyte/backend/ModelBridge.h"
+#include "monkeybyte/backend/VoiceService.h"
 #include "monkeybyte/ui/chat/ChatMessage.h"
 #include "monkeybyte/ui/chat/ToolCard.h"
 #include "monkeybyte/ui/chat/UserCommands.h"
@@ -103,10 +105,14 @@ ChatPanel::ChatPanel(AppServices& services)
     build_messages();
     build_input();
     wire_controller();
+    wire_voice();
     restore_history();
 }
 
-ChatPanel::~ChatPanel() { *alive_ = false; }
+ChatPanel::~ChatPanel() {
+    *alive_ = false;
+    services_.voice->stop_all();
+}
 
 // (Re)fill the model dropdown from the settings store, preserving the
 // current selection when possible (§7.1).
@@ -414,6 +420,12 @@ void ChatPanel::build_input() {
     attach_btn_.set_tooltip_text("Attach image");
     attach_btn_.signal_clicked().connect([this] { on_attach_image(); });
 
+    // §CHIMPFLOW — click-to-record, click-again-to-transcribe. The
+    // transcript is inserted for review, never sent automatically.
+    mic_btn_.set_icon_name("audio-input-microphone-symbolic");
+    mic_btn_.set_tooltip_text("Start dictation");
+    mic_btn_.signal_clicked().connect([this] { on_microphone(); });
+
     // §7.8 — user command menu ("/init", "/compress", …)
     commands_btn_.set_label("/");
     commands_btn_.set_tooltip_text("Commands");
@@ -440,6 +452,7 @@ void ChatPanel::build_input() {
 
     bar->append(commands_btn_);
     bar->append(attach_btn_);
+    bar->append(mic_btn_);
     bar->append(*input_scroll);
     bar->append(send_btn_);
     append(*bar);
@@ -589,6 +602,82 @@ void ChatPanel::wire_controller() {
         });
 }
 
+void ChatPanel::wire_voice() {
+    auto& voice = *services_.voice;
+    voice.signal_dictation_state_changed().connect(
+        [this, alive = alive_](DictationState state) {
+            Glib::signal_idle().connect_once([this, alive, state] {
+                if (*alive) update_microphone(state);
+            });
+        });
+    voice.signal_dictation_text().connect(
+        [this, alive = alive_](const std::string& text) {
+            Glib::signal_idle().connect_once([this, alive, text] {
+                if (!*alive) return;
+                if (text.empty()) {
+                    if (!processing_) stop_activity("No speech detected");
+                    return;
+                }
+                // Review-before-send: dictation only edits the input buffer.
+                input_.get_buffer()->insert_at_cursor(text);
+                input_.grab_focus();
+            });
+        });
+    voice.signal_error().connect([this, alive = alive_](const std::string& error) {
+        Glib::signal_idle().connect_once([this, alive, error] {
+            if (*alive) show_error(error);
+        });
+    });
+    voice.signal_settings_changed().connect(
+        [this, alive = alive_](const ChimpFlowSettings&) {
+            Glib::signal_idle().connect_once([this, alive] {
+                if (*alive) refresh_microphone();
+            });
+        });
+    refresh_microphone();
+}
+
+void ChatPanel::on_microphone() {
+    services_.voice->toggle_dictation();
+}
+
+void ChatPanel::refresh_microphone() {
+    if (services_.voice->dictation_state() != DictationState::Idle) return;
+    const auto config = services_.voice->settings();
+    const bool enabled = config.enabled && config.dictation_enabled &&
+                         !config.stt_model.empty() &&
+                         !resolved_chimpflow_api_key(config).empty();
+    mic_btn_.set_sensitive(enabled);
+    mic_btn_.set_tooltip_text(
+        enabled ? "Start dictation"
+                : "Enable ChimpFlow, dictation, a scoped key and STT model in Settings");
+}
+
+void ChatPanel::update_microphone(DictationState state) {
+    switch (state) {
+    case DictationState::Idle:
+        mic_btn_.remove_css_class("destructive-action");
+        mic_btn_.set_icon_name("audio-input-microphone-symbolic");
+        refresh_microphone();
+        if (!processing_) stop_activity("Ready");
+        break;
+    case DictationState::Recording:
+        mic_btn_.set_sensitive(true);
+        mic_btn_.add_css_class("destructive-action");
+        mic_btn_.set_icon_name("media-record-symbolic");
+        mic_btn_.set_tooltip_text("Stop and transcribe");
+        if (!processing_) show_activity("Listening…");
+        break;
+    case DictationState::Transcribing:
+        mic_btn_.set_sensitive(false);
+        mic_btn_.remove_css_class("destructive-action");
+        mic_btn_.set_icon_name("emblem-synchronizing-symbolic");
+        mic_btn_.set_tooltip_text("Transcribing…");
+        if (!processing_) show_activity("Transcribing…");
+        break;
+    }
+}
+
 ChatMessage& ChatPanel::ensure_assistant_bubble() {
     if (!active_assistant_) {
         active_assistant_ = Gtk::make_managed<ChatMessage>(ChatMessage::Role::Assistant);
@@ -603,6 +692,7 @@ ChatMessage& ChatPanel::ensure_assistant_bubble() {
 void ChatPanel::finalize_active_bubble() {
     if (!active_assistant_) return;
     active_assistant_->finalize();
+    services_.voice->speak(active_assistant_->raw_text());
     history_.push_back({"assistant", "", "", ""});
     active_assistant_ = nullptr;
 }
@@ -1054,12 +1144,14 @@ void ChatPanel::cancel_session() {
 }
 
 void ChatPanel::reset_agent() {
+    services_.voice->stop_all();
     // Agent teardown only; chat AND the persisted daedalus session are
     // kept so the rebuilt agent resumes the visible conversation.
     if (controller_) controller_->clear(false);
 }
 
 void ChatPanel::clear_history() {
+    services_.voice->stop_all();
     // Also wipes daedalus's persisted session (§7.8) so the next agent
     // build doesn't silently restore the cleared conversation.
     if (controller_) controller_->clear(true);
@@ -1130,6 +1222,7 @@ void ChatPanel::restore_history() {
 }
 
 void ChatPanel::reload_history() {
+    services_.voice->stop_all();
     restore_history();
 }
 

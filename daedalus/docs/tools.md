@@ -735,10 +735,12 @@ loop already drives. The agent's chosen state is propagated
 through the sink as `on_state_change(prev, new)` so hosts can
 re-render the status chip.
 
-> **`set_status` never exits the agent loop** — no state does, not
-> even `Done`. The loop ends only when the agent calls `stop` (or
-> the host cancels). `set_status` exists purely to keep the host
-> UI stage chip in sync.
+> **Terminal and non-terminal states differ (§STATUS-KIND-BREAKER):**
+> `set_status("Done")` exits the agent loop like `stop`, so use it only
+> after the final assistant response. Every other accepted state only
+> updates the host UI. Three consecutive status-only iterations of the
+> SAME non-terminal state trip a runaway safety breaker; changing state,
+> using another tool, a text response, and a new turn reset the streak.
 >
 > **Runtime-owned states (§IdleLoopFix, 2026-08-20):** `Idle`,
 > `AwaitingApproval`, and `Compressing` are set by the library
@@ -752,6 +754,11 @@ re-render the status chip.
 | Name  | Type   | Required | Description                                                  |
 |-------|--------|----------|--------------------------------------------------------------|
 | state | string | Yes      | One of `Understanding`, `Planning`, `Acting`, `Verifying`, `Documenting`, `Done`, `Cancelled`, `Error`. Case-insensitive. `Idle`, `AwaitingApproval`, and `Compressing` are runtime-owned and rejected with an error. |
+
+Unknown/unrecognised state names return a `status: error` tool-result
+naming the valid states. That result is appended to the conversation so the
+model can correct itself on the next iteration; it does **not** terminate
+the loop and does not count as a valid same-kind status update.
 
 ### Example Usage
 

@@ -314,12 +314,13 @@ This behaviour must be preserved.
 
 ### 4.5 Sidebar panel: **Settings**
 
-The biggest panel. Has its own internal tab bar and eight tab pages.
+The biggest panel. Has its own internal tab bar and ten tab pages.
 
 **Outer layout:** a `GtkBox` vertical containing, top-to-bottom:
 1. Outer header: only the title `"Settings"`.
 2. **Settings sub-tabs** (`#settings-tabs`): one row of small buttons
-   (Interface / Providers / Models / System Prompts / MCP Servers / Agent / Search / Paths), styled as a
+   (Interface / Providers / Models / Workspace / MCP Servers / Agent /
+   Web Search / ChimpFlow / Search / Paths), styled as a
    segmented control. Active tab has the accent underline and
    `bg-panel` background.
 3. **Settings content** (`#settings-content`): a `GtkStack` with one
@@ -556,7 +557,28 @@ persists immediately and triggers an agent rebuild on the next message.
 * **MCP** — master switch (`agent.mcp_enabled`, default on) mapped to
   `AgentConfig::mcp_enabled`; off disables all MCP tool integrations.
 
-#### Tab 7 — **Search**
+#### Tab 8 — **ChimpFlow** (§CHIMPFLOW)
+
+Local voice support is opt-in (master switch defaults off). The page has
+master, **Read assistant replies aloud**, and **Enable microphone dictation**
+switches; loopback server URL + port; a masked `tts` + `stt` API-key entry
+(empty resolves `CHIMPFLOW_KEY` at request time); discovered TTS-model and
+voice dropdowns; an STT-model entry; Refresh and Preview buttons; and a
+busy/error status label.
+
+* Refresh runs health/model/voice discovery on a worker without blocking
+  GTK. Discovery and preview use the current widget values even before Save.
+  List population is suppression-guarded and never auto-plays. An actual
+  user voice selection plays a short sample; Preview replays it.
+* Save validates loopback HTTP (`localhost`, `127.0.0.1`, `[::1]`) and the
+  port, persists all fields under `chimpflow.*` in `monkeybyte.db`, and calls
+  the shared `VoiceService::reload()` immediately—no agent rebuild. Enabling
+  requires a scoped key, TTS model, and voice; dictation also needs STT model.
+* Cancelling discovery/preview invalidates stale callbacks and clears busy
+  state. Async callbacks carry a panel-lifetime token. Keys are masked and
+  never logged; transcripts and assistant text never leave the machine.
+
+#### Tab 9 — **Search**
 
 * A monospace multi-line editor with the search **exclude patterns**, one
   glob per line, auto-saved on edit (SQLite `search.excludes`).
@@ -568,7 +590,7 @@ persists immediately and triggers an agent rebuild on the next message.
   `*.dylib`, `*.exe`, `*.dll`, `*.class`, `*.pyc`, `*.min.js`, `*.min.css`).
 * A `Reset to Defaults` button restores the seeded list.
 
-#### Tab 8 — **Paths**
+#### Tab 10 — **Paths**
 
 A read-only, grouped listing of every filesystem location the app and its
 embedded libraries use, so users can find their data. Each entry shows a
@@ -1008,7 +1030,9 @@ GSettings as `chat-panel-width`.
   plus the levels the selected model's provider plugin reports via
   `model_bridge::supported_thinking_levels()` (queried without building an
   agent — `ProviderRegistry` hint-then-autodetect); e.g. MiniMax-M3 gets
-  `Default`/`None`, kimi-k3 `Default`/`Low`/`High`/`Max`. A model with no
+  `Default`/`None`, while Kimi K3.1 Pro gets `Default`/`Low`/`High`/`Max`
+  (`kimi-k3.1-pro[-highspeed]` on the platform, `k3.1-pro[-highspeed]` on
+  Kimi Code). A model with no
   thinking support gets a single inert `None` entry so the dropdown never
   disappears. The selection is persisted per model in monkeybyte.db kv
   (`agent.thinking_level.<model name>`) and handed to the controller via
@@ -1017,7 +1041,10 @@ GSettings as `chat-panel-width`.
   level into each outgoing payload, so the change applies from the very
   next request with no rebuild). The level is also seeded into
   `AgentConfig::thinking_level` on every agent build so a fresh session
-  keeps the saved selection.
+  keeps the saved selection. For K3.1, `Default` preserves the endpoint
+  default (`Max` platform / `High` Kimi Code) and thinking cannot be
+  disabled. Moonshot recommends a fresh session after effort changes because
+  they invalidate the prefix cache.
 * `Stop` is hidden until the panel enters `processing` state. Click:
   `POST /api/chat/cancel { session_id }` followed by closing the
   EventSource stream and resetting state.
@@ -1221,10 +1248,10 @@ with a small syntax highlighter port (`highlightCode()`) and you're done.
 `GtkBox` horizontal, padding 12 px, border-top, gap 8 px.
 
 ```
-┌───┐ ┌───┐ ┌──────────────────────────────┐  ┌──────┐
-│ / │ │ 📎 │ │ Ask me anything…             │  │ Send │
-└───┘ └───┘ │                              │  └──────┘
-            └──────────────────────────────┘
+┌───┐ ┌───┐ ┌───┐ ┌─────────────────────────┐  ┌──────┐
+│ / │ │ 📎 │ │ 🎤 │ │ Ask me anything…        │  │ Send │
+└───┘ └───┘ └───┘ │                         │  └──────┘
+                  └─────────────────────────┘
 ```
 
 * The input is a `GtkTextView` (or `GtkEntry` with multi-line) that grows
@@ -1265,6 +1292,13 @@ with a small syntax highlighter port (`highlightCode()`) and you're done.
   model gets an info bubble instead of a silently dropped image. Allowed
   while processing (it only edits the input buffer; the queued message
   carries the `![name](path)` markdown as usual).
+* §CHIMPFLOW — the microphone sits between Attach and the input. It is
+  insensitive unless master enable + dictation + scoped key + STT model are
+  configured. First click records (red record icon / Listening), second stops
+  and enters the insensitive Transcribing state. Completion inserts trimmed
+  text at the TextView cursor and focuses it for review; it **never
+  auto-sends**. Empty/short audio returns to Ready with non-error feedback.
+
 * Sent attachments are shown in the user bubble: `ChatMessage::set_text`
   (user role) lifts `![alt](path)` references to existing local files out
   of the text and renders them as rounded `GtkPicture` thumbnails (≤320px
@@ -1415,6 +1449,39 @@ note when the agent has not been created (first message not sent).
   carried over by daedalus); `Failed` → a "did not complete — will retry
   at the start of the next turn" bubble; `NoModel` → a "no model
   configured" bubble.
+
+---
+
+### 7.9 ChimpFlow voice orchestration (§CHIMPFLOW)
+
+`AppServices` owns one `VoiceService`, shared by Settings and Chat.
+`ChimpFlowClient` is a synchronous worker-called libcurl client with an
+injectable transport, binary-safe bodies, cancellation and no automatic
+error retries. `Wav` provides bounded PCM WAV/multipart helpers.
+`AudioEngine` exposes an `AudioBackend` interface for fake-audio tests and a
+native PipeWire implementation for 16 kHz mono capture and sample-rate mono
+playback. Every utterance is RMS-normalised to 0.12 with a 4x gain cap and
+0.98 peak limit, so voices have consistent loudness without noise boosting
+or clipping.
+
+* Public service calls and widget signals are UI-thread affairs. HTTP runs
+  on `std::jthread` workers; completions return via `Glib::Dispatcher`.
+  Generation counters plus lifetime tokens suppress stale work. Destruction
+  cancels and joins workers. Exceptions are contained per operation so one
+  failed utterance does not head-of-line-block later speech.
+* Finalized **live** assistant bubbles call `speak(raw_markdown)` exactly
+  once. Markdown becomes speech-friendly UTF-8 prose (no byte truncation).
+  Utterances synthesize/play one at a time in FIFO order, including prose
+  around tool cards. History restore, user messages, tool cards and host
+  notices never enter this path.
+* Preview and recording stop pending speech to avoid overlap/microphone
+  feedback. Clear History, reset/reload and teardown call `stop_all()`.
+  Master-off cancels active work. No audio device opens until requested.
+* PipeWire streams are destroyed under the loop lock; the lock is released
+  before `pw_thread_loop_stop()`. The `pw_stream_events` tables have static
+  lifetime because PipeWire retains their pointers (stack tables caused a
+  realtime-thread crash). Completion is the **drained** event, not merely
+  queued samples, so speech tails are not clipped.
 
 ---
 

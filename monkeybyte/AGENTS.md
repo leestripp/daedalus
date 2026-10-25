@@ -42,6 +42,9 @@ center → Chat panel docked right → Status Bar at the bottom.
   `ControlServer` (127.0.0.1-only UI control endpoint, used for automated
   UI testing; `MONKEYBYTE_CONTROL_PORT` env override, 0 = off; default
   port 17878).
+- **Audio:** **PipeWire** (`libpipewire-0.3`) for local microphone capture
+  and drained playback. `backend/VoiceService` coordinates the loopback-only
+  ChimpFlow STT/TTS gateway; no cloud audio service is used.
 - **Storage:** **SQLite3** — `monkeybyte.db` at
   `$XDG_DATA_HOME/monkeybyte/` (interface settings, system prompts,
   workspace, per-model prompt bindings). Providers and models live in
@@ -148,6 +151,16 @@ src/monkeybyte/
     HtmlToText             static HTML → plain text for agent consumption (§6)
     WebSearch              key-less DuckDuckGo HTML-endpoint search for the
                            web_search agent tool; parse() is a pure function
+    ChimpFlowClient        synchronous, worker-called curl client for ChimpFlow
+                           discovery, WAV synthesis and multipart transcription;
+                           injectable transport, cancellation, no error retries
+    Wav                    bounded PCM16/24/32 WAV parsing, 16 kHz PCM encoding,
+                           binary-safe OpenAI multipart body construction
+    AudioEngine            AudioBackend abstraction + native PipeWire capture/
+                           playback; streams open only on demand
+    VoiceService           shared AppServices owner for Settings + Chat; worker
+                           threads, Glib::Dispatcher completions, FIFO speech,
+                           preview/dictation cancellation and generation guards
                            for unit tests (§6)
     Logger                 append-only error log at
                            $XDG_DATA_HOME/monkeybyte/monkeybyte.log (§7.2);
@@ -253,10 +266,11 @@ re-configure (`CONFIGURE_DEPENDS`).
   `test_search_service`, `test_markdown`, `test_markdown_to_html`,
   `test_file_icons`, `test_file_templates`,
   `test_user_commands`, `test_html_to_text`, `test_web_search_parse`.
-- Tests must not require a GTK main loop or display: only the GTK-free
-  services (FileService, SettingsStore, WorkspaceTree logic, SearchService,
-  Markdown) are covered. Test classes with complex state should expose a
-  synchronous hook for tests (design §14).
+- Tests must not require GTK widgets or a display: only the GTK-free backend
+  services are covered. Asynchronous VoiceService dispatcher tests may
+  iterate the default **Glib** main context with fake client/audio
+  dependencies; they must not open real audio devices. Test classes with
+  complex state should expose a synchronous hook for tests (design §14).
 - Tests use temp dirs under `std::filesystem::temp_directory_path()` and
   clean up after themselves; a throwaway SQLite DB path is passed to
   `SettingsStore` explicitly.
@@ -388,6 +402,27 @@ re-configure (`CONFIGURE_DEPENDS`).
   (design §12.1); switching workspaces mid-agent is unsafe.
 
 ## Conventions / gotchas
+
+### ChimpFlow / PipeWire invariants
+
+- `pw_stream_new_simple()` retains the `pw_stream_events` pointer. Capture
+  and playback event tables must have static lifetime; stack-local tables
+  caused a realtime-thread use-after-free/segfault in live voice preview.
+- Destroy a PipeWire stream under its thread-loop lock, then unlock **before**
+  `pw_thread_loop_stop()` (stop joins the thread). Playback completion means
+  the `drained` event, not merely that samples were queued. Re-arm one-shot
+  completion latches on every start.
+- Normalise every playback utterance to 0.12 RMS, with at most 4x gain and
+  a 0.98 peak limit (`normalise_playback_samples`). Do not replace this with
+  peak-only normalisation: perceived voice loudness tracks RMS more closely.
+- VoiceService public methods and widget callbacks stay on the UI thread;
+  curl runs on `std::jthread` workers and returns through `Glib::Dispatcher`.
+  Generation counters suppress stale completions. Contain exceptions per
+  operation so one failed utterance cannot block later speech.
+- ChimpFlow is loopback-only. Use a dedicated `tts` + `stt` key; never log it
+  or fall back to an admin/other app's key. Dictation inserts review text
+  only—never auto-send. History restoration must not trigger read-aloud.
+
 
 - daedalus's `ToolFactory` is **process-global**; since daedalus 0.9.7
   `register_tool()` is replace-by-name (plus a new `unregister_tool()`),

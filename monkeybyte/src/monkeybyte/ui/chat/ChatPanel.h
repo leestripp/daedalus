@@ -13,6 +13,7 @@
 namespace monkeybyte {
 
 struct AppServices;
+enum class DictationState;
 class ChatMessage;
 class ToolCard;
 
@@ -69,6 +70,7 @@ private:
     void build_messages();
     void build_input();
     void wire_controller();
+    void wire_voice();
     void populate_models();
     // §ThinkingLevel — (re)fill the thinking-level dropdown for the
     // currently selected model and restore its saved level.
@@ -92,6 +94,10 @@ private:
     // the chosen path is appended to the input as ![name](path), which
     // daedalus's LLMClient turns into an image_url content part.
     void on_attach_image();
+    // §CHIMPFLOW — click once to record, again to transcribe for review.
+    void on_microphone();
+    void update_microphone(DictationState state);
+    void refresh_microphone();
     // Mirrors LLMClient::model_supports_vision(): consult the provider
     // plugin's static model table; unknown models are assumed capable.
     bool current_model_supports_vision();
@@ -143,6 +149,7 @@ private:
     Gtk::Button send_btn_;
     Gtk::MenuButton commands_btn_; // §7.8 — "/" user commands
     Gtk::Button attach_btn_;       // §READ-IMAGE — image attachment
+    Gtk::Button mic_btn_;          // §CHIMPFLOW — dictation toggle
 
     ChatMessage* active_assistant_ = nullptr;
     std::map<std::string, ToolCard*> tool_cards_;

@@ -8,6 +8,10 @@
  * Not every model supports every level — support is provider- and
  * model-specific (see ProviderPlugin::supported_thinking_levels()):
  *
+ *   - kimi-k3.1-pro[-highspeed] / k3.1-pro[-highspeed]:
+ *                              Low / High / Max (thinking always on;
+ *     None is ignored — K3.1 cannot disable thinking). K3.1 uses top-level
+ *     reasoning_effort on both platform and Kimi Code endpoints.
  *   - kimi-k3 / k3 / k3-256k:  Low / High / Max (thinking always on;
  *     None is ignored — K3 cannot disable thinking).
  *   - kimi-for-coding (Kimi K2.8 Preview, §K2.8 2026-09-30):
@@ -33,7 +37,7 @@ enum class ThinkingLevel : std::uint8_t {
     None,     ///< Disable thinking where the model allows it.
     Low,      ///< Reduced reasoning effort (Kimi K3 family).
     High,     ///< Elevated reasoning effort (Kimi K3 family).
-    Max,      ///< Maximum reasoning effort (Kimi K3 family default).
+    Max,      ///< Maximum reasoning effort (server defaults vary by endpoint).
 };
 
 /// @brief Human-readable name (e.g. "Low"). Never returns nullptr.

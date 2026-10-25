@@ -404,8 +404,9 @@ compression config:
 
 **Why this matters (2026-08-08 incident):** the compression request used
 to go out with the model row's raw temperature. Models with a fixed
-server-side temperature (Kimi `kimi-for-coding*` / `k3` /
-`kimi-k2.7-code` = 1.0) **hard-reject** any other value, so all 3 summary
+server-side temperature (Kimi K3.1 `kimi-k3.1-pro*` / `k3.1-pro*`,
+`kimi-for-coding*` / `k3` / `kimi-k2.7-code` = 1.0) **hard-reject** any
+other value, so all 3 summary
 attempts failed and the last-resort fallback silently deleted ~70% of the
 context — compression "worked" only by throwing history away. The
 regression test is `tests/test_auto_compress.cpp` → *"compression

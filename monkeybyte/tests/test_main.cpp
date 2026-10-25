@@ -3,15 +3,19 @@
 // SettingsStore, FileService).
 
 #include "monkeybyte/backend/FileService.h"
+#include "monkeybyte/backend/AudioEngine.h"
 #include "monkeybyte/backend/FileKind.h"
 #include "monkeybyte/backend/FileTemplates.h"
+#include "monkeybyte/backend/ChimpFlowClient.h"
 #include "monkeybyte/backend/HtmlToText.h"
 #include "monkeybyte/backend/MarkdownToHtml.h"
 #include "monkeybyte/backend/McpBridge.h"
 #include "monkeybyte/backend/ModelBridge.h"
 #include "monkeybyte/backend/ProjectTypes.h"
 #include "monkeybyte/backend/SearchService.h"
+#include "monkeybyte/backend/Wav.h"
 #include "monkeybyte/backend/SettingsStore.h"
+#include "monkeybyte/backend/VoiceService.h"
 #include "monkeybyte/backend/SkillDiscovery.h"
 #include "monkeybyte/tree/WorkspaceTree.h"
 #include "monkeybyte/ui/FileIcons.h"
@@ -23,15 +27,20 @@
 #include <glibmm/init.h>
 
 #include <daedalus/settings.h>
+#include <nlohmann/json.hpp>
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
+#include <glibmm/main.h>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <limits>
+#include <thread>
 #include <unordered_set>
 
 namespace {
@@ -150,6 +159,586 @@ void test_file_service() {
         check(found, "dotfiles listed when show_hidden enabled");
     }
 
+    fs::remove_all(dir);
+}
+
+
+// ── ChimpFlow settings + HTTP contract (§CHIMPFLOW) ─────────────────
+void test_chimpflow_settings_and_client() {
+    std::cout << "ChimpFlow settings/client\n";
+    using monkeybyte::ChimpFlowClient;
+    using monkeybyte::ChimpFlowError;
+    using monkeybyte::ChimpFlowSettings;
+    using monkeybyte::HttpResponse;
+
+    const auto dir = make_temp_dir("chimpflow_settings");
+    monkeybyte::SettingsStore store((dir / "settings.db").string());
+    const auto defaults = store.load_chimpflow();
+    check(!defaults.enabled && defaults.read_assistant && defaults.dictation_enabled &&
+              defaults.server_url == "http://127.0.0.1" && defaults.port == 8090 &&
+              defaults.api_key.empty() && defaults.tts_model == "pocket-tts" &&
+              defaults.stt_model == "whisper" && defaults.voice.empty(),
+          "ChimpFlow safe defaults");
+
+    ChimpFlowSettings settings;
+    settings.enabled = true;
+    settings.read_assistant = false;
+    settings.dictation_enabled = false;
+    settings.server_url = "http://localhost/";
+    settings.port = 18090;
+    settings.api_key = "test-key";
+    settings.tts_model = "pocket-tts-test";
+    settings.stt_model = "whisper-test";
+    settings.voice = "alba";
+    store.save_chimpflow(settings);
+    const auto loaded = store.load_chimpflow();
+    check(loaded.enabled && !loaded.read_assistant && !loaded.dictation_enabled &&
+              loaded.server_url == "http://localhost/" && loaded.port == 18090 &&
+              loaded.api_key == "test-key" && loaded.tts_model == "pocket-tts-test" &&
+              loaded.stt_model == "whisper-test" && loaded.voice == "alba",
+          "ChimpFlow every field round-trips");
+    store.set("chimpflow.port", "not-a-number");
+    check(store.load_chimpflow().port == 8090, "ChimpFlow corrupt port uses default");
+    store.save_chimpflow(settings);
+
+    check(monkeybyte::chimpflow_base_url(settings) == "http://localhost:18090",
+          "ChimpFlow URL strips trailing slash and appends port");
+    settings.server_url = "http://[::1]";
+    check(monkeybyte::chimpflow_base_url(settings) == "http://[::1]:18090",
+          "ChimpFlow IPv6 loopback URL");
+    const std::vector<std::string> rejected = {
+        "https://127.0.0.1", "http://example.com", "http://127.0.0.1:8090",
+        "http://127.0.0.1/v1", "http://user@127.0.0.1", "http://0.0.0.0"};
+    for (const auto& url : rejected) {
+        settings.server_url = url;
+        bool threw = false;
+        try {
+            (void)monkeybyte::chimpflow_base_url(settings);
+        } catch (const ChimpFlowError&) {
+            threw = true;
+        }
+        check(threw, "ChimpFlow rejects non-loopback/ambiguous URL: " + url);
+    }
+    settings.server_url = "http://127.0.0.1";
+    settings.port = 0;
+    bool bad_port = false;
+    try {
+        (void)monkeybyte::chimpflow_base_url(settings);
+    } catch (const ChimpFlowError&) {
+        bad_port = true;
+    }
+    check(bad_port, "ChimpFlow rejects port zero");
+    fs::remove_all(dir);
+}
+
+monkeybyte::HttpResponse test_http_response(long status, const std::string& body) {
+    monkeybyte::HttpResponse response;
+    response.status = status;
+    response.body.assign(body.begin(), body.end());
+    return response;
+}
+
+void test_chimpflow_http_contract() {
+    std::cout << "ChimpFlow HTTP contract\n";
+    using monkeybyte::ChimpFlowClient;
+    using monkeybyte::ChimpFlowError;
+    using monkeybyte::ChimpFlowSettings;
+    using monkeybyte::HttpRequest;
+    using monkeybyte::HttpResponse;
+
+    ChimpFlowSettings settings;
+    settings.api_key = "test-key";
+    settings.voice = "alba";
+    std::vector<HttpRequest> requests;
+    ChimpFlowClient client([&](const HttpRequest& request, std::stop_token) {
+        requests.push_back(request);
+        if (request.url.ends_with("/healthz"))
+            return test_http_response(200, R"({"status":"ok","service":"chimpflow"})");
+        if (request.url.ends_with("/v1/models"))
+            return test_http_response(200, R"({"data":[{"id":"pocket-tts"}]})");
+        if (request.url.ends_with("/v1/voices"))
+            return test_http_response(200, R"({"data":[{"id":"alba"},{"id":"anna"}]})");
+        if (request.url.ends_with("/v1/audio/speech"))
+            return test_http_response(200, std::string("A\0B\x01", 4));
+        if (request.url.ends_with("/v1/audio/transcriptions"))
+            return test_http_response(200, R"({"text":"  hello agent \n"})");
+        return test_http_response(404, R"({"error":"unexpected route"})");
+    });
+
+    client.health(settings);
+    check(client.list_models(settings) == std::vector<std::string>{"pocket-tts"},
+          "model discovery parses runtime ids");
+    check(client.list_voices(settings) == (std::vector<std::string>{"alba", "anna"}),
+          "voice discovery parses runtime ids");
+    const auto speech = client.synthesize(settings, "Hello from MonkeyByte", "alba");
+    check(speech == (std::vector<std::uint8_t>{'A', 0, 'B', 1}),
+          "TTS response remains binary-safe");
+    const std::vector<float> stt_samples = {0.0f, 0.5f, -0.5f};
+    const auto wav = monkeybyte::make_wav_16k_mono(stt_samples);
+    check(client.transcribe(settings, wav) == "hello agent",
+          "STT response text is trimmed");
+    check(requests.size() == 5, "all five API calls used the transport");
+    check(requests[0].headers.empty(), "health does not require auth");
+    for (std::size_t i = 1; i < requests.size(); ++i) {
+        const auto& headers = requests[i].headers;
+        check(headers.size() == 1 && headers[0].first == "Authorization" &&
+                  headers[0].second == "Bearer test-key",
+              "authenticated endpoint uses bearer key " + std::to_string(i));
+    }
+    check(requests[1].url == "http://127.0.0.1:8090/v1/models" &&
+              requests[2].url == "http://127.0.0.1:8090/v1/voices",
+          "discovery URLs are exact");
+    const auto tts = nlohmann::json::parse(requests[3].body);
+    check(tts.at("model") == "pocket-tts" && tts.at("voice") == "alba" &&
+              tts.at("input") == "Hello from MonkeyByte" &&
+              tts.at("response_format") == "wav" && requests[3].method == "POST",
+          "TTS request matches OpenAI-compatible contract");
+    const auto& multipart = requests[4].body;
+    const std::string wav_bytes(reinterpret_cast<const char*>(wav.data()), wav.size());
+    check(multipart.find(wav_bytes) != std::string::npos &&
+              multipart.find("name=\"model\"\r\n\r\nwhisper\r\n") != std::string::npos &&
+              requests[4].content_type.find("boundary=") != std::string::npos,
+          "STT multipart preserves WAV bytes and includes model");
+
+    for (const long status : {401L, 403L, 502L, 503L}) {
+        ChimpFlowClient failing([&](const HttpRequest&, std::stop_token) {
+            return test_http_response(status, R"({"error":"specific gateway error"})");
+        });
+        bool caught = false;
+        try {
+            (void)failing.list_voices(settings);
+        } catch (const ChimpFlowError& e) {
+            caught = e.status() == status &&
+                     std::string(e.what()).find("specific gateway error") != std::string::npos;
+        }
+        check(caught, "gateway error surfaces status/detail " + std::to_string(status));
+    }
+    ChimpFlowClient malformed([](const HttpRequest&, std::stop_token) {
+        return test_http_response(200, "not-json");
+    });
+    bool bad_json = false;
+    try {
+        (void)malformed.list_models(settings);
+    } catch (const ChimpFlowError& e) {
+        bad_json = std::string(e.what()).find("invalid JSON") != std::string::npos;
+    }
+    check(bad_json, "malformed discovery JSON is an explicit error");
+
+    bool saw_cancellation = false;
+    ChimpFlowClient cancelled([&](const HttpRequest&, std::stop_token token) {
+        saw_cancellation = token.stop_requested();
+        return test_http_response(200, R"({"data":[]})");
+    });
+    std::stop_source stop;
+    stop.request_stop();
+    check(cancelled.list_models(settings, stop.get_token()).empty() && saw_cancellation,
+          "stop token reaches the transport");
+
+    settings.api_key.clear();
+    const char* old_env = std::getenv("CHIMPFLOW_KEY");
+    const std::string saved_env = old_env ? old_env : "";
+    ::setenv("CHIMPFLOW_KEY", "environment-key", 1);
+    check(monkeybyte::resolved_chimpflow_api_key(settings) == "environment-key",
+          "empty stored key falls back to CHIMPFLOW_KEY");
+    settings.api_key = "explicit-key";
+    check(monkeybyte::resolved_chimpflow_api_key(settings) == "explicit-key",
+          "explicit stored key wins over environment");
+    if (old_env) ::setenv("CHIMPFLOW_KEY", saved_env.c_str(), 1);
+    else ::unsetenv("CHIMPFLOW_KEY");
+}
+
+void test_wav_contract() {
+    std::cout << "ChimpFlow WAV/multipart\n";
+    const std::vector<float> samples = {0.0f, 0.5f, -0.5f, 1.0f, -1.0f};
+    const auto wav = monkeybyte::make_wav_16k_mono(samples);
+    monkeybyte::WavAudio parsed;
+    std::string error;
+    check(monkeybyte::parse_wav(wav, parsed, error) && parsed.sample_rate == 16000 &&
+              parsed.samples.size() == samples.size() &&
+              std::abs(parsed.samples[1] - 0.5f) < 0.0001f &&
+              std::abs(parsed.samples[2] + 0.5f) < 0.0001f,
+          "16-bit capture WAV round-trip");
+    check(wav.size() == 44 + samples.size() * 2, "WAV header/data sizes are exact");
+
+    const auto with_bits = [&](int bits) {
+        auto out = wav;
+        const auto set16 = [&out](std::size_t p, unsigned value) {
+            out[p] = static_cast<std::uint8_t>(value & 0xff);
+            out[p + 1] = static_cast<std::uint8_t>(value >> 8);
+        };
+        const auto set32 = [&out](std::size_t p, std::uint32_t value) {
+            for (std::size_t i = 0; i < 4; ++i)
+                out[p + i] = static_cast<std::uint8_t>(value >> (i * 8));
+        };
+        const std::size_t sample_bytes = static_cast<std::size_t>(bits / 8);
+        const std::size_t data_bytes = samples.size() * sample_bytes;
+        // RIFF chunks are padded to an even byte count (24-bit * five samples
+        // is odd); the production parser deliberately rejects a missing pad.
+        out.resize(44 + data_bytes + (data_bytes & 1u));
+        set32(4, static_cast<std::uint32_t>(out.size() - 8));
+        set32(28, 16000u * static_cast<std::uint32_t>(sample_bytes));
+        set16(32, static_cast<unsigned>(sample_bytes));
+        set16(34, static_cast<unsigned>(bits));
+        set32(40, static_cast<std::uint32_t>(samples.size() * sample_bytes));
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            const std::size_t p = 44 + i * sample_bytes;
+            if (bits == 24) {
+                const std::int32_t value = static_cast<std::int32_t>(samples[i] * 8388607.0f);
+                const auto raw = static_cast<std::uint32_t>(value);
+                out[p] = static_cast<std::uint8_t>(raw);
+                out[p + 1] = static_cast<std::uint8_t>(raw >> 8);
+                out[p + 2] = static_cast<std::uint8_t>(raw >> 16);
+            } else {
+                const auto raw = static_cast<std::uint32_t>(
+                    static_cast<std::int32_t>(samples[i] * 2147483647.0f));
+                for (std::size_t b = 0; b < 4; ++b)
+                    out[p + b] = static_cast<std::uint8_t>(raw >> (b * 8));
+            }
+        }
+        return out;
+    };
+    for (const int bits : {24, 32}) {
+        const auto encoded = with_bits(bits);
+        check(monkeybyte::parse_wav(encoded, parsed, error) &&
+                  parsed.samples.size() == samples.size() &&
+                  std::abs(parsed.samples[1] - 0.5f) < 0.0001f &&
+                  std::abs(parsed.samples[2] + 0.5f) < 0.0001f,
+              std::to_string(bits) + "-bit PCM WAV playback parse");
+    }
+
+    auto truncated = wav;
+    truncated.pop_back();
+    check(!monkeybyte::parse_wav(truncated, parsed, error) && !error.empty(),
+          "truncated WAV is rejected");
+    auto stereo = wav;
+    stereo[22] = 2;
+    check(!monkeybyte::parse_wav(stereo, parsed, error), "stereo WAV is rejected");
+    auto bad_rate = wav;
+    bad_rate[24] = bad_rate[25] = bad_rate[26] = bad_rate[27] = 0;
+    check(!monkeybyte::parse_wav(bad_rate, parsed, error), "zero sample rate is rejected");
+
+    const auto multipart = monkeybyte::make_stt_multipart("test-boundary", "whisper", wav);
+    const std::string wav_bytes(reinterpret_cast<const char*>(wav.data()), wav.size());
+    check(multipart.find(wav_bytes) != std::string::npos &&
+              multipart.find("filename=\"dictation.wav\"") != std::string::npos &&
+              multipart.find("name=\"model\"\r\n\r\nwhisper\r\n") != std::string::npos &&
+              multipart.ends_with("--test-boundary--\r\n"),
+          "multipart body is binary-safe and complete");
+    bool bad_model = false;
+    try {
+        (void)monkeybyte::make_stt_multipart("test", "bad\r\nmodel", wav);
+    } catch (const std::invalid_argument&) {
+        bad_model = true;
+    }
+    check(bad_model, "multipart rejects header injection in model name");
+}
+
+
+// ── ChimpFlow orchestration (§CHIMPFLOW) ────────────────────────────
+void test_audio_normalisation() {
+    std::cout << "Audio normalisation\n";
+    const auto near = [](float actual, float expected) {
+        return std::abs(actual - expected) < 0.0005f;
+    };
+    const auto rms = [](const std::vector<float>& samples) {
+        double sum = 0.0;
+        for (const float sample : samples) sum += sample * sample;
+        return std::sqrt(sum / samples.size());
+    };
+
+    std::vector<float> quiet{0.01f, -0.01f};
+    monkeybyte::normalise_playback_samples(quiet);
+    check(near(quiet[0], 0.04f) && near(quiet[1], -0.04f),
+          "quiet voice gain is capped at 4x instead of boosting noise without limit");
+
+    std::vector<float> medium{0.05f, -0.05f};
+    monkeybyte::normalise_playback_samples(medium);
+    check(near(medium[0], 0.12f) && std::abs(rms(medium) - 0.12) < 0.0005,
+          "medium voice reaches the RMS loudness target");
+
+    std::vector<float> loud{0.5f, -0.5f};
+    monkeybyte::normalise_playback_samples(loud);
+    check(near(loud[0], 0.12f) && std::abs(rms(loud) - 0.12) < 0.0005,
+          "loud voice is attenuated to the same RMS target");
+
+    std::vector<float> spiky(1024, 0.001f);
+    spiky[0] = 1.0f;
+    monkeybyte::normalise_playback_samples(spiky);
+    check(near(spiky[0], 0.98f) &&
+              std::all_of(spiky.begin(), spiky.end(),
+                          [](float sample) { return std::abs(sample) <= 0.98001f; }),
+          "peak limiter prevents clipping on transient-heavy voices");
+
+    std::vector<float> silence(8, 0.0f);
+    monkeybyte::normalise_playback_samples(silence);
+    check(std::all_of(silence.begin(), silence.end(),
+                      [](float sample) { return sample == 0.0f; }),
+          "digital silence remains silent");
+
+    std::vector<float> nonfinite{std::numeric_limits<float>::quiet_NaN(),
+                                 std::numeric_limits<float>::infinity(),
+                                 0.05f, -0.05f};
+    monkeybyte::normalise_playback_samples(nonfinite);
+    check(nonfinite[0] == 0.0f && nonfinite[1] == 0.0f &&
+              std::all_of(nonfinite.begin(), nonfinite.end(),
+                          [](float sample) { return std::isfinite(sample); }) &&
+              std::abs(rms(nonfinite) - 0.12) < 0.0005,
+          "non-finite samples are sanitized before gain calculation");
+}
+
+class FakeAudioBackend final : public monkeybyte::AudioBackend {
+public:
+    void start_recording() override {
+        ++record_starts;
+        recording = true;
+    }
+    std::vector<float> stop_recording() override {
+        ++record_stops;
+        recording = false;
+        return recorded_samples;
+    }
+    void play(std::uint32_t rate, std::vector<float> samples,
+              std::function<void()> on_drained) override {
+        ++play_calls;
+        last_rate = rate;
+        last_samples = std::move(samples);
+        drained = std::move(on_drained);
+    }
+    void stop_playback() override {
+        ++playback_stops;
+        drained = {};
+    }
+    void complete() {
+        auto callback = std::move(drained);
+        drained = {};
+        if (callback) callback();
+    }
+
+    int record_starts = 0;
+    int record_stops = 0;
+    int play_calls = 0;
+    int playback_stops = 0;
+    bool recording = false;
+    std::uint32_t last_rate = 0;
+    std::vector<float> last_samples;
+    std::vector<float> recorded_samples;
+    std::function<void()> drained;
+};
+
+bool pump_voice_until(const std::function<bool()>& predicate) {
+    auto context = Glib::MainContext::get_default();
+    for (int i = 0; i < 3000; ++i) {
+        if (predicate()) return true;
+        while (context->iteration(false)) {
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return predicate();
+}
+
+void test_chimpflow_voice_service() {
+    std::cout << "ChimpFlow VoiceService\n";
+    using monkeybyte::ChimpFlowClient;
+    using monkeybyte::ChimpFlowSettings;
+    using monkeybyte::DictationState;
+    using monkeybyte::VoiceCatalog;
+    using monkeybyte::VoiceService;
+
+    const std::string plain = monkeybyte::speech_text(
+        "# Hello\n\n**world** [link](https://example.invalid) "
+        "![image](image.png)\n\n```cpp\nanswer();\n```\n\nMonkey 🐒");
+    check(plain.find("Hello") != std::string::npos &&
+              plain.find("world") != std::string::npos &&
+              plain.find("link") != std::string::npos &&
+              plain.find("answer();") != std::string::npos &&
+              plain.find("Monkey 🐒") != std::string::npos &&
+              plain.find("https://") == std::string::npos &&
+              plain.find("```") == std::string::npos,
+          "speech_text preserves prose/UTF-8 and drops Markdown wiring");
+
+    struct FakeState {
+        std::mutex mutex;
+        std::vector<std::string> spoken;
+        int transcription_calls = 0;
+        bool fail_next_speech = false;
+    };
+    auto state = std::make_shared<FakeState>();
+    auto client = std::make_shared<ChimpFlowClient>(
+        [state](const monkeybyte::HttpRequest& request, std::stop_token) {
+            std::lock_guard lock(state->mutex);
+            if (request.url.ends_with("/healthz"))
+                return test_http_response(200, R"({"status":"ok"})");
+            if (request.url.ends_with("/v1/models"))
+                return test_http_response(200, R"({"data":[{"id":"pocket-tts"}]})");
+            if (request.url.ends_with("/v1/voices"))
+                return test_http_response(200, R"({"data":[{"id":"alba"},{"id":"anna"}]})");
+            if (request.url.ends_with("/v1/audio/speech")) {
+                const auto json = nlohmann::json::parse(request.body);
+                state->spoken.push_back(json.at("input").get<std::string>());
+                if (state->fail_next_speech) {
+                    state->fail_next_speech = false;
+                    return test_http_response(502, R"({"error":"engine test failure"})");
+                }
+                const auto wav = monkeybyte::make_wav_16k_mono(
+                    std::vector<float>{0.1f, 0.2f});
+                return test_http_response(
+                    200, std::string(reinterpret_cast<const char*>(wav.data()),
+                                     wav.size()));
+            }
+            if (request.url.ends_with("/v1/audio/transcriptions")) {
+                ++state->transcription_calls;
+                return test_http_response(200, R"({"text":"  dictated text  "})");
+            }
+            return test_http_response(404, R"({"error":"unexpected route"})");
+        });
+
+    const auto dir = make_temp_dir("voice_service");
+    monkeybyte::SettingsStore store((dir / "settings.db").string());
+    ChimpFlowSettings config;
+    config.enabled = true;
+    config.api_key = "test-key";
+    config.voice = "alba";
+    store.save_chimpflow(config);
+    auto audio = std::make_shared<FakeAudioBackend>();
+    VoiceService service(store, client, audio);
+
+    VoiceCatalog catalog;
+    std::string discovery_error = "pending";
+    service.discover(config, [&](const VoiceCatalog& result, const std::string& error) {
+        catalog = result;
+        discovery_error = error;
+    });
+    check(pump_voice_until([&] { return discovery_error != "pending"; }) &&
+              discovery_error.empty() &&
+              catalog.models == std::vector<std::string>{"pocket-tts"} &&
+              catalog.voices == (std::vector<std::string>{"alba", "anna"}),
+          "discovery returns models/voices on the main context");
+
+    std::string transcript;
+    std::string last_error;
+    service.signal_dictation_text().connect(
+        [&](const std::string& text) { transcript = text; });
+    service.signal_error().connect(
+        [&](const std::string& error) { last_error = error; });
+
+    service.speak("**First** message");
+    service.speak("Second message");
+    check(pump_voice_until([&] { return audio->play_calls == 1; }),
+          "first assistant utterance reaches playback");
+    check(audio->play_calls == 1 && audio->last_rate == 16000 &&
+              audio->last_samples.size() == 2,
+          "second utterance waits for first drained callback");
+    audio->complete();
+    check(pump_voice_until([&] { return audio->play_calls == 2; }),
+          "drained playback advances FIFO speech queue");
+    audio->complete();
+    check(pump_voice_until([&] { return !service.speech_active(); }),
+          "speech queue drains to idle");
+    {
+        std::lock_guard lock(state->mutex);
+        check(state->spoken.size() == 2 && state->spoken[0] == "First message" &&
+                  state->spoken[1] == "Second message",
+              "assistant speech is Markdown-clean and FIFO");
+    }
+
+    state->fail_next_speech = true;
+    service.speak("Failing utterance");
+    service.speak("Recovery utterance");
+    check(pump_voice_until([&] { return audio->play_calls == 3; }),
+          "one failed TTS item does not block later speech");
+    check(last_error.find("engine test failure") != std::string::npos,
+          "assistant synthesis failure is visible");
+    audio->complete();
+    check(pump_voice_until([&] { return !service.speech_active(); }),
+          "recovery utterance completes");
+
+    bool preview_done = false;
+    std::string preview_error = "pending";
+    service.preview(config, "alba", [&](const std::string& error) {
+        preview_error = error;
+        preview_done = true;
+    });
+    check(pump_voice_until([&] { return audio->play_calls == 4; }),
+          "voice preview reaches playback");
+    audio->complete();
+    check(pump_voice_until([&] { return preview_done; }) && preview_error.empty(),
+          "voice preview reports drained completion");
+
+    audio->recorded_samples.assign(5000, 0.1f);
+    service.toggle_dictation();
+    check(service.dictation_state() == DictationState::Recording && audio->recording,
+          "first mic toggle starts recording");
+    service.speak("Queued while recording");
+    check(audio->play_calls == 4, "recording suppresses speaker feedback");
+    service.toggle_dictation();
+    check(service.dictation_state() == DictationState::Transcribing && !audio->recording,
+          "second mic toggle stops recording and starts STT");
+    check(pump_voice_until([&] {
+              return service.dictation_state() == DictationState::Idle &&
+                     transcript == "dictated text";
+          }),
+          "dictation returns trimmed review text without auto-send");
+    check(pump_voice_until([&] { return audio->play_calls == 5; }),
+          "speech queued during dictation resumes afterward");
+    audio->complete();
+
+    service.speak("Cancel active speech");
+    check(pump_voice_until([&] { return audio->play_calls == 6; }),
+          "speech active before stop_all");
+    service.stop_all();
+    check(!service.speech_active() && service.queued_speech() == 0,
+          "stop_all cancels active and queued speech");
+    audio->complete(); // stale/no callback after intentional cancellation
+    check(!service.speech_active(), "stale drained callback cannot resurrect speech");
+
+    config.enabled = false;
+    store.save_chimpflow(config);
+    service.reload();
+    const auto spoken_before = [&] {
+        std::lock_guard lock(state->mutex);
+        return state->spoken.size();
+    }();
+    service.speak("Must stay silent");
+    check(state->spoken.size() == spoken_before && !service.speech_active(),
+          "master disable stops assistant narration");
+    service.toggle_dictation();
+    check(last_error.find("Enable ChimpFlow") != std::string::npos &&
+              service.dictation_state() == DictationState::Idle,
+          "disabled dictation fails with actionable feedback");
+
+    config.enabled = true;
+    store.save_chimpflow(config);
+    service.reload();
+    audio->recorded_samples = {0.0f};
+    transcript = "unchanged";
+    service.toggle_dictation();
+    service.toggle_dictation();
+    check(service.dictation_state() == DictationState::Idle && transcript.empty(),
+          "short recording returns empty transcript without STT");
+
+    bool cancelled_preview = false;
+    std::string cancelled_error;
+    service.preview(config, "alba", [&](const std::string& error) {
+        cancelled_preview = true;
+        cancelled_error = error;
+    });
+    check(pump_voice_until([&] { return audio->play_calls == 7; }),
+          "second preview active before cancellation");
+    service.stop_all();
+    check(cancelled_preview && cancelled_error.find("cancelled") != std::string::npos,
+          "cancelling preview completes its callback and clears UI busy state");
+
+    config.stt_model.clear();
+    store.save_chimpflow(config);
+    service.reload();
+    const int record_starts_before = audio->record_starts;
+    service.toggle_dictation();
+    check(service.dictation_state() == DictationState::Idle &&
+              // Virtual call through VoiceService is opaque to cppcheck.
+              audio->record_starts == record_starts_before && // cppcheck-suppress knownConditionTrueFalse
+              last_error.find("STT model") != std::string::npos,
+          "dictation rejects missing required configuration before opening mic");
+    service.stop_all();
     fs::remove_all(dir);
 }
 
@@ -591,6 +1180,10 @@ void test_model_bridge_thinking_levels() {
     };
     add("mm", "https://api.minimax.io", "", "MiniMax-M3");   // host auto-detect
     add("kimi", "https://api.moonshot.ai", "", "kimi-k3");   // host auto-detect
+    add("kimi31", "https://api.moonshot.ai", "", "kimi-k3.1-pro");
+    add("kimi31hs", "https://api.moonshot.ai", "", "kimi-k3.1-pro-highspeed");
+    add("code31", "https://api.kimi.com/coding/v1", "", "k3.1-pro");
+    add("code31hs", "https://api.kimi.ai/coding/v1", "", "k3.1-pro-highspeed");
     add("plain", "https://api.example.com", "", "gpt-x");    // openai-compatible
 
     const auto mm = mb::supported_thinking_levels(registry, prompts, "mm - MiniMax-M3");
@@ -600,6 +1193,20 @@ void test_model_bridge_thinking_levels() {
     check(k3.size() == 3 && k3[0] == ThinkingLevel::Low &&
               k3[1] == ThinkingLevel::High && k3[2] == ThinkingLevel::Max,
           "kimi-k3 offers Low/High/Max");
+
+    // §K3.1: the chat-header dropdown receives Low/High/Max for both
+    // platform and Kimi Code IDs through the unchanged ModelBridge path.
+    for (const char* display : {
+             "kimi31 - kimi-k3.1-pro",
+             "kimi31hs - kimi-k3.1-pro-highspeed",
+             "code31 - k3.1-pro",
+             "code31hs - k3.1-pro-highspeed",
+         }) {
+        const auto levels = mb::supported_thinking_levels(registry, prompts, display);
+        check(levels.size() == 3 && levels[0] == ThinkingLevel::Low &&
+                  levels[1] == ThinkingLevel::High && levels[2] == ThinkingLevel::Max,
+              std::string(display) + " offers Low/High/Max");
+    }
 
     check(mb::supported_thinking_levels(registry, prompts, "plain - gpt-x").empty(),
           "openai-compatible model has no levels");
@@ -1063,6 +1670,11 @@ int main() {
     test_file_kind();
     test_file_templates();
     test_project_types();
+    test_chimpflow_settings_and_client();
+    test_chimpflow_http_contract();
+    test_wav_contract();
+    test_audio_normalisation();
+    test_chimpflow_voice_service();
     test_settings_store();
     test_mcp_bridge();
     test_mcp_json_import();

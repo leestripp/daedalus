@@ -4,8 +4,9 @@
 // Provider plugin for Moonshot AI's Kimi APIs:
 //   - Kimi Platform (pay-as-you-go): https://api.moonshot.ai /
 //     https://api.moonshot.cn
-//   - Kimi Code (membership subscription): https://api.kimi.com/coding/v1
-//     (own model IDs: k3, k3-256k, kimi-for-coding[-highspeed])
+//   - Kimi Code (membership subscription): api.kimi.com / api.kimi.ai
+//     /coding/v1 (own model IDs: k3.1-pro[-highspeed], k3, k3-256k,
+//     kimi-for-coding[-highspeed])
 //
 // Encapsulates the Kimi quirks:
 //   - kimi-k2.7-code rejects any temperature other than 1.0 (fixed
@@ -17,7 +18,7 @@
 //     it) — handled by the shared SSE parser accumulating the field
 //     into the synthesized assistant message (§ProviderPlugins Phase 4
 //     in MiniMaxSseParser/LLMClient.cpp).
-//   - Static model table (kimi-k3, kimi-k2.x, moonshot-v1 context sizes).
+//   - Static model table (K3.1 Pro, kimi-k3, kimi-k2.x, moonshot-v1).
 //
 // Internal header — not part of the public libdaedalus API.
 

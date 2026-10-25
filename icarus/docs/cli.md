@@ -621,6 +621,14 @@ show both states. Models without thinking control print a note.
 (Default = send nothing; the provider/model decides)
 ```
 
+Kimi K3.1 Pro and Highspeed are supported through daedalus's `moonshot`
+plugin. Configure `kimi-k3.1-pro` or `kimi-k3.1-pro-highspeed` for the
+pay-as-you-go platform, or `k3.1-pro` / `k3.1-pro-highspeed` for Kimi Code.
+They offer `Default`/`Low`/`High`/`Max`; thinking cannot be disabled.
+`Default` preserves the endpoint default (`max` on the platform, `high` on
+Kimi Code). Moonshot recommends starting a new session after changing model
+or effort because the prefix cache is invalidated.
+
 #### `/level <name|#>`
 
 Set the thinking level at runtime (daedalus `Agent::set_thinking_level()`),

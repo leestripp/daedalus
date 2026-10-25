@@ -3,13 +3,14 @@
 //
 // §ProviderPlugins Phase 4: MoonshotPlugin behavior.
 //   MS1. Resolution: "moonshot" name; api.moonshot.ai/.cn and kimi hosts.
-//   MS2. clamp_temperature: kimi-k2.7-code forces 1.0, others pass through.
+//   MS2. clamp_temperature: kimi-k2.7-code and K3.1 force 1.0.
 //   MS3. Payload mutation: generic stream_options + prompt_cache_key;
 //        no MiniMax quirks leak in.
-//   MS4. context_size_for: kimi-k3 / k2.x / moonshot-v1 sizes.
+//   MS4. context_size_for: K3.1 / kimi-k3 / k2.x / moonshot-v1 sizes.
 //   MS5. reasoning_content round-trips through the stream parser into
 //        the synthesized assistant message (Kimi tool-loop requirement).
 
+#include <algorithm>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -40,6 +41,7 @@ void test_ms1_resolution() {
     for (const char* host : {"https://api.moonshot.ai",
                              "https://api.moonshot.cn",
                              "https://api.kimi.com/coding",
+                             "https://api.kimi.ai/coding",
                              "https://api.kimi.example.com"}) {
         auto p = daedalus::ProviderRegistry::plugin_for_host(host);
         EXPECT(p != nullptr);
@@ -69,6 +71,12 @@ void test_ms2_temperature_clamp() {
     EXPECT(p->clamp_temperature("k3", 0.0) == 1.0);
     EXPECT(p->clamp_temperature("k3-256k", 0.3) == 1.0);
     EXPECT(p->clamp_temperature("kimi-k3", 0.2) == 0.2);
+    // §K3.1: both platform and Kimi Code IDs inherit K3's fixed 1.0.
+    for (const char* id : {"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed",
+                           "k3.1-pro", "k3.1-pro-highspeed"}) {
+        EXPECT(p->clamp_temperature(id, 0.2) == 1.0);
+        EXPECT(p->clamp_temperature(id, 1.0) == 1.0);
+    }
     std::cout << "[ok] MS2: Moonshot temperature clamp\n";
 }
 
@@ -102,6 +110,12 @@ void test_ms3_payload_mutation() {
 void test_ms4_context_sizes() {
     auto p = daedalus::ProviderRegistry::plugin_for_name("moonshot");
     EXPECT(p != nullptr);
+    // §K3.1: exact 1M window from the platform pricing/reference docs.
+    for (const char* id : {"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed",
+                           "k3.1-pro", "k3.1-pro-highspeed"}) {
+        EXPECT(p->context_size_for(id) == 1048576);
+    }
+    EXPECT(p->context_size_for("Kimi-K3.1-Pro") == 1048576);
     EXPECT(p->context_size_for("kimi-k3") == 1000000);
     EXPECT(p->context_size_for("kimi-k2.7-code") == 262144);
     EXPECT(p->context_size_for("kimi-k2.6") == 262144);
@@ -122,7 +136,19 @@ void test_ms4_context_sizes() {
     for (const auto& m : models) {
         EXPECT(p->context_size_for(m.model_id) == m.context_size);
     }
-    std::cout << "[ok] MS4: Moonshot context sizes\n";
+    for (const char* id : {"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed",
+                           "k3.1-pro", "k3.1-pro-highspeed"}) {
+        const auto it = std::find_if(models.begin(), models.end(),
+            [&](const auto& m) { return m.model_id == id; });
+        EXPECT(it != models.end());
+        if (it != models.end()) {
+            EXPECT(it->context_size == 1048576);
+            EXPECT(it->default_temperature == 1.0);
+            EXPECT(it->supports_vision);
+            EXPECT(it->supports_thinking);
+        }
+    }
+    std::cout << "[ok] MS4: Moonshot context sizes and K3.1 metadata\n";
 }
 
 void test_ms5_reasoning_content_roundtrip() {

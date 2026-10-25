@@ -35,8 +35,8 @@ public:
                "who knows when verification failed and you must loop back to Understanding or "
                "Planning — call this to reflect that.  Use Documenting when you are updating "
                "README, CHANGELOG, comments, or tool docs after the code change is verified.  "
-               "NOTE: set_status only updates the host UI stage — it NEVER exits the agent "
-               "loop, not even Done.  To end your turn, call the stop tool.";
+               "Non-terminal states only update the host UI stage.  Done exits the agent loop "
+               "like stop, so use it only after your final response; otherwise call stop to finish.";
     }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;

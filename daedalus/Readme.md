@@ -651,7 +651,7 @@ Underlying infrastructure:
 ## Features
 
 
-- **Provider Plugin System**: MiniMax, Moonshot AI/Kimi (pay-as-you-go platform **and** the Kimi Code subscription endpoint `api.kimi.com/coding`), LM Studio, and generic OpenAI-compatible providers — each described by a `ProviderPlugin` hook implementation (base URL, endpoints, model tables, payload shaping, temperature clamps, SSE dialect). Hosts can register custom plugins without forking the library. See [docs/provider-plugins.md](docs/provider-plugins.md).
+- **Provider Plugin System**: MiniMax, Moonshot AI/Kimi (including K3.1 Pro/Highspeed with Low/High/Max reasoning effort; pay-as-you-go platform **and** Kimi Code subscription endpoints `api.kimi.com`/`api.kimi.ai`), LM Studio, and generic OpenAI-compatible providers — each described by a `ProviderPlugin` hook implementation (base URL, endpoints, model tables, payload shaping, temperature clamps, SSE dialect). Hosts can register custom plugins without forking the library. See [docs/provider-plugins.md](docs/provider-plugins.md).
 - **Provider Context Caching**: prompt-cache hit capture for MiniMax (nested `prompt_tokens_details.cached_tokens`) and Moonshot/Kimi (top-level `cached_tokens` + `prompt_cache_key` affinity) surfaced via `AgentStats::cached_tokens`; the system prompt is byte-static per session and per-iteration stats ride as a transient trailing message so provider prefix caches keep matching. See [docs/provider-plugins.md](docs/provider-plugins.md).
 - **Agent Skills**: Extensible capabilities via Anthropic's Agent Skills standard
 - **40+ Tools**: File operations, Git, shell commands, search, images, PDFs, code analysis

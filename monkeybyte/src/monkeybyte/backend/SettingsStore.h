@@ -31,6 +31,23 @@ struct InterfaceSettings {
 // Row shape of the legacy `models` table (pre-provider-split schema),
 // read only by model_bridge::migrate_legacy_models(). New model/provider
 // config lives in daedalus's SettingsStore — see backend/ModelBridge.h.
+// §CHIMPFLOW — local STT/TTS gateway configuration. The API key follows
+// the provider convention: an empty value resolves CHIMPFLOW_KEY at request
+// time. Nothing is enabled until the user opts in.
+struct ChimpFlowSettings {
+    bool enabled = false;
+    bool read_assistant = true;
+    bool dictation_enabled = true;
+    std::string server_url = "http://127.0.0.1"; // loopback origin, no port/path
+    int port = 8090;
+    std::string api_key;
+    std::string tts_model = "pocket-tts";
+    std::string stt_model = "whisper";
+    std::string voice; // populated from GET /v1/voices, never hardcoded
+
+    bool operator==(const ChimpFlowSettings&) const = default;
+};
+
 struct LegacyModelConfig {
     std::string provider_name; // unique id
     std::string base_url;
@@ -70,6 +87,9 @@ public:
 
     InterfaceSettings load_interface() const;
     void save_interface(const InterfaceSettings& s);
+
+    ChimpFlowSettings load_chimpflow() const;
+    void save_chimpflow(const ChimpFlowSettings& s);
 
     // Search exclude patterns (§4.3): one glob per entry, matched against
     // file names and workspace-relative paths. Persisted under the

@@ -14,7 +14,8 @@ providers are configured through an OpenAI-compatible chat API.
 ## Requirements
 
 - CMake ≥ 3.28, Ninja, a C++23 compiler
-- gtkmm-4.0, gtksourceview-5, libcurl, sqlite3, nlohmann_json ≥ 3.11
+- gtkmm-4.0, gtksourceview-5, libcurl, sqlite3, nlohmann_json ≥ 3.11,
+  libpipewire-0.3
 - Network access on first configure (fetches daedalus + OmniNet)
 
 ## Build & run (development)
@@ -63,6 +64,33 @@ XDG data dirs, so the installed binary runs from anywhere:
 
 (Make sure `~/.local/bin` is in your `PATH` if you want to just type
 `monkeybyte`.)
+
+## Optional local voice (ChimpFlow)
+
+MonkeyByte can use a local [ChimpFlow](../ChimpFlow) gateway for assistant
+read-aloud and microphone dictation. Audio and transcripts stay on the
+machine; MonkeyByte accepts only loopback HTTP URLs (`localhost`,
+`127.0.0.1`, or `[::1]`).
+
+1. Start ChimpFlow (default `127.0.0.1:8090`) and create a dedicated key
+   with **both `tts` and `stt` scopes**. Set it as `CHIMPFLOW_KEY`, or enter
+   it in Settings; an empty key field uses the environment variable.
+2. Open **Settings → ChimpFlow**. Keep the server at `http://127.0.0.1`
+   and port `8090`, then click **Refresh Models / Voices**.
+3. Select the discovered TTS model, STT model, and voice. Selecting a voice
+   plays a short preview; **Preview Voice** replays it.
+4. Enable local voice support, read-aloud, and/or dictation as desired,
+   then click **Save Settings**. The master switch is off by default.
+
+All playback is loudness-normalised to a consistent RMS level, with capped
+gain and peak limiting so quiet voices are not excessively amplified and
+loud voices do not clip.
+
+The chat microphone records on the first click and transcribes on the
+second. The transcript is inserted at the input cursor for review and is
+**never sent automatically**. With read-aloud enabled, each newly finalized
+live assistant bubble is spoken in FIFO order; restored history, user
+messages, tool cards, and status notices are not spoken.
 
 ## Multiple instances
 

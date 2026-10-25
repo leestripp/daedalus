@@ -185,17 +185,11 @@ private:
     std::string last_fatal_signature_;  // kept for logging
     int consecutive_fatal_count_ = 0;
 
-    // §IdleExitBreaker (2026-08-20): consecutive agent-loop iterations
-    // whose ONLY tool call is set_status. set_status only reports state
-    // to the host UI — it NEVER exits the loop (§IdleLoopFix made the
-    // tool reject runtime-owned states and spell this out), yet models
-    // still end turns with set_status("Done") instead of the stop tool
-    // and then answer every re-invocation with another set_status,
-    // looping forever. Two in a row = the model is clearly trying to
-    // exit, so the breaker ends the turn for it (same as stop).
-    // Reset at turn start, on any non-set_status tool call, and on
-    // plain-text responses.
-    int consecutive_status_only_count_ = 0;
+    // §STATUS-KIND-BREAKER (2026-10-25): consecutive status-only
+    // iterations of the SAME non-terminal state. Done ends intentionally on
+    // its first valid call; three identical other states suppress a runaway.
+    int consecutive_same_status_count_ = 0;
+    std::string last_status_only_state_;
 
     // §BUG-COMPRESS-LOOP (2026-08-10): consecutive compression attempts
     // that did NOT get the context back below the auto-compress threshold.
@@ -219,7 +213,7 @@ private:
      * return AgentState::DONE WITHOUT injecting another recovery message.
      */
     bool fatal_breaker_should_end_turn(const std::string& signature);
-    bool status_only_breaker_should_end_turn();  // §IdleExitBreaker
+    bool same_status_breaker_should_end_turn(const std::string& state);
 
     // §State Machine: LLM-driven transitions (via the `set_status` tool)
     // are reported through this callback so the owning AgentImpl can keep
