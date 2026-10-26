@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **§SCROLL-KINETIC (2026-10-26): user bubbles no longer disappear below
+  the chat viewport after Send.** The root cause was GTK 4.22 deceleration
+  continuing to write the old adjustment after every idle/150 ms bottom pin,
+  not a missing pin call. MonkeyByte now cancels active deceleration before a
+  forced pin and restores the user's kinetic-scrolling setting. A standalone
+  GTK regression drives the real scroll/decelerate controllers; the exact
+  clipped-bubble reproduction passed on X11 and Wayland, followed by the
+  full 109/109 CTest suite and umbrella static analysis.
+
 - **§STATUS-KIND-BREAKER (2026-10-25): correct `set_status` terminal and
   runaway semantics.** `set_status("Done")` is now an intentional immediate
   loop exit, matching models that use it instead of `stop`. Non-terminal

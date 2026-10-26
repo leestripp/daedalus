@@ -5,6 +5,7 @@
 #include "monkeybyte/backend/ModelBridge.h"
 #include "monkeybyte/backend/VoiceService.h"
 #include "monkeybyte/ui/chat/ChatMessage.h"
+#include "monkeybyte/ui/chat/ScrollPin.h"
 #include "monkeybyte/ui/chat/ToolCard.h"
 #include "monkeybyte/ui/chat/UserCommands.h"
 #include "monkeybyte/ui/UiGuard.h"
@@ -750,6 +751,10 @@ void ChatPanel::scroll_to_bottom() {
 
 void ChatPanel::scroll_to_bottom_forced() {
     stick_to_bottom_ = true;
+    // §SCROLL-KINETIC — a forced pin must cancel active deceleration, not just
+    // protect the latch. Otherwise GTK's next deceleration tick moves the
+    // viewport back above the new bubble after the idle/timeout pins.
+    cancel_scroller_deceleration(scroller_);
     // §7.3 — protect the pin against residual inertial-scroll value changes
     // (touchpad fling on Wayland) that arrive right after Enter.
     stick_lock_until_us_ = g_get_monotonic_time() + G_USEC_PER_SEC;

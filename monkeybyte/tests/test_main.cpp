@@ -22,8 +22,13 @@
 #include "monkeybyte/ui/FileIcons.h"
 #include "monkeybyte/ui/HtmlView.h"
 #include "monkeybyte/ui/chat/Markdown.h"
+#include "monkeybyte/ui/chat/ScrollPin.h"
 #include "monkeybyte/ui/chat/UserCommands.h"
 
+#include <gdkmm/display.h>
+#include <gtkmm/application.h>
+#include <gtkmm/box.h>
+#include <gtkmm/window.h>
 #include <giomm/init.h>
 #include <glibmm/init.h>
 
@@ -1718,6 +1723,77 @@ void test_fountain_zoom() {
           "zoom: snapped to 5% steps");
 }
 
+void test_scroll_pin_kinetic_cancel() {
+    auto app = Gtk::Application::create();
+    if (!Gdk::Display::get_default()) {
+        std::cout << "  skip: scroll pin kinetic cancellation (no display)\n";
+        return;
+    }
+    Gtk::Window window;
+    auto* scroller = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* content = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL);
+    content->set_size_request(400, 2000);
+    scroller->set_size_request(400, 300);
+    scroller->set_child(*content);
+    window.set_child(*scroller);
+    window.show();
+
+    auto pump = [](int milliseconds) {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(milliseconds);
+        while (std::chrono::steady_clock::now() < deadline) {
+            while (g_main_context_iteration(nullptr, FALSE)) {}
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    };
+    pump(100);
+    auto adj = scroller->get_vadjustment();
+    adj->set_value(adj->get_upper() - adj->get_page_size());
+    pump(30);
+    const double initial = adj->get_value();
+    check(initial > 0, "scroll pin: tall content starts above zero");
+
+    // Drive GTK's own scroll/deceleration controllers, not a synthetic
+    // adjustment write. This reproduces the production failure where the
+    // deceleration tick moves the viewport again after a forced pin.
+    auto* controllers = gtk_widget_observe_controllers(GTK_WIDGET(scroller->gobj()));
+    const guint count = g_list_model_get_n_items(controllers);
+    for (guint i = 0; i < count; ++i) {
+        auto* item = g_list_model_get_item(controllers, i);
+        auto* controller = GTK_EVENT_CONTROLLER(item);
+        if (GTK_IS_EVENT_CONTROLLER_SCROLL(controller) &&
+            gtk_event_controller_get_propagation_phase(controller) != GTK_PHASE_CAPTURE) {
+            g_signal_emit_by_name(controller, "scroll-begin");
+            gboolean handled = false;
+            g_signal_emit_by_name(controller, "scroll", 0.0, -10.0, &handled);
+        }
+        g_object_unref(item);
+    }
+    for (guint i = 0; i < count; ++i) {
+        auto* item = g_list_model_get_item(controllers, i);
+        auto* controller = GTK_EVENT_CONTROLLER(item);
+        if (GTK_IS_EVENT_CONTROLLER_SCROLL(controller) &&
+            gtk_event_controller_get_propagation_phase(controller) == GTK_PHASE_CAPTURE)
+            g_signal_emit_by_name(controller, "decelerate", 0.0, -800.0);
+        g_object_unref(item);
+    }
+    pump(20);
+    check(adj->get_value() < initial - 1.0,
+          "scroll pin: GTK deceleration is active before cancellation");
+
+    monkeybyte::cancel_scroller_deceleration(*scroller);
+    const double target = adj->get_upper() - adj->get_page_size();
+    adj->set_value(target);
+    pump(300);
+    check(std::abs(adj->get_value() - target) < 0.01,
+          "scroll pin: deceleration cannot override the pinned bottom");
+    check(scroller->get_kinetic_scrolling(),
+          "scroll pin: kinetic scrolling setting is restored");
+
+    window.hide();
+    pump(20);
+}
+
 int main() {
     // giomm object wrapping (FileKind content-type queries) needs glibmm
     // initialized; in the app Gtk::Application does this for us.
@@ -1749,6 +1825,7 @@ int main() {
     test_user_commands();
     test_html_to_text();
     test_fountain_zoom();
+    test_scroll_pin_kinetic_cancel();
 
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n"
                                 : "\n" + std::to_string(failures) + " FAILURES\n");

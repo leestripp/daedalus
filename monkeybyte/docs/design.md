@@ -1174,12 +1174,17 @@ stick-lock (`stick_lock_until_us_`) during which residual inertial-scroll
 value changes (touchpad fling on Wayland) cannot clear the latch, plus a
 second re-pin 150 ms later to catch late multi-pass layouts.
 
-**Known upstream issue:** the remaining intermittent pin failures are
-tracked as a GTK4 scrolled-window/viewport bug (transient fractional
-adjustment values during multi-pass height-for-width layouts, plus
-inertial-scroll value changes arriving after programmatic pins). The
-stick-lock + delayed re-pin above are the workaround; revisit and simplify
-once GTK fixes the adjustment behavior upstream.
+**§SCROLL-KINETIC (2026-10-26):** the long-standing clipped user-bubble
+failure was NOT fixed by more delayed pins. GTK 4.22's deceleration callback
+keeps writing the previous scroll position after each pin, so the viewport
+could briefly reach the bottom and then return to 0 even with
+`stick_to_bottom_ == true`. `cancel_scroller_deceleration()` (ScrollPin.h)
+uses the public kinetic-scrolling toggle to cancel that callback and restores
+the user's setting immediately; every forced pin calls it before scheduling
+the layout pins. The regression test drives GTK's real scroll/decelerate
+controllers and proves the bottom stays stable, and the same reproduction
+passed live on X11 and Wayland. The stick-lock and 150 ms pass still handle
+latch intent and late multi-pass layouts, respectively.
 
 **Tool card** (appended below the current assistant bubble when a tool call
 starts; never inside it). Starting a tool call **finalizes the active

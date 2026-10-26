@@ -406,6 +406,19 @@ re-configure (`CONFIGURE_DEPENDS`).
 
 ## Conventions / gotchas
 
+### Chat scrolling (§SCROLL-KINETIC)
+
+- **A forced bottom pin must cancel GTK deceleration.** GTK 4.22's
+  `scrolled_window_deceleration_cb` continues calling
+  `gtk_adjustment_set_value()` after idle/timeout pins. Protecting only
+  `stick_to_bottom_` leaves the viewport free to return to its old position
+  (reproduced: new user bubble pinned at 1363, then deceleration returned it
+  to 0). `cancel_scroller_deceleration()` in `ui/chat/ScrollPin.h` toggles
+  `set_kinetic_scrolling(false)` to invoke GTK's cancellation, then restores
+  the setting. Do not replace this with another timer. Regression coverage
+  in `test_scroll_pin_kinetic_cancel()` drives the actual GTK scroll and
+  decelerate controllers; live X11 and Wayland reproductions passed too.
+
 ### ChimpFlow / PipeWire invariants
 
 - `pw_stream_new_simple()` retains the `pw_stream_events` pointer. Capture
