@@ -112,6 +112,10 @@ struct daedalus::AgentSink {
     virtual void on_tool_result(std::string_view name,
                                 const nlohmann::json& result) noexcept;
 
+    // A library-originated message is queued and needs a driving turn.
+    // Schedule only; do not submit its text again.
+    virtual void on_turn_requested(std::string_view source) noexcept;
+
     // State / lifecycle
     virtual void on_state_change(int from, int to) noexcept;
     virtual void on_error(daedalus::ErrorKind kind,
@@ -401,7 +405,7 @@ void on_tool_result(std::string_view name,
     "process_id": "bg_1",
     "pid": 12345,
     "command": "python3 -m http.server 8000",
-    "message": "Process started in background. Use action=poll with process_id to read output, action=send to write stdin, action=stop to terminate."
+    "message": "Process started in background. Its exit status and final output will arrive automatically. Poll only for intermediate output; use send for stdin or stop to terminate."
   }
 }
 ```
@@ -1275,6 +1279,16 @@ agent:
    later turn processes the *previous* queued message instead of the
    fresh prompt. `Agent::pending_count()` returns the number of
    unconsumed queued messages so hosts can detect the drift.
+
+   Background process completion is the library's own use of this queue.
+   It submits one `trigger:background-process` message and then calls
+   `AgentSink::on_turn_requested(source)` on the process-monitor thread.
+   Implement that callback to wake your normal scheduler. Call
+   `run_one_turn()` on the usual driving thread when idle, or drain the
+   pending queue after the active turn. **Never call
+   `submit_user_message()` from this callback**: the completion is already
+   queued, and resubmitting duplicates it. The callback carries no message
+   text; `pending_messages()` is available if the host needs to inspect it.
 
 2. **Pending queue management** — hosts can inspect and rewrite the
    queue of not-yet-consumed user messages (e.g. a chat UI that shows

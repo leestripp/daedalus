@@ -572,6 +572,12 @@ void ChatPanel::wire_controller() {
         signal_stats_changed_.emit(s);
     });
 
+    controller_->turn_request_received.connect([this, alive = alive_] {
+        Glib::signal_idle().connect_once([this, alive] {
+            if (*alive) controller_->run_pending_turn();
+        });
+    });
+
     marshal<std::string>(controller_->finished, [this](const std::string& reason) {
         // §7.6 — resting state (emitted after state_changed, so it wins).
         stop_activity(reason == "cancelled" ? "Cancelled"

@@ -5,6 +5,7 @@
 #include <vector>
 #include <nlohmann/json.hpp>
 #include <filesystem>
+#include <functional>
 #include <memory>
 
 #include "BaseTool.h"  // for ToolProgressFn
@@ -12,6 +13,8 @@
 #include "ToolFilter.h"
 
 class FileIO;  // Forward declaration
+struct BackgroundProcessInfo;
+struct ProcessOutput;
 class ToolFactory;
 class SessionMemory;
 
@@ -53,6 +56,16 @@ namespace ToolHandler {
     // behaviour for direct ToolHandler users.
     void set_cancel_token(std::stop_token token);
     [[nodiscard]] std::stop_token current_cancel_token();
+
+    // Per-thread, per-agent destination for background process completion.
+    // The manager copies this callback when a process starts, so concurrent
+    // agents sharing the global tool factory never redirect each other's
+    // completion events. Empty = preserve the legacy polling-only behavior.
+    using BackgroundCompletionHandler = std::function<void(
+        const BackgroundProcessInfo&, const ProcessOutput&)>;
+    void set_background_completion_handler(BackgroundCompletionHandler handler);
+    [[nodiscard]] BackgroundCompletionHandler
+    current_background_completion_handler();
 
     // Execute a tool call - delegates to ToolFactory
     json execute_tool_call(const json& tool_call, FileIO& file_io);

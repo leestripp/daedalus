@@ -48,6 +48,10 @@
 #include "core/SkillManager.h"
 #include "mcp/McpServerManager.h"  // §Phase 11
 #include "tools/ToolFilter.h"
+#include "tools/ToolHandler.h"
+
+struct BackgroundProcessInfo;
+struct ProcessOutput;
 
 namespace daedalus::detail {
 
@@ -222,6 +226,19 @@ public:
 private:
     void set_state(AgentState s) noexcept;
 
+    // The process manager can outlive an Agent. This separately owned gate
+    // serializes completion delivery with shutdown/destruction, preventing a
+    // late callback from dereferencing a destroyed AgentImpl.
+    struct BackgroundCompletionState {
+        std::mutex mutex;
+        AgentImpl* agent = nullptr;
+    };
+    [[nodiscard]] ToolHandler::BackgroundCompletionHandler
+    make_background_completion_handler();
+    void bind_background_completion_handler();
+    void handle_background_completion(const BackgroundProcessInfo& info,
+                                      const ProcessOutput& output);
+
     AgentConfig cfg_;
     std::shared_ptr<AgentSink> sink_;
     std::atomic<AgentState> state_{AgentState::Idle};
@@ -275,6 +292,7 @@ private:
     std::shared_ptr<HostToolContext>       host_ctx_;
 
     bool initialized_ = false;
+    std::shared_ptr<BackgroundCompletionState> background_completion_state_;
 };
 
 }  // namespace daedalus::detail

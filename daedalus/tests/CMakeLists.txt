@@ -829,6 +829,20 @@ target_include_directories(daedalus_background_process_tests PRIVATE
 )
 add_test(NAME background_process_tests COMMAND daedalus_background_process_tests)
 
+# End-to-end execute_bash completion routing through the public Agent API.
+add_executable(daedalus_background_completion_tests
+    test_background_completion.cpp
+)
+target_include_directories(daedalus_background_completion_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/src/core
+)
+target_link_libraries(daedalus_background_completion_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME background_completion_tests COMMAND daedalus_background_completion_tests)
+
 # Create McpClient test
 add_executable(daedalus_mcp_client_tests
     test_mcp_client.cpp

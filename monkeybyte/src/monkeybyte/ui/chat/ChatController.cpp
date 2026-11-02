@@ -332,6 +332,13 @@ public:
                                  std::string(command));
     }
 
+    void on_turn_requested(std::string_view source) noexcept override {
+        (void)source;
+        // Do not start a jthread from the process monitor. ChatPanel
+        // marshals this signal to the GTK main thread first.
+        controller_.turn_request_received.emit();
+    }
+
 private:
     ChatController& controller_;
     int next_seq_ = 0;
@@ -530,9 +537,20 @@ void ChatController::ensure_agent(const std::string& model_display) {
     active_thinking_level_ = thinking_level_;
 }
 
+void ChatController::run_pending_turn() {
+    if (agent_ && agent_->pending_count() > 0) {
+        send_message("", active_model_display_);
+    }
+}
+
 void ChatController::send_message(const std::string& text,
                                   const std::string& model_display) {
-    if (text.empty()) return; // §12.3
+    // Empty text is reserved for run_pending_turn(): daedalus already owns
+    // the queued completion, so this path schedules work without submitting
+    // a second copy or displaying a user bubble.
+    const bool agent_turn = text.empty() && agent_
+                            && agent_->pending_count() > 0;
+    if (text.empty() && !agent_turn) return; // §12.3
     if (model_display.empty()) {
         error_message.emit("No model selected. Add one in Settings → Models.");
         set_state(ChatState::Idle);
@@ -543,7 +561,7 @@ void ChatController::send_message(const std::string& text,
     // the chat bubble still shows just what the user typed. Evaluated on
     // the GTK main thread, before anything is queued.
     std::string full = text;
-    if (context_provider_) {
+    if (!text.empty() && context_provider_) {
         std::string ctx;
         ui_guard("context_provider", [&] { ctx = context_provider_(); });
         if (!ctx.empty()) full = ctx + "\n\n" + text;
@@ -562,10 +580,11 @@ void ChatController::send_message(const std::string& text,
         std::lock_guard lock(state_mutex_);
         mid_turn = state_ == ChatState::Processing ||
                    state_ == ChatState::Cancelling;
-        queued_messages_.push_back(std::move(full));
+        if (text.empty()) turn_requested_ = true;
+        else queued_messages_.push_back(std::move(full));
         if (!mid_turn) state_ = ChatState::Processing;
     }
-    user_message_sent.emit(text); // echo the bubble immediately
+    if (!text.empty()) user_message_sent.emit(text); // immediate user echo
     if (mid_turn) return;
     state_changed.emit(ChatState::Processing);
 
@@ -592,9 +611,11 @@ void ChatController::send_message(const std::string& text,
             // queued and go FIRST on the next send, preserving FIFO.
             for (;;) {
                 std::string next;
+                bool submit_next = false;
                 {
                     std::lock_guard lock(state_mutex_);
                     if (reason != "error" && !queued_messages_.empty()) {
+                        submit_next = true;
                         next = std::move(queued_messages_.front());
                         queued_messages_.pop_front();
                         while (!queued_messages_.empty()) {
@@ -602,6 +623,13 @@ void ChatController::send_message(const std::string& text,
                                     std::move(queued_messages_.front());
                             queued_messages_.pop_front();
                         }
+                    } else if (reason != "error"
+                               && (turn_requested_
+                                   || (agent_ && agent_->pending_count() > 0))) {
+                        // The completion is already in daedalus's queue.
+                        // Clearing the flag and checking it in this same
+                        // critical section prevents a final-check/Idle race.
+                        turn_requested_ = false;
                     } else {
                         // Final queue check and the resting-state
                         // transition are one atomic step: a main-thread
@@ -625,8 +653,10 @@ void ChatController::send_message(const std::string& text,
                     set_state(ChatState::Processing);
                 // §MSG-HEADERS — interactive origin, stamped into the
                 // message's `_meta` when the turn consumes the queue.
-                agent_->submit_user_message(std::move(next), {},
-                                            interactive_source());
+                if (submit_next) {
+                    agent_->submit_user_message(std::move(next), {},
+                                                interactive_source());
+                }
                 agent_->run_one_turn();
                 const auto s = agent_->state();
                 if (s == daedalus::AgentState::Cancelled) {

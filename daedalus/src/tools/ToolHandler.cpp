@@ -5,6 +5,7 @@
 #include "core/SessionMemory.h"
 #include "core/CommonUtils.h"
 #include "core/Logger.h"
+#include "core/BackgroundProcessManager.h"
 #include "daedalus/default_paths.h"
 
 #include <filesystem>
@@ -78,6 +79,19 @@ namespace ToolHandler {
     std::stop_token current_cancel_token() {
         std::lock_guard<std::mutex> lock(g_state_mutex);
         return g_cancel_token;
+    }
+
+    // Unlike the approval/cancel globals above, completion routing is
+    // thread-local: monkeybyte and other multi-agent hosts can execute turns
+    // concurrently on different threads using the same ToolFactory.
+    thread_local BackgroundCompletionHandler g_background_completion_handler;
+
+    void set_background_completion_handler(BackgroundCompletionHandler handler) {
+        g_background_completion_handler = std::move(handler);
+    }
+
+    BackgroundCompletionHandler current_background_completion_handler() {
+        return g_background_completion_handler;
     }
 
     // Path to the approvals JSON file. Lives in the per-agent project

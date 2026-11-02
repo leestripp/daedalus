@@ -151,6 +151,11 @@ public:
     // approval_always_ flag (tests / sinks without an Agent).
     void set_auto_approve_setter(std::function<void(bool)> setter);
 
+    // Wake the REPL when a background process completion is queued. The
+    // handler only wakes input_queue; main remains the sole driving thread.
+    void set_turn_request_handler(std::function<void()> handler);
+    void on_turn_requested(std::string_view source) noexcept override;
+
 private:
     /// Start the ThinkingSpinner with the current HUD status message.
     void start_status_spinner();
@@ -280,6 +285,7 @@ private:
     // §BUG-008: injected Agent::set_auto_approve() handle for the 'a'
     // answer. Empty → fall back to approval_always_ below.
     std::function<void(bool)> auto_approve_setter_;
+    std::function<void()> turn_request_handler_;
 
     // Session-scoped "always approve" flag, set when the user answers 'a'
     // at the approval prompt. Atomic: approvals are requested from the

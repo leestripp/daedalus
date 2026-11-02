@@ -1283,6 +1283,14 @@ with a small syntax highlighter port (`highlightCode()`) and you're done.
   the queue goes first on the next send (FIFO). `clear()` drops the
   queue with the session. When `isProcessing=true`, Stop becomes
   visible.
+* Background process exits use daedalus's own synchronized queue directly.
+  `AgentSink::on_turn_requested` emits `turn_request_received`; ChatPanel
+  marshals it to GTK and calls `run_pending_turn()`, which schedules the same
+  drain loop without submitting or echoing the completion again. A
+  `turn_requested_` flag and the final `Agent::pending_count()` check share
+  `state_mutex_`, so an exit cannot strand between the worker's last queue
+  check and its Idle transition.
+
 * Empty input doesn't send.
 * A `/` menu button at the left edge of the bar opens a popover listing
   the user commands (§7.8). Commands are reachable mid-turn now that the

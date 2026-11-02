@@ -145,6 +145,19 @@ public:
     // State / lifecycle
     // ------------------------------------------------------------------
 
+    /// A library-originated message (currently a background process exit)
+    /// has been added to the Agent's pending queue and needs a turn.
+    ///
+    /// Called on the background monitor thread. The host MUST schedule
+    /// Agent::run_one_turn() on its normal driving thread; it MUST NOT submit
+    /// the message again. If a turn is already running, arrange for the queue
+    /// to be drained when that turn finishes. Default no-op preserves source
+    /// compatibility for hosts that provide their own scheduling.
+    virtual void on_turn_requested(std::string_view source) noexcept
+    {
+        (void)source;
+    }
+
     /// @brief Agent transitioned from one state to another. `to` is the
     /// cast-to-int value of the new AgentState.
     /// @note Legacy int protocol — prefer the typed overload below. Both

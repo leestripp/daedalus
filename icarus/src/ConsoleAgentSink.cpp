@@ -62,6 +62,15 @@ void ConsoleAgentSink::set_auto_approve_setter(std::function<void(bool)> setter)
     auto_approve_setter_ = std::move(setter);
 }
 
+void ConsoleAgentSink::set_turn_request_handler(std::function<void()> handler) {
+    turn_request_handler_ = std::move(handler);
+}
+
+void ConsoleAgentSink::on_turn_requested(std::string_view source) noexcept {
+    (void)source;
+    if (turn_request_handler_) turn_request_handler_();
+}
+
 void ConsoleAgentSink::on_assistant_delta(std::string_view text) noexcept {
     // Streaming output has arrived: stop the spinner and reset the idle
     // timer. The watchdog will restart it if the stream pauses.

@@ -929,8 +929,23 @@ int main(int argc, char* argv[]) {
         sink->set_auto_approve_setter(
             [&agent](bool on) { agent.set_auto_approve(on); });
 
+        sink->set_turn_request_handler([&input_queue] {
+            // The completion is already in the Agent's pending queue. Wake
+            // pop() only; main consumes it without submitting a duplicate.
+            input_queue.wake();
+        });
+
         bool header_printed = false;
         while (!g_shutting_down.load()) {
+            if (agent.pending_count() > 0) {
+                header_printed = false;
+                input_thread.resume();
+                sink->start_agent_turn();
+                agent.run_one_turn();
+                sink->stop_agent_turn();
+                continue;
+            }
+
             // Print the input header only once when we are about to block for
             // input. The queue pop uses a short timeout so the loop remains
             // responsive to g_shutting_down; without the guard that timeout

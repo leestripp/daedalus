@@ -23,6 +23,10 @@
 #include <filesystem>
 #include <ctime>
 #include <cstdint>
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <thread>
 
 /**
  * Information about a running background process
@@ -73,11 +77,18 @@ struct ProcessOutput {
  * 4. Read output from the server
  * 5. Stop the server when done
  *
- * Thread safety: This class is NOT thread-safe. All calls should be made
- * from the same thread (main agent loop).
+ * Thread safety: public methods are synchronized. A single internal monitor
+ * synchronizes waitpid() and dispatches natural process exits exactly once; explicit
+ * stop_process()/cleanup_all() cancellations do not generate completions.
  */
 class BackgroundProcessManager {
 public:
+    /// Called after a naturally exited process has been reaped and its final
+    /// output tail is available. The callback runs on the manager monitor
+    /// thread and must not destroy the manager.
+    using CompletionCallback = std::function<void(
+        const BackgroundProcessInfo&, const ProcessOutput&)>;
+
     /**
      * Get singleton instance
      */
@@ -88,9 +99,12 @@ public:
      *
      * @param command Command to execute (will be parsed and run)
      * @param cwd Working directory for the process
+     * @param on_complete Optional exactly-once natural-exit notification
      * @return Process ID on success, empty string on failure
      */
-    std::string start_background(const std::string& command, const std::string& cwd = "");
+    std::string start_background(const std::string& command,
+                                 const std::string& cwd = "",
+                                 CompletionCallback on_complete = {});
 
     /**
      * Send input to a background process's stdin
@@ -160,6 +174,13 @@ private:
     BackgroundProcessManager(const BackgroundProcessManager&) = delete;
     BackgroundProcessManager& operator=(const BackgroundProcessManager&) = delete;
 
+    struct ProcessEntry {
+        BackgroundProcessInfo info;
+        CompletionCallback on_complete;
+        bool stop_requested = false;
+        bool completion_dispatched = false;
+    };
+
     // Internal methods
     std::string generate_process_id();
     bool create_fifo(const std::string& path);
@@ -175,14 +196,21 @@ private:
     void clear_file(const std::string& path);
     bool is_process_running(pid_t pid) const;
     bool kill_process_group(pid_t pid);
+    void ensure_monitor_locked();
+    void monitor_loop(std::stop_token stop_token);
 
     // Configuration
     static constexpr size_t MAX_OUTPUT_SIZE = 100000;  // 100KB max output buffer
     static constexpr const char* TEMP_DIR_PREFIX = "daedalus_bg_";
 
-    // State
+    // State. waitpid() runs only under mutex_ (natural exits on the monitor,
+    // explicit kills on the stopping thread), so polling and status queries
+    // can never race it for the exit status.
     std::filesystem::path temp_base_;
-    std::unordered_map<std::string, BackgroundProcessInfo> processes_;
+    mutable std::mutex mutex_;
+    std::condition_variable monitor_cv_;
+    std::jthread monitor_thread_;
+    std::unordered_map<std::string, ProcessEntry> processes_;
     int process_counter_ = 0;
 };
 

@@ -38,7 +38,7 @@ public:
 
     [[nodiscard]] std::string get_name() const override { return "execute_bash"; }
     [[nodiscard]] std::string get_description() const override {
-        return "Execute shell commands in the project root. Supports synchronous execution and background/detached processes for servers or long-running tools.";
+        return "Execute shell commands in the project root. Supports synchronous and background execution. After starting a background job, do not poll for completion: its final status and output arrive later as a user message that wakes the agent, so you may safely end the current turn with set_status(\"Done\") or stop. Poll only for intermediate output.";
     }
     [[nodiscard]] json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;

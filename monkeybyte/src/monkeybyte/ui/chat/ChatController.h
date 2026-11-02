@@ -53,6 +53,9 @@ public:
     ChatController& operator=(const ChatController&) = delete;
 
     void send_message(const std::string& text, const std::string& model_display);
+    // GTK-main-thread entry point for AgentSink::on_turn_requested. The
+    // library has already queued the completion; this only schedules a drain.
+    void run_pending_turn();
     void cancel();
     // Agent teardown. wipe_session=true (user /clear, 🗑 button, workspace
     // change) also removes daedalus's persisted message chain so the next
@@ -137,6 +140,9 @@ public:
     sigc::signal<void(ToolInfo)> tool_updated;         // progress / done
     sigc::signal<void(std::string)> error_message;
     sigc::signal<void(std::string)> finished;          // done reason
+    // Worker thread: a library-originated pending message needs a turn.
+    // ChatPanel marshals this to run_pending_turn() on the GTK main loop.
+    sigc::signal<void()> turn_request_received;
     // §7.6/§7.3/§7.8 — context compression (daedalus does it — the 90%
     // auto-compress loop or a host-triggered Agent::compress(), §7.8):
     // compacting fires when it starts (AgentState::Compressing), compacted
@@ -188,6 +194,10 @@ private:
     // (2026-10-04) — the drain loop joins the whole queue into ONE
     // message per submit + run_one_turn, in FIFO order.
     std::deque<std::string> queued_messages_;
+    // Set by a background-completion wake while the worker is busy. The
+    // final drain check consumes it together with Agent::pending_count(),
+    // closing the completion-vs-Idle race.
+    bool turn_requested_ = false;
 };
 
 } // namespace monkeybyte

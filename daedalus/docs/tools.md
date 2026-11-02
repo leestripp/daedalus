@@ -671,9 +671,28 @@ Result:
   "process_id": "bg_1",
   "pid": 12345,
   "command": "python3 -m http.server 8000",
-  "message": "Process started in background. Use action=poll with process_id to read output, action=send to write stdin, action=stop to terminate."
+  "message": "Process started in background. Its exit status and final output will arrive automatically. Poll only for intermediate output; use send for stdin or stop to terminate."
 }
 ```
+
+### Automatic completion delivery
+
+A natural exit is detected by the library's process monitor and delivered to
+the originating agent exactly once as a queued user message with source
+`trigger:background-process`. The message states success, a nonzero exit code,
+or the terminating signal, and includes bounded final stdout/stderr tails.
+The original `action=start` tool call still returns immediately; completion is
+a later event, not a second result for that closed tool call. After starting a
+background job, the agent may safely finish the current turn with
+`set_status("Done")` or `stop`: when the process exits, the completion message
+wakes the agent for a new turn. Do not repeatedly poll just to discover whether
+the process finished. `poll` remains available for intermediate output, and
+explicit `stop` is an intentional cancellation that does not generate a
+completion event.
+
+Hosts schedule this queued message through `AgentSink::on_turn_requested()`;
+see `docs/embedding.md`. Exit-status reaping is synchronized inside the process
+manager, so output/status polling cannot consume the exit notification first.
 
 ### Poll / send / stop
 

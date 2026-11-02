@@ -62,7 +62,7 @@ json BashTool::get_definition() const {
                     })},
                     {"background", json::object({
                         {"type", "boolean"},
-                        {"description", "Shorthand for action=start. Start the command detached and return a process_id."}
+                        {"description", "Shorthand for action=start. Start detached and return a process_id. Do not poll for completion: natural exit sends status and final output as a later user message that wakes the agent, so you may safely call set_status(\"Done\") or stop after starting. Poll only for intermediate output."}
                     })},
                     {"action", json::object({
                         {"type", "string"},
@@ -305,7 +305,9 @@ json BashTool::run_background(const std::string& command,
     // supplied one we ignore it for now; the returned ID is authoritative.
     (void)requested_id;
 
-    std::string process_id = manager.start_background(command, project_path);
+    std::string process_id = manager.start_background(
+        command, project_path,
+        ToolHandler::current_background_completion_handler());
     if (process_id.empty()) {
         return json::object({
             {"status", "error"},
@@ -326,7 +328,7 @@ json BashTool::run_background(const std::string& command,
         {"process_id", process_id},
         {"pid", static_cast<int>(info->pid)},
         {"command", command},
-        {"message", "Process started in background. Use action=poll with process_id to read output, action=send to write stdin, action=stop to terminate."}
+        {"message", "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you. Use action=poll only for intermediate output, action=send for stdin, or action=stop to terminate."}
     });
 }
 

@@ -27,7 +27,8 @@
 #include "daedalus/ProviderRegistry.h"  // §ProviderPlugins
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
 #include "core/FileIO.h"             // for execute_tool FileIO construction
-#include "core/Logger.h"             // LOG_ERROR for on_error file logging
+#include "core/Logger.h"
+#include "core/BackgroundProcessManager.h"             // LOG_ERROR for on_error file logging
 #include "core/SessionMemory.h"      // internal subsystem (src/core/)
 #include "core/SkillManager.h"       // internal subsystem (src/core/)
 #include "tools/ToolHandler.h"       // internal subsystem (src/tools/)
@@ -131,7 +132,9 @@ AgentImpl::AgentImpl(AgentConfig cfg, std::shared_ptr<AgentSink> sink)
     , sink_(std::move(sink))
     , body_(std::make_unique<Body>())
     , host_ctx_(std::make_shared<LibraryToolContext>(cfg_))
+    , background_completion_state_(std::make_shared<BackgroundCompletionState>())
 {
+    background_completion_state_->agent = this;
     // §v0.5.0: settings moved to SQLite. AgentConfig::settings_path /
     // mcp_servers_path / mcp_env_path / memory_dir are now deprecated
     // ([[deprecated]] in default_paths.h) — the library reads from
@@ -182,6 +185,10 @@ void AgentImpl::set_state(AgentState s) noexcept
 void AgentImpl::initialize()
 {
     if (initialized_) return;
+    {
+        std::lock_guard lock(background_completion_state_->mutex);
+        background_completion_state_->agent = this;
+    }
 
     // §logging: give the Logger a project-scoped home before anything else
     // logs. If it already self-initialized with the cwd fallback (a LOG_*
@@ -647,6 +654,10 @@ void AgentImpl::rebind_mcp_factory()
 
 AgentImpl::~AgentImpl()
 {
+    {
+        std::lock_guard lock(background_completion_state_->mutex);
+        background_completion_state_->agent = nullptr;
+    }
     // §MCP-CONTROL-CORE: never leave a dangling manager pointer or a
     // `this`-capturing handler in the process-global factory. Hosts are
     // not required to call shutdown() before destruction (monkeybyte's
@@ -662,6 +673,10 @@ AgentImpl::~AgentImpl()
 void AgentImpl::shutdown()
 {
     if (!initialized_) return;
+    {
+        std::lock_guard lock(background_completion_state_->mutex);
+        background_completion_state_->agent = nullptr;
+    }
     // §CRASH-4 (2026-07-16): uninstall crash handlers BEFORE
     // tearing down LLMClient; otherwise the signal handler would
     // iterate a stale `messages_` pointer as Messages destructs.
@@ -822,8 +837,70 @@ void AgentImpl::record_terminal_error(daedalus::ErrorKind kind,
     turn_terminal_error_ = daedalus::AgentError{kind, std::move(message)};
 }
 
+ToolHandler::BackgroundCompletionHandler
+AgentImpl::make_background_completion_handler()
+{
+    const std::weak_ptr<BackgroundCompletionState> weak_state =
+        background_completion_state_;
+    return [weak_state](const BackgroundProcessInfo& info,
+                        const ProcessOutput& output) {
+        const auto state = weak_state.lock();
+        if (!state) return;
+        std::lock_guard lock(state->mutex);
+        if (state->agent) {
+            state->agent->handle_background_completion(info, output);
+        }
+    };
+}
+
+void AgentImpl::bind_background_completion_handler()
+{
+    ToolHandler::set_background_completion_handler(
+        make_background_completion_handler());
+}
+
+void AgentImpl::handle_background_completion(
+    const BackgroundProcessInfo& info,
+    const ProcessOutput& output)
+{
+    constexpr std::size_t max_output_tail = 6000;
+    const auto tail = [](const std::string& text) {
+        if (text.size() <= max_output_tail) return text;
+        return "[... earlier output truncated ...]\n"
+               + text.substr(text.size() - max_output_tail);
+    };
+
+    nlohmann::json event{
+        {"process_id", info.process_id},
+        {"pid", info.pid},
+        {"command", info.command},
+        {"working_dir", info.working_dir},
+        {"exit_code", output.exit_code},
+        {"signaled", output.signaled},
+        {"signal", output.signal_num}
+    };
+    if (!output.stdout.empty()) event["stdout_tail"] = tail(output.stdout);
+    if (!output.stderr.empty()) event["stderr_tail"] = tail(output.stderr);
+
+    const std::string outcome = output.signaled
+        ? "terminated by signal " + std::to_string(output.signal_num)
+        : output.exit_code == 0
+            ? "completed successfully (exit code 0)"
+            : "failed (exit code " + std::to_string(output.exit_code) + ")";
+    const std::string text =
+        "A background process you started has " + outcome
+        + ". Review this result and continue any dependent work; "
+          "do not poll or restart it unless the task requires it.\n"
+        + event.dump(2, ' ', false,
+                     nlohmann::json::error_handler_t::replace);
+
+    submit_user_message(text, {}, "trigger:background-process");
+    if (sink_) sink_->on_turn_requested("trigger:background-process");
+}
+
 void AgentImpl::run_one_turn(std::stop_token st)
 {
+    bind_background_completion_handler();
     if (!initialized_) initialize();
     // §MCP-CONTROL-CORE: multi-agent hosts share the global tool factory;
     // claim the MCP binding for THIS turn before anything executes.
@@ -1257,6 +1334,7 @@ nlohmann::json AgentImpl::execute_tool(const std::string& name,
         ~SkillManagerGuard() { SkillManager::set_current(prev_); }
     } skill_guard(body_->skill_manager.get());
 
+    bind_background_completion_handler();
     nlohmann::json result = ToolHandler::execute_tool_call(
         tool_call, file_io, nullptr, tool_filter_);
 

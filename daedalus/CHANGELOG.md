@@ -31,6 +31,20 @@
 
 ### Added
 
+- **Background process completion notifications.** `execute_bash` background
+  jobs now report natural success, nonzero exit, or signal termination to the
+  originating agent exactly once, with bounded final output, instead of
+  requiring the model to poll for terminal status. Delivery uses the existing
+  pending queue with origin `trigger:background-process`; the initial start
+  tool call still returns normally. The new `AgentSink::on_turn_requested()`
+  wake-up lets idle hosts schedule that queued message without duplicating it.
+  The model-facing tool description explicitly permits ending the current
+  turn with `set_status("Done")` or `stop`; the completion wakes a later turn.
+  MonkeyByte and icarus implement the scheduling path, including safe drain
+  behavior when a completion arrives as a worker goes idle. Process reaping is
+  synchronized with polling and explicit stops, callbacks are isolated per
+  agent, and late exits are lifetime-gated against agent destruction.
+
 - **§K3.1 (2026-10-25): Kimi K3.1 Pro and Highspeed support across
   daedalus, icarus, and monkeybyte.** The Moonshot plugin now knows the
   platform IDs `kimi-k3.1-pro[-highspeed]` and Kimi Code IDs

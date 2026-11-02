@@ -9,6 +9,10 @@
 #include <string>
 #include <chrono>
 #include <thread>
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <csignal>
 
 using namespace std::chrono_literals;
 
@@ -160,4 +164,93 @@ TEST_CASE("BackgroundProcessManager - cleanup all") {
     // Verify all stopped
     auto active = manager.list_active_processes();
     CHECK(active.empty());
+}
+TEST_CASE("BackgroundProcessManager - natural exit callback is exactly once") {
+    auto& manager = BackgroundProcessManager::get_instance();
+    manager.cleanup_all();
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    int calls = 0;
+    BackgroundProcessInfo completed;
+    ProcessOutput final_output;
+
+    const std::string id = manager.start_background(
+        "printf 'callback-output'; exit 0", "",
+        [&](const BackgroundProcessInfo& info, const ProcessOutput& output) {
+            {
+                std::lock_guard lock(mutex);
+                ++calls;
+                completed = info;
+                final_output = output;
+            }
+            cv.notify_all();
+        });
+    REQUIRE(!id.empty());
+
+    // Status polling must coexist with the monitor rather than racing it
+    // for waitpid(). The callback still owns terminal-status delivery.
+    for (int i = 0; i < 20; ++i) {
+        (void)manager.poll_output(id);
+        std::this_thread::sleep_for(5ms);
+    }
+    {
+        std::unique_lock lock(mutex);
+        REQUIRE(cv.wait_for(lock, 2s, [&] { return calls == 1; }));
+        CHECK(completed.process_id == id);
+        CHECK(completed.exit_code == 0);
+        CHECK(!completed.signaled);
+        CHECK(final_output.exited);
+        CHECK(final_output.stdout == "callback-output");
+    }
+    std::this_thread::sleep_for(30ms);
+    CHECK(calls == 1);
+    CHECK(manager.poll_output(id).exit_code == 0);
+}
+
+TEST_CASE("BackgroundProcessManager - callbacks preserve failure and signal status") {
+    auto& manager = BackgroundProcessManager::get_instance();
+    manager.cleanup_all();
+
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::vector<ProcessOutput> outputs;
+    const auto callback = [&](const BackgroundProcessInfo&,
+                              const ProcessOutput& output) {
+        {
+            std::lock_guard lock(mutex);
+            outputs.push_back(output);
+        }
+        cv.notify_all();
+    };
+
+    const std::string failed = manager.start_background("exit 23", "", callback);
+    const std::string signaled = manager.start_background("kill -TERM $$", "", callback);
+    REQUIRE(!failed.empty());
+    REQUIRE(!signaled.empty());
+
+    {
+        std::unique_lock lock(mutex);
+        REQUIRE(cv.wait_for(lock, 2s, [&] { return outputs.size() == 2; }));
+    }
+    CHECK(manager.get_process_info(failed)->exit_code == 23);
+    CHECK(manager.get_process_info(signaled)->signaled);
+    CHECK(manager.get_process_info(signaled)->signal_num == SIGTERM);
+    std::this_thread::sleep_for(30ms);
+    CHECK(outputs.size() == 2);
+}
+
+TEST_CASE("BackgroundProcessManager - explicit stop suppresses completion") {
+    auto& manager = BackgroundProcessManager::get_instance();
+    manager.cleanup_all();
+
+    std::atomic<int> calls{0};
+    const std::string id = manager.start_background(
+        "sleep 30", "", [&](const BackgroundProcessInfo&, const ProcessOutput&) {
+            ++calls;
+        });
+    REQUIRE(!id.empty());
+    CHECK(manager.stop_process(id));
+    std::this_thread::sleep_for(30ms);
+    CHECK(calls == 0);
 }

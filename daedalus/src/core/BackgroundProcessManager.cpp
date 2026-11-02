@@ -40,6 +40,11 @@ BackgroundProcessManager::BackgroundProcessManager()
 
 BackgroundProcessManager::~BackgroundProcessManager() {
     cleanup_all();
+    if (monitor_thread_.joinable()) {
+        monitor_thread_.request_stop();
+        monitor_cv_.notify_all();
+        monitor_thread_.join();
+    }
 }
 
 BackgroundProcessManager& BackgroundProcessManager::get_instance() {
@@ -241,103 +246,167 @@ bool BackgroundProcessManager::is_process_running(pid_t pid) const {
 
 bool BackgroundProcessManager::kill_process_group(pid_t pid) {
     if (pid <= 0) return false;
-    
-    // First try SIGTERM for graceful shutdown
+
     if (killpg(pid, SIGTERM) < 0) {
-        if (errno == ESRCH) return true;  // Already dead
+        if (errno == ESRCH) return true;
         return false;
     }
-    
-    // Give a moment to clean up
-    usleep(100000);  // 100ms
-    
-    // If still running, SIGKILL
+
+    usleep(100000);
     if (is_process_running(pid)) {
         killpg(pid, SIGKILL);
     }
-    
-    // Reap
-    int status;
-    waitpid(pid, &status, WNOHANG);
-    
+    // stop_process()/cleanup_all() hold mutex_, so this cannot race the
+    // monitor's waitpid(). Reap the killed child before its record is erased.
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
     return true;
 }
 
-std::string BackgroundProcessManager::start_background(const std::string& command,
-                                                       const std::string& cwd) {
+std::string BackgroundProcessManager::start_background(
+    const std::string& command,
+    const std::string& cwd,
+    CompletionCallback on_complete) {
     if (command.empty()) {
         return "";
     }
-    
-    // Generate process ID
-    std::string process_id = generate_process_id();
-    
-    // Create paths for FIFOs and output files
-    std::string fifo_path = (temp_base_ / (process_id + ".fifo")).string();
-    std::string stdout_path = (temp_base_ / (process_id + ".stdout")).string();
-    std::string stderr_path = (temp_base_ / (process_id + ".stderr")).string();
-    
-    // Create FIFO
+
+    std::lock_guard lock(mutex_);
+    const std::string process_id = generate_process_id();
+    const std::string fifo_path = (temp_base_ / (process_id + ".fifo")).string();
+    const std::string stdout_path = (temp_base_ / (process_id + ".stdout")).string();
+    const std::string stderr_path = (temp_base_ / (process_id + ".stderr")).string();
+
     if (!create_fifo(fifo_path)) {
         return "";
     }
-    
-    // Spawn process
-    pid_t pid = spawn_process(command, cwd, fifo_path, stdout_path, stderr_path);
+
+    const pid_t pid = spawn_process(command, cwd, fifo_path, stdout_path, stderr_path);
     if (pid < 0) {
         remove_fifo(fifo_path);
         return "";
     }
-    
-    // Store process info
-    BackgroundProcessInfo info;
-    info.process_id = process_id;
-    info.pid = pid;
-    info.command = command;
-    info.working_dir = cwd.empty() ? "." : cwd;
-    info.started_at = std::chrono::system_clock::now();
-    info.exited = false;
-    info.fifo_path = fifo_path;
-    info.stdout_path = stdout_path;
-    info.stderr_path = stderr_path;
-    
-    processes_[process_id] = info;
-    
+
+    ProcessEntry entry;
+    entry.info.process_id = process_id;
+    entry.info.pid = pid;
+    entry.info.command = command;
+    entry.info.working_dir = cwd.empty() ? "." : cwd;
+    entry.info.started_at = std::chrono::system_clock::now();
+    entry.info.fifo_path = fifo_path;
+    entry.info.stdout_path = stdout_path;
+    entry.info.stderr_path = stderr_path;
+    entry.on_complete = std::move(on_complete);
+
+    processes_.emplace(process_id, std::move(entry));
+    ensure_monitor_locked();
+    monitor_cv_.notify_all();
     return process_id;
+}
+
+void BackgroundProcessManager::ensure_monitor_locked() {
+    if (monitor_thread_.joinable()) return;
+    monitor_thread_ = std::jthread(
+        [this](std::stop_token stop_token) { monitor_loop(stop_token); });
+}
+
+void BackgroundProcessManager::monitor_loop(std::stop_token stop_token) {
+    struct Completion {
+        BackgroundProcessInfo info;
+        ProcessOutput output;
+        CompletionCallback callback;
+    };
+
+    while (!stop_token.stop_requested()) {
+        std::vector<Completion> completions;
+        {
+            std::unique_lock lock(mutex_);
+            for (auto& [id, entry] : processes_) {
+                auto& info = entry.info;
+                if (info.exited) continue;
+
+                int status = 0;
+                const pid_t ret = waitpid(info.pid, &status, WNOHANG);
+                if (ret == 0) continue;
+                if (ret < 0 && errno == EINTR) continue;
+
+                info.exited = true;
+                if (ret == info.pid) {
+                    if (WIFEXITED(status)) {
+                        info.exit_code = WEXITSTATUS(status);
+                    } else if (WIFSIGNALED(status)) {
+                        info.signaled = true;
+                        info.signal_num = WTERMSIG(status);
+                    }
+                } else if (ret < 0 && errno != ECHILD) {
+                    LOG_ERROR("[BackgroundProcess] waitpid failed for " + id
+                              + ": " + std::strerror(errno));
+                }
+
+                if (!entry.stop_requested && !entry.completion_dispatched
+                    && entry.on_complete) {
+                    entry.completion_dispatched = true;
+                    ProcessOutput output;
+                    output.stdout = read_file(info.stdout_path);
+                    output.stderr = read_file(info.stderr_path);
+                    output.exited = true;
+                    output.exit_code = info.exit_code;
+                    output.signaled = info.signaled;
+                    output.signal_num = info.signal_num;
+                    completions.push_back(
+                        {info, std::move(output), entry.on_complete});
+                }
+            }
+
+            // Idle processes need a short wait to observe exit; an empty
+            // manager sleeps until start_background() notifies it.
+            monitor_cv_.wait_for(
+                lock, processes_.empty() ? std::chrono::milliseconds(250)
+                                         : std::chrono::milliseconds(10));
+        }
+
+        // Agent submission and host wake-up can call back into tools. Never
+        // hold the manager mutex across user-provided completion callbacks.
+        for (auto& completion : completions) {
+            try {
+                completion.callback(completion.info, completion.output);
+            } catch (const std::exception& e) {
+                LOG_ERROR("[BackgroundProcess] completion callback failed for "
+                          + completion.info.process_id + ": " + e.what());
+            } catch (...) {
+                LOG_ERROR("[BackgroundProcess] completion callback failed for "
+                          + completion.info.process_id + ": unknown exception");
+            }
+        }
+    }
 }
 
 SendResult BackgroundProcessManager::send_to_process(
     const std::string& process_id,
     const std::string& input) {
-    
     SendResult result;
-    
+    std::lock_guard lock(mutex_);
+
     auto it = processes_.find(process_id);
     if (it == processes_.end()) {
         result.error = "Process not found: " + process_id;
         return result;
     }
-    
-    const auto& info = it->second;
-    
+
+    const auto& info = it->second.info;
     if (info.exited) {
         result.error = "Process has already exited";
         return result;
     }
-    
     if (!is_process_running(info.pid)) {
-        // Process died - update status
-        const_cast<BackgroundProcessInfo&>(info).exited = true;
         result.error = "Process is no longer running";
         return result;
     }
-    
-    // Write to FIFO
     if (!write_to_fifo(info.fifo_path, input)) {
         result.error = "Failed to write to process stdin";
         return result;
     }
-    
+
     result.success = true;
     result.bytes_sent = input.size();
     return result;
@@ -346,216 +415,107 @@ SendResult BackgroundProcessManager::send_to_process(
 ProcessOutput BackgroundProcessManager::poll_output(
     const std::string& process_id,
     bool clear_after_read) {
-    
     ProcessOutput output;
-    
+    std::lock_guard lock(mutex_);
+
     auto it = processes_.find(process_id);
-    if (it == processes_.end()) {
-        return output;
-    }
-    
-    auto& info = it->second;
-    
-    // Check if process has exited
-    if (!info.exited) {
-        int status;
-        pid_t ret = waitpid(info.pid, &status, WNOHANG);
-        if (ret == info.pid) {
-            info.exited = true;
-            if (WIFEXITED(status)) {
-                info.exit_code = WEXITSTATUS(status);
-            } else if (WIFSIGNALED(status)) {
-                info.signaled = true;
-                info.signal_num = WTERMSIG(status);
-            }
-        } else if (ret < 0 && errno == ECHILD) {
-            // Already reaped
-            info.exited = true;
-        }
-    }
-    
-    // Read output files
+    if (it == processes_.end()) return output;
+
+    auto& info = it->second.info;
     output.stdout = read_file(info.stdout_path);
     output.stderr = read_file(info.stderr_path);
-    
-    // Set exit status
     output.exited = info.exited;
     output.exit_code = info.exit_code;
     output.signaled = info.signaled;
     output.signal_num = info.signal_num;
-    
-    // Clear output files if requested
+
     if (clear_after_read) {
         clear_file(info.stdout_path);
         clear_file(info.stderr_path);
     }
-    
     return output;
 }
 
 bool BackgroundProcessManager::stop_process(const std::string& process_id) {
+    std::lock_guard lock(mutex_);
     auto it = processes_.find(process_id);
-    if (it == processes_.end()) {
-        return false;
-    }
-    
-    auto& info = it->second;
-    
-    if (info.exited) {
-        // Already dead, just cleanup
+    if (it == processes_.end()) return false;
+
+    auto& entry = it->second;
+    entry.stop_requested = true;
+    if (!entry.info.exited) {
+        const bool result = kill_process_group(entry.info.pid);
+        entry.info.exited = true;
+        entry.info.signaled = true;
+        entry.info.signal_num = SIGKILL;
         cleanup_process(process_id);
-        return true;
+        return result;
     }
-    
-    // Kill process group
-    bool result = kill_process_group(info.pid);
-    
-    // Update status
-    info.exited = true;
-    info.signaled = true;
-    info.signal_num = SIGKILL;
-    
-    // Cleanup resources
+
     cleanup_process(process_id);
-    
-    return result;
+    return true;
 }
 
 std::vector<BackgroundProcessInfo> BackgroundProcessManager::list_active_processes() const {
+    std::lock_guard lock(mutex_);
     std::vector<BackgroundProcessInfo> active;
-    
-    for (const auto& pair : processes_) {
-        const auto& info = pair.second;
-        if (!info.exited && is_process_running(info.pid)) {
-            active.push_back(info);
-        }
+    for (const auto& [id, entry] : processes_) {
+        if (!entry.info.exited) active.push_back(entry.info);
     }
-    
     return active;
 }
 
 std::optional<BackgroundProcessInfo> BackgroundProcessManager::get_process_info(
     const std::string& process_id) {
-    
+    std::lock_guard lock(mutex_);
     auto it = processes_.find(process_id);
-    if (it == processes_.end()) {
-        return std::nullopt;
-    }
-    
-    auto& info = it->second;
-    
-    // Check if process has exited if not already marked
-    if (!info.exited) {
-        int status;
-        pid_t ret = waitpid(info.pid, &status, WNOHANG);
-        if (ret == info.pid) {
-            // Process has exited
-            info.exited = true;
-            if (WIFEXITED(status)) {
-                info.exit_code = WEXITSTATUS(status);
-            } else if (WIFSIGNALED(status)) {
-                info.signaled = true;
-                info.signal_num = WTERMSIG(status);
-            }
-        } else if (ret < 0 && errno == ECHILD) {
-            // No child - process has exited
-            info.exited = true;
-        }
-    }
-    
-    return it->second;
+    if (it == processes_.end()) return std::nullopt;
+    return it->second.info;
 }
 
 bool BackgroundProcessManager::has_exited(const std::string& process_id) {
+    std::lock_guard lock(mutex_);
     auto it = processes_.find(process_id);
-    if (it == processes_.end()) {
-        return true;  // Not found = considered exited
-    }
-    
-    auto& info = it->second;
-    
-    // If already marked as exited, return true without checking
-    if (info.exited) {
-        return true;
-    }
-    
-    // Check if process has actually exited via waitpid
-    int status;
-    pid_t ret = waitpid(info.pid, &status, WNOHANG);
-    if (ret == info.pid) {
-        // Process has exited
-        info.exited = true;
-        if (WIFEXITED(status)) {
-            info.exit_code = WEXITSTATUS(status);
-        } else if (WIFSIGNALED(status)) {
-            info.signaled = true;
-            info.signal_num = WTERMSIG(status);
-        }
-        return true;
-    } else if (ret < 0 && errno == ECHILD) {
-        // No child - process has exited
-        info.exited = true;
-        return true;
-    }
-    
-    // Process still running
-    return false;
+    return it == processes_.end() || it->second.info.exited;
 }
 
 void BackgroundProcessManager::cleanup_process(const std::string& process_id) {
     auto it = processes_.find(process_id);
-    if (it == processes_.end()) {
-        return;
-    }
-    
-    const auto& info = it->second;
-    
-    // Remove FIFO
-    if (!info.fifo_path.empty()) {
-        remove_fifo(info.fifo_path);
-    }
-    
-    // Remove output files
+    if (it == processes_.end()) return;
+
+    const auto& info = it->second.info;
+    if (!info.fifo_path.empty()) remove_fifo(info.fifo_path);
     if (!info.stdout_path.empty()) {
-        std::filesystem::remove(info.stdout_path);
+        std::error_code ec;
+        std::filesystem::remove(info.stdout_path, ec);
     }
     if (!info.stderr_path.empty()) {
-        std::filesystem::remove(info.stderr_path);
+        std::error_code ec;
+        std::filesystem::remove(info.stderr_path, ec);
     }
-    
-    // Remove from map
     processes_.erase(it);
 }
 
 void BackgroundProcessManager::cleanup_all() {
-    // Stop all running processes
-    for (auto& pair : processes_) {
-        auto& info = pair.second;
-        if (!info.exited) {
-            kill_process_group(info.pid);
-        }
+    std::lock_guard lock(mutex_);
+    for (auto& [id, entry] : processes_) {
+        entry.stop_requested = true;
+        if (!entry.info.exited) kill_process_group(entry.info.pid);
     }
-    
-    // Clean up all process resources
+
     std::vector<std::string> ids;
-    for (const auto& pair : processes_) {
-        ids.push_back(pair.first);
-    }
-    
-    for (const auto& id : ids) {
-        cleanup_process(id);
-    }
-    
-    // Remove temp directory if empty
-    if (std::filesystem::exists(temp_base_)) {
-        try {
-            // Only remove if empty
-            for (const auto& entry : std::filesystem::directory_iterator(temp_base_)) {
-                // Not empty, just remove our files manually
-                std::filesystem::remove(entry.path());
-            }
-        } catch (const std::exception& e) {
-            // Ignore errors during cleanup
+    ids.reserve(processes_.size());
+    for (const auto& [id, entry] : processes_) ids.push_back(id);
+    for (const auto& id : ids) cleanup_process(id);
+
+    monitor_cv_.notify_all();
+    if (!std::filesystem::exists(temp_base_)) return;
+    try {
+        for (const auto& entry : std::filesystem::directory_iterator(temp_base_)) {
+            std::error_code ec;
+            std::filesystem::remove(entry.path(), ec);
         }
+    } catch (const std::exception&) {
+        // Best-effort temp cleanup only.
     }
 }
