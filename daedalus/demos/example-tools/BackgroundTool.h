@@ -9,7 +9,7 @@ class FileIO;
 class BackgroundTool : public BaseTool {
 public:
     std::string get_name() const override { return "background_process"; }
-    std::string get_description() const override { return "Start, send to, poll, list, and stop background server processes."; }
+    std::string get_description() const override { return "Start, send to, poll, list, and stop background server processes. Natural exits automatically return status and final output; after start you may safely call set_status(\"Done\") or stop instead of polling for completion."; }
     json get_definition() const override;
     json execute(const json& args, FileIO& file_io) override;
 

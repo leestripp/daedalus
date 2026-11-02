@@ -63,7 +63,8 @@ restarts it.
 - **POSIX constants are fine.** `STDOUT_FILENO`, `STDERR_FILENO`,
   `STDIN_FILENO` are used in `Subprocess.cpp` and
   `BackgroundProcessManager.cpp` to re-route child-process stdio
-  through pipes. The library never writes to those fds itself —
+  through output files and stdin FIFOs. The library never writes to those
+  fds itself —
   they exist only as targets for the *child's* dup2.
 - **Demos (`demos/daedalus-cli/`) are explicitly OUT OF SCOPE.**
   Demos own their terminal and use `std::cout` directly. Hosts can

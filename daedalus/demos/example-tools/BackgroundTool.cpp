@@ -17,7 +17,7 @@ json BackgroundTool::get_definition() const {
         {"type", "function"},
         {"function", json::object({
             {"name", get_name()},
-            {"description", "Manage background processes for server applications. Start processes in background, send input, poll output, and stop processes. Use this when you need to run a server or long-running process and communicate with it while continuing the reasoning loop."},
+            {"description", "Manage background processes for server applications. Start processes in background, send input, read intermediate output, and stop processes. Natural exits automatically deliver status and final output as a later user message that wakes the agent, so after start you may safely call set_status(\"Done\") or stop instead of polling for completion."},
             {"parameters", json::object({
                 {"type", "object"},
                 {"properties", json::object({
@@ -130,7 +130,7 @@ json BackgroundTool::handle_start(const json& args) {
         {"process_id", process_id},
         {"pid", static_cast<int>(info->pid)},
         {"command", info->command},
-        {"message", "Process started in background. Use process_id to send input, poll output, or stop it."}
+        {"message", "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you. Use process_id to send input, read intermediate output, or stop the process."}
     });
 }
 

@@ -61,12 +61,18 @@ int main() {
     std::string input;
     while (std::getline(std::cin, input) && input != "/quit") {
         agent.submit_user_message(std::move(input));
-        agent.run_one_turn();      // one user msg → loop → stop/cancel/error
+        agent.run_one_turn();      // drain queue → loop → stop/cancel/error
         std::cout << '\n';
     }
     // dtor calls shutdown() automatically; explicit call is also fine.
 }
 ```
+
+This deliberately minimal loop has no external wake-up source. A background
+completion submitted while it is blocked in `getline()` is consumed by the
+next `run_one_turn()` after user input. For proactive delivery while idle,
+implement `AgentSink::on_turn_requested()` and wake the host's normal input
+scheduler as described in **Wiring your own input source** below.
 
 Link with `-ldaedalus -lcurl -lpthread -lssl -lcrypto -lpng -lpoppler-cpp`
 (or whatever subset your host needs).
@@ -173,6 +179,7 @@ in what format, and what it means for your host application.
 | `on_tool_call` | `name` + `call_id` + `args` (JSON) | **Structured tool input** — the tool the LLM wants to execute |
 | `on_tool_progress` | `name` + `call_id` + `progress` (JSON) | **Tool progress updates** — `{stage, percent, message, output_chunk}` |
 | `on_tool_result` | `name` + `call_id` + `result` (JSON) | **Structured tool output** — tool execution result |
+| `on_turn_requested` | `source` (string) | **Queued library message needs a driving turn** — wake the host scheduler; never resubmit its text |
 | `on_state_change` | `from` + `to` (int enum values) | **State transitions** — agent lifecycle |
 | `on_error` | `kind` (enum) + `message` (string) + `will_retry` (bool) | **Structured LLM/API errors** — machine-readable failure channel |
 | `on_log` | `level` (enum) + `message` (string) | **Library diagnostics** — NOT LLM output |
@@ -405,7 +412,7 @@ void on_tool_result(std::string_view name,
     "process_id": "bg_1",
     "pid": 12345,
     "command": "python3 -m http.server 8000",
-    "message": "Process started in background. Its exit status and final output will arrive automatically. Poll only for intermediate output; use send for stdin or stop to terminate."
+    "message": "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you. Use action=poll only for intermediate output, action=send for stdin, or action=stop to terminate."
   }
 }
 ```
@@ -1238,8 +1245,10 @@ state machine transitions.
 session / per UI pane. To drive multiple Agents concurrently, give each
 its own thread.
 
-The agent calls sink methods on its own thread. Hosts that need to
-marshal events to a different thread (e.g. GTK4 main loop, web SSE)
+The agent calls ordinary sink methods on its driving thread.
+`on_turn_requested()` is the documented exception: it may arrive on the
+background-process monitor thread. Hosts that need to marshal events to a
+different thread (e.g. GTK4 main loop, web SSE)
 should post from inside the sink callback:
 
 ```cpp
@@ -1273,12 +1282,15 @@ agent:
    consumes it. Use this from any host (CLI, web, tests,
    background job) that has its own input pipeline.
 
-   Each submit queues exactly one message and each `run_one_turn()`
-   consumes exactly one — keep them paired 1:1. Submitting without a
-   matching `run_one_turn()` leaves the queue off-by-one forever: every
-   later turn processes the *previous* queued message instead of the
-   fresh prompt. `Agent::pending_count()` returns the number of
-   unconsumed queued messages so hosts can detect the drift.
+   Each submit queues one message. At the start of a turn,
+   `run_one_turn()` consumes the ENTIRE pending queue and joins messages
+   FIFO into one model input (texts blank-line-separated, images
+   concatenated, origins retained). Submitting while idle without a
+   matching `run_one_turn()` leaves the message pending until the next
+   turn; `Agent::pending_count()` reports how many messages are waiting.
+   Queue submission, inspection, editing, and cancellation are internally
+   synchronized and may be called from any thread; `run_one_turn()` itself
+   remains confined to the host's single driving thread.
 
    Background process completion is the library's own use of this queue.
    It submits one `trigger:background-process` message and then calls

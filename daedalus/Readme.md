@@ -151,10 +151,10 @@ int main() {
     std::string input;
     while (std::getline(std::cin, input) && input != "/quit") {
         agent.submit_user_message(std::move(input));
-        agent.run_one_turn();          // one turn = one user msg → loop → stop/cancel/error
+        agent.run_one_turn();          // drain queue → loop → stop/cancel/error
         std::cout << '\n';
     }
-    // dtor calls cleanup() automatically; explicit call is also fine.
+    // dtor calls shutdown() automatically; explicit call is also fine.
     return 0;
 }
 ```
@@ -162,6 +162,11 @@ int main() {
 Link with `libdaedalus.a`. The library does not call `std::cout`,
 `std::cerr`, or `std::cin` itself — every UI bit flows through the sink
 or the host's main loop.
+
+This minimal stdin loop consumes library-originated messages on its next turn.
+A production host that must process background completions while idle should
+implement `AgentSink::on_turn_requested()` to wake its normal scheduler; do
+not resubmit the already-queued message.
 
 See [`docs/embedding.md`](docs/embedding.md) for the full embedding guide
 and the complete `AgentSink` event reference.
@@ -658,7 +663,7 @@ Underlying infrastructure:
 - **Network Tools (OmniNet-backed)**: `http_request` (HTTP/HTTPS), `dns_lookup`, `tcp_check`, `tls_inspect`, plus 4 WebSocket tools (`websocket_connect/send/recv/close`). Replaces Bash `curl` + `python3 -c "import urllib"`. See [docs/network-tools.md](docs/network-tools.md).
 - **Sub-Agents**: Spawn parallel daedalus processes for independent tasks
 - **Session Memory**: Learns from your project across sessions
-- **Background Processes**: Run and communicate with long-running servers
+- **Background Processes**: Run and communicate with long-running servers; natural exits proactively return status and bounded final output, so agents can end their turn instead of polling for completion
 - **Context Compression**: "70/30 Split" algorithm - compresses oldest 70%, keeps newest 30% intact for seamless continuation
 - **Manager Mode**: Orchestrate multiple sub-agents for complex projects
 - **SSE Streaming**: Token-by-token responses via `on_assistant_delta` sink callbacks — turn off with `cfg.stream = false` for buffered batch hosts. (§Phase 9.8)
@@ -746,7 +751,10 @@ registered example tools under `demos/example-tools/`.
   commands stream sanitised output chunks to `AgentSink::on_tool_progress()`
   while they execute; chunks are sanitised incrementally
   (`SanitizedOutputStream`), so concatenating them reproduces the exact final
-  output — chunk boundaries can never corrupt a sequence. This is the
+  output — chunk boundaries can never corrupt a sequence. Background
+  starts also deliver one automatic `trigger:background-process` completion
+  with exit status and final output; the agent may call `set_status("Done")`
+  or `stop` and be woken when the process exits. This is the
   **only** core tool that calls
   `AgentSink::request_command_approval()` (unless `auto_approve` is set).
 

@@ -294,7 +294,9 @@ docs/
 - Runs either the interactive REPL or the A2A agent daemon based on flags.
 - In REPL mode: reads lines from `InputReader`, submits to `daedalus::Agent`,
   and renders output via `ConsoleAgentSink`. Contains all slash-command
-  handlers.
+  handlers. Before blocking for input it drains library-originated pending
+  messages (background completions); the sink's `on_turn_requested()` wakes
+  `InputQueue`, while `run_one_turn()` stays on the main thread.
 - Identifies itself to LLM providers via the User-Agent
   `daedalus-icarus/<version>` (`AgentConfig::user_agent`, §UA 2026-07-29).
   `<version>` is the `ICARUS_VERSION` compile definition, derived by
@@ -315,7 +317,8 @@ docs/
 ### `src/ConsoleAgentSink.cpp` — Terminal sink
 
 - Implements `daedalus::AgentSink` callbacks, including the structured
-  `on_error` channel.
+  `on_error` channel and `on_turn_requested()` background-completion wake-up.
+  The latter only wakes the input queue; it never resubmits message text.
 - Buffers assistant text deltas; flushes at newline or 2048-char threshold.
 - Prints `output_chunk` tool-progress events (live bash stdout/stderr,
   pre-sanitised by daedalus) verbatim to stdout; `on_tool_result` then

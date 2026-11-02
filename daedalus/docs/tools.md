@@ -646,7 +646,8 @@ pair. See `docs/embedding.md` § `on_tool_progress` for the host contract.
 {
   "name": "execute_bash",
   "arguments": {
-    "command": "python3 -m http.server 8000"
+    "command": "python3 -m http.server 8000",
+    "background": true
   }
 }
 ```
@@ -671,7 +672,7 @@ Result:
   "process_id": "bg_1",
   "pid": 12345,
   "command": "python3 -m http.server 8000",
-  "message": "Process started in background. Its exit status and final output will arrive automatically. Poll only for intermediate output; use send for stdin or stop to terminate."
+  "message": "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you. Use action=poll only for intermediate output, action=send for stdin, or action=stop to terminate."
 }
 ```
 
@@ -697,7 +698,7 @@ manager, so output/status polling cannot consume the exit notification first.
 ### Poll / send / stop
 
 ```json
-// Read latest output
+// Read intermediate output (not needed for completion notification)
 { "name": "execute_bash", "arguments": { "action": "poll", "process_id": "bg_1" } }
 
 // Send stdin data
@@ -1585,7 +1586,7 @@ None required.
 
 ## 16. `background_process`
 
-Manage background processes for server applications. Start processes in background, send input, poll output, and stop processes. Use this when you need to run a server or long-running process and communicate with it while continuing the reasoning loop.
+Manage background processes for server applications. Start processes in background, send input, read intermediate output, and stop processes. Natural exits automatically deliver status and bounded final output as a later `trigger:background-process` user message. After `start`, the agent may safely finish the current turn with `set_status("Done")` or `stop`; the completion wakes a later turn, so polling for terminal status is unnecessary.
 
 ### Actions
 
@@ -1631,7 +1632,7 @@ Manage background processes for server applications. Start processes in backgrou
   "process_id": "bg_001",
   "pid": 12345,
   "command": "./my_server --port 8080",
-  "started_at": "2024-01-15T10:30:00Z"
+  "message": "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you."
 }
 ```
 
@@ -1720,6 +1721,8 @@ Manage background processes for server applications. Start processes in backgrou
 - Output is captured to files to prevent memory issues with large outputs
 - Process IDs are unique identifiers returned by the start action
 - Use the `list` action to see all active background processes
+- Natural exits generate one completion message; explicit `stop` does not
+- Use `poll` only for intermediate output, never to wait for terminal status
 - Processes are automatically cleaned up when daedalus exits
 
 ---

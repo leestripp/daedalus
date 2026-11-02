@@ -74,3 +74,15 @@ over under `state_mutex_`). The host-side queue therefore stays, and
 `clear_pending_messages()` is now used to drop messages stranded when a
 cancel lands between `submit_user_message()` and `run_one_turn()`'s
 consume (previously an unrecoverable off-by-one).
+
+## Updated resolution (2026-11-02, background completion delivery)
+
+The queue is now internally synchronized as originally requested:
+`submit_user_message()`, `pending_count()`, queue inspection/editing, and
+`cancel()` are callable from any thread. Only `run_one_turn()` remains
+restricted to the single driving thread. This lets the background-process
+monitor submit directly to the owning Agent and lets MonkeyByte perform its
+final `pending_count()` race-closure check under `state_mutex_`.
+
+The "Host-side workaround" and first "Resolution" sections above are retained
+as historical context; their driving-thread-only queue contract is superseded.

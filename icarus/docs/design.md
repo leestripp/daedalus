@@ -87,6 +87,14 @@ linenoise-backed `InputReader` and handed to the main loop via an
 driven by a single canonical table (`detail::kSlashCommands` in
 `src/ui/InputReader.h`) — add new commands there and in `main.cpp`.
 
+Background process exits use the same main-thread scheduler without creating
+a second agent thread. Daedalus queues the `trigger:background-process`
+message and invokes `ConsoleAgentSink::on_turn_requested()` on its process
+monitor; the sink only wakes `InputQueue`. Before blocking for terminal input,
+the main loop checks `Agent::pending_count()` and drives any queued completion
+with `run_one_turn()`. The completion is never submitted again, and the agent
+may safely end the preceding turn with `Done` or `stop` instead of polling.
+
 ### 3.2 A2A Agent Daemon Mode (`--a2a-agent`)
 
 ```
