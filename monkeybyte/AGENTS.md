@@ -375,6 +375,12 @@ re-configure (`CONFIGURE_DEPENDS`).
   webkitgtk-6.0 2.52.3 build has a broken JSC Date numeric path
   (Date.now() = INT32_MIN in web processes) - platform bug, breaks
   YouTube; see browser_bugs.md before suspecting app code.
+- **Browser resource bounds (2026-10-27):** long URLs must remain ellipsized
+  in EditorArea's header (full URL in the tooltip), not dictate natural
+  width. The mbConsole hook must also stay batched and size-bounded: forwarding
+  every console call synchronously across WebKit IPC lets each chatty tab
+  flood the GTK main thread and allocate unbounded message strings. Keep the
+  burst cap/drop warning and native direct-post bounds when changing it.
 
 ## Security considerations
 

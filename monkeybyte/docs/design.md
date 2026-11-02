@@ -893,7 +893,9 @@ gain better integration, proper IME, print margins, etc., for free.)
   (`EditorArea::open_url`), which stores the URL in `Tab::path` (never
   collides with workspace-file coordination, which matches absolute paths).
   Browser tabs disable Save/Delete, skip tree-reveal, show a globe icon, and
-  keep no history across restarts. It is a real web view: arbitrary
+  keep no history across restarts. The URL in the file header is ellipsized
+  (with the full address in its tooltip), so an arbitrarily long URL cannot
+  widen the editor or overlap the sidebar. It is a real web view: arbitrary
   remote/local URLs load with JavaScript enabled, always by explicit user or
   agent action.
 * **Agent browser tools**: the `browser.*` UI-control commands let the
@@ -920,7 +922,10 @@ gain better integration, proper IME, print margins, etc., for free.)
   `browser.console {max_entries?, clear?, tab?}` reads back console.* and
   page-error entries captured by a document-start user script
   (`ui/HtmlView`, `mbConsole` script message handler, bounded 200-entry
-  buffer cleared on every navigation start).
+  buffer cleared on every navigation start). To keep chatty pages from
+  flooding the GTK main thread, the script batches each 50 ms burst (at most
+  100 entries, with a dropped-message warning) and caps message text; native
+  handling independently bounds direct script posts.
 * **File uploads in browser tabs**: a page's `<input type="file">` works
   out of the box — `ui/HtmlView` does not handle
   `WebKitWebView::run-file-chooser`, so WebKitGTK's default handler shows

@@ -406,14 +406,47 @@ constexpr char kConsoleHookScript[] = R"JS(
 (function() {
     if (window.__mbConsoleHooked) return;
     window.__mbConsoleHooked = true;
+    var pending = [];
+    var dropped = 0;
+    var flushScheduled = false;
+    function flush() {
+        flushScheduled = false;
+        var entries = pending;
+        pending = [];
+        if (dropped > 0) {
+            entries.unshift({level: 'warn', text: '[monkeybyte] dropped ' +
+                dropped + ' console messages during a logging burst'});
+            dropped = 0;
+        }
+        try {
+            window.webkit.messageHandlers.mbConsole.postMessage(
+                JSON.stringify(entries));
+        } catch (e) {}
+    }
     function post(level, args) {
         try {
             var text = Array.prototype.map.call(args, function(a) {
                 if (typeof a === 'string') return a;
                 try { return JSON.stringify(a); } catch (e) { return String(a); }
             }).join(' ');
-            window.webkit.messageHandlers.mbConsole.postMessage(
-                JSON.stringify({level: level, text: text}));
+            // Bound retained text without splitting a UTF-16 surrogate pair.
+            if (text.length > 4096) {
+                var end = 4096;
+                var last = text.charCodeAt(end - 1);
+                if (last >= 0xD800 && last <= 0xDBFF) --end;
+                text = text.slice(0, end) + '…';
+            }
+            // One IPC delivery per burst, not one per console call. Keep the
+            // newest entries just like the native bounded capture buffer.
+            if (pending.length >= 100) {
+                pending.shift();
+                ++dropped;
+            }
+            pending.push({level: level, text: text});
+            if (!flushScheduled) {
+                flushScheduled = true;
+                setTimeout(flush, 50);
+            }
         } catch (e) {}
     }
     ['error', 'warn', 'log'].forEach(function(level) {
@@ -433,17 +466,9 @@ constexpr char kConsoleHookScript[] = R"JS(
 })();
 )JS";
 
-void on_console_message(WebKitUserContentManager*, JSCValue* message,
-                        gpointer data) {
-    auto* state = static_cast<BrowserState*>(data);
-    if (!jsc_value_is_string(message)) return;
-    char* raw = jsc_value_to_string(message);
-    const auto entry = nlohmann::json::parse(raw, nullptr,
-                                             /*allow_exceptions=*/false);
-    g_free(raw);
-    if (entry.is_discarded()) return;
-    if (state->console.size() >= kMaxConsoleEntries)
-        state->console.pop_front();
+constexpr std::size_t kMaxConsoleTextBytes = 16 * 1024;
+
+void append_console_entry(BrowserState* state, const nlohmann::json& entry) {
     // Page-controlled input: any site can post arbitrary JSON to this
     // handler — entry.value() would throw type_error through the C callback.
     auto get_str = [&entry](const char* key, const char* fallback) {
@@ -451,7 +476,44 @@ void on_console_message(WebKitUserContentManager*, JSCValue* message,
         return (it != entry.end() && it->is_string()) ? it->get<std::string>()
                                                       : std::string(fallback);
     };
-    state->console.push_back({get_str("level", "log"), get_str("text", "")});
+    auto level = get_str("level", "log");
+    if (level != "error" && level != "warn" && level != "log") level = "log";
+    auto text = get_str("text", "");
+    // Also cap direct posts that bypass the injected script. JSON parsing
+    // has validated UTF-8, so backing up to a lead byte preserves the text.
+    if (text.size() > kMaxConsoleTextBytes) {
+        auto end = kMaxConsoleTextBytes;
+        while (end > 0 &&
+               (static_cast<unsigned char>(text[end]) & 0xC0) == 0x80)
+            --end;
+        text.resize(end);
+        text += "…";
+    }
+    if (state->console.size() >= kMaxConsoleEntries)
+        state->console.pop_front();
+    state->console.push_back({std::move(level), std::move(text)});
+}
+
+void on_console_message(WebKitUserContentManager*, JSCValue* message,
+                        gpointer data) {
+    auto* state = static_cast<BrowserState*>(data);
+    if (!jsc_value_is_string(message)) return;
+    char* raw = jsc_value_to_string(message);
+    const auto payload = nlohmann::json::parse(raw, nullptr,
+                                               /*allow_exceptions=*/false);
+    g_free(raw);
+    if (payload.is_discarded()) return;
+    if (!payload.is_array()) {
+        append_console_entry(state, payload); // direct/legacy single entry
+        return;
+    }
+    // A hostile page can post an arbitrarily large array directly. Only the
+    // newest entries can survive the native buffer, so ignore the rest.
+    const auto first = payload.size() > kMaxConsoleEntries
+                           ? payload.size() - kMaxConsoleEntries
+                           : 0;
+    for (auto i = first; i < payload.size(); ++i)
+        append_console_entry(state, payload[i]);
 }
 
 void hook_console(WebKitWebView* view, BrowserState* state) {
@@ -584,6 +646,7 @@ Gtk::Widget* browser_page(WebKitWebView* view, const std::string& initial_url) {
     forward->set_sensitive(false);
     auto* address = Gtk::make_managed<Gtk::Entry>();
     address->set_hexpand(true);
+    address->set_width_chars(1);
     address->set_text(initial_url);
 
     back->signal_clicked().connect([view] { webkit_web_view_go_back(view); });

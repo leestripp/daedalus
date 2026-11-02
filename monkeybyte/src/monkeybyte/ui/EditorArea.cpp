@@ -76,6 +76,12 @@ EditorArea::EditorArea(AppServices& services)
     header_.add_css_class("file-header");
     header_name_.set_halign(Gtk::Align::START);
     header_name_.set_hexpand(true);
+    // Browser tabs use the full URL as their name. An unbroken URL must not
+    // become the editor's natural width and push the browser over the
+    // sidebar; the tooltip still exposes the complete address.
+    header_name_.set_width_chars(1);
+    header_name_.set_max_width_chars(60);
+    header_name_.set_ellipsize(Pango::EllipsizeMode::END);
     header_status_.add_css_class("muted");
     save_btn_.set_label("💾 Save");
     save_btn_.set_has_frame(false);
@@ -289,6 +295,7 @@ void EditorArea::rebuild_tab_bar() {
 void EditorArea::update_header() {
     if (active_ == kNoActive || active_ >= tabs_.size()) {
         header_name_.set_text("");
+        header_name_.set_tooltip_text("");
         header_status_.set_text("");
         save_btn_.set_sensitive(false);
         delete_btn_.set_sensitive(false);
@@ -296,6 +303,7 @@ void EditorArea::update_header() {
     }
     const auto& tab = tabs_[active_];
     header_name_.set_text(tab.name + (tab.is_dirty ? " ●" : ""));
+    header_name_.set_tooltip_text(tab.name);
     // Viewer tabs are read-only: Save never applies. Browser tabs hold a
     // URL, not a workspace file: Delete does not apply either.
     save_btn_.set_sensitive(tab.kind == FileOpenMode::Text && tab.is_dirty &&

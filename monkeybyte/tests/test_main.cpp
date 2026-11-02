@@ -1723,6 +1723,75 @@ void test_fountain_zoom() {
           "zoom: snapped to 5% steps");
 }
 
+void test_browser_long_url_layout() {
+    auto app = Gtk::Application::create();
+    if (!Gdk::Display::get_default()) {
+        std::cout << "  skip: browser long URL layout (no display)\n";
+        return;
+    }
+    auto* page = monkeybyte::HtmlView::create_browser("");
+    auto* nav = dynamic_cast<Gtk::Box*>(page->get_first_child());
+    check(nav != nullptr, "browser layout: navigation bar exists");
+    if (!nav) return;
+    Gtk::Entry* address = nullptr;
+    for (auto* child = nav->get_first_child(); child;
+         child = child->get_next_sibling()) {
+        address = dynamic_cast<Gtk::Entry*>(child);
+        if (address) break;
+    }
+    check(address != nullptr, "browser layout: address entry exists");
+    if (!address) return;
+    address->set_text("https://example.test/" + std::string(4000, 'x'));
+    const auto width =
+        page->measure(Gtk::Orientation::HORIZONTAL, -1);
+    std::cout << "  browser long URL width: minimum=" << width.sizes.minimum
+              << " natural=" << width.sizes.natural << '\n';
+    check(width.sizes.natural <= 600,
+          "browser layout: long URL cannot force a wide editor page");
+    delete page;
+}
+
+void test_browser_console_capture_is_bounded() {
+    auto app = Gtk::Application::create();
+    if (!Gdk::Display::get_default()) {
+        std::cout << "  skip: browser console bounds (no display)\n";
+        return;
+    }
+    Gtk::Window window;
+    auto* page = monkeybyte::HtmlView::create_browser(
+        "data:text/html,<script>"
+        "for(let i=0;i<250;i++)console.log('message-'+i);"
+        "console.log('x'.repeat(20000))"
+        "</script>");
+    window.set_child(*page);
+    window.show();
+    auto* view = monkeybyte::HtmlView::browser_view_of(page);
+    check(view != nullptr, "browser console: WebKit view exists");
+    if (!view) {
+        window.hide();
+        return;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(5);
+    auto entries = monkeybyte::HtmlView::console_entries(view);
+    while (entries.empty() && std::chrono::steady_clock::now() < deadline) {
+        while (g_main_context_iteration(nullptr, FALSE)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        entries = monkeybyte::HtmlView::console_entries(view);
+    }
+    check(entries.size() == 101,
+          "browser console: burst is batched and capped at 100 entries");
+    check(!entries.empty() && entries.front().level == "warn" &&
+              entries.front().text.find("dropped 151") != std::string::npos,
+          "browser console: dropped burst messages are reported");
+    check(!entries.empty() && entries.back().text.size() <= 16 * 1024 + 3,
+          "browser console: oversized message text is bounded");
+    monkeybyte::HtmlView::clear_console(view);
+    check(monkeybyte::HtmlView::console_entries(view).empty(),
+          "browser console: existing clear command still empties capture");
+    window.hide();
+}
+
 void test_scroll_pin_kinetic_cancel() {
     auto app = Gtk::Application::create();
     if (!Gdk::Display::get_default()) {
@@ -1825,6 +1894,8 @@ int main() {
     test_user_commands();
     test_html_to_text();
     test_fountain_zoom();
+    test_browser_long_url_layout();
+    test_browser_console_capture_is_bounded();
     test_scroll_pin_kinetic_cancel();
 
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n"
