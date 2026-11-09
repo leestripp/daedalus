@@ -71,6 +71,24 @@ target_link_libraries(daedalus_second_brain_tests PRIVATE
 )
 add_test(NAME second_brain_tests COMMAND daedalus_second_brain_tests)
 
+find_package(SQLite3 REQUIRED)
+add_executable(daedalus_second_brain_concurrency_tests
+    test_second_brain_concurrency.cpp
+)
+target_include_directories(daedalus_second_brain_concurrency_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_second_brain_concurrency_tests PRIVATE
+    daedalus
+    SQLite::SQLite3
+    pthread
+)
+add_test(NAME second_brain_concurrency_tests
+    COMMAND daedalus_second_brain_concurrency_tests)
+set_tests_properties(second_brain_concurrency_tests PROPERTIES TIMEOUT 120)
+
 add_executable(daedalus_brain_tool_tests
     test_brain_tool.cpp
 )

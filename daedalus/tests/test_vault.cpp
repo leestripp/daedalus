@@ -145,7 +145,7 @@ void test_tamper_and_wrong_key() {
     std::cout << "[ok] test_tamper_and_wrong_key" << std::endl;
 }
 
-// 6: secret values must not appear as plaintext in the DB file.
+// 6: secret values must not appear as plaintext in the persisted DB state.
 void test_no_plaintext_in_db_file() {
     auto root = fresh_dir("plaintext");
     auto store = daedalus::SettingsStore::for_home(root / "home");
@@ -154,10 +154,18 @@ void test_no_plaintext_in_db_file() {
     vault.remove("github/api-token");  // exercise delete too
     vault.store(sample_login());
 
-    std::ifstream f(root / "home" / "daedalus.db", std::ios::binary);
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    const std::string db_bytes = ss.str();
+    const auto read_bytes = [](const fs::path& path) {
+        std::ifstream in(path, std::ios::binary);
+        std::ostringstream bytes;
+        bytes << in.rdbuf();
+        return bytes.str();
+    };
+    const auto db_path = root / "home" / "daedalus.db";
+    // WAL is part of the logical on-disk database: recent rows may not have
+    // been checkpointed into the main file yet. Inspect both, which also
+    // extends the no-plaintext-secret check to recently written pages.
+    const std::string db_bytes = read_bytes(db_path) +
+                                 read_bytes(db_path.string() + "-wal");
     assert(db_bytes.find("ghp_supersecretvalue123") == std::string::npos);
     // Metadata IS plaintext by design:
     assert(db_bytes.find("github/api-token") != std::string::npos);

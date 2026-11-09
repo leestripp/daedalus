@@ -4,7 +4,7 @@
 > resolution, and migration recipes.** If anything in `Readme.md` or
 > other docs conflicts with this file, this file wins.
 >
-> *Last updated 2026-07-18.*
+> *Last updated 2026-11-09.*
 
 ---
 
@@ -74,7 +74,47 @@ DAEDALUS_HOME=/tmp/daedalus-test daedalus-cli --migrate-data-apply
 `<data_root>` defaults to `$XDG_DATA_HOME/daedalus` or `~/.local/share/daedalus`.
 And so on.
 
-### 1.3 XDG directory permissions
+### 1.3 Global Second Brain and multi-process storage
+
+The Global Second Brain is **user-tier**, shared by every project and host that
+uses the same data root:
+
+| Concrete file / dir | Resolves to | Notes |
+|---|---|---|
+| Markdown notes | `<data_root>/brain/{inbox,projects,areas,resources,archives}/` | Source of truth; one `<note-id>.md` per note |
+| Brain lock | `<data_root>/brain/.lock` | POSIX `flock(2)` shared for reads, exclusive for every mutation/reindex |
+| Settings + brain index | `<data_root>/daedalus.db` | SQLite settings plus rebuildable `brain_notes` / `brain_fts` tables |
+| SQLite WAL sidecars | `<data_root>/daedalus.db-wal`, `<data_root>/daedalus.db-shm` | Required runtime state; created as needed in WAL mode |
+
+All cooperating Daedalus processes protect the complete note
+read/modify/write/index sequence with the brain lock. Lock acquisition is
+bounded at five seconds and reports an explicit error on timeout. Capture ID
+allocation, append/update, move, remove, list/search/backlinks, and reindex are
+covered; process-local mutexes alone are not relied on.
+
+Every note replacement writes a unique temporary file in the destination
+folder, calls `fsync`, atomically renames it over the destination, and `fsync`s
+the directory. Temporary files use hidden `.…tmp.<pid>.<sequence>` names and
+are ignored by reindex. A crash therefore leaves complete old or new Markdown;
+a later reindex reconciles any file/index gap. Metadata and FTS changes commit
+in one SQLite transaction, as does each complete reindex. Reindex comparisons
+use nanosecond mtime plus size so same-size replacements within one second are
+still detected.
+
+`SettingsStore` enables and verifies **WAL journal mode**, retains a five-second
+SQLite busy timeout, and performs schema creation/migration inside
+`BEGIN IMMEDIATE` so fresh processes cannot race the singleton schema-version
+row. WAL must be on a local filesystem that supports SQLite WAL and POSIX
+locks; startup fails explicitly if WAL cannot be enabled. Treat `daedalus.db`
+and its `-wal` sidecar as one logical database during inspection or backup—use
+SQLite's backup mechanism or checkpoint before copying, not a bare copy of only
+the main file.
+
+The lock coordinates Daedalus processes, not arbitrary external editors.
+External tools should also use atomic write-and-rename when editing notes;
+reindex remains the recovery mechanism for manual file changes.
+
+### 1.4 XDG directory permissions
 
 `Agent::initialize()` calls `Paths::ensure_directories()` which
 auto-creates the four XDG roots with the secure permissions shown below.
@@ -99,7 +139,7 @@ mounts).
 | `user_cache_root()` | 0700 | Private — cache may contain PII |
 | Project directories | 0755 | Standard project permissions |
 
-### 1.4 System tier (read-only)
+### 1.5 System tier (read-only)
 
 The library also looks for read-only system-shipped data:
 

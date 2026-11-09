@@ -3,7 +3,7 @@
 > Complete reference for the `daedalus::SettingsStore` API (v0.4.0+) and
 > the migration path from the legacy JSON-based `SettingsManager`.
 
-*Last updated 2026-07-20.*
+*Last updated 2026-11-09.*
 
 ---
 
@@ -25,6 +25,22 @@ settings store that replaces the scattered JSON files (`config.json`,
 $XDG_DATA_HOME/daedalus/daedalus.db
 # e.g. ~/.local/share/daedalus/daedalus.db
 ```
+
+### Multi-process access and durability
+
+Every store opens with a five-second SQLite busy timeout and **WAL journal
+mode** (verified by querying `PRAGMA journal_mode`). WAL allows independent
+processes to share the store without rollback-journal reader/writer blocking.
+The `daedalus.db-wal` and `daedalus.db-shm` sidecars belong to the same logical
+database; do not discard them when inspecting or backing up live data.
+
+Schema creation and migration run in one `BEGIN IMMEDIATE` transaction. This
+serializes first-open work across processes and prevents duplicate
+`schema_version` inserts. Brain metadata/FTS upserts and deletes also have
+their own transactions (or join the surrounding reindex transaction). If WAL
+cannot be enabled on the backing filesystem, opening the store fails with an
+explicit error rather than silently falling back to unsafe rollback-journal
+sharing. See `docs/storage.md` §1.3 for the brain file-lock contract.
 
 ---
 

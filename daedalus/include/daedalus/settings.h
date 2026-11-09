@@ -395,7 +395,7 @@ public:
         std::string tags;                 // comma-separated, may be empty
         std::string created;              // ISO-8601 UTC
         std::string updated;              // ISO-8601 UTC
-        int64_t     mtime = 0;            // file mtime (seconds) — reindex diff
+        int64_t     mtime = 0;            // file mtime (ns) — reindex diff
         int64_t     size  = 0;            // file size (bytes)   — reindex diff
     };
 

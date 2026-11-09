@@ -285,7 +285,7 @@ into `build/_deps/` on first build.
 |--------|-------|----------------|
 | `src/library` | `Agent*.cpp`, `paths.cpp`, `project_paths.cpp`, ... | Public facade and PIMPL internals |
 | `src/library/a2a` | `A2aClient.cpp`, `A2aServer.cpp` | A2A (Agent2Agent Protocol) HTTP+JSON client + server |
-| `src/core` | `SettingsStore.cpp`, `Messages.cpp`, `Logger.cpp`, `SystemPromptBuilder.cpp`, ... | Settings, persistence, logging, compression, thread pool, metrics |
+| `src/core` | `SettingsStore.cpp`, `SecondBrain.cpp`, `InterprocessLock.cpp`, `Messages.cpp`, `Logger.cpp`, ... | Settings, global brain + process locking, persistence, logging, compression, metrics |
 | `src/api` | `LLMClient.cpp`, `HttpSession.cpp`, `providers/*.cpp` | Provider-agnostic HTTP/SSE chat client + provider plugins (`ProviderPlugin` hook implementations: OpenAI-compatible default, MiniMax, Moonshot, LM Studio; see `docs/provider-plugins.md`) + prompt-cache helpers (`ContextStatus.h`, §ContextCache) |
 | `src/tools` | `ToolFactory.cpp`, `BashTool.cpp`, `SkillTool.cpp`, `MemoryTool.cpp`, `SerperSearchTool.cpp`, `PDFTool.cpp` (read_pdf, §PDF-CORE), ... | Core tool implementations registered by default |
 | `demos/example-tools` | `GitTool.cpp`, `NetworkTool.cpp`, `SearchTool.cpp` (grep/wiki), `SystemInfoTool.cpp`, `BackgroundTool.cpp`, ... | Optional example / reference tool implementations |
@@ -460,13 +460,24 @@ Key files:
 
 | File | Location | Purpose |
 |------|----------|---------|
-| `daedalus.db` | `$XDG_DATA_HOME/daedalus/daedalus.db` | SQLite settings (models, MCP servers, Serper key) |
+| `daedalus.db` | `$XDG_DATA_HOME/daedalus/daedalus.db` | SQLite settings and brain index; WAL mode required |
+| `brain/` | `$XDG_DATA_HOME/daedalus/brain/` | Global Second Brain Markdown source of truth |
+| `brain/.lock` | Same brain root | Bounded shared/exclusive inter-process lock for all brain operations |
 | `messages.json` | `<project>/.daedalus/daedalus[-<name>]/messages.json` | Conversation transcript |
 | `messages.json.crash` | Same dir | Crash mirror written by signal handlers |
 | `memory/memory.sqlite` | Same dir | Long-term memory |
 
 Env-var resolution is documented in `docs/storage.md`. For CI/sandboxing you
 can collapse everything with `DAEDALUS_HOME=/tmp/foo`.
+
+Second Brain mutations hold the brain-root `flock` exclusively and readers hold
+it shared; never narrow that coverage to only the file write. Note replacement
+must remain temp-file + `fsync` + rename + directory `fsync`, and brain
+metadata/FTS updates must remain transactional. `SettingsStore` opens in WAL
+mode and serializes schema initialization with `BEGIN IMMEDIATE`. Multi-process
+and `SIGKILL` recovery coverage lives in
+`tests/test_second_brain_concurrency.cpp`; always run it after changing these
+invariants.
 
 ### Public API at a glance
 

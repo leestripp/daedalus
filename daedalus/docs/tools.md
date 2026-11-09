@@ -21,6 +21,7 @@ functional autonomous agent are registered automatically:
 | `list_tools` | Live roster of registered tools (core, host, MCP) with one-line descriptions; `filter` substring + `verbose` full-schema options (§LIST-TOOLS-CORE) |
 | `stop` | End the agent loop cleanly |
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
+| `brain` | Global Second Brain: `capture`, `search`, `read`, `list`, `update`, `append`, `delete`, `file`, `backlinks`, `reindex` over user-global Markdown notes with a transactional FTS5 index |
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
 | `web_search` | Unified web search (§WEB-SEARCH-CORE): tries the enabled providers from the `web_search_providers` SettingsStore table in `priority` order with automatic failover — `brave`, `tavily`, `exa`, `firecrawl`, `serper`, `serpapi` (API-key services), `searxng` (self-hosted; base_url + optional Basic auth or bearer/API-key header), and `duckduckgo` (key-less HTML endpoint, enabled by default). Args: `query`, optional `max_results` (default 10, cap 25), optional `provider` to force one provider and bypass the chain. The description also points agents with a built-in browser at using a search-engine page directly, and notes `web_fetch` on a search URL as a fallback. Replaces the removed `serper_search` / `searxng_search` tools |
@@ -39,6 +40,20 @@ poppler-cpp is a REQUIRED dependency of the library build.)
 
 File I/O tools were removed entirely: the agent can read, write, and edit
 files through `execute_bash` (e.g. `cat`, `sed`, `grep`) instead.
+
+## Second Brain concurrency and failure behavior
+
+`brain` operates on the single user-global tree documented in
+`docs/storage.md`; it does not switch to a project-local brain. Independent
+agents sharing that tree coordinate through `<brain>/.lock`: readers share the
+lock and mutations/reindex hold it exclusively. The whole append/update
+read-modify-write/index operation is covered, so concurrent appends and
+same-title captures do not overwrite one another.
+
+Notes are replaced atomically, and metadata plus FTS changes are transactional.
+A lock or SQLite busy timeout surfaces as a contained tool error rather than an
+indefinite wait. After a process crash or manual file edit, `reindex` scans the
+Markdown source of truth and atomically reconciles the index.
 
 ## Image input (vision models)
 

@@ -4,7 +4,7 @@
 // §SECOND-BRAIN: the Global Second Brain — a plain-markdown knowledge base
 // shared by every agent on this machine.
 //
-// Design (see Plan.md):
+// Design (see docs/storage.md):
 //   - Source of truth: markdown files under <user_data_root>/brain/,
 //     organised in an inbox + PARA folders (projects / areas / resources /
 //     archives). Human-readable and editable with any editor — the agent
@@ -22,8 +22,10 @@
 // daedalus_home — the knowledge base is reachable from every project,
 // exactly like SecretsVault::global().
 //
-// Thread-safety: all public methods serialise on an internal mutex; the
-// index writes go through SettingsStore's own locking.
+// Thread/process safety: public operations serialise on an internal mutex and
+// a bounded flock(2) at <brain_root>/.lock. Writers hold it exclusively;
+// readers share it. Markdown replacement is atomic and the SQLite index is
+// transactional, so independent agents cannot overwrite each other's edits.
 
 #pragma once
 
@@ -142,8 +144,12 @@ private:
     /// Locate the file for `id` in any folder. Empty path if not found.
     std::filesystem::path find_note_file(std::string_view id) const;
 
+    /// Read without taking the process lock. The public reader holds the
+    /// shared lock; mutations already hold the exclusive lock.
+    std::optional<BrainNote> read_unlocked(std::string_view id) const;
+
     /// Write note (frontmatter + body) to disk and upsert the index row.
-    /// Caller holds mu_.
+    /// Caller holds mu_ and the exclusive inter-process lock.
     void write_and_index(const BrainNote& note);
 
     /// Parse one markdown file into a BrainNote. Frontmatter is parsed

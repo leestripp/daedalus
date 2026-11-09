@@ -15,15 +15,24 @@
 #include "SecondBrain.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cerrno>
 #include <chrono>
+#include <cstdint>
 #include <ctime>
 #include <fstream>
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 
+#include <fcntl.h>
+#include <unistd.h>
+
+#include "InterprocessLock.h"
 #include "daedalus/paths.h"
 
 namespace fs = std::filesystem;
@@ -137,24 +146,126 @@ std::string read_file_text(const fs::path& p)
             std::istreambuf_iterator<char>()};
 }
 
-void write_file_text(const fs::path& p, std::string_view text)
+class ScopedFd
 {
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    if (!out) throw std::runtime_error("cannot write " + p.string());
-    out << text;
-    out.flush();
-    if (!out) throw std::runtime_error("write failed: " + p.string());
+public:
+    explicit ScopedFd(int fd) : fd_(fd) {}
+    ~ScopedFd() { if (fd_ >= 0) (void)::close(fd_); }
+
+    ScopedFd(const ScopedFd&) = delete;
+    ScopedFd& operator=(const ScopedFd&) = delete;
+
+    int get() const { return fd_; }
+    int release() { return std::exchange(fd_, -1); }
+
+private:
+    int fd_;
+};
+
+[[noreturn]] void throw_errno(const std::string& operation,
+                              const fs::path& path)
+{
+    const int error = errno;
+    throw std::system_error(error, std::generic_category(),
+                            operation + " '" + path.string() + "'");
 }
 
-/// file_size + mtime as a seconds count. The epoch is the file_clock's
-/// own — we only ever compare values produced by this same function, so
-/// the unspecified epoch does not matter.
+void sync_fd(const int fd, const fs::path& path)
+{
+    for (;;) {
+        if (::fsync(fd) == 0) return;
+        if (errno != EINTR) throw_errno("cannot fsync", path);
+    }
+}
+
+void sync_directory(const fs::path& path)
+{
+    int fd;
+    do {
+        fd = ::open(path.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) throw_errno("cannot open directory", path);
+    ScopedFd dir(fd);
+    sync_fd(dir.get(), path);
+}
+
+/// Replace a note without ever exposing a truncated destination. The temp
+/// file is in the same directory, so rename(2) is atomic; fsync on both file
+/// and directory makes the rename durable before the index is updated.
+void write_file_text(const fs::path& p, std::string_view text)
+{
+    static std::atomic<uint64_t> sequence{0};
+    const auto parent = p.parent_path();
+    const auto prefix = "." + p.filename().string() + ".tmp." +
+                        std::to_string(static_cast<long long>(::getpid())) + ".";
+
+    fs::path temp_path;
+    int raw_fd = -1;
+    for (int attempt = 0; attempt < 100 && raw_fd < 0; ++attempt) {
+        temp_path = parent / (prefix + std::to_string(sequence.fetch_add(1)));
+        raw_fd = ::open(temp_path.c_str(),
+                        O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+        if (raw_fd < 0 && errno == EINTR) {
+            --attempt;
+        } else if (raw_fd < 0 && errno != EEXIST) {
+            throw_errno("cannot create temporary note", temp_path);
+        }
+    }
+    if (raw_fd < 0)
+        throw std::runtime_error("cannot allocate temporary note beside " +
+                                 p.string());
+
+    ScopedFd fd(raw_fd);
+    bool renamed = false;
+    struct TempCleanup
+    {
+        fs::path path;
+        const bool& renamed;
+        ~TempCleanup() { if (!renamed) (void)::unlink(path.c_str()); }
+    } cleanup{temp_path, renamed};
+
+    size_t offset = 0;
+    while (offset < text.size()) {
+        const auto written = ::write(fd.get(), text.data() + offset,
+                                     text.size() - offset);
+        if (written > 0) {
+            offset += static_cast<size_t>(written);
+        } else if (written < 0 && errno == EINTR) {
+            continue;
+        } else {
+            throw_errno("cannot write temporary note", temp_path);
+        }
+    }
+    sync_fd(fd.get(), temp_path);
+    const int closing_fd = fd.release();
+    if (::close(closing_fd) != 0)
+        throw_errno("cannot close temporary note", temp_path);
+
+    for (;;) {
+        if (::rename(temp_path.c_str(), p.c_str()) == 0) break;
+        if (errno != EINTR) throw_errno("cannot replace note", p);
+    }
+    renamed = true;
+    sync_directory(parent);
+}
+
+/// file_size + nanosecond mtime. The epoch is the file_clock's own — we
+/// only compare values produced by this same function. Nanoseconds prevent
+/// a same-size crash replacement within one second from looking index-fresh.
 std::pair<int64_t, int64_t> file_stat(const fs::path& p)
 {
     const auto size = static_cast<int64_t>(fs::file_size(p));
-    const auto mtime = std::chrono::duration_cast<std::chrono::seconds>(
+    const auto mtime = std::chrono::duration_cast<std::chrono::nanoseconds>(
         fs::last_write_time(p).time_since_epoch()).count();
     return {mtime, size};
+}
+
+InterprocessFileLock lock_brain(const fs::path& root,
+                                const InterprocessLockMode mode)
+{
+    InterprocessFileLock lock(root / ".lock", mode);
+    if (!lock) throw std::runtime_error("SecondBrain: " + lock.error());
+    return lock;
 }
 
 }  // anonymous namespace
@@ -248,6 +359,7 @@ BrainNote SecondBrain::capture(std::string_view folder,
             "SecondBrain::capture: invalid folder '" + std::string(folder) +
             "' (expected one of: " + join_csv(folders()) + ")");
 
+    auto process_lock = lock_brain(root_, InterprocessLockMode::exclusive);
     BrainNote note;
     note.folder = std::string(folder);
     note.title  = std::string(trim(title));
@@ -293,6 +405,12 @@ BrainNote SecondBrain::capture(std::string_view folder,
 std::optional<BrainNote> SecondBrain::read(std::string_view id) const
 {
     std::lock_guard lk(mu_);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::shared);
+    return read_unlocked(id);
+}
+
+std::optional<BrainNote> SecondBrain::read_unlocked(std::string_view id) const
+{
     const auto path = find_note_file(id);
     if (path.empty()) return std::nullopt;
     return parse_file(path, path.parent_path().filename().string());
@@ -304,7 +422,8 @@ bool SecondBrain::update(std::string_view id,
                          const std::optional<std::string>& body)
 {
     std::lock_guard lk(mu_);
-    auto note = read(id);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::exclusive);
+    auto note = read_unlocked(id);
     if (!note.has_value()) return false;
 
     if (title.has_value()) note->title = *title;
@@ -320,7 +439,8 @@ bool SecondBrain::update(std::string_view id,
 bool SecondBrain::append(std::string_view id, std::string_view markdown)
 {
     std::lock_guard lk(mu_);
-    auto note = read(id);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::exclusive);
+    auto note = read_unlocked(id);
     if (!note.has_value()) return false;
 
     if (!note->body.empty()) note->body += "\n\n";
@@ -335,6 +455,7 @@ bool SecondBrain::append(std::string_view id, std::string_view markdown)
 bool SecondBrain::remove(std::string_view id)
 {
     std::lock_guard lk(mu_);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::exclusive);
     const auto path = find_note_file(id);
     if (path.empty()) return false;
 
@@ -343,6 +464,7 @@ bool SecondBrain::remove(std::string_view id)
     if (ec)
         throw std::runtime_error("SecondBrain::remove: cannot delete "
                                  + path.string() + ": " + ec.message());
+    sync_directory(path.parent_path());
     store_.delete_brain_note(id);
     return true;
 }
@@ -359,7 +481,8 @@ bool SecondBrain::move(std::string_view id, std::string_view new_folder)
             "SecondBrain::move: invalid folder '" + std::string(new_folder) +
             "'");
 
-    auto note = read(id);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::exclusive);
+    auto note = read_unlocked(id);
     if (!note.has_value()) return false;
     if (note->folder == new_folder) return true;  // already there — no-op
 
@@ -372,12 +495,17 @@ bool SecondBrain::move(std::string_view id, std::string_view new_folder)
     write_and_index(*note);
     std::error_code ec;
     fs::remove(old_path, ec);
+    if (ec)
+        throw std::runtime_error("SecondBrain::move: cannot delete "
+                                 + old_path.string() + ": " + ec.message());
+    sync_directory(old_path.parent_path());
     return true;
 }
 
 std::vector<std::string> SecondBrain::backlinks(std::string_view id) const
 {
     std::lock_guard lk(mu_);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::shared);
     std::vector<std::string> out;
     const std::string target(id);
 
@@ -414,6 +542,7 @@ std::vector<BrainNoteMeta> SecondBrain::list(std::string_view folder,
             "SecondBrain::list: invalid folder '" + std::string(folder) +
             "'");
 
+    auto process_lock = lock_brain(root_, InterprocessLockMode::shared);
     // Tag filtering happens in C++ (tags are a CSV column); when a tag is
     // given we over-fetch so the post-filter limit stays meaningful.
     const int fetch = tag.empty() ? limit : limit * 4 + 20;
@@ -434,6 +563,7 @@ std::vector<BrainSearchHit> SecondBrain::search(std::string_view query,
                                                 int limit) const
 {
     std::lock_guard lk(mu_);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::shared);
     const auto fts = sanitise_fts_query(query);
     if (fts.empty()) return {};
     return store_.search_brain_notes(fts, limit);
@@ -446,6 +576,7 @@ std::vector<BrainSearchHit> SecondBrain::search(std::string_view query,
 SecondBrain::ReindexResult SecondBrain::reindex()
 {
     std::lock_guard lk(mu_);
+    auto process_lock = lock_brain(root_, InterprocessLockMode::exclusive);
     ReindexResult result;
 
     // Current index state, keyed by id.
@@ -454,6 +585,12 @@ SecondBrain::ReindexResult SecondBrain::reindex()
         indexed.emplace(row.id, row);
 
     std::unordered_set<std::string> seen_on_disk;
+    struct PendingIndexUpdate
+    {
+        BrainNoteMeta row;
+        std::string body;
+    };
+    std::vector<PendingIndexUpdate> pending_updates;
 
     for (const auto& folder : folders()) {
         const auto dir = folder_path(folder);
@@ -489,13 +626,19 @@ SecondBrain::ReindexResult SecondBrain::reindex()
         }
     }
 
-    // Drop index rows whose files have vanished.
-    for (const auto& [id, row] : indexed) {
-        if (seen_on_disk.find(id) == seen_on_disk.end()) {
-            store_.delete_brain_note(id);
-            ++result.removed;
+    // Apply the complete scan in one transaction. No cooperating writer can
+    // alter the files or index while the exclusive brain lock is held, and a
+    // failed FTS update cannot leave a half-applied reindex behind.
+    store_.transaction([&](SettingsStore& tx) {
+        for (const auto& update : pending_updates)
+            tx.upsert_brain_note(update.row, update.body);
+        for (const auto& [id, row] : indexed) {
+            if (seen_on_disk.find(id) == seen_on_disk.end()) {
+                tx.delete_brain_note(id);
+                ++result.removed;
+            }
         }
-    }
+    });
     return result;
 }
 
@@ -505,7 +648,7 @@ SecondBrain::ReindexResult SecondBrain::reindex()
 
 void SecondBrain::write_and_index(const BrainNote& note)
 {
-    // Caller holds mu_.
+    // Caller holds mu_ and the exclusive inter-process lock.
     const auto path = note_path(note.folder, note.id);
     write_file_text(path, render_file(note));
 

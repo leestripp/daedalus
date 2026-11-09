@@ -4,6 +4,23 @@
 
 ### Fixed
 
+- **§SECOND-BRAIN-IPC (2026-11-09): Global Second Brain writes are now safe
+  across independent agents and hosts.** Every operation shares a bounded
+  brain-root `flock(2)` (shared readers, exclusive mutations/reindex), covering
+  the complete read/modify/write/index sequence so same-title captures and
+  concurrent appends cannot overwrite one another. Markdown replacement now
+  uses same-directory temp files, `fsync`, atomic rename, and directory
+  `fsync`; metadata/FTS upserts and deletes and complete reindexes commit in
+  SQLite transactions. `SettingsStore` enables and verifies WAL, and schema
+  initialization runs under `BEGIN IMMEDIATE` to close the fresh-process
+  singleton-version race found by stress testing. Reindex now compares
+  nanosecond mtime plus size. New hermetic fork/SIGKILL coverage exercises
+  capture, append, update, move, delete, backlinks, list/search/reindex,
+  lock timeouts, forced transaction rollback, WAL recovery, and complete-note
+  survival; the suite passed 20 consecutive runs, followed by the full
+  111-test CTest suite and umbrella static analysis. Tests use temporary homes
+  only and never touch the user's real brain.
+
 - **§SCROLL-KINETIC (2026-10-26): user bubbles no longer disappear below
   the chat viewport after Send.** The root cause was GTK 4.22 deceleration
   continuing to write the old adjustment after every idle/150 ms bottom pin,

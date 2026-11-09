@@ -606,7 +606,7 @@ void ensure_schema(OmniNet::DB::Database& db)
             current_version = 0;
         }
     } else {
-        db.execute("INSERT INTO schema_version(version) VALUES (" +
+        db.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (" +
                    std::to_string(kSchemaVersion) + ")");
         current_version = kSchemaVersion;
     }
@@ -642,7 +642,7 @@ void ensure_schema(OmniNet::DB::Database& db)
     if (current_version != kSchemaVersion) {
         // SQLite's UPSERT pattern. Set to current version.
         db.execute("DELETE FROM schema_version");
-        db.execute("INSERT INTO schema_version(version) VALUES (" +
+        db.execute("INSERT OR IGNORE INTO schema_version(version) VALUES (" +
                    std::to_string(kSchemaVersion) + ")");
     }
 }
@@ -797,7 +797,25 @@ public:
             auto db = std::make_unique<OmniNet::DB::Database>();
             db->open(path.string());
             db->setBusyTimeout(std::chrono::milliseconds(5000));
-            ensure_schema(*db);
+            db->enableWAL(true);
+            const auto journal_mode = db->queryOne("PRAGMA journal_mode");
+            if (!journal_mode.has_value() || journal_mode->empty() ||
+                (*journal_mode)[0] != "wal") {
+                throw std::runtime_error(
+                    "SettingsStore: SQLite WAL mode is required for "
+                    "multi-process access");
+            }
+            // Schema inspection and migration must share one write lock.
+            // A deferred BEGIN lets two fresh processes both observe the
+            // missing singleton version row and race to insert it.
+            db->execute("BEGIN IMMEDIATE");
+            try {
+                ensure_schema(*db);
+                db->execute("COMMIT");
+            } catch (...) {
+                db->execute("ROLLBACK");
+                throw;
+            }
             it = dbs_.emplace(path, std::move(db)).first;
         }
         return *it->second;
@@ -1601,29 +1619,39 @@ void SettingsStore::delete_vault_row(std::string_view name)
 void SettingsStore::upsert_brain_note(const BrainNoteRow& r,
                                       std::string_view body)
 {
-    // Metadata row (UPSERT preserves nothing — every field is rewritten
-    // from the file, which is the source of truth).
-    exec_prepared(
-        *mutex_, *db_,
-        "INSERT INTO brain_notes(id, folder, title, tags, created, updated,"
-        " mtime, size) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "folder=excluded.folder, title=excluded.title, tags=excluded.tags, "
-        "created=excluded.created, updated=excluded.updated, "
-        "mtime=excluded.mtime, size=excluded.size",
-        r.id, r.folder, r.title, r.tags, r.created, r.updated,
-        r.mtime, r.size);
+    std::lock_guard<std::recursive_mutex> lk(*mutex_);
+    auto write = [&] {
+        // Metadata row (UPSERT preserves nothing — every field is rewritten
+        // from the file, which is the source of truth).
+        exec_prepared(
+            *mutex_, *db_,
+            "INSERT INTO brain_notes(id, folder, title, tags, created, updated,"
+            " mtime, size) VALUES(?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET "
+            "folder=excluded.folder, title=excluded.title, tags=excluded.tags, "
+            "created=excluded.created, updated=excluded.updated, "
+            "mtime=excluded.mtime, size=excluded.size",
+            r.id, r.folder, r.title, r.tags, r.created, r.updated,
+            r.mtime, r.size);
 
-    // FTS5 rows have no UNIQUE constraint to conflict on, so delete-then-
-    // insert is the idempotent upsert for the full-text index.
-    exec_prepared(
-        *mutex_, *db_,
-        "DELETE FROM brain_fts WHERE id = ?",
-        r.id);
-    exec_prepared(
-        *mutex_, *db_,
-        "INSERT INTO brain_fts(id, title, tags, body) VALUES(?, ?, ?, ?)",
-        r.id, r.title, r.tags, std::string(body));
+        // FTS5 rows have no UNIQUE constraint to conflict on, so delete-then-
+        // insert is the idempotent upsert for the full-text index. Metadata
+        // and FTS must commit together: reindex already supplies an outer
+        // transaction, while standalone callers get one here.
+        exec_prepared(
+            *mutex_, *db_,
+            "DELETE FROM brain_fts WHERE id = ?",
+            r.id);
+        exec_prepared(
+            *mutex_, *db_,
+            "INSERT INTO brain_fts(id, title, tags, body) VALUES(?, ?, ?, ?)",
+            r.id, r.title, r.tags, std::string(body));
+    };
+    if (db_->inTransaction()) {
+        write();
+    } else {
+        db_->transaction(write);
+    }
 }
 
 namespace {
@@ -1745,14 +1773,22 @@ SettingsStore::search_brain_notes(std::string_view fts_query, int limit) const
 
 void SettingsStore::delete_brain_note(std::string_view id)
 {
-    exec_prepared(
-        *mutex_, *db_,
-        "DELETE FROM brain_fts WHERE id = ?",
-        std::string(id));
-    exec_prepared(
-        *mutex_, *db_,
-        "DELETE FROM brain_notes WHERE id = ?",
-        std::string(id));
+    std::lock_guard<std::recursive_mutex> lk(*mutex_);
+    auto write = [&] {
+        exec_prepared(
+            *mutex_, *db_,
+            "DELETE FROM brain_fts WHERE id = ?",
+            std::string(id));
+        exec_prepared(
+            *mutex_, *db_,
+            "DELETE FROM brain_notes WHERE id = ?",
+            std::string(id));
+    };
+    if (db_->inTransaction()) {
+        write();
+    } else {
+        db_->transaction(write);
+    }
 }
 
 bool SettingsStore::has_mcp_servers() const noexcept
