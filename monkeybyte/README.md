@@ -230,11 +230,11 @@ cd build && ctest --output-on-failure   # all tests (incl. daedalus')
 
 ## Project layout
 
-- `src/monkeybyte/` — application code (see `AGENTS.md` for the tour)
+- `src/monkeybyte/` — application code (see the MonkeyByte section of `../AGENTS.md`)
 - `tests/` — assert-based unit tests (no framework)
 - `data/` — GSettings schema + dark/light CSS themes
 - `docs/design.md` — full design specification (authoritative)
-- `AGENTS.md` — contributor/agent guidance: conventions, testing, security
+- `../AGENTS.md` — consolidated contributor/agent guidance (MonkeyByte section)
 
 ## License
 

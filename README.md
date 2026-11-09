@@ -57,5 +57,6 @@ hand-maintained version files, no per-component tags.
 
 ## Documentation
 
-Start with [AGENTS.md](AGENTS.md) (monorepo guide), then each component's
-own `AGENTS.md` / `Readme.md` / `docs/`.
+Start with [AGENTS.md](AGENTS.md) (the consolidated monorepo and component
+guides), then each component's `Readme.md` / `docs/`. There is only this one
+root `AGENTS.md`; all active planning is consolidated in root `plan.md`.

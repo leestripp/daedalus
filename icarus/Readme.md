@@ -220,7 +220,7 @@ config, database, data, cache, logs, skills, and the per-project session files.
 - [`docs/design.md`](docs/design.md) — architecture and design rationale
 - [`docs/ui-design.md`](docs/ui-design.md) — terminal UI design
 - [`docs/a2a-protocol.md`](docs/a2a-protocol.md) — A2A protocol notes
-- [`AGENTS.md`](AGENTS.md) — contributor/agent guide (build, conventions, layout)
+- [`../AGENTS.md`](../AGENTS.md) — root contributor/agent guide (Icarus section)
 
 ## License
 

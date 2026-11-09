@@ -1,7 +1,8 @@
 # icarus CLI AI Agent — Design Document
 
 > **Scope:** design decisions, architecture, data flow, and rationale.
-> For usage instructions see `Readme.md`. For developer reference see `AGENTS.md`.
+> For usage instructions see `Readme.md`. For developer reference see the
+> Icarus section of [`../../AGENTS.md`](../../AGENTS.md).
 
 ---
 
