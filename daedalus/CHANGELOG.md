@@ -48,6 +48,23 @@
 
 ### Added
 
+- **§SCHEDULED-TASKS (2026-11-11): persistent one-shot and recurring agent
+  tasks.** The new `schedule_task` tool supports add/list/edit/delete with UTC
+  `run_at` deadlines or fixed `interval_seconds` recurrence. Each agent stores
+  tasks in its project namespace; a `std::jthread` dispatcher consumes or
+  advances persistent state before queuing an origin-tagged
+  `trigger:task-<id>` message and waking idle hosts through
+  `AgentSink::on_turn_requested()`. One-shots remove themselves automatically;
+  recurring downtime coalesces into one wake-up and the next future slot.
+  Occurrences firing during an active turn are dropped permanently rather
+  than queued, preventing unbounded stale-prompt backlogs; later recurring
+  slots still run normally. Scheduler shutdown is joined during agent
+  teardown. Hermetic tests cover busy one-shot/recurring drops, idle delivery,
+  validation, per-agent tool isolation, persistence, malformed files,
+  add-after-start wake-up, self-removal, recurrence, edits/deletion, shutdown,
+  and end-to-end Agent queue/wake routing, including 20 consecutive busy/drop
+  runs; the full 113-test suite and umbrella static analysis pass.
+
 - **Background process completion notifications.** `execute_bash` background
   jobs now report natural success, nonzero exit, or signal termination to the
   originating agent exactly once, with bounded final output, instead of

@@ -4,7 +4,7 @@
 > resolution, and migration recipes.** If anything in `Readme.md` or
 > other docs conflicts with this file, this file wins.
 >
-> *Last updated 2026-11-09.*
+> *Last updated 2026-11-11.*
 
 ---
 
@@ -187,11 +187,21 @@ get different `agent_dir()` paths, so:
 | `agent_dir/memory/memory.json` | Long-term facts. Source of truth for `SessionMemory`. | No — losing this loses project memory |
 | `agent_dir/memory/daedalus.db` | SQLite mirror of `memory.json` under `mem.<session_id>` keys. Used for recovery if the JSON file is corrupt. | Yes (regenerable from `memory.json`) |
 | `agent_dir/sessions/<sid>/` | Per-session scratch state | Yes |
+| `agent_dir/scheduled_tasks.json` | Persistent one-shot/recurring tasks for `schedule_task`. Atomic temp-file + rename updates; consumed/advanced before dispatch. Read when the agent initializes. | No — losing this deletes future scheduled work |
 | `agent_dir/logs/<timestamp>_session.log` | Internal diagnostics written by the `LOG_*` macros (`core/Logger.h`). One file per session; rotated to `.old` past 10 MB; files older than 30 days are deleted on startup. | Yes |
 | `agent_dir/cache/` | Project-specific regenerable caches | Yes |
 | `agent_dir/skills/active/` | Project-local skill overrides | No — losing this drops overrides |
 | `agent_dir/agents/<sub_name>/` | Sub-agent state | Depends on sub-agent |
 | `agent_dir/.lock` | Lock file (prevents concurrent writes) | No — recreated on next write |
+
+Scheduled tasks are runtime state for one agent namespace, not user-global
+cron state. They fire only while an owning host process is active; overdue
+one-shots and one coalesced occurrence of each overdue recurring task fire on
+startup. A deadline that occurs during an active agent turn is discarded
+permanently: one-shots stay deleted and recurring tasks retain only their next
+future slot; no pending-message backlog is created. The scheduler is
+process-local, so do not run multiple hosts against the same agent namespace's
+task file.
 
 ---
 

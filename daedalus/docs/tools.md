@@ -23,6 +23,7 @@ functional autonomous agent are registered automatically:
 | `remember` / `forget` / `memories` / `memory_stats` | Long-term memory management |
 | `brain` | Global Second Brain: `capture`, `search`, `read`, `list`, `update`, `append`, `delete`, `file`, `backlinks`, `reindex` over user-global Markdown notes with a transactional FTS5 index |
 | `todo_add` / `todo_edit` / `todo_delete` / `todo_list` / `todo_count` / `set_max_todos` / `todo_clear` | Per-project, per-agent todo list |
+| `schedule_task` | Persistent one-shot and recurring agent wake-ups |
 | `discover_skills` / `load_skill` / `get_active_skills` / `search_skills` / `deactivate_skill` / `get_skill_context` | Skill loading and introspection |
 | `web_search` | Unified web search (§WEB-SEARCH-CORE): tries the enabled providers from the `web_search_providers` SettingsStore table in `priority` order with automatic failover — `brave`, `tavily`, `exa`, `firecrawl`, `serper`, `serpapi` (API-key services), `searxng` (self-hosted; base_url + optional Basic auth or bearer/API-key header), and `duckduckgo` (key-less HTML endpoint, enabled by default). Args: `query`, optional `max_results` (default 10, cap 25), optional `provider` to force one provider and bypass the chain. The description also points agents with a built-in browser at using a search-engine page directly, and notes `web_fetch` on a search URL as a fallback. Replaces the removed `serper_search` / `searxng_search` tools |
 | `read_image` | Load a local image (`png` / `jpeg` / `gif` / `bmp` / `webp`) and attach it to the next model request as an `image_url` content part, so vision-capable models (e.g. Kimi K3) can see it. PNGs and JPEGs are decoded and downscaled to ≤512px longest edge (libpng / libjpeg); `gif` / `bmp` / `webp` pass through as base64 (2MB cap). SVG is rejected — send SVG markup as text instead. The base64 payload rides one request only and is stripped from stored history. |
@@ -1741,6 +1742,76 @@ Manage background processes for server applications. Start processes in backgrou
 - Processes are automatically cleaned up when daedalus exits
 
 ---
+
+## Scheduled task tool
+
+`schedule_task` manages persistent, per-project/per-agent time-based tasks.
+Tasks live in
+`<project_root>/.daedalus/daedalus[-<agent_name>]/scheduled_tasks.json`.
+They are **not cron jobs**: a scheduler thread runs only while its Daedalus
+host and agent are active. Overdue tasks fire when the agent next initializes.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `action` | string | Yes | `add`, `list`, `edit`, or `delete` |
+| `id` | integer | edit/delete | Positive task id returned by `add`/`list` |
+| `name` | string | add | Short human-readable name |
+| `prompt` | string | add | Instructions submitted to the agent when due |
+| `kind` | string | No | `once` (add default) or `recurring` |
+| `run_at` | string | one-shot add | UTC deadline, `YYYY-MM-DDTHH:MM:SSZ` |
+| `interval_seconds` | integer | recurring add | Fixed interval from 1 second through 31,536,000 (one year) |
+
+For a recurring add, `run_at` optionally sets the first deadline; otherwise
+the first run is `now + interval_seconds`. `edit` changes only supplied fields.
+Changing an interval without supplying `run_at` schedules the next run one new
+interval from the edit. `list` returns tasks sorted by deadline plus `now_utc`,
+which the model can use when constructing a UTC timestamp.
+
+```json
+{
+  "name": "schedule_task",
+  "arguments": {
+    "action": "add",
+    "name": "morning-review",
+    "prompt": "Review the build and report any failures.",
+    "kind": "once",
+    "run_at": "2026-11-12T09:30:00Z"
+  }
+}
+```
+
+```json
+{
+  "name": "schedule_task",
+  "arguments": {
+    "action": "add",
+    "name": "hourly-health",
+    "prompt": "Run the health check and summarize the result.",
+    "kind": "recurring",
+    "interval_seconds": 3600
+  }
+}
+```
+
+At dispatch, one-shot state is deleted and recurring state is advanced
+**before** the task enters the normal pending-message queue. A crash or host
+callback failure therefore cannot replay a task. Missed recurring intervals
+coalesce into one wake-up and the next future slot rather than producing a
+burst. The queued source is `trigger:task-<id>` and the existing
+`AgentSink::on_turn_requested()` wakes an idle host.
+
+**Busy occurrences are deliberately dropped.** If the agent is actively
+running a turn (including planning, acting, verification, documentation,
+approval, or compression), a due occurrence is not queued and no wake-up is
+requested. There is no catch-up later: a one-shot stays deleted, while a
+recurring task simply waits for its next future slot. This bound prevents
+frequent schedules from accumulating hundreds or thousands of stale prompts
+behind a long-running turn. Terminal states (`Done`, `Cancelled`, and `Error`)
+are not busy, so the next occurrence can queue normally.
+
+The scheduler stops and joins during agent shutdown/destruction. Mutations use
+atomic temp-file plus rename persistence; malformed storage is reported and
+never overwritten.
 
 ## Todo list tools
 

@@ -53,6 +53,11 @@
 struct BackgroundProcessInfo;
 struct ProcessOutput;
 
+namespace daedalus::scheduling {
+struct ScheduledTask;
+class TaskScheduler;
+}
+
 namespace daedalus::detail {
 
 class AgentImpl {
@@ -239,6 +244,12 @@ private:
     void handle_background_completion(const BackgroundProcessInfo& info,
                                       const ProcessOutput& output);
 
+    // §SCHEDULED-TASKS (2026-11-11): per-agent persistent timer service.
+    void start_task_scheduler();
+    void stop_task_scheduler() noexcept;
+    void handle_scheduled_task(
+        const daedalus::scheduling::ScheduledTask& task);
+
     AgentConfig cfg_;
     std::shared_ptr<AgentSink> sink_;
     std::atomic<AgentState> state_{AgentState::Idle};
@@ -259,6 +270,9 @@ private:
     // remains driving-thread-only.
     mutable std::mutex pending_mutex_;
     std::vector<daedalus::PendingUserMessage> pending_user_messages_;
+    // Guarded by pending_mutex_. Scheduled tasks inspect this while holding
+    // the same lock, closing the dequeue/state-transition race.
+    bool turn_active_ = false;
 
     // §TURN-ERROR: terminal error of the current/most recent turn.
     // Driving-thread only (set at run_one_turn entry/end, read by the
@@ -293,6 +307,7 @@ private:
 
     bool initialized_ = false;
     std::shared_ptr<BackgroundCompletionState> background_completion_state_;
+    daedalus::scheduling::TaskScheduler* task_scheduler_ = nullptr;
 };
 
 }  // namespace daedalus::detail

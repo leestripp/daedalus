@@ -861,6 +861,32 @@ target_link_libraries(daedalus_background_completion_tests PRIVATE
 )
 add_test(NAME background_completion_tests COMMAND daedalus_background_completion_tests)
 
+# Persistent one-shot/recurring scheduler, tool CRUD, and shutdown behavior.
+add_executable(daedalus_task_scheduler_tests
+    test_task_scheduler.cpp
+)
+target_include_directories(daedalus_task_scheduler_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_task_scheduler_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME task_scheduler_tests COMMAND daedalus_task_scheduler_tests)
+set_tests_properties(task_scheduler_tests PROPERTIES TIMEOUT 20)
+
+add_executable(daedalus_schedule_task_tool_tests
+    test_schedule_task_tool.cpp
+)
+target_include_directories(daedalus_schedule_task_tool_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_schedule_task_tool_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME schedule_task_tool_tests COMMAND daedalus_schedule_task_tool_tests)
+
 # Create McpClient test
 add_executable(daedalus_mcp_client_tests
     test_mcp_client.cpp

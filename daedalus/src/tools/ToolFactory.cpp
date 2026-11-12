@@ -13,6 +13,7 @@
 #include "tools/ReadImageTool.h"
 #include "tools/PDFTool.h"
 #include "tools/TodoListTool.h"
+#include "tools/ScheduleTaskTool.h"
 #include "tools/ListToolsTool.h"
 #include "mcp/McpServerManager.h"
 #include "core/FileIO.h"
@@ -154,6 +155,10 @@ void ToolFactory::initialize_tools() {
     register_tool(std::make_shared<TodoSetMaxTool>());
     register_tool(std::make_shared<TodoCountTool>());
     register_tool(std::make_shared<TodoClearTool>());
+
+    // §SCHEDULED-TASKS (2026-11-11): persistent one-shot and recurring
+    // agent wake-ups. The tool resolves this agent's scheduler via FileIO.
+    register_tool(std::make_shared<ScheduleTaskTool>());
 
     // MCP tools are NOT registered statically. They are populated dynamically
     // by `refresh_mcp_tools()` (called from LLMClient) so each server's

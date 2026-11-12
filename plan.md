@@ -1,3 +1,23 @@
+# Scheduled agent tasks — DONE (2026-11-11)
+
+Implemented persistent per-project/per-agent scheduling with a
+`std::jthread` dispatcher and the `schedule_task` add/list/edit/delete tool.
+One-shot UTC tasks delete themselves before dispatch; recurring tasks advance
+by their fixed interval and coalesce missed intervals. Due prompts use the
+normal pending queue with source `trigger:task-<id>` and wake idle hosts
+through `AgentSink::on_turn_requested()`. If the agent is actively busy, the
+occurrence is dropped permanently instead of queued; recurring tasks retain
+their next future slot, preventing unbounded backlogs.
+
+- Storage: `agent_dir/scheduled_tasks.json`, with atomic temp-file + rename
+  mutations and fail-closed malformed-file handling.
+- Lifecycle: scheduler starts on agent initialization and joins on shutdown
+  or destruction; overdue work fires on startup only when a host is active.
+- Verification: full superbuild, all 113 CTests, umbrella static analysis,
+  and repeated timing/routing suites passed, including 20 busy/drop runs.
+- Contract documented in `daedalus/docs/tools.md`, `docs/storage.md`, root
+  `AGENTS.md`, and `daedalus/CHANGELOG.md`.
+
 # Second Brain multi-process hardening — DONE (2026-11-09)
 
 The Global Second Brain is now safe for cooperating MonkeyByte/Daedalus

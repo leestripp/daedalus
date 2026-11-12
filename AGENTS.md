@@ -50,8 +50,8 @@ namespaced per component (see Versioning below).
 - **daedalus** is the shared brain: a static C++23 library
   (`libdaedalus.a`) exposing `daedalus::Agent` plus the `AgentSink`
   callback interface. It owns the agent loop, LLM HTTP/SSE clients
-  (provider plugins), tool registry (bash, memory, skills, todos, web,
-  MCP, …), settings store, and crash resilience. **The library never
+  (provider plugins), tool registry (bash, memory, skills, todos, scheduled
+  tasks, web, MCP, …), settings store, and crash resilience. **The library never
   touches stdio** — all host-visible output flows through `AgentSink`.
 - **icarus** is the terminal host: an interactive REPL with streaming
   rendering, slash commands, linenoise editing, and an A2A (Agent2Agent)
@@ -61,6 +61,15 @@ namespaced per component (see Versioning below).
   editor (GtkSourceView) with an agent chat panel, WebKit previews, and
   an HTTP `ControlServer` for UI automation. It embeds the same
   `daedalus::Agent` via `ChatController`.
+
+Scheduled work uses the core `schedule_task` tool, persisted at
+`agent_dir/scheduled_tasks.json`. A per-agent `std::jthread` queues due prompts
+with source `trigger:task-<id>` and calls `on_turn_requested()`; hosts must
+only schedule/drain the existing queue, never resubmit the prompt. One-shot
+state is removed and recurring state advanced before that callback. If a turn
+is active, the occurrence is dropped permanently instead of queued; recurring
+tasks wait for their next slot, preventing unbounded stale-prompt backlogs.
+See `daedalus/docs/tools.md` and `daedalus/docs/storage.md`.
 
 ## How the hosts consume daedalus (dual-mode)
 
@@ -873,8 +882,9 @@ docs/
 - In REPL mode: reads lines from `InputReader`, submits to `daedalus::Agent`,
   and renders output via `ConsoleAgentSink`. Contains all slash-command
   handlers. Before blocking for input it drains library-originated pending
-  messages (background completions); the sink's `on_turn_requested()` wakes
-  `InputQueue`, while `run_one_turn()` stays on the main thread.
+  messages (background completions and scheduled tasks); the sink's
+  `on_turn_requested()` wakes `InputQueue`, while `run_one_turn()` stays on
+  the main thread.
 - Identifies itself to LLM providers via the User-Agent
   `daedalus-icarus/<version>` (`AgentConfig::user_agent`, §UA 2026-07-29).
   `<version>` is the `ICARUS_VERSION` compile definition, derived by
@@ -895,8 +905,9 @@ docs/
 #### `src/ConsoleAgentSink.cpp` — Terminal sink
 
 - Implements `daedalus::AgentSink` callbacks, including the structured
-  `on_error` channel and `on_turn_requested()` background-completion wake-up.
-  The latter only wakes the input queue; it never resubmits message text.
+  `on_error` channel and `on_turn_requested()` background/scheduled-task
+  wake-up. The latter only wakes the input queue; it never resubmits message
+  text.
 - Buffers assistant text deltas; flushes at newline or 2048-char threshold.
 - Prints `output_chunk` tool-progress events (live bash stdout/stderr,
   pre-sanitised by daedalus) verbatim to stdout; `on_tool_result` then

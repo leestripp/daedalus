@@ -28,7 +28,8 @@
 #include "api/LLMClient.h"           // internal subsystem (src/api/)
 #include "core/FileIO.h"             // for execute_tool FileIO construction
 #include "core/Logger.h"
-#include "core/BackgroundProcessManager.h"             // LOG_ERROR for on_error file logging
+#include "core/BackgroundProcessManager.h"
+#include "core/TaskScheduler.h"
 #include "core/SessionMemory.h"      // internal subsystem (src/core/)
 #include "core/SkillManager.h"       // internal subsystem (src/core/)
 #include "tools/ToolHandler.h"       // internal subsystem (src/tools/)
@@ -626,8 +627,12 @@ void AgentImpl::initialize()
         }
     }
 
+    // Publish initialization before a due task can wake the host. Otherwise
+    // an immediate on_turn_requested() could re-enter initialize() on another
+    // thread while this one is still constructing the client.
     initialized_ = true;
     set_state(AgentState::Idle);
+    start_task_scheduler();
     if (sink_) {
         sink_->on_log(daedalus::LogLevel::Info,
                       "Agent::initialize() — ready"
@@ -654,6 +659,7 @@ void AgentImpl::rebind_mcp_factory()
 
 AgentImpl::~AgentImpl()
 {
+    stop_task_scheduler();
     {
         std::lock_guard lock(background_completion_state_->mutex);
         background_completion_state_->agent = nullptr;
@@ -672,6 +678,7 @@ AgentImpl::~AgentImpl()
 
 void AgentImpl::shutdown()
 {
+    stop_task_scheduler();
     if (!initialized_) return;
     {
         std::lock_guard lock(background_completion_state_->mutex);
@@ -898,6 +905,63 @@ void AgentImpl::handle_background_completion(
     if (sink_) sink_->on_turn_requested("trigger:background-process");
 }
 
+void AgentImpl::start_task_scheduler()
+{
+    const fs::path root = cfg_.project_root.empty()
+        ? fs::current_path() : cfg_.project_root;
+    task_scheduler_ = &daedalus::scheduling::TaskSchedulerService::instance()
+        .get(root, cfg_.agent_name);
+    task_scheduler_->start([this](
+        const daedalus::scheduling::ScheduledTask& task) {
+        handle_scheduled_task(task);
+    });
+}
+
+void AgentImpl::stop_task_scheduler() noexcept
+{
+    if (task_scheduler_) task_scheduler_->stop();
+}
+
+void AgentImpl::handle_scheduled_task(
+    const daedalus::scheduling::ScheduledTask& task)
+{
+    const std::string source = "trigger:task-" + std::to_string(task.id);
+    nlohmann::json event{
+        {"task_id", task.id},
+        {"name", task.name},
+        {"kind", task.recurring ? "recurring" : "once"},
+        {"scheduled_for", daedalus::scheduling::format_utc(task.next_run_at)}
+    };
+    const std::string text =
+        "A scheduled task is due. Carry out its instructions now. "
+        "If it is recurring, it has already been advanced to its next slot; "
+        "if it was one-shot, it has already been removed.\n"
+        + event.dump(2, ' ', false, nlohmann::json::error_handler_t::replace)
+        + "\n\nTask instructions:\n" + task.prompt;
+    {
+        // §SCHEDULED-TASK-BUSY-DROP (2026-11-11): the scheduler has already
+        // consumed/advanced persistent state. Check and enqueue under the
+        // turn queue's mutex so a deadline racing a new turn cannot slip in.
+        std::lock_guard lk(pending_mutex_);
+        const auto state = state_.load(std::memory_order_acquire);
+        const bool state_busy =
+            state == AgentState::Understanding
+            || state == AgentState::Planning
+            || state == AgentState::Acting
+            || state == AgentState::Verifying
+            || state == AgentState::Documenting
+            || state == AgentState::AwaitingApproval
+            || state == AgentState::Compressing;
+        if (turn_active_ || state_busy) {
+            LOG_DEBUG("[SCHEDULE] Dropping due task " + std::to_string(task.id)
+                      + " because the agent is busy");
+            return;
+        }
+        pending_user_messages_.push_back({text, {}, source});
+    }
+    if (sink_) sink_->on_turn_requested(source);
+}
+
 void AgentImpl::run_one_turn(std::stop_token st)
 {
     bind_background_completion_handler();
@@ -923,12 +987,20 @@ void AgentImpl::run_one_turn(std::stop_token st)
     // whole turn. A stop_requested token leaves the message queued
     // (checked above, before consuming).
     PendingUserMessage pending;
+    struct TurnActiveGuard {
+        AgentImpl& agent;
+        ~TurnActiveGuard() {
+            std::lock_guard lk(agent.pending_mutex_);
+            agent.turn_active_ = false;
+        }
+    } turn_active_guard{*this};
     {
         std::lock_guard<std::mutex> lk(pending_mutex_);
         if (pending_user_messages_.empty()) {
             // No queued message — no-op.
             return;
         }
+        turn_active_ = true;
         // §QUEUE-JOIN (2026-10-04): drain the WHOLE queue as ONE message.
         // Messages submitted while a turn was busy (a follow-up change, a
         // correction to an earlier queued item, ...) are the user's single

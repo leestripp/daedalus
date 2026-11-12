@@ -258,6 +258,7 @@ set(CORE_SOURCES
 	src/core/SessionMemory.cpp
 	src/core/Logger.cpp
 	src/core/BackgroundProcessManager.cpp
+	src/core/TaskScheduler.cpp
 	src/core/Messages.cpp
 	src/core/SystemPromptBuilder.cpp
 	src/core/ThreadPool.cpp
@@ -306,6 +307,7 @@ set(TOOLS_SOURCES
 	src/tools/PDFTool.cpp
 	src/tools/TodoListTool.cpp
 	src/tools/TodoListService.cpp
+	src/tools/ScheduleTaskTool.cpp
 )
 
 # Public library API sources (Phase 1: headers + thin stubs).
