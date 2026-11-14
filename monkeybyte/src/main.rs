@@ -79,8 +79,23 @@ impl MonkeyByteApp {
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
         let data_dir = format!("{home}/.config/monkeybyte-electron/backend");
+        // One backend at a time — kill any orphaned Electron-era daemon
+        // (its parent window is gone; it only risks data-dir races now).
+        let _ = std::process::Command::new("pkill")
+            .args(["-x", "monkeybyte-electron-backend"])
+            .status();
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        let ui_port = match daemon::start_ui_bridge() {
+            Ok(port) => port,
+            Err(err) => {
+                app.status_line = format!("ui bridge failed: {err}");
+                log::log(&format!("UI BRIDGE FAILED: {err}"));
+                return app;
+            }
+        };
+        log::log(&format!("ui bridge on port {ui_port}"));
         log::log(&format!("spawning daemon: {executable}"));
-        match daemon::spawn(&executable, &data_dir, 0) {
+        match daemon::spawn(&executable, &data_dir, ui_port) {
             Ok((daemon, _ui_token)) => {
                 log::log(&format!("daemon up: port={}", daemon.port));
                 daemon.events(app.events_cancel.clone(), tx);

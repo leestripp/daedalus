@@ -2,7 +2,7 @@
 //! Protocol reference: ../monkeybyte-electron/src/main/backend-client.js
 //! The daemon is the proven agent brain; this app replaces only the shell.
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::process::{Child, Command, Stdio};
 use crate::log;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,59 @@ fn hex_token() -> anyhow::Result<String> {
 
 /// Spawn `executable --data-dir D --ui-port P`; read the daemon's chosen port
 /// from the first stdout JSON line (15s handshake budget, as Electron had).
+/// Minimal UI-bridge HTTP server: the backend POSTs executeUi callbacks
+/// here (browser automation etc.). Log every call; respond not-implemented
+/// until those phases land. Returns the bound port.
+pub fn start_ui_bridge() -> anyhow::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    std::thread::spawn(move || {
+        for stream in listener.incoming().flatten() {
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(match stream.try_clone() { Ok(s) => s, Err(_) => return });
+                let mut stream = stream;
+                let mut request_line = String::new();
+                if reader.read_line(&mut request_line).is_err() {
+                    return;
+                }
+                let mut content_length = 0usize;
+                let mut headers = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.trim_end().is_empty() {
+                        break;
+                    }
+                    if let Some(len) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        content_length = len.trim().parse().unwrap_or(0);
+                    }
+                    headers.push_str(&line);
+                }
+                let mut body = vec![0u8; content_length];
+                if content_length > 0 {
+                    use std::io::Read;
+                    let _ = reader.read_exact(&mut body);
+                }
+                log::log(&format!("UI callback: {} | {}b body", request_line.trim(), body.len()));
+                let _ = headers;
+                let resp = br#"{"ok":false,"error":"ui bridge not implemented yet"}"#;
+                let head = format!(
+                    "HTTP/1.1 200 OK
+Content-Type: application/json
+Content-Length: {}
+Connection: close
+
+",
+                    resp.len()
+                );
+                use std::io::Write;
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(resp);
+            });
+        }
+    });
+    Ok(port)
+}
+
 pub fn spawn(executable: &str, data_dir: &str, ui_port: u16) -> anyhow::Result<(Daemon, String)> {
     let bridge = hex_token()?;
     let ui = hex_token()?;
@@ -46,15 +99,20 @@ pub fn spawn(executable: &str, data_dir: &str, ui_port: u16) -> anyhow::Result<(
         .stdin(Stdio::null())
         .spawn()?;
     let stdout = child.stdout.take().expect("piped stdout");
+    let mut stderr = child.stderr.take().expect("piped stderr");
     let mut reader = BufReader::new(stdout);
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if Instant::now() > deadline {
-            anyhow::bail!("daemon handshake timed out");
+            let mut err = String::new();
+            let _ = stderr.read_to_string(&mut err);
+            anyhow::bail!("daemon handshake timed out; stderr: {err}");
         }
         let mut line = String::new();
         if reader.read_line(&mut line)? == 0 {
-            anyhow::bail!("daemon exited during handshake");
+            let mut err = String::new();
+            let _ = stderr.read_to_string(&mut err);
+            anyhow::bail!("daemon exited during handshake; stderr: {err}");
         }
         if let Ok(ready) = serde_json::from_str::<serde_json::Value>(&line) {
             if let Some(port) = ready["port"].as_u64() {
