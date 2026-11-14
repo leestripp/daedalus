@@ -123,6 +123,7 @@ export function createChatView({ api, getWorkspace, onError }) {
   let sessionData = { sessions: [] };
   let loggedBusy = null;
   let loggedState = '';
+  let pendingNotice = null;  // §NO-DOUBLE-SPEAK: tell_user likely to stream
   let canonicalHistory = [];
   let liveTurn = null;
   const approvals = new Map();
@@ -150,7 +151,7 @@ export function createChatView({ api, getWorkspace, onError }) {
   const narration = createNarration(api.chimpflowSpeak, report);
 
   function resetNarration() {
-    speechBuffer = ''; narration.cancel();
+    speechBuffer = ''; pendingNotice = null; narration.cancel();
   }
 
   // §NO-TTS-WHILE-DICTATING 2026-11-14: TTS playing into an open mic is
@@ -528,12 +529,20 @@ export function createChatView({ api, getWorkspace, onError }) {
   api.onAgentEvent((type, payload) => {
     if (type === 'assistant_delta') { appendDelta(payload.text); narrateDelta(payload.text); }
     else if (type === 'history') {
+      const streamedText = liveTurn?.streamed?.text ?? '';  // capture before mergeLiveHistory clears liveTurn
       if (liveTurn) mergeLiveHistory(payload);
       else setHistory(payload);
       const latest = payload.at(-1);
       if (speakOnComplete && latest?.role === 'assistant') {
         speakOnComplete = false;
         flushNarration();
+        if (pendingNotice) {
+          const spoken = messageElement('assistant', streamedText).textContent.trim();
+          if (spoken !== pendingNotice.plain) narration.speak(pendingNotice.plain);
+          pendingNotice = null;
+        }
+      } else {
+        pendingNotice = null;
       }
     }
     else if (type === 'user_message') {
@@ -552,11 +561,20 @@ export function createChatView({ api, getWorkspace, onError }) {
       // assistant_delta and was narrated sentence-by-sentence; skip speaking
       // the identical tell_user copy again. Distinct notices still speak.
       if (settings.chimpflow?.enabled && settings.chimpflow?.readAssistant && !dictating()) {
-        const streamed = liveTurn?.streamed?.text ?? '';
-        const alreadySpoken = streamed.trim().length > 0
-          && messageElement('assistant', payload.message).textContent.trim()
-            === messageElement('assistant', streamed).textContent.trim();
-        if (!alreadySpoken) narration.speak(messageElement('assistant', payload.message).textContent);
+        const streamed = (liveTurn?.streamed?.text ?? '').trim();
+        const plain = messageElement('assistant', payload.message).textContent.trim();
+        const streamedPlain = messageElement('assistant', streamed).textContent.trim();
+        if (streamedPlain && streamedPlain === plain) {
+          // Final answer already streamed and narrated sentence-by-sentence.
+        } else if (!streamedPlain || plain.startsWith(streamedPlain)) {
+          // §NO-DOUBLE-SPEAK: this notice is (the start of) the message that
+          // is still streaming — narrating it now queues the whole clip ahead
+          // of the streamed sentences (out-of-order playback, double-speak).
+          // Defer to turn end; speak only if the stream never delivered it.
+          pendingNotice = { plain };
+        } else {
+          narration.speak(plain);  // genuinely distinct notice — speak now
+        }
       }
     }
     else if (['tool_call', 'tool_result', 'tool_progress'].includes(type)) {
