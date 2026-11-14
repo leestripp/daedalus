@@ -6,6 +6,7 @@ mod daemon;
 mod log;
 mod narration;
 mod tts;
+mod workspace;
 
 use chat::{Bubble, Chat, Role};
 use eframe::egui;
@@ -33,6 +34,8 @@ struct MonkeyByteApp {
     speech_buffer: String,
     sessions: Vec<(String, String)>,
     active_session: Option<String>,
+    workspace_root: Option<std::path::PathBuf>,
+    workspace_expanded: std::collections::HashSet<std::path::PathBuf>,
 }
 
 impl MonkeyByteApp {
@@ -50,6 +53,8 @@ impl MonkeyByteApp {
             speech_buffer: String::new(),
             sessions: Vec::new(),
             active_session: None,
+            workspace_root: None,
+            workspace_expanded: std::collections::HashSet::new(),
         };
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
@@ -65,6 +70,12 @@ impl MonkeyByteApp {
                 let (sessions, active) = load_sessions(&daemon);
                 app.sessions = sessions;
                 app.active_session = active;
+                if let Ok(settings) = daemon.request("GET", "/v1/settings", &serde_json::Value::Null) {
+                    if let Some(root) = settings["workspace"].as_str() {
+                        app.workspace_root = Some(std::path::PathBuf::from(root));
+                        log::log(&format!("workspace root: {root}"));
+                    }
+                }
                 restore_history(&mut app.chat, &daemon);
                 log::log(&format!("startup ok: {} bubbles, {} sessions", app.chat.bubbles.len(), app.sessions.len()));
                 app.daemon = Some(daemon);
@@ -280,6 +291,27 @@ impl eframe::App for MonkeyByteApp {
                         }
                     }
                 });
+            });
+
+        egui::SidePanel::right("workspace")
+            .width_range(150.0..=400.0)
+            .default_width(260.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Workspace");
+                    if ui.button("⟳").clicked() {
+                        self.workspace_expanded.clear();
+                    }
+                });
+                if let Some(root) = self.workspace_root.clone() {
+                    ui.small(root.display().to_string());
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        workspace::tree_ui(ui, &root, &mut self.workspace_expanded);
+                    });
+                } else {
+                    ui.weak("no workspace selected");
+                }
             });
 
         egui::CentralPanel::default().show(ctx, |ui| {
