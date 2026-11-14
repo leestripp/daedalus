@@ -158,6 +158,7 @@ export async function registerIpc({ store, getWindow, backendExecutable }) {
     ['POST:/v1/chat/steer', true], ['POST:/v1/chat/cancel', true],
     ['POST:/v1/chat/clear', true], ['POST:/v1/chat/approval', true],
     ['POST:/v1/models/select', true], ['POST:/v1/models/thinking', true],
+    ['POST:/v1/debug/log', true],
   ]);
   handle('mb:agent:request', async (route, options = {}) => {
     const method = options.method === 'POST' ? 'POST' : 'GET';
