@@ -76,7 +76,7 @@ impl Narrator {
             let mut sink = match rodio::Sink::try_new(&stream_handle) {
                 Ok(sink) => sink,
                 Err(err) => {
-                    log::log(&format!("narrator: audio device unavailable ({err}); narration disabled"));
+                    crate::log::log(&format!("narrator: audio device unavailable ({err}); narration disabled"));
                     return;
                 }
             };
