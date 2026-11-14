@@ -135,9 +135,13 @@ export function createChatView({ api, getWorkspace, onError }) {
     speechBuffer = ''; narration.cancel();
   }
 
+  // §NO-TTS-WHILE-DICTATING 2026-11-14: TTS playing into an open mic is
+  // transcribed by whisper as repeated phrases / [BLANK_AUDIO] junk.
+  const dictating = () => recorder?.state === 'recording';
+
   function narrateDelta(text) {
     const voice = settings.chimpflow ?? {};
-    if (!speakOnComplete || !voice.enabled || !voice.readAssistant) return;
+    if (!speakOnComplete || !voice.enabled || !voice.readAssistant || dictating()) return;
     speechBuffer += text;
     const drained = drainSpeechSegments(speechBuffer);
     speechBuffer = drained.remainder;
@@ -149,7 +153,7 @@ export function createChatView({ api, getWorkspace, onError }) {
 
   function flushNarration() {
     const remainder = speechBuffer; speechBuffer = '';
-    if (remainder.trim()) narration.speak(messageElement('assistant', remainder).textContent);
+    if (remainder.trim() && !dictating()) narration.speak(messageElement('assistant', remainder).textContent);
   }
 
   function scroll() { elements.messages.scrollTop = elements.messages.scrollHeight; }
@@ -281,7 +285,7 @@ export function createChatView({ api, getWorkspace, onError }) {
     setActivity(`${activity}${status.pending ? ` · ${status.pending} queued` : ''}`, busy);
     elements.send.textContent = 'Send';
     elements.send.disabled = !currentWorkspace;
-    elements.steer.disabled = !busy || !currentWorkspace;
+    elements.steer.disabled = !currentWorkspace;
     elements.stop.disabled = !busy || !currentWorkspace;
     elements.model.disabled = busy || !settings.models.length;
     elements.thinking.disabled = busy;
@@ -367,7 +371,9 @@ export function createChatView({ api, getWorkspace, onError }) {
     attachments = []; renderAttachments();
     if (!liveTurn) liveTurn = { depth: canonicalHistory.length, notices: [], streamed: null };
     try {
-      const status = await api.agentRequest(steer ? '/v1/chat/steer' : '/v1/chat/send', {
+      // §STEER-FALLBACK 2026-11-14: steering only exists mid-turn; when idle
+      // fall back to a normal send so the button never swallows a message.
+      const status = await api.agentRequest(steer && busy ? '/v1/chat/steer' : '/v1/chat/send', {
         method: 'POST', body: { text, attachments: sentAttachments },
       });
       resetNarration();
@@ -458,12 +464,18 @@ export function createChatView({ api, getWorkspace, onError }) {
           const base64 = await blobBase64(wav);
           setActivity('Transcribing…', true);
           const result = await api.chimpflowTranscribe(base64, 'audio/wav');
+          // §WHISPER-NOISE 2026-11-14: whisper emits [BLANK_AUDIO]/[NOISE]
+          // bracket tags for unintelligible audio — keep them out of the draft.
+          const spoken = String(result.text ?? '')
+            .replace(/\s*\[(BLANK_AUDIO|BLANK|NOISE|MUSIC|SILENCE)\]\s*/gi, ' ')
+            .trim();
           const existing = elements.draft.value.trim();
-          elements.draft.value = `${existing}${existing ? '\n' : ''}${result.text ?? ''}`;
+          elements.draft.value = `${existing}${existing && spoken ? '\n' : ''}${spoken}`;
           elements.draft.focus();
         } catch (error) { report(error); }
         finally {
           elements.dictate.textContent = '🎤'; recorder = null;
+          elements.dictate.title = 'Start dictation';
           setActivity(busy ? 'Thinking…' : 'Ready', busy);
         }
       });
@@ -502,16 +514,25 @@ export function createChatView({ api, getWorkspace, onError }) {
       // §NO-DOUBLE-SPEAK 2026-11-14: the final answer already arrived as
       // assistant_delta and was narrated sentence-by-sentence; skip speaking
       // the identical tell_user copy again. Distinct notices still speak.
-      if (settings.chimpflow?.enabled && settings.chimpflow?.readAssistant) {
+      if (settings.chimpflow?.enabled && settings.chimpflow?.readAssistant && !dictating()) {
         const streamed = liveTurn?.streamed?.text ?? '';
         const alreadySpoken = streamed.trim().length > 0
           && messageElement('assistant', payload.message).textContent.trim()
             === messageElement('assistant', streamed).textContent.trim();
-        if (!alreadySpoken) narration.speak(payload.message);
+        if (!alreadySpoken) narration.speak(messageElement('assistant', payload.message).textContent);
       }
     }
     else if (['tool_call', 'tool_result', 'tool_progress'].includes(type)) {
-      if (type === 'tool_call') setActivity(`Running ${payload.name ?? 'tool'}…`, true);
+      if (type === 'tool_call') {
+        setActivity(`Running ${payload.name ?? 'tool'}…`, true);
+        // §TOOL-NARRATION 2026-11-14: narrate tool starts so a spoken turn
+        // doesn't go silent between sentences while tools run. Skipped while
+        // dictating (mic open) — TTS bleed corrupts the transcript.
+        const voice = settings.chimpflow ?? {};
+        if (speakOnComplete && voice.enabled && voice.readAssistant && !dictating()) {
+          narration.speak(`Running ${payload.name ?? 'tool'}.`);
+        }
+      }
       else if (type === 'tool_result' && busy) setActivity('Thinking…', true);
       toolCard(type, payload);
     }

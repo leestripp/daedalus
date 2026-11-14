@@ -105,13 +105,31 @@ export function createNarration(request, onError, onPlayed = () => {}) {
   let generation = 0;
   let audio = null;
 
-  async function play(text, ticket, options) {
-    if (!text.trim() || ticket !== generation) return false;
+  // §PIPELINE 2026-11-14: synthesis (TTS request + decode/normalize) starts
+  // the moment speak() is called and runs in parallel with whatever is
+  // playing; only playback is serialized. Synthesizing inside the queue made
+  // every sentence pay full TTS+decode latency as a dead gap after the
+  // previous segment ended.
+  async function prepare(text, ticket, options) {
+    if (!text.trim() || ticket !== generation) return null;
     const result = await request(text, options);
+    if (ticket !== generation) return null;
     const bytes = Uint8Array.from(atob(result.base64), (character) => character.charCodeAt(0));
-    const blob = await normalizedWav(bytes.buffer, result.mime);
-    if (ticket !== generation) return false;
-    const url = URL.createObjectURL(blob);
+    return normalizedWav(bytes.buffer, result.mime);
+  }
+
+  async function play(prepared, ticket) {
+    let clip = null;
+    try {
+      clip = await prepared;
+    } catch (error) {
+      // A cancelled segment can still fail in flight (abort, shutdown);
+      // only fresh-segment failures are worth surfacing.
+      if (ticket === generation) throw error;
+      return false;
+    }
+    if (!clip || ticket !== generation) return false;
+    const url = URL.createObjectURL(clip);
     const player = new Audio(url);
     audio?.pause(); audio = player;
     player.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
@@ -134,7 +152,8 @@ export function createNarration(request, onError, onPlayed = () => {}) {
   return {
     speak(text, options = undefined) {
       const ticket = generation;
-      queue = queue.then(() => play(text, ticket, options))
+      const prepared = prepare(text, ticket, options);
+      queue = queue.then(() => play(prepared, ticket))
         .then((played) => { if (played) onPlayed(); })
         .catch((error) => onError(error));
       return queue;

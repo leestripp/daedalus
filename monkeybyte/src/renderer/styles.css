@@ -11,10 +11,22 @@
   --muted: #7f849c;
   --border: #313244;
   --accent: #89b4fa;
+  --accent-soft: rgba(137, 180, 250, 0.14);
   --accent-fg: #11111b;
   --ok: #a6e3a1;
   --err: #f38ba8;
   --warn: #f9e2af;
+  /* §UNDEFINED-VARS 2026-11-14: these were referenced by rules below but
+     never defined, silently disabling editor fonts/bg, hover feedback,
+     context menus and the editor caret color. */
+  --text: #cdd6f4;
+  --hover: #45475a;
+  --surface-2: #585b70;
+  --editor-bg: #1e1e2e;
+  --line-number: #6c7086;
+  --yellow: #f9e2af;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 :root[data-theme="light"] {
@@ -30,10 +42,19 @@
   --muted: #7c7f93;
   --border: #bcc0cc;
   --accent: #1e66f5;
+  --accent-soft: rgba(30, 102, 245, 0.12);
   --accent-fg: #ffffff;
   --ok: #40a02b;
   --err: #d20f39;
   --warn: #df8e1d;
+  --text: #4c4f69;
+  --hover: #bcc0cc;
+  --surface-2: #acb0be;
+  --editor-bg: #eff1f5;
+  --line-number: #8c8fa1;
+  --yellow: #df8e1d;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
 
 * { box-sizing: border-box; }
@@ -404,8 +425,16 @@ html[data-theme="light"] {
 .chat-input-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; flex: 0 0 auto; align-self: stretch; }
 .chat-input-actions button { width: 100%; padding-inline: 8px; }
 .chat-input-actions #send-chat { grid-column: 1 / -1; }
-.message-bubble.user { background: var(--accent-soft); }
-.message-bubble.assistant { background: var(--panel-alt); }
+/* §USER-BUBBLE 2026-11-14: user turns must be unmistakable — right-aligned
+   with an accent border. (--accent-soft was previously undefined, so both
+   roles rendered with the same surface background.) */
+.message-bubble.user {
+  margin-left: auto;
+  max-width: 85%;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.message-bubble.assistant { margin-right: auto; max-width: 92%; background: var(--panel-alt); }
 .message-bubble.error { background: var(--err); color: var(--panel-alt); }
 .message-content { overflow-wrap: anywhere; }
 .message-content p { margin: 0 0 8px; }
