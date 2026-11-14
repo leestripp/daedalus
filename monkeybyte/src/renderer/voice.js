@@ -101,15 +101,15 @@ export async function recordingWav(bytes, mime) {
 }
 
 export function createNarration(request, onError, onPlayed = () => {}, onDebug = () => {}) {
-  let queue = Promise.resolve();
   let generation = 0;
-  let audio = null;
+  let context = null;   // §AUDIO-CLOCK 2026-11-14: one shared AudioContext;
+  let master = null;    // rendering runs on Chromium's real-time audio thread,
+  let cursor = 0;       // so scheduled audio plays gaplessly no matter how
+  const live = new Set(); // busy the renderer main thread is with chat UI.
 
   // §PIPELINE 2026-11-14: synthesis (TTS request + decode/normalize) starts
-  // the moment speak() is called and runs in parallel with whatever is
-  // playing; only playback is serialized. Synthesizing inside the queue made
-  // every sentence pay full TTS+decode latency as a dead gap after the
-  // previous segment ended.
+  // the moment speak() is called and runs in parallel; ordering is imposed
+  // by the audio-clock cursor at schedule time, not by a promise queue.
   async function prepare(text, ticket, options) {
     if (!text.trim() || ticket !== generation) return null;
     onDebug(`tts synth start "${text.slice(0, 50)}"`);
@@ -119,6 +119,17 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
     if (ticket !== generation) return null;
     const bytes = Uint8Array.from(atob(result.base64), (character) => character.charCodeAt(0));
     return normalizedWav(bytes.buffer, result.mime);
+  }
+
+  function ensureGraph() {
+    if (!context) {
+      context = new AudioContext();
+      master = context.createGain();
+      master.connect(context.destination);
+      cursor = context.currentTime;
+    }
+    if (context.state === 'suspended') context.resume().catch(() => {});
+    return context;
   }
 
   async function play(prepared, ticket, label = '') {
@@ -132,38 +143,26 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
       return false;
     }
     if (!clip || ticket !== generation) return false;
-    onDebug(`tts play start ${label}`);
-    const playStarted = performance.now();
-    const url = URL.createObjectURL(clip);
-    const player = new Audio(url);
-    audio?.pause(); audio = player;
-    player.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-    // §ENDED-RACE 2026-11-14: attach completion listeners BEFORE play() —
-    // a short clip can fire 'ended' during play()'s task-rounds, before a
-    // post-await attach would see it, parking the queue forever (only
-    // cancel() ever unstuck it: "next sentence plays when I hit Stop").
-    await new Promise((resolve) => {
-      player.addEventListener('ended', resolve, { once: true });
-      player.addEventListener('error', resolve, { once: true });
-      player.addEventListener('pause', resolve, { once: true });
-      try { Promise.resolve(player.play()).catch(resolve); }
-      catch { resolve(); }  // stubbed/legacy play() may throw synchronously
-      if (player.ended) resolve();   // already finished while we were attaching
-    });
+    const ctx = ensureGraph();
+    const bytes = await clip.arrayBuffer();
+    const buffer = await ctx.decodeAudioData(bytes);
     if (ticket !== generation) return false;
-    // §PLAY-TO-END 2026-11-14: hold the queue until this segment actually
-    // finishes. audio.play() resolves at playback START, so chaining on it
-    // let the next sentence pause() this one mid-sentence. 'pause'/'error'
-    // are the interruption exits (cancel() pauses), checked via the
-    // generation ticket / current-player identity below.
-    await new Promise((resolve) => {
-      player.addEventListener('ended', resolve, { once: true });
-      player.addEventListener('error', resolve, { once: true });
-      player.addEventListener('pause', resolve, { once: true });
-    });
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(master);
+    // Schedule on the audio timeline: each segment starts exactly when the
+    // previous one ends. 'ended' events below are bookkeeping only — late
+    // event delivery under UI jank can no longer open playback gaps.
+    const startAt = Math.max(ctx.currentTime, cursor);
+    cursor = startAt + buffer.duration;
+    live.add(source);
+    source.onended = () => live.delete(source);
+    source.start(startAt);
+    onDebug(`tts play start ${label} at=${startAt.toFixed(2)} dur=${buffer.duration.toFixed(2)}`);
+    const playStarted = performance.now();
+    await new Promise((resolve) => source.addEventListener('ended', resolve, { once: true }));
     onDebug(`tts play end ${label} after ${Math.round(performance.now() - playStarted)}ms`);
-    if (ticket !== generation || audio !== player) return false;
-    return true;
+    return ticket === generation;
   }
 
   return {
@@ -171,16 +170,19 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
       const ticket = generation;
       const prepared = prepare(text, ticket, options);
       onDebug(`tts speak queued "${text.slice(0, 50)}"`);
-      queue = queue.then(() => play(prepared, ticket, `"${text.slice(0, 50)}"`))
-        .then((played) => { if (played) onPlayed(); })
+      const done = play(prepared, ticket, `"${text.slice(0, 50)}"`);
+      done.then((played) => { if (played) onPlayed(); })
         .catch((error) => onError(error));
-      return queue;
+      return done;
     },
     cancel() {
-      onDebug('tts cancel');
-      generation += 1; audio?.pause(); audio = null;
-      queue = Promise.resolve();
-      onDebug('tts cancel: queue reset');
+      generation += 1;
+      for (const source of live) {
+        try { source.stop(); } catch { /* already ended or never started */ }
+      }
+      live.clear();
+      if (context) cursor = context.currentTime;
+      onDebug('tts cancel: clock reset');
     },
   };
 }

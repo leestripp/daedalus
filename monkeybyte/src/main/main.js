@@ -12,6 +12,8 @@ import { createSettingsStore } from './settings-store.js';
 import { prepareSmokeWorkspace, runSmokeTest } from './smoke-test.js';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+// §AUDIO-CLOCK: AudioContext may start suspended without a user gesture.
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 const smokeMode = process.argv.includes('--smoke-test');
 let mainWindow = null;
 let smokeWorkspace = null;

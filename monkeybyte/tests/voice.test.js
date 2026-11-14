@@ -85,58 +85,49 @@ async function flush(times = 20) {
   for (let index = 0; index < times; ++index) await new Promise((resolve) => setImmediate(resolve));
 }
 
-function stubPlaybackEnvironment() {
-  const players = [];
-  class FakeAudio {
-    constructor() { this.listeners = {}; players.push(this); }
+function stubPlaybackEnvironment({ duration = 2 } = {}) {
+  const sources = [];
+  const sample = new Float32Array(64).fill(0.05);
+  class FakeBufferSource {
+    constructor() { this.listeners = {}; sources.push(this); }
     addEventListener(type, listener) { (this.listeners[type] ??= []).push(listener); }
     emit(type) { for (const listener of this.listeners[type] ?? []) listener(); }
-    async play() {}
-    pause() { this.emit('pause'); }
+    connect() {}
+    start(when) { this.startTime = when; }
+    stop() { this.emit('ended'); }
   }
-  const sample = new Float32Array(64).fill(0.05);
   class FakeAudioContext {
+    constructor() { this.currentTime = 0; this.destination = {}; this.state = 'running'; }
+    async resume() {}
+    createGain() { return { gain: { value: 1 }, connect() {} }; }
+    createBufferSource() { return new FakeBufferSource(); }
     async decodeAudioData() {
-      return { numberOfChannels: 1, length: sample.length, sampleRate: 22050, getChannelData: () => sample };
+      return { numberOfChannels: 1, length: sample.length, sampleRate: 22050, getChannelData: () => sample, duration };
     }
     async close() {}
   }
-  const originals = {
-    audio: globalThis.Audio,
-    context: globalThis.AudioContext,
-    createObjectURL: URL.createObjectURL,
-    revokeObjectURL: URL.revokeObjectURL,
-  };
-  globalThis.Audio = FakeAudio;
+  const originalContext = globalThis.AudioContext;
   globalThis.AudioContext = FakeAudioContext;
-  URL.createObjectURL = () => 'blob:fake';
-  URL.revokeObjectURL = () => {};
   return {
-    players,
-    restore() {
-      globalThis.Audio = originals.audio;
-      globalThis.AudioContext = originals.context;
-      URL.createObjectURL = originals.createObjectURL;
-      URL.revokeObjectURL = originals.revokeObjectURL;
-    },
+    sources,
+    restore() { globalThis.AudioContext = originalContext; },
   };
 }
 
-test('narration holds the queue until each segment finishes playing', async () => {
+test('narration schedules segments gaplessly on the audio clock', async () => {
   const environment = stubPlaybackEnvironment();
   try {
     const narration = createNarration(async () => ({ base64: btoa('fake-bytes'), mime: 'audio/wav' }));
     const first = narration.speak('First sentence.');
     const second = narration.speak('Second sentence.');
     await flush();
-    // §PLAY-TO-END 2026-11-14: only one player may exist while the first
-    // segment is still playing; the old start-chained queue created both.
-    assert.equal(environment.players.length, 1);
-    environment.players[0].emit('ended');
-    await first;  // play() returned → queue advanced to segment 2
-    await flush();
-    assert.equal(environment.players.length, 2);
-    environment.players[1].emit('ended');
+    // §AUDIO-CLOCK 2026-11-14: both segments decode in parallel and are
+    // chained by start time — segment 2 begins exactly when segment 1 ends.
+    assert.equal(environment.sources.length, 2);
+    assert.equal(environment.sources[1].startTime, environment.sources[0].startTime + 2);
+    environment.sources[0].emit('ended');
+    await first;
+    environment.sources[1].emit('ended');
     await second;
   } finally {
     environment.restore();
@@ -155,10 +146,11 @@ test('cancel interrupts the current segment without counting it as played', asyn
     const first = narration.speak('First sentence.');
     const second = narration.speak('Second sentence.');
     await flush();
-    narration.cancel();
+    narration.cancel();  // stop() fires 'ended' on every scheduled source
     await first;
     await second;
     assert.equal(played, 0);
+    assert.equal(environment.sources.length, 2);  // no new source after cancel
   } finally {
     environment.restore();
   }
