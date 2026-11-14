@@ -71,7 +71,7 @@ export function createBackendClient({ executable, dataDir, onEvent, executeUi })
         });
         if (!response.ok) throw new Error(`Event stream failed: ${response.status}`);
         failures = 0;
-        debugLog(f'sse connected (after ${failures} failure(s))');
+        debugLog(`sse connected (after ${failures} failure(s))`);
         const decoder = new TextDecoder();
         let buffer = '';
         for await (const chunk of response.body) {
