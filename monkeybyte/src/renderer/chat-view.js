@@ -499,7 +499,16 @@ export function createChatView({ api, getWorkspace, onError }) {
     else if (type === 'tell_user') {
       liveTurn?.notices.push(payload.message);
       elements.messages.append(messageElement('system', payload.message)); scroll();
-      if (settings.chimpflow?.enabled && settings.chimpflow?.readAssistant) narration.speak(payload.message);
+      // §NO-DOUBLE-SPEAK 2026-11-14: the final answer already arrived as
+      // assistant_delta and was narrated sentence-by-sentence; skip speaking
+      // the identical tell_user copy again. Distinct notices still speak.
+      if (settings.chimpflow?.enabled && settings.chimpflow?.readAssistant) {
+        const streamed = liveTurn?.streamed?.text ?? '';
+        const alreadySpoken = streamed.trim().length > 0
+          && messageElement('assistant', payload.message).textContent.trim()
+            === messageElement('assistant', streamed).textContent.trim();
+        if (!alreadySpoken) narration.speak(payload.message);
+      }
     }
     else if (['tool_call', 'tool_result', 'tool_progress'].includes(type)) {
       if (type === 'tool_call') setActivity(`Running ${payload.name ?? 'tool'}…`, true);
