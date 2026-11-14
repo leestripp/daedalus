@@ -107,6 +107,19 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
   let cursor = 0;       // so scheduled audio plays gaplessly no matter how
   const live = new Set(); // busy the renderer main thread is with chat UI.
   let burst = null;     // §PREBUFFER: first segment after silence, held until
+  let inflight = 0;     // §TTS-CAP: the chimpflow service serializes requests;
+  const waiters = [];   // flooding it with 8 concurrent synths made every one
+                        // take 6-12s. Two in flight, the rest queue FIFO here.
+  async function acquireSynth() {
+    if (inflight < 2) { inflight += 1; return; }
+    await new Promise((resolve) => waiters.push(resolve));
+    inflight += 1;
+  }
+  function releaseSynth() {
+    inflight -= 1;
+    const next = waiters.shift();
+    if (next) next();
+  }
                         // the second is ready (or cap/turn-end) so playback
                         // never opens with a thinking-gap hole.
 
@@ -117,7 +130,13 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
     if (!text.trim() || ticket !== generation) return null;
     onDebug(`tts synth start "${text.slice(0, 50)}"`);
     const started = performance.now();
-    const result = await request(text, options);
+    await acquireSynth();
+    let result = null;
+    try {
+      result = await request(text, options);
+    } finally {
+      releaseSynth();
+    }
     onDebug(`tts synth done "${text.slice(0, 50)}" in ${Math.round(performance.now() - started)}ms`);
     if (ticket !== generation) return null;
     const bytes = Uint8Array.from(atob(result.base64), (character) => character.charCodeAt(0));
@@ -131,7 +150,13 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
       master.connect(context.destination);
       cursor = context.currentTime;
     }
-    if (context.state === 'suspended') context.resume().catch(() => {});
+    if (context.state === 'suspended') {
+      // Chromium auto-suspends idle contexts; playback scheduled onto a
+      // frozen clock is silent, so this must never go unnoticed.
+      onDebug('tts WARNING: audio context suspended — resuming');
+      context.resume().catch(() => {});
+    }
+    context.addEventListener?.('statechange', () => onDebug(`tts audio state → ${context.state}`));
     return context;
   }
 

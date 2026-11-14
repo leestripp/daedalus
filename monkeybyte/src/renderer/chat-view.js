@@ -159,6 +159,21 @@ export function createChatView({ api, getWorkspace, onError }) {
   // transcribed by whisper as repeated phrases / [BLANK_AUDIO] junk.
   const dictating = () => recorder?.state === 'recording';
 
+  // §SPEECH-TEXT 2026-11-14: markdown read literally by kokoro turns one
+  // paragraph into 58 seconds of "bullet bullet six bee cee three zero..."
+  // — sanitize to what a listener should hear before sending to TTS.
+  function toSpeechText(markdown) {
+    return messageElement('assistant', markdown).textContent
+      .split('\n')
+      .map((line) => line.replace(/^\s*(?:[\u2022\*\-\u2013\u2014]|\d+[.)])\s+/, ''))
+      .join('\n')
+      .replace(/`([^`]*)`/g, '$1')
+      .replace(/\b[0-9a-f]{7,40}\b/g, 'a commit')
+      .replace(/https?:\/\/\S+|www\.\S+/g, 'a link')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+  }
+
   function narrateDelta(text) {
     const voice = settings.chimpflow ?? {};
     // §MULTI-BLOCK 2026-11-14: narrate whenever the agent is live (armed at
@@ -170,14 +185,14 @@ export function createChatView({ api, getWorkspace, onError }) {
     const drained = drainSpeechSegments(speechBuffer);
     speechBuffer = drained.remainder;
     for (const segment of drained.segments) {
-      const plain = messageElement('assistant', segment).textContent;
-      narration.speak(plain);
+      const plain = toSpeechText(segment);
+      if (plain) narration.speak(plain);
     }
   }
 
   function flushNarration() {
     const remainder = speechBuffer; speechBuffer = '';
-    if (remainder.trim() && !dictating()) narration.speak(messageElement('assistant', remainder).textContent);
+    if (remainder.trim() && !dictating()) { const plain = toSpeechText(remainder); if (plain) narration.speak(plain); }
     narration.release();  // §PREBUFFER: turn end frees a held first segment
   }
 
@@ -546,8 +561,8 @@ export function createChatView({ api, getWorkspace, onError }) {
         // into the next turn, where it played ~40s late, out of order.
         flushNarration();
         if (pendingNotice) {
-          const spoken = messageElement('assistant', streamedText).textContent.trim();
-          if (spoken !== pendingNotice.plain) narration.speak(pendingNotice.plain);
+          const spoken = toSpeechText(streamedText);
+          if (spoken !== pendingNotice.plain && pendingNotice.plain) narration.speak(pendingNotice.plain);
           pendingNotice = null;
         }
       } else {
@@ -572,8 +587,8 @@ export function createChatView({ api, getWorkspace, onError }) {
       // the identical tell_user copy again. Distinct notices still speak.
       if (settings.chimpflow?.enabled && settings.chimpflow?.readAssistant && !dictating()) {
         const streamed = (liveTurn?.streamed?.text ?? '').trim();
-        const plain = messageElement('assistant', payload.message).textContent.trim();
-        const streamedPlain = messageElement('assistant', streamed).textContent.trim();
+        const plain = toSpeechText(payload.message);
+        const streamedPlain = toSpeechText(streamed);
         if (streamedPlain && streamedPlain === plain) {
           // Final answer already streamed and narrated sentence-by-sentence.
         } else if (!streamedPlain || plain.startsWith(streamedPlain)) {

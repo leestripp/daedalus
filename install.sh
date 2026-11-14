@@ -32,7 +32,11 @@ ln -sfn ../lib/monkeybyte-electron/monkeybyte "$prefix/bin/monkeybyte-electron"
 
 # §BACKEND-KILL (2026-11-14): the backend outlives the app window by design —
 # restart any running backend so the next app start uses this new binary.
-pkill  "monkeybyte-electron-backend --data-dir" 2>/dev/null || true
+# §BACKEND-KILL: the backend outlives the app window, so installs would never
+# load without this. Deferred (and [m]-quoted so this wrapper doesn't match
+# its own pattern): this script runs INSIDE the backend, so the kill must
+# land after the install finishes and the agent's reply has flushed.
+nohup sh -c 'sleep 15; pkill  "[m]onkeybyte-electron-backend"' >/dev/null 2>&1 &
 # Retire the old GTK executable. Electron keeps its explicit command name.
 rm -f "$prefix/bin/monkeybyte"
 
