@@ -73,7 +73,13 @@ impl Narrator {
         let (_stream, stream_handle) = rodio::OutputStream::try_default()?;
         let (tx, rx) = mpsc::channel::<Msg>();
         std::thread::spawn(move || {
-            let mut sink = rodio::Sink::try_new(&stream_handle).expect("audio sink");
+            let mut sink = match rodio::Sink::try_new(&stream_handle) {
+                Ok(sink) => sink,
+                Err(err) => {
+                    log::log(&format!("narrator: audio device unavailable ({err}); narration disabled"));
+                    return;
+                }
+            };
             let mut next_seq = 0u64;
             let mut order: BTreeMap<u64, (Vec<f32>, u32)> = BTreeMap::new();
             let mut want = 0u64;
