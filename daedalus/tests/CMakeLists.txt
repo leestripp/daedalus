@@ -104,6 +104,22 @@ target_link_libraries(daedalus_brain_tool_tests PRIVATE
 add_test(NAME brain_tool_tests COMMAND daedalus_brain_tool_tests)
 
 # ============================================================================
+# §DEBUG-LOG: DebugLogTool — shared agent/app debug log (append/tail)
+# ============================================================================
+
+add_executable(daedalus_debug_log_tests test_debug_log_tool.cpp)
+target_include_directories(daedalus_debug_log_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_debug_log_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME debug_log_tool_tests COMMAND daedalus_debug_log_tests)
+
+# ============================================================================
 # Regression: SettingsStore preserves all fields
 # (previously omitted, causing user settings to be wiped on /models switch)
 # ============================================================================

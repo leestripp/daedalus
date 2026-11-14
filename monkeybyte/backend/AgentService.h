@@ -41,6 +41,7 @@ public:
                         std::string source = "user:lee");
     nlohmann::json steer(std::string text, const nlohmann::json& attachments);
     nlohmann::json cancel();
+    nlohmann::json debug_log(const std::string& entry);
     nlohmann::json respond(std::string_view id, bool approved);
     nlohmann::json history() const;
     nlohmann::json clear_history();

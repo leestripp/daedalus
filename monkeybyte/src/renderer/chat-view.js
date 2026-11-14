@@ -121,6 +121,8 @@ export function createChatView({ api, getWorkspace, onError }) {
   let latestStats = {};
   let settings = { models: [] };
   let sessionData = { sessions: [] };
+  let loggedBusy = null;
+  let loggedState = '';
   let canonicalHistory = [];
   let liveTurn = null;
   const approvals = new Map();
@@ -292,6 +294,11 @@ export function createChatView({ api, getWorkspace, onError }) {
 
   function updateStatus(status) {
     busy = Boolean(status.busy);
+    if (busy !== loggedBusy || String(status.state ?? '') !== loggedState) {
+      loggedBusy = busy;
+      loggedState = String(status.state ?? '');
+      debugLog(`status busy=${busy} state=${loggedState || '?'} pending=${status.pending ?? 0}`);
+    }
     if (status.stats) latestStats = status.stats;
     if (status.model !== undefined) currentModel = status.model || '';
     renderAgentStatus();
@@ -350,6 +357,11 @@ export function createChatView({ api, getWorkspace, onError }) {
     } catch (error) { report(error); }
   }
 
+  // §DEBUG-LOG: fire-and-forget line to the shared agent/app debug log.
+  function debugLog(message) {
+    api.agentRequest('/v1/debug/log', { method: 'POST', body: { entry: message } }).catch(() => {});
+  }
+
   async function request(path, body = {}) {
     try { return await api.agentRequest(path, { method: 'POST', body }); }
     catch (error) { report(error); throw error; }
@@ -383,6 +395,7 @@ export function createChatView({ api, getWorkspace, onError }) {
     if (!text && !attachments.length) return;
     elements.draft.value = '';
     if (text.startsWith('/') && !steer && await command(text)) return;
+    debugLog(`send workspace=${currentWorkspace ?? '?'} chars=${text.length}`);
     const sentAttachments = attachments;
     attachments = []; renderAttachments();
     if (!liveTurn) liveTurn = { depth: canonicalHistory.length, notices: [], streamed: null };
@@ -419,7 +432,10 @@ export function createChatView({ api, getWorkspace, onError }) {
 
   byId('chat-form').addEventListener('submit', (event) => { event.preventDefault(); send().catch(report); });
   elements.steer.addEventListener('click', () => send(true).catch(report));
-  elements.stop.addEventListener('click', () => request('/v1/chat/cancel').catch(() => {}));
+  elements.stop.addEventListener('click', () => {
+    debugLog('stop clicked');
+    request('/v1/chat/cancel').catch(() => {});
+  });
   elements.draft.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send().catch(report); }
   });

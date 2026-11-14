@@ -69,6 +69,9 @@ int main(int argc, char** argv) {
                 return {200, service->steer(body.value("text", ""), body.value("attachments", json::array()))};
             }
             if (method == "POST" && path == "/v1/chat/cancel") return {200, service->cancel()};
+            if (method == "POST" && path == "/v1/debug/log") {
+                return {200, service->debug_log(body.value("entry", ""))};
+            }
             if (method == "POST" && path == "/v1/chat/approval") {
                 return {200, service->respond(body.at("id").get<std::string>(), body.at("approved").get<bool>())};
             }

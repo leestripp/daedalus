@@ -11,6 +11,8 @@
 #include <ranges>
 #include <stdexcept>
 #include <utility>
+#include <ctime>
+#include <fstream>
 
 namespace monkeybyte {
 namespace {
@@ -419,6 +421,32 @@ void AgentService::run_driver(std::stop_token stop_token) {
         emit("status", status());
         emit("turn_done", {{"cancelled", agent_->state() == daedalus::AgentState::Cancelled}});
         reject_approvals();
+    }
+}
+
+nlohmann::json AgentService::debug_log(const std::string& entry) {
+    // §DEBUG-LOG (2026-11-14): the app side of the shared debug log. The
+    // agent tails this file with the debug_log tool to correlate UI/SSE
+    // behaviour with its own actions.
+    try {
+        std::filesystem::path path;
+        if (record_) path = record_->workspace;
+        if (path.empty()) path = std::filesystem::current_path();
+        path /= ".daedalus";
+        std::error_code error;
+        std::filesystem::create_directories(path, error);
+        path /= "app-debug.log";
+        const auto now = std::chrono::system_clock::now();
+        const std::time_t time = std::chrono::system_clock::to_time_t(now);
+        std::tm tm{};
+        gmtime_r(&time, &tm);
+        char stamp[32];
+        std::strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%SZ", &tm);
+        std::ofstream stream(path, std::ios::app);
+        if (stream) stream << stamp << " [app] " << entry << '\n';
+        return {{"status", "ok"}};
+    } catch (const std::exception& error) {
+        return {{"status", "error"}, {"message", error.what()}};
     }
 }
 

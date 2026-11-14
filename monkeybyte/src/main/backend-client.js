@@ -71,6 +71,7 @@ export function createBackendClient({ executable, dataDir, onEvent, executeUi })
         });
         if (!response.ok) throw new Error(`Event stream failed: ${response.status}`);
         failures = 0;
+        debugLog(f'sse connected (after ${failures} failure(s))');
         const decoder = new TextDecoder();
         let buffer = '';
         for await (const chunk of response.body) {
@@ -94,6 +95,7 @@ export function createBackendClient({ executable, dataDir, onEvent, executeUi })
       } catch (error) {
         if (closing || error.name === 'AbortError') return;
         failures += 1;
+        debugLog(`sse lost: ${error.message} — reconnect attempt ${failures}`);
         if (failures <= 2 || failures % 10 === 0) {
           onEvent('backend_error', { message: `Event stream lost (${error.message}); reconnecting…` });
         }
@@ -128,6 +130,11 @@ export function createBackendClient({ executable, dataDir, onEvent, executeUi })
     port = ready.port;
     eventTask = events();
     return { port };
+  }
+
+  // §DEBUG-LOG: line to the shared agent/app debug log via the backend.
+  async function debugLog(entry) {
+    try { await request('/v1/debug/log', { method: 'POST', body: { entry } }); } catch { /* never block on logging */ }
   }
 
   async function request(path, { method = 'GET', body = {}, timeout = 30000 } = {}) {
