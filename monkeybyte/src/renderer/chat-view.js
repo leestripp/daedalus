@@ -523,16 +523,10 @@ export function createChatView({ api, getWorkspace, onError }) {
       }
     }
     else if (['tool_call', 'tool_result', 'tool_progress'].includes(type)) {
-      if (type === 'tool_call') {
-        setActivity(`Running ${payload.name ?? 'tool'}…`, true);
-        // §TOOL-NARRATION 2026-11-14: narrate tool starts so a spoken turn
-        // doesn't go silent between sentences while tools run. Skipped while
-        // dictating (mic open) — TTS bleed corrupts the transcript.
-        const voice = settings.chimpflow ?? {};
-        if (speakOnComplete && voice.enabled && voice.readAssistant && !dictating()) {
-          narration.speak(`Running ${payload.name ?? 'tool'}.`);
-        }
-      }
+      // Tool activity is deliberately NOT narrated — readAssistant speaks
+      // messages only (2026-11-14: narrating tool names was tried and
+      // rejected as noise).
+      if (type === 'tool_call') setActivity(`Running ${payload.name ?? 'tool'}…`, true);
       else if (type === 'tool_result' && busy) setActivity('Thinking…', true);
       toolCard(type, payload);
     }
