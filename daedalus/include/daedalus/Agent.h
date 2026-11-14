@@ -130,6 +130,20 @@ public:
                              std::vector<ImageAttachment> imgs,
                              std::string source);
 
+    /// @brief Steer the active turn at a safe tool-result boundary.
+    ///
+    /// Unlike submit_user_message(), this does not blindly wait for a later
+    /// turn. While a turn is active, the message is drained only after ALL
+    /// results for the preceding assistant tool_calls have been appended,
+    /// immediately before the next model request. It is never inserted into
+    /// a streaming assistant response or between a tool call and its result.
+    /// Multiple steering messages drain FIFO as one joined user message.
+    /// If submitted idle, or if the turn ends before the boundary, it becomes
+    /// an ordinary pending message so it is neither lost nor misordered.
+    void submit_steer_message(std::string text,
+                              std::vector<ImageAttachment> imgs = {},
+                              std::string source = "steer");
+
     /// @brief Number of submitted user messages not yet consumed by
     ///        run_one_turn(). Anything other than the expected 0/1 means
     ///        submits and turns have drifted out of sync.
@@ -204,6 +218,10 @@ public:
     ///        results are elided. Empty when no model is configured.
     ///        Driving thread; do not call mid-turn.
     [[nodiscard]] std::vector<HistoryEntry> history_snapshot() const;
+
+    /// Clear this session's conversation and synchronously erase its persisted
+    /// messages. Driving thread only; reject the operation while a turn runs.
+    void clear_history();
 
     // ------------------------------------------------------------------
     // Read-only views

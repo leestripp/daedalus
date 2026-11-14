@@ -31,10 +31,12 @@
 #include <vector>
 #include <array>       // fixed-size crash registry
 #include <cstdlib>     // malloc/free (crash payload slots)
+#include <cstdint>
 #include <iterator>    // istreambuf_iterator
 #include <cstring>     // strlen
 #include <mutex>       // std::call_once
 #include <algorithm>   // std::find, std::swap
+#include <unordered_map>
 
 // §Phase 5.1: helper macro that converts LOG_CERR(INFO,  ...); style
 // statements into LOG_INFO/LOG_WARNING/LOG_ERROR via the existing
@@ -352,8 +354,10 @@ void install_signal_handlers_once() {
 }  // namespace
 
 Messages::Messages(std::filesystem::path data_dir,
-                 const MessageCompressionConfig& config)
+                 const MessageCompressionConfig& config,
+                 std::string session_id)
     : data_dir_(std::move(data_dir))
+    , session_id_(std::move(session_id))
     , messages_(json::array())
     , config_(config) {
 
@@ -361,7 +365,33 @@ Messages::Messages(std::filesystem::path data_dir,
     // directory, passed in by AgentImpl::initialize() via
     // resolve_agent_dir(project_root, agent_name). The default
     // (empty agent_name) yields `<project>/.daedalus/daedalus/`.
-    messages_file_ = data_dir_ / "messages.json";
+    if (session_id_.empty()) session_id_ = "default";
+    if (session_id_ == "default") {
+        messages_file_ = data_dir_ / "messages.json";
+    } else {
+        // Hex encoding makes arbitrary host IDs path-safe. Keep the path
+        // bounded for unusually long IDs with a stable FNV-1a fallback.
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string encoded;
+        if (session_id_.size() <= 64) {
+            encoded.reserve(session_id_.size() * 2);
+            for (const unsigned char byte : session_id_) {
+                encoded.push_back(digits[byte >> 4]);
+                encoded.push_back(digits[byte & 0x0f]);
+            }
+        } else {
+            std::uint64_t hash = 14695981039346656037ULL;
+            for (const unsigned char byte : session_id_) {
+                hash ^= byte;
+                hash *= 1099511628211ULL;
+            }
+            encoded = "hash-";
+            for (int shift = 60; shift >= 0; shift -= 4) {
+                encoded.push_back(digits[(hash >> shift) & 0x0f]);
+            }
+        }
+        messages_file_ = data_dir_ / ("messages-" + encoded + ".json");
+    }
 
     // Ensure the namespace directory exists.
     if (!std::filesystem::exists(data_dir_)) {
@@ -671,6 +701,41 @@ void Messages::mark_dirty() {
 // ============================================================================
 
 bool Messages::load() {
+    if (load_from_storage()) return true;
+    if (session_id_ == "default") return false;
+
+    // §SESSION-STORAGE: before per-chat IDs were wired, every named chat
+    // shared messages.json/msg.default. Migrate that chain into the first
+    // named session that asks for it, then remove the legacy copy so new
+    // chats cannot inherit or clear another chat's history.
+    Messages legacy(data_dir_, config_);
+    if (!legacy.load_from_storage()) return false;
+    {
+        std::lock_guard<std::mutex> lock(messages_mutex_);
+        messages_ = legacy.get_messages();
+        mark_dirty_locked();
+    }
+    save();
+    bool persisted = has_saved_messages();
+    if (!persisted) {
+        try {
+            persisted = !daedalus::SettingsStore::for_home(data_dir_)
+                .get_messages_json(session_id_).empty();
+        } catch (const std::exception& error) {
+            LOG_WARNING(std::string("Session migration verification failed: ") + error.what());
+        }
+    }
+    if (persisted) {
+        legacy.clear();
+        legacy.save();
+        LOG_INFO("Migrated legacy default history into session " + session_id_);
+    } else {
+        LOG_WARNING("Keeping legacy default history because the named-session copy was not persisted");
+    }
+    return true;
+}
+
+bool Messages::load_from_storage() {
     // §Plan.md v0.3.5: try SQLite mirror first. Fall back to JSON file.
     // §B22 fix: when the SQLite mirror is corrupt (parse error) or empty,
     // delete it so the next load doesn't try it again.
@@ -1305,13 +1370,49 @@ std::vector<daedalus::HistoryEntry> Messages::history_snapshot() const {
     std::vector<daedalus::HistoryEntry> out;
     if (!messages_.is_array()) return out;
     out.reserve(messages_.size());
+    std::unordered_map<std::string, std::string> tool_names;
     for (const auto& m : messages_) {
         if (!m.is_object() || !m.contains("role") || !m["role"].is_string()) {
             continue;
         }
         const std::string role = m["role"].get<std::string>();
+        if (role == "assistant" && m.contains("tool_calls") && m["tool_calls"].is_array()) {
+            for (const auto& call : m["tool_calls"]) {
+                if (!call.is_object() || !call.contains("id") || !call["id"].is_string()
+                    || !call.contains("function") || !call["function"].is_object()) continue;
+                const auto& function = call["function"];
+                if (function.contains("name") && function["name"].is_string()) {
+                    tool_names[call["id"].get<std::string>()] = function["name"].get<std::string>();
+                }
+            }
+        }
+        if (role == "tool") {
+            // tell_user is user-facing prose, not tool plumbing. Its only
+            // persisted copy is the tool result, so restore it as an
+            // assistant bubble instead of losing the answer on restart.
+            const auto id = m.find("tool_call_id");
+            const auto tool = id != m.end() && id->is_string()
+                ? tool_names.find(id->get<std::string>()) : tool_names.end();
+            if (tool != tool_names.end() && tool->second == "tell_user"
+                && m.contains("content") && m["content"].is_string()) {
+                const auto result = json::parse(m["content"].get<std::string>(), nullptr, false);
+                if (result.is_object() && result.value("status", "") == "success"
+                    && result.contains("content") && result["content"].is_string()) {
+                    auto text = result["content"].get<std::string>();
+                    if (!text.empty()) {
+                        std::string src, rcv;
+                        if (m.contains("_meta") && m["_meta"].is_object()) {
+                            src = m["_meta"].value("source", "");
+                            rcv = m["_meta"].value("received_at", "");
+                        }
+                        out.push_back({"assistant", std::move(text), std::move(src), std::move(rcv)});
+                    }
+                }
+            }
+            continue;
+        }
         if (role != "system" && role != "user" && role != "assistant") {
-            continue;  // elide "tool" results and anything else
+            continue;
         }
         std::string text;
         if (m.contains("content")) {

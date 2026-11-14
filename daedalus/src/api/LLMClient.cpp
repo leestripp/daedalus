@@ -305,7 +305,7 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
         // Empty agent_name yields `<project>/.daedalus/daedalus/`.
         messages_ = std::make_unique<Messages>(
             daedalus::resolve_agent_dir(config.target_directory, config.agent_name),
-            messages_config);
+            messages_config, config.session_id);
     } else {
         // Settings not loaded - create Messages with defaults for compression functionality
         MessageCompressionConfig messages_config;
@@ -320,7 +320,7 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
             };
         messages_ = std::make_unique<Messages>(
             daedalus::resolve_agent_dir(config.target_directory, config.agent_name),
-            messages_config);
+            messages_config, config.session_id);
     }
 
     // §18/§18.9 — at startup, refresh the MCP tool surface from the
@@ -3040,7 +3040,8 @@ void LLMClient::uninstall_crash_handlers() {
     // ===================================================================
 
 AgentState LLMClient::run_one_turn(const std::string& user_message,
-                                   std::string_view source) {
+                                   std::string_view source,
+                                   SteerProvider steer_provider) {
     // §AutoCompress: hold the turn guard for the whole turn so
     // compress_context() can compress immediately when (and only when) no
     // turn is running. Also serializes concurrent turns.
@@ -3232,6 +3233,17 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
         Messages::stamp(sys_msg, "system");
         messages.push_back(std::move(sys_msg));
     }
+    const auto append_user_message =
+        [this, &messages](const std::string& text, std::string_view origin) {
+            for (const auto& ref : daedalus::image_refs::extract(text)) {
+                queue_image_ref(ref, "user attachment");
+            }
+            json user_msg = {{"role", "user"}, {"content", text}};
+            Messages::stamp(user_msg, origin);
+            messages.push_back(std::move(user_msg));
+            if (messages_) messages_->mark_dirty();
+        };
+
     if (!user_message.empty()) {
         // §B19 fix: clean up a dangling tool result from an interrupted turn.
         // If the last message is a tool result, the previous turn ended mid-cycle
@@ -3254,15 +3266,8 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
         // Markdown text; the base64 never persists in context. This
         // replaces the dead build_multimodal_message() path, which used
         // to embed the data URI in history (re-paid every turn).
-        for (const auto& ref : daedalus::image_refs::extract(user_message)) {
-            queue_image_ref(ref, "user attachment");
-        }
-        // §MSG-HEADERS: stamp the incoming user turn with its source
-        // (submit_user_message overload → pending queue → this param;
-        // the default marks it an interactive user message).
-        json user_msg = {{"role", "user"}, {"content", user_message}};
-        Messages::stamp(user_msg, source);
-        messages.push_back(std::move(user_msg));
+        // §MSG-HEADERS: stamp the incoming user turn with its source.
+        append_user_message(user_message, source);
     }
 
     // PERSIST-DIRTY (2026-08-31): the pushes above went through the raw
@@ -3452,6 +3457,19 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
             break;
         }
         if (result_state == AgentState::ACT || result_state == AgentState::BUILD_TEST) {
+            // §STEER-BOUNDARY: run_agent_cycle() has appended EVERY result
+            // for the preceding assistant tool_calls. Only now may a user
+            // steering message enter the chain, before the next API request.
+            // Never drain it during SSE/tool execution or between a call and
+            // its result. If no tool cycle follows, the provider is not
+            // polled and AgentImpl safely returns the message to its queue.
+            if (steer_provider && !cancel_source_.get_token().stop_requested()) {
+                auto steering = steer_provider();
+                if (steering) {
+                    queue_image_attachments(steering->images);
+                    append_user_message(steering->text, steering->source);
+                }
+            }
             continue;
         }
 

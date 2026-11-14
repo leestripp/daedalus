@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: file:; connect-src 'self' http://127.0.0.1:* http://localhost:*; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>MonkeyByte</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell" data-testid="app-shell">
+    <nav class="activity-bar" aria-label="Sidebar panels">
+      <button class="activity-button" type="button" data-panel="workspace" title="Workspace (Ctrl+1)" aria-label="Workspace" aria-pressed="true">📁</button>
+      <button class="activity-button" type="button" data-panel="search" title="Search (Ctrl+2)" aria-label="Search" aria-pressed="false">⌕</button>
+      <button class="activity-button" type="button" data-panel="git" title="Source Control (Ctrl+3)" aria-label="Source Control" aria-pressed="false">⑂</button>
+      <span class="activity-spacer" aria-hidden="true"></span>
+      <button class="activity-button" type="button" data-panel="settings" title="Settings (Ctrl+4)" aria-label="Settings" aria-pressed="false">⚙</button>
+    </nav>
+
+    <aside id="sidebar" class="sidebar" aria-label="Sidebar">
+      <section id="panel-workspace" class="sidebar-page workspace-page" aria-labelledby="workspace-heading">
+        <header class="sidebar-header">
+          <h2 id="workspace-heading">Workspace</h2>
+          <div class="header-actions">
+            <button id="new-workspace" class="icon-button" type="button" title="New typed workspace" aria-label="New typed workspace">＋</button>
+            <button id="set-workspace-type" class="icon-button" type="button" title="Set workspace project type" aria-label="Set workspace project type">⌘</button>
+            <button id="choose-workspace" class="icon-button" type="button" title="Open workspace" aria-label="Open workspace">📂</button>
+            <button id="new-folder" class="icon-button" type="button" title="New folder" aria-label="New folder">🗀</button>
+            <button id="import-files" class="icon-button" type="button" title="Import files" aria-label="Import files">⇩</button>
+            <button id="refresh-workspace" class="icon-button" type="button" title="Refresh workspace" aria-label="Refresh workspace">↻</button>
+            <button id="toggle-hidden" class="icon-button" type="button" title="Show hidden files" aria-label="Show hidden files" aria-pressed="false">○</button>
+          </div>
+        </header>
+        <button id="workspace-path" class="workspace-path" type="button" title="Change workspace">No workspace selected</button>
+        <div id="workspace-tree" class="workspace-tree" role="tree" aria-label="Workspace files">
+          <p class="muted-message">Choose a workspace to begin.</p>
+        </div>
+      </section>
+
+      <section id="panel-search" class="sidebar-page" aria-labelledby="search-heading" hidden>
+        <header class="sidebar-header"><h2 id="search-heading">Search</h2></header>
+        <div class="panel-form">
+          <label for="search-input">Search files</label>
+          <input id="search-input" type="search" placeholder="Text to find">
+          <label for="search-files">File glob</label>
+          <input id="search-files" type="text" placeholder="*.cpp (optional)">
+          <label class="check-row" for="search-case"><input id="search-case" type="checkbox"> Case sensitive</label>
+          <button id="search-submit" class="primary" type="button">Search</button>
+        </div>
+        <div id="search-status" class="muted-message" role="status"></div>
+        <div id="search-results" class="search-results"></div>
+      </section>
+
+      <section id="panel-git" class="sidebar-page" aria-labelledby="git-heading" hidden>
+        <header class="sidebar-header"><h2 id="git-heading">Source Control</h2><button id="git-refresh" class="icon-button" type="button" title="Refresh Git status" aria-label="Refresh Git status">↻</button></header>
+        <div id="git-branch" class="git-branch"></div>
+        <div id="git-status" class="git-status"><p class="muted-message">Open a Git workspace to see changes.</p></div>
+      </section>
+
+      <section id="panel-settings" class="sidebar-page settings-page" aria-labelledby="settings-heading" hidden>
+        <header class="sidebar-header"><h2 id="settings-heading">Settings</h2></header>
+        <nav id="settings-tabs" class="settings-tabs" aria-label="Settings pages"></nav>
+        <div id="settings-content" class="settings-content"></div>
+        <footer class="settings-footer"><span id="settings-status" role="status">Changes apply immediately.</span></footer>
+      </section>
+    </aside>
+
+    <div id="sidebar-resizer" class="resizer" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" tabindex="0"></div>
+
+    <main id="main-area" class="main-area">
+      <div class="tabbar">
+        <div id="tab-list" class="tab-list" role="tablist" aria-label="Open files"></div>
+        <button id="open-browser" class="icon-button" type="button" title="Open Browser" aria-label="Open Browser">🌐</button>
+        <button id="new-file-main" class="icon-button" type="button" title="New file" aria-label="New file">＋</button>
+      </div>
+      <header class="file-header">
+        <div class="file-heading"><h1 id="file-title">MonkeyByte</h1><span id="dirty-indicator" class="dirty-indicator" title="Unsaved changes" hidden>●</span><span id="save-status" class="save-status" role="status"></span></div>
+        <div class="header-actions">
+          <button id="find-toggle" class="icon-button" type="button" title="Find (Ctrl+F)" aria-label="Find" disabled>⌕</button>
+          <button id="save-file" type="button" disabled>Save</button>
+          <button id="delete-file" class="danger" type="button" title="Delete file" disabled>Delete</button>
+          <button id="close-file" type="button" disabled>Close</button>
+        </div>
+      </header>
+      <section id="editor-empty" class="editor-empty" aria-label="Editor welcome">
+        <h2>AI Code Editor</h2>
+        <p>Open a workspace and choose a text file, or ask the agent to help build your project.</p>
+      </section>
+      <div id="find-bar" class="find-bar" hidden>
+        <input id="find-input" type="search" aria-label="Find text" placeholder="Find">
+        <button id="find-next" type="button">Next</button>
+        <input id="replace-input" type="text" aria-label="Replacement text" placeholder="Replace">
+        <button id="replace-next" type="button">Replace</button>
+        <button id="replace-all" type="button">All</button>
+        <label class="check-row" for="find-case"><input id="find-case" type="checkbox"> Aa</label>
+        <span id="find-status" role="status"></span>
+      </div>
+      <div id="editor-container" class="editor-container" hidden>
+        <div id="line-numbers" class="line-numbers" aria-hidden="true"></div>
+        <div class="editor-surface">
+          <pre id="editor-highlight" class="editor-highlight" aria-hidden="true"></pre>
+          <label class="sr-only" for="editor">File editor</label>
+          <textarea id="editor" spellcheck="false" wrap="off"></textarea>
+        </div>
+      </div>
+      <section id="browser-container" class="browser-container" aria-label="Browser preview" hidden>
+        <div class="browser-toolbar">
+          <button id="browser-back" class="icon-button" type="button" title="Back" aria-label="Browser back">←</button>
+          <button id="browser-forward" class="icon-button" type="button" title="Forward" aria-label="Browser forward">→</button>
+          <button id="browser-reload" class="icon-button" type="button" title="Reload" aria-label="Reload browser">↻</button>
+          <label class="sr-only" for="browser-address">Address</label>
+          <input id="browser-address" type="text" placeholder="https://localhost:3000" autocomplete="off" autocapitalize="none" spellcheck="false">
+          <select id="browser-device" aria-label="Browser viewport">
+            <option value="fit">Fit to Window</option>
+            <option value="390x844">Phone — 390 × 844</option>
+            <option value="768x1024">Tablet — 768 × 1024</option>
+            <option value="1366x768">Laptop — 1366 × 768</option>
+            <option value="1920x1080">Desktop — 1920 × 1080</option>
+          </select>
+          <button id="browser-go" type="button" title="Go to address" aria-label="Go to address">Go</button>
+          <button id="browser-scheme" class="scheme-toggle" type="button" role="switch" aria-checked="true" title="Browser color scheme: Dark">Dark</button>
+          <button id="browser-rotate" class="icon-button" type="button" title="Rotate viewport" aria-label="Rotate viewport">⤾</button>
+        </div>
+        <div id="browser-host" class="browser-host" aria-label="Web page"></div>
+      </section>
+    </main>
+
+    <div id="chat-resizer" class="resizer" role="separator" aria-label="Resize chat panel" aria-orientation="vertical" tabindex="0"></div>
+
+    <aside id="chat-panel" class="chat-panel" aria-labelledby="chat-heading" data-testid="chat-panel">
+      <header class="chat-header">
+        <div class="chat-titlebar">
+          <h2 id="chat-heading">Agent</h2>
+          <button id="new-chat" class="icon-button" type="button" title="New chat" aria-label="New chat">＋</button>
+        </div>
+        <div class="chat-session-row">
+          <label class="sr-only" for="session-select">Chat session</label>
+          <select id="session-select" aria-label="Chat session"><option>New Chat</option></select>
+          <button id="rename-chat" class="icon-button" type="button" title="Rename chat" aria-label="Rename chat">✎</button>
+          <button id="delete-chat" class="icon-button" type="button" title="Delete chat" aria-label="Delete chat">🗑</button>
+        </div>
+        <div class="chat-selectors">
+          <label class="sr-only" for="model-select">Active model</label>
+          <select id="model-select" disabled><option>Select a workspace</option></select>
+          <label class="sr-only" for="thinking-select">Thinking level</label>
+          <select id="thinking-select" disabled>
+            <option>Default</option><option>None</option><option>Low</option><option>High</option><option>Max</option>
+          </select>
+        </div>
+      </header>
+      <div id="chat-error" class="chat-error" role="alert" hidden></div>
+      <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
+      <div id="chat-activity" class="chat-activity" data-busy="false"><span class="activity-spinner" aria-hidden="true"></span><span id="chat-activity-text">Connecting…</span></div>
+      <div id="chat-attachments" class="chat-attachments" hidden></div>
+      <form id="chat-form" class="chat-input">
+        <button id="commands-chat" type="button" title="Commands" aria-label="Commands">/</button>
+        <button id="attach-chat" type="button" title="Attach image" aria-label="Attach image">📎</button>
+        <button id="dictate-chat" type="button" title="Enable ChimpFlow in Settings" aria-label="Dictation" disabled>🎤</button>
+        <label class="sr-only" for="chat-text">Message the agent</label>
+        <textarea id="chat-text" rows="2" placeholder="Message the agent · Enter to send · Shift+Enter for newline"></textarea>
+        <div class="chat-input-actions">
+          <button id="steer-chat" type="button" title="Steer the active turn" disabled>Steer</button>
+          <button id="stop-chat" type="button" title="Stop the active turn" disabled>Stop</button>
+          <button id="send-chat" class="primary" type="submit" disabled>Send</button>
+        </div>
+      </form>
+    </aside>
+
+    <footer class="status-bar">
+      <span id="git-status-bar" title="Git status"></span>
+      <span id="agent-status">Agent Idle</span>
+    </footer>
+  </div>
+  <div id="workspace-context-menu" class="context-menu" hidden></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

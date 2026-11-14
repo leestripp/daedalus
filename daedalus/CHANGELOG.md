@@ -4,6 +4,24 @@
 
 ### Fixed
 
+- **§SESSION-STORAGE (2026-11-14): named chats no longer share or delete one
+  another's transcripts.** `AgentConfig.session_id` now reaches `Messages`, which
+  uses a path-safe per-session JSON filename and the matching `msg.<session-id>`
+  SQLite key. Previously every named chat silently used `messages.json` and
+  `msg.default`, so New Chat cloned the old transcript and Delete/Clear erased it.
+  Legacy default data migrates into the first named session that loads it only
+  after the new copy is confirmed persisted, then leaves the legacy namespace so
+  later new chats start empty. Unnamed/default sessions retain their old paths.
+  Regression coverage proves independent save/load/clear, one-time migration,
+  backend create/select/delete isolation, and named-session compression paths.
+
+- **§HISTORY-TELL-USER (2026-11-14): restored chats retain the actual final
+  answer.** `Messages::history_snapshot()` now associates tool-call IDs with
+  their tool names and restores successful `tell_user` result content as an
+  assistant entry. Other tool calls/results remain elided, malformed results
+  are skipped, and GTK and Electron both recover the user-facing answer after
+  a history refresh or restart instead of only the assistant's lead-in.
+
 - **§SECOND-BRAIN-IPC (2026-11-09): Global Second Brain writes are now safe
   across independent agents and hosts.** Every operation shares a bounded
   brain-root `flock(2)` (shared readers, exclusive mutations/reindex), covering
@@ -184,7 +202,7 @@
 - §Monorepo (2026-09-24): the `daedalus`, `icarus`, and `monkeybyte`
   repositories were consolidated into a single monorepo rooted at this
   repository (library history/tags preserved; hosts imported as
-  `icarus/` and `monkeybyte/` subtrees).
+  `icarus/` and `monkeybyte-gtk/` subtrees).
   - New superbuild root `CMakeLists.txt`: one configure builds library +
     demos + tests + both hosts (`DAEDALUS_BUILD_ICARUS` /
     `DAEDALUS_BUILD_MONKEYBYTE`, both default OFF when this repo is

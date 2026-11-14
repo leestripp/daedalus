@@ -17,7 +17,7 @@ namespace daedalus {
 
 struct HistoryEntry {
     std::string role;     ///< "system" | "user" | "assistant"
-    std::string content;  ///< text content; tool calls/results are elided
+    std::string content;  ///< text; plumbing elided, tell_user text retained
 
     /// §MSG-HEADERS (2026-10-04): origin envelope of the underlying
     /// message, straight from its `_meta`. Both empty for legacy

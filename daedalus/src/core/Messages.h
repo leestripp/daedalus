@@ -177,9 +177,12 @@ public:
      *                 cfg.agent_name) to compute this; Messages
      *                 itself does NOT know about agent_name.
      * @param config Compression configuration
+     * @param session_id Stable per-chat persistence key. Empty means the
+     *                   legacy default namespace.
      */
     Messages(std::filesystem::path data_dir,
-             const MessageCompressionConfig& config = MessageCompressionConfig());
+             const MessageCompressionConfig& config = MessageCompressionConfig(),
+             std::string session_id = "default");
     
     ~Messages();
 
@@ -771,6 +774,9 @@ private:
     // load() tries this when messages.json is missing or corrupt.
     // load_from_crash_file() also runs the drop-last heuristic via
     // validate_message_for_recovery().
+    /** Load only the currently selected session namespace. */
+    bool load_from_storage();
+
     bool load_from_crash_file(const std::string& crash_path);
 
     // §CRASH-5: returns true if `msg` is well-formed enough to keep

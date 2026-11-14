@@ -49,6 +49,13 @@ void Agent::submit_user_message(std::string text,
     impl_->submit_user_message(std::move(text), std::move(imgs),
                                std::move(source));
 }
+void Agent::submit_steer_message(std::string text,
+                                 std::vector<ImageAttachment> imgs,
+                                 std::string source)
+{
+    impl_->submit_steer_message(std::move(text), std::move(imgs),
+                                std::move(source));
+}
 void Agent::cancel() noexcept { impl_->cancel(); }
 size_t Agent::pending_count() const noexcept { return impl_->pending_count(); }
 
@@ -174,6 +181,7 @@ void Agent::register_tool(std::unique_ptr<BaseTool> tool)
 }
 
 void Agent::clear_memory() { impl_->clear_memory(); }
+void Agent::clear_history() { impl_->clear_history(); }
 
 bool Agent::switch_model(const std::string& model_name)
 {

@@ -4,7 +4,7 @@ Version=1.0
 Name=MonkeyByte
 GenericName=AI Code Editor
 Comment=Native desktop AI code editor with an integrated LLM agent
-Exec=monkeybyte
+Exec=monkeybyte-electron
 Icon=monkeybyte
 Terminal=false
 Categories=Development;IDE;TextEditor;
@@ -20,4 +20,4 @@ Actions=new-window;
 
 [Desktop Action new-window]
 Name=New Window
-Exec=monkeybyte
+Exec=monkeybyte-electron

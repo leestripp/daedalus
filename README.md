@@ -1,15 +1,15 @@
 # daedalus
 
-A C++23 autonomous AI-agent library and its two host applications, in one
+A C++23 autonomous AI-agent library and its host applications, in one
 monorepo.
 
 | Component | What it is |
 |-----------|------------|
 | [`daedalus/`](daedalus/) | The shared brain — `libdaedalus.a`: agent loop, LLM providers, tool registry (bash, memory, skills, todos, web, MCP…), settings store. Never touches stdio; hosts implement `AgentSink`. |
 | [`icarus/`](icarus/) | Terminal host — streaming REPL with slash commands and an A2A (Agent2Agent) HTTP server mode. |
-| [`monkeybyte/`](monkeybyte/) | Desktop host — GTK4/gtkmm code editor with agent chat panel, WebKit previews, and an HTTP UI-automation server. |
+| [`monkeybyte/`](monkeybyte/) | Standalone Electron host — complete IDE, persistent Daedalus chat, browser tools, shared settings, project types, and ChimpFlow voice. |
 
-## Build everything
+## Build the C++ superbuild
 
 ```bash
 cmake -S . -B build
@@ -17,22 +17,38 @@ cmake --build build -j$(nproc)
 ctest --test-dir build --output-on-failure    # or: -L lib | -L cli | -L app
 ```
 
-`monkeybyte` builds by default only when pkg-config finds the GTK stack
-(`gtkmm-4.0`, `gtksourceview-5`, `webkitgtk-6.0`, `md4c`) — override with
-`-DDAEDALUS_BUILD_MONKEYBYTE=ON/OFF`; `-DDAEDALUS_BUILD_ICARUS=OFF`
-skips the CLI. Install prefix defaults to `~/.local`.
+The superbuild compiles the library, Icarus, tests, and Electron's standalone
+backend. `-DDAEDALUS_BUILD_ICARUS=OFF` skips the CLI;
+`-DDAEDALUS_BUILD_ELECTRON_BACKEND=OFF` skips the backend. Install prefix
+defaults to `~/.local`.
 
-## Install
+## Run the Electron app
 
 ```bash
-./install.sh            # builds + installs everything to ~/.local
+cd monkeybyte
+npm ci
+npm run check
+npm test
+npm start
+```
+
+The sandbox-aware launcher fails closed if Chromium has no valid setuid or
+namespace sandbox. On this host's `nosuid` checkout, use the copied-runtime and
+root-owned-helper procedure in [`monkeybyte/README.md`](monkeybyte/README.md);
+never use `--no-sandbox`.
+
+## Install the applications
+
+```bash
+./install.sh            # builds + installs Icarus and Electron MonkeyByte
 ./install.sh /opt/foo   # or a custom prefix
 ```
 
-One pass installs icarus, monkeybyte, and the library, then handles
-monkeybyte's desktop integration (absolute `Exec` path in the `.desktop`
-file, GSettings schema compiled into the prefix, desktop/icon cache
-refresh).
+One pass installs Icarus, the shared library, and standalone Electron
+MonkeyByte with its compiled backend. The old GTK executable and source tree
+are retired. The single **MonkeyByte** desktop launcher starts
+`bin/monkeybyte-electron` and keeps the original icon; user settings and
+sessions are preserved.
 
 ## Use just the library
 

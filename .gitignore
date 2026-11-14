@@ -1,9 +1,9 @@
 # .gitignore — daedalus monorepo (ONE file for the whole repo)
 #
 # §Monorepo (2026-09-24): consolidated from the old per-component files
-# (daedalus/, icarus/, monkeybyte/ .gitignore). Patterns here have no
+# (daedalus/ and icarus/ .gitignore). Patterns here have no
 # leading slash, so git applies them recursively to every subdirectory —
-# one ignore policy for library + both hosts.
+# one ignore policy for library + hosts.
 #
 # Goal: `git add .` should only stage source files. Anything else
 # (build artifacts, agent state, scratch dirs, editor files, OS junk,
@@ -114,10 +114,6 @@ node_modules/
 *.pfx
 
 # ---------------------------------------------------------------------------
-# monkeybyte .deb packaging artifacts (keep build-deb.sh tracked)
-# ---------------------------------------------------------------------------
-monkeybyte/packages/deb/*.deb
-monkeybyte/packages/deb/stage/
 
 # ---------------------------------------------------------------------------
 # OS cruft
@@ -125,3 +121,6 @@ monkeybyte/packages/deb/stage/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Standalone Electron packages
+monkeybyte/release/
