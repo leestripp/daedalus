@@ -134,6 +134,7 @@ test('narration holds the queue until each segment finishes playing', async () =
     assert.equal(environment.players.length, 1);
     environment.players[0].emit('ended');
     await flush();
+    await flush();  // §ENDED-RACE: pre-play listeners add one microtask hop
     assert.equal(environment.players.length, 2);
     environment.players[1].emit('ended');
     await first;

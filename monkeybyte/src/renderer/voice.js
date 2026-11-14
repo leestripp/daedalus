@@ -100,7 +100,7 @@ export async function recordingWav(bytes, mime) {
   return new Blob([wav16(rendered)], { type: 'audio/wav' });
 }
 
-export function createNarration(request, onError, onPlayed = () => {}) {
+export function createNarration(request, onError, onPlayed = () => {}, onDebug = () => {}) {
   let queue = Promise.resolve();
   let generation = 0;
   let audio = null;
@@ -112,13 +112,16 @@ export function createNarration(request, onError, onPlayed = () => {}) {
   // previous segment ended.
   async function prepare(text, ticket, options) {
     if (!text.trim() || ticket !== generation) return null;
+    onDebug(`tts synth start "${text.slice(0, 50)}"`);
+    const started = performance.now();
     const result = await request(text, options);
+    onDebug(`tts synth done "${text.slice(0, 50)}" in ${Math.round(performance.now() - started)}ms`);
     if (ticket !== generation) return null;
     const bytes = Uint8Array.from(atob(result.base64), (character) => character.charCodeAt(0));
     return normalizedWav(bytes.buffer, result.mime);
   }
 
-  async function play(prepared, ticket) {
+  async function play(prepared, ticket, label = '') {
     let clip = null;
     try {
       clip = await prepared;
@@ -129,11 +132,24 @@ export function createNarration(request, onError, onPlayed = () => {}) {
       return false;
     }
     if (!clip || ticket !== generation) return false;
+    onDebug(`tts play start ${label}`);
+    const playStarted = performance.now();
     const url = URL.createObjectURL(clip);
     const player = new Audio(url);
     audio?.pause(); audio = player;
     player.addEventListener('ended', () => URL.revokeObjectURL(url), { once: true });
-    await player.play();
+    // §ENDED-RACE 2026-11-14: attach completion listeners BEFORE play() —
+    // a short clip can fire 'ended' during play()'s task-rounds, before a
+    // post-await attach would see it, parking the queue forever (only
+    // cancel() ever unstuck it: "next sentence plays when I hit Stop").
+    await new Promise((resolve) => {
+      player.addEventListener('ended', resolve, { once: true });
+      player.addEventListener('error', resolve, { once: true });
+      player.addEventListener('pause', resolve, { once: true });
+      try { Promise.resolve(player.play()).catch(resolve); }
+      catch { resolve(); }  // stubbed/legacy play() may throw synchronously
+      if (player.ended) resolve();   // already finished while we were attaching
+    });
     if (ticket !== generation) return false;
     // §PLAY-TO-END 2026-11-14: hold the queue until this segment actually
     // finishes. audio.play() resolves at playback START, so chaining on it
@@ -145,6 +161,7 @@ export function createNarration(request, onError, onPlayed = () => {}) {
       player.addEventListener('error', resolve, { once: true });
       player.addEventListener('pause', resolve, { once: true });
     });
+    onDebug(`tts play end ${label} after ${Math.round(performance.now() - playStarted)}ms`);
     if (ticket !== generation || audio !== player) return false;
     return true;
   }
@@ -153,14 +170,17 @@ export function createNarration(request, onError, onPlayed = () => {}) {
     speak(text, options = undefined) {
       const ticket = generation;
       const prepared = prepare(text, ticket, options);
-      queue = queue.then(() => play(prepared, ticket))
+      onDebug(`tts speak queued "${text.slice(0, 50)}"`);
+      queue = queue.then(() => play(prepared, ticket, `"${text.slice(0, 50)}"`))
         .then((played) => { if (played) onPlayed(); })
         .catch((error) => onError(error));
       return queue;
     },
     cancel() {
+      onDebug('tts cancel');
       generation += 1; audio?.pause(); audio = null;
       queue = Promise.resolve();
+      onDebug('tts cancel: queue reset');
     },
   };
 }

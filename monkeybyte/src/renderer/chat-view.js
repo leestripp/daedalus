@@ -148,7 +148,7 @@ export function createChatView({ api, getWorkspace, onError }) {
       : 'Enable ChimpFlow, dictation, a scoped key and STT model in Settings';
   }
 
-  const narration = createNarration(api.chimpflowSpeak, report);
+  const narration = createNarration(api.chimpflowSpeak, report, () => {}, debugLog);
 
   function resetNarration() {
     speechBuffer = ''; pendingNotice = null; narration.cancel();

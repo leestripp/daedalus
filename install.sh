@@ -29,6 +29,10 @@ rm -rf "$electron_prefix"
 mkdir -p "$electron_prefix" "$prefix/bin"
 cp -a "$electron_package"/. "$electron_prefix"/
 ln -sfn ../lib/monkeybyte-electron/monkeybyte "$prefix/bin/monkeybyte-electron"
+
+# §BACKEND-KILL (2026-11-14): the backend outlives the app window by design —
+# restart any running backend so the next app start uses this new binary.
+pkill  "monkeybyte-electron-backend --data-dir" 2>/dev/null || true
 # Retire the old GTK executable. Electron keeps its explicit command name.
 rm -f "$prefix/bin/monkeybyte"
 
