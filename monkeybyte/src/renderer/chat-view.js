@@ -124,6 +124,7 @@ export function createChatView({ api, getWorkspace, onError }) {
   let loggedBusy = null;
   let loggedState = '';
   let pendingNotice = null;  // §NO-DOUBLE-SPEAK: tell_user likely to stream
+  let agentBusy = false;  // §MULTI-BLOCK: latest status busy flag
   let canonicalHistory = [];
   let liveTurn = null;
   const approvals = new Map();
@@ -160,7 +161,11 @@ export function createChatView({ api, getWorkspace, onError }) {
 
   function narrateDelta(text) {
     const voice = settings.chimpflow ?? {};
-    if (!speakOnComplete || !voice.enabled || !voice.readAssistant || dictating()) return;
+    // §MULTI-BLOCK 2026-11-14: narrate whenever the agent is live (armed at
+    // send, or any busy period) — turns can carry several assistant text
+    // blocks; gating only on the send-armed flag left later blocks silent
+    // until a dump at the next turn's flush ("only heard part of it").
+    if ((!speakOnComplete && !agentBusy) || !voice.enabled || !voice.readAssistant || dictating()) return;
     speechBuffer += text;
     const drained = drainSpeechSegments(speechBuffer);
     speechBuffer = drained.remainder;
@@ -555,7 +560,7 @@ export function createChatView({ api, getWorkspace, onError }) {
       elements.messages.append(messageElement('user', payload.text));
       scroll();
     }
-    else if (type === 'status') updateStatus(payload);
+    else if (type === 'status') { agentBusy = payload.busy === true; updateStatus(payload); }
     else if (type === 'stats') { latestStats = payload; renderAgentStatus(); }
     else if (type === 'turn_done') setActivity(payload.cancelled ? 'Cancelled' : 'Done', false);
     else if (type === 'tell_user') {
