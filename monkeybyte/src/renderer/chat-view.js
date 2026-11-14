@@ -370,17 +370,22 @@ export function createChatView({ api, getWorkspace, onError }) {
     const sentAttachments = attachments;
     attachments = []; renderAttachments();
     if (!liveTurn) liveTurn = { depth: canonicalHistory.length, notices: [], streamed: null };
+    // §FIRST-WORDS 2026-11-14: arm narration BEFORE the request roundtrip.
+    // The backend starts the turn on arrival, so streamed deltas can begin
+    // before this POST resolves; arming after the await dropped the opening
+    // words of the reply (everything before the first tool call).
+    resetNarration();
+    speakOnComplete = true;
     try {
       // §STEER-FALLBACK 2026-11-14: steering only exists mid-turn; when idle
       // fall back to a normal send so the button never swallows a message.
       const status = await api.agentRequest(steer && busy ? '/v1/chat/steer' : '/v1/chat/send', {
         method: 'POST', body: { text, attachments: sentAttachments },
       });
-      resetNarration();
-      speakOnComplete = true;
       updateStatus(status);
     } catch (error) {
       liveTurn = null;
+      speakOnComplete = false;
       attachments = sentAttachments; renderAttachments(); report(error);
     }
   }
