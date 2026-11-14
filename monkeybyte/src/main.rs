@@ -48,6 +48,14 @@ struct MonkeyByteApp {
     events_tx: mpsc::Sender<daemon::Event>,
     chimpflow: Option<tts::ChimpFlow>,
     stt_model: String,
+    /// Electron chat-header selectors (model + thinking level).
+    models: Vec<String>,
+    model: String,
+    thinking: String,
+}
+
+fn dirs_home() -> Option<String> {
+    std::env::var("HOME").ok().filter(|h| !h.is_empty())
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -85,6 +93,9 @@ impl MonkeyByteApp {
             events_tx,
             chimpflow: None,
             stt_model: "whisper".to_string(),
+            models: Vec::new(),
+            model: String::new(),
+            thinking: "Default".to_string(),
         };
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
@@ -113,6 +124,37 @@ impl MonkeyByteApp {
                     .chimpflow
                     .clone()
                     .and_then(|cf| tts::Narrator::spawn(cf).ok());
+                // Full settings pass: model/thinking selectors + workspace root.
+                if let Ok(settings) = daemon.request("GET", "/v1/settings", &serde_json::Value::Null) {
+                    log::log(&format!(
+                        "settings keys: {:?}",
+                        settings.as_object().map(|m| m.keys().cloned().collect::<Vec<_>>())
+                    ));
+                    if let Some(models) = settings["models"].as_array() {
+                        app.models = models.iter().filter_map(|v| v.as_str().map(String::from)).collect();
+                    }
+                    app.model = settings["defaultModel"].as_str().unwrap_or("").to_string();
+                    app.thinking = settings["thinking"].as_str().unwrap_or("Default").to_string();
+                    if app.workspace_root.is_none() {
+                        // The daemon's /v1/settings has NO workspace key
+                        // (keys: agent, chimpflow, models, ...). The
+                        // workspace lives in the Electron-side store.
+                        if let Some(home) = dirs_home() {
+                            let store = std::path::PathBuf::from(home)
+                                .join(".config/monkeybyte-electron/electron-settings.json");
+                            if let Ok(text) = std::fs::read_to_string(&store) {
+                                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                                    if let Some(w) = v["workspace"].as_str() {
+                                        if !w.is_empty() {
+                                            log::log(&format!("workspace from electron store: {w}"));
+                                            app.workspace_root = Some(std::path::PathBuf::from(w));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 log::log(&format!("narrator: {}", if app.narrator.is_some() { "enabled" } else { "disabled" }));
                 let (sessions, active) = load_sessions(&daemon);
                 app.sessions = sessions;
@@ -220,6 +262,22 @@ impl MonkeyByteApp {
             }
         });
         self.status_line = "transcribing…".to_string();
+    }
+
+    fn select_model(&mut self, model: &str) {
+        if let Some(daemon) = self.daemon.as_ref() {
+            log::log(&format!("POST /v1/models/select {model}"));
+            let _ = daemon.request("POST", "/v1/models/select", &serde_json::json!({ "model": model }));
+        }
+        self.model = model.to_string();
+    }
+
+    fn select_thinking(&mut self, level: &str) {
+        if let Some(daemon) = self.daemon.as_ref() {
+            log::log(&format!("POST /v1/models/thinking {level}"));
+            let _ = daemon.request("POST", "/v1/models/thinking", &serde_json::json!({ "level": level }));
+        }
+        self.thinking = level.to_string();
     }
 
     fn delete_session(&mut self) {
@@ -560,6 +618,32 @@ impl eframe::App for MonkeyByteApp {
                         if ui.button("\u{1f5d1}").on_hover_text("Delete chat").clicked() {
                             self.delete_session();
                         }
+                    });
+                    // Model + thinking selectors (Electron chat-selectors row).
+                    ui.horizontal(|ui| {
+                        let models = self.models.clone();
+                        let active = if self.model.is_empty() { "Select model".to_string() } else { self.model.clone() };
+                        egui::ComboBox::from_id_salt("model-select")
+                            .selected_text(active)
+                            .show_ui(ui, |ui| {
+                                for model in models {
+                                    let is_active = self.model == model;
+                                    if ui.selectable_label(is_active, &model).clicked() && !is_active {
+                                        self.select_model(&model);
+                                    }
+                                }
+                            });
+                        let levels = ["Default", "None", "Low", "High", "Max"];
+                        let thinking = self.thinking.clone();
+                        egui::ComboBox::from_id_salt("thinking-select")
+                            .selected_text(thinking)
+                            .show_ui(ui, |ui| {
+                                for level in levels {
+                                    if ui.selectable_label(self.thinking == level, level).clicked() {
+                                        self.select_thinking(level);
+                                    }
+                                }
+                            });
                     });
                     ui.separator();
 
