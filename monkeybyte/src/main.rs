@@ -36,6 +36,21 @@ struct MonkeyByteApp {
     active_session: Option<String>,
     workspace_root: Option<std::path::PathBuf>,
     workspace_expanded: std::collections::HashSet<std::path::PathBuf>,
+    left_panel: LeftPanel,
+    renaming: bool,
+    rename_buffer: String,
+    inspect: bool,
+    /// Live rectangles of every major region, captured each frame from the
+    /// panel show() responses — the UI-position ground truth.
+    layout_rects: Vec<(String, egui::Rect)>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum LeftPanel {
+    Workspace,
+    Search,
+    Git,
+    Settings,
 }
 
 impl MonkeyByteApp {
@@ -55,6 +70,11 @@ impl MonkeyByteApp {
             active_session: None,
             workspace_root: None,
             workspace_expanded: std::collections::HashSet::new(),
+            left_panel: LeftPanel::Workspace,
+            renaming: false,
+            rename_buffer: String::new(),
+            inspect: false,
+            layout_rects: Vec::new(),
         };
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
@@ -122,6 +142,29 @@ impl MonkeyByteApp {
         }
         self.chat.busy = false;
         self.chat.seal();
+    }
+
+    fn delete_session(&mut self) {
+        let Some(id) = self.active_session.clone() else { return };
+        if let Some(daemon) = self.daemon.as_ref() {
+            log::log(&format!("POST /v1/sessions/delete {id}"));
+            let _ = daemon.request("POST", "/v1/sessions/delete", &serde_json::json!({ "id": id }));
+            let (sessions, active) = load_sessions(daemon);
+            self.sessions = sessions;
+            self.active_session = active;
+            restore_history(&mut self.chat, daemon);
+        }
+    }
+
+    fn rename_session(&mut self, name: &str) {
+        let Some(id) = self.active_session.clone() else { return };
+        if let Some(daemon) = self.daemon.as_ref() {
+            log::log(&format!("POST /v1/sessions/rename {id}"));
+            let _ = daemon.request("POST", "/v1/sessions/rename", &serde_json::json!({ "id": id, "name": name }));
+            let (sessions, active) = load_sessions(daemon);
+            self.sessions = sessions;
+            self.active_session = active;
+        }
     }
 
     /// Switch to another chat session: server select, then reload transcript.
@@ -271,103 +314,296 @@ fn load_sessions(daemon: &daemon::Daemon) -> (Vec<(String, String)>, Option<Stri
 impl eframe::App for MonkeyByteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
-        egui::SidePanel::left("sessions")
-            .width_range(100.0..=300.0)
-            .default_width(200.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Chats");
-                    if ui.button("+").clicked() {
-                        self.create_session();
-                    }
-                });
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    let sessions = self.sessions.clone();
-                    for (id, name) in sessions {
-                        let active = self.active_session.as_deref() == Some(id.as_str());
-                        if ui.selectable_label(active, &name).clicked() && !active {
-                            self.select_session(&id);
-                        }
-                    }
-                });
-            });
 
-        egui::SidePanel::right("workspace")
-            .width_range(150.0..=400.0)
-            .default_width(260.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Workspace");
-                    if ui.button("⟳").clicked() {
-                        self.workspace_expanded.clear();
-                    }
-                });
-                if let Some(root) = self.workspace_root.clone() {
-                    ui.small(root.display().to_string());
-                    ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        workspace::tree_ui(ui, &root, &mut self.workspace_expanded);
-                    });
-                } else {
-                    ui.weak("no workspace selected");
-                }
-            });
-
-        egui::CentralPanel::default().show(ctx, |ui| {
+        // Status bar — Electron footer: git · agent state (right: context %).
+        let mut rects: Vec<(String, egui::Rect)> = Vec::new();
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading("MonkeyByte (Rust)");
+                ui.small("git: —");
                 ui.separator();
                 if self.chat.busy {
-                    ui.spinner();
-                    ui.label(&self.chat.state);
-                    if ui.button("Stop").clicked() {
-                        self.stop();
-                    }
+                    ui.small("Agent Busy");
                 } else {
-                    ui.label("ready");
+                    ui.small("Agent Idle");
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(format!("context {:.0}%", self.chat.context_percent));
-                });
-            });
-            ui.separator();
-            egui::ScrollArea::vertical()
-                .auto_shrink([false; 2])
-                .stick_to_bottom(true)
-                .show(ui, |ui| {
-                    for bubble in &self.chat.bubbles {
-                        let label = match bubble.role {
-                            Role::User => "You",
-                            Role::Assistant => "Byte",
-                            Role::Tool => "Tool",
-                            Role::Notice => "•",
-                        };
-                        ui.group(|ui| {
-                            ui.label(egui::RichText::new(label).strong());
-                            let mut text = bubble.text.clone();
-                            if bubble.live {
-                                text.push_str(" \u{258c}");
-                            }
-                            ui.label(text);
-                        });
+                    ui.small(format!("context {:.0}%", self.chat.context_percent));
+                    if ui
+                        .selectable_label(self.inspect, "Inspect")
+                        .on_hover_text("UI inspector: positions, widgets, hover ids")
+                        .clicked()
+                    {
+                        self.inspect = !self.inspect;
                     }
                 });
-            ui.separator();
-            ui.horizontal(|ui| {
-                let response = ui.add(
-                    egui::TextEdit::singleline(&mut self.input)
-                        .desired_width(f32::INFINITY)
-                        .hint_text("Message Byte…"),
-                );
-                let send_clicked = ui.button("Send").clicked()
-                    || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
-                if send_clicked {
-                    self.send();
+            });
+        });
+
+        // Activity bar — Electron `nav.activity-bar` icon rail.
+        let r = egui::SidePanel::left("activity")
+            .width_range(30.0..=48.0)
+            .default_width(40.0)
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(4.0);
+                    if ui
+                        .selectable_label(matches!(self.left_panel, LeftPanel::Workspace), "\u{1f4c1}")
+                        .on_hover_text("Workspace (Ctrl+1)")
+                        .clicked()
+                    {
+                        self.left_panel = LeftPanel::Workspace;
+                    }
+                    if ui
+                        .selectable_label(matches!(self.left_panel, LeftPanel::Search), "\u{2315}")
+                        .on_hover_text("Search (Ctrl+2)")
+                        .clicked()
+                    {
+                        self.left_panel = LeftPanel::Search;
+                    }
+                    if ui
+                        .selectable_label(matches!(self.left_panel, LeftPanel::Git), "\u{2442}")
+                        .on_hover_text("Source Control (Ctrl+3)")
+                        .clicked()
+                    {
+                        self.left_panel = LeftPanel::Git;
+                    }
+                    ui.add_space((ui.available_height() - 44.0).max(0.0));
+                    if ui
+                        .selectable_label(matches!(self.left_panel, LeftPanel::Settings), "\u{2699}")
+                        .on_hover_text("Settings (Ctrl+4)")
+                        .clicked()
+                    {
+                        self.left_panel = LeftPanel::Settings;
+                    }
+                });
+            });
+        rects.push(("activity".into(), r.response.rect));
+
+        // Sidebar — one page per activity selection (Electron `aside#sidebar`).
+        let r = egui::SidePanel::left("sidebar")
+            .resizable(true)
+            .width_range(140.0..=460.0)
+            .default_width(240.0)
+            .show(ctx, |ui| {
+                match self.left_panel {
+                    LeftPanel::Workspace => {
+                        ui.horizontal(|ui| {
+                            ui.heading("Workspace");
+                            if ui.button("\u{1f4c2}").on_hover_text("Open workspace").clicked() {}
+                            if ui.button("\u{21bb}").on_hover_text("Refresh workspace").clicked() {
+                                self.workspace_expanded.clear();
+                            }
+                        });
+                        if let Some(root) = self.workspace_root.clone() {
+                            ui.small(root.display().to_string());
+                            ui.separator();
+                            egui::ScrollArea::vertical().show(ui, |ui| {
+                                workspace::tree_ui(ui, &root, &mut self.workspace_expanded);
+                            });
+                        } else {
+                            ui.weak("Choose a workspace to begin.");
+                        }
+                    }
+                    LeftPanel::Search => {
+                        ui.heading("Search");
+                        ui.separator();
+                        ui.weak("Search lands in a later phase.");
+                    }
+                    LeftPanel::Git => {
+                        ui.horizontal(|ui| {
+                            ui.heading("Source Control");
+                            if ui.button("\u{21bb}").on_hover_text("Refresh Git status").clicked() {}
+                        });
+                        ui.separator();
+                        ui.weak("Open a Git workspace to see changes.");
+                    }
+                    LeftPanel::Settings => {
+                        ui.heading("Settings");
+                        ui.separator();
+                        ui.weak("Settings land in a later phase.");
+                    }
                 }
             });
-            ui.label(egui::RichText::new(&self.status_line).small().weak());
+        rects.push(("sidebar".into(), r.response.rect));
+
+        // Chat panel — Electron `aside#chat-panel` (right side).
+        let r = egui::SidePanel::right("chat")
+            .resizable(true)
+            .width_range(300.0..=800.0)
+            .default_width(400.0)
+            .show(ctx, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Agent");
+                        if ui.button("\u{ff0b}").on_hover_text("New chat").clicked() {
+                            self.create_session();
+                        }
+                    });
+                    // Session row: select + rename + delete (Electron chat-session-row).
+                    ui.horizontal(|ui| {
+                        let active_name = self
+                            .sessions
+                            .iter()
+                            .find(|(id, _)| Some(id) == self.active_session.as_ref())
+                            .map(|(_, n)| n.clone())
+                            .unwrap_or_else(|| "New Chat".to_string());
+                        let sessions = self.sessions.clone();
+                        egui::ComboBox::from_id_salt("session-select")
+                            .selected_text(active_name)
+                            .show_ui(ui, |ui| {
+                                for (id, name) in sessions {
+                                    let active = self.active_session.as_deref() == Some(id.as_str());
+                                    if ui.selectable_label(active, &name).clicked() && !active {
+                                        self.select_session(&id);
+                                    }
+                                }
+                            });
+                        if ui.button("\u{270e}").on_hover_text("Rename chat").clicked() {
+                            self.rename_buffer = self
+                                .sessions
+                                .iter()
+                                .find(|(id, _)| Some(id) == self.active_session.as_ref())
+                                .map(|(_, n)| n.clone())
+                                .unwrap_or_default();
+                            self.renaming = true;
+                        }
+                        if ui.button("\u{1f5d1}").on_hover_text("Delete chat").clicked() {
+                            self.delete_session();
+                        }
+                    });
+                    ui.separator();
+
+                    let composer_h = 92.0;
+                    egui::ScrollArea::vertical()
+                        .id_salt("chat-messages")
+                        .auto_shrink([false; 2])
+                        .stick_to_bottom(true)
+                        .max_height((ui.available_height() - composer_h).max(80.0))
+                        .show(ui, |ui| {
+                            for bubble in &self.chat.bubbles {
+                                let label = match bubble.role {
+                                    Role::User => "You",
+                                    Role::Assistant => "Byte",
+                                    Role::Tool => "Tool",
+                                    Role::Notice => "\u{2022}",
+                                };
+                                ui.group(|ui| {
+                                    ui.label(egui::RichText::new(label).strong());
+                                    let mut text = bubble.text.clone();
+                                    if bubble.live {
+                                        text.push_str(" \u{258c}");
+                                    }
+                                    ui.label(text);
+                                });
+                            }
+                        });
+
+                    ui.horizontal(|ui| {
+                        if self.chat.busy {
+                            ui.spinner();
+                            ui.label(&self.chat.state);
+                        } else {
+                            ui.weak(&self.status_line);
+                        }
+                    });
+
+                    let response = ui.add(
+                        egui::TextEdit::multiline(&mut self.input)
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY)
+                            .hint_text("Message the agent \u{00b7} Enter to send \u{00b7} Shift+Enter for newline"),
+                    );
+                    let enter_send = ui.input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift);
+                    ui.horizontal(|ui| {
+                        ui.weak("/");
+                        if ui.button("\u{1f4ce}").on_hover_text("Attach image").clicked() {}
+                        if ui.button("\u{1f3a4}").on_hover_text("Dictation").clicked() {}
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Send").clicked()
+                                || (response.lost_focus() && enter_send)
+                            {
+                                self.send();
+                            }
+                            if ui.add_enabled(self.chat.busy, egui::Button::new("Stop")).clicked() {
+                                self.stop();
+                            }
+                            if ui.add_enabled(self.chat.busy, egui::Button::new("Steer")).clicked() {
+                                self.send(); // busy → daemon::send() routes to /v1/chat/steer
+                            }
+                        });
+                    });
+                });
+            });
+        rects.push(("chat".into(), r.response.rect));
+
+        // Main area — editor surface (Electron `main#main-area`).
+        let r = egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("MonkeyByte");
+            });
+            ui.separator();
+            ui.weak(
+                "Editor \u{2014} open a file from the workspace tree. File viewing and editing land in a later phase.",
+            );
         });
+        rects.push(("editor".into(), r.response.rect));
+        self.layout_rects = rects;
+
+        // Rename popup (Electron rename flow).
+        if self.renaming {
+            let mut open = true;
+            let mut close = false;
+            egui::Window::new("Rename chat")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut open)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.rename_buffer);
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("Save").clicked() && !self.rename_buffer.trim().is_empty() {
+                            let name = self.rename_buffer.trim().to_string();
+                            self.rename_session(&name);
+                            close = true;
+                        }
+                        if ui.button("Cancel").clicked() {
+                            close = true;
+                        }
+                    });
+                });
+            if !open || close {
+                self.renaming = false;
+            }
+        }
+
+        if self.inspect {
+            ctx.set_debug_on_hover(true);
+            egui::Window::new("UI Inspector")
+                .default_pos(ctx.screen_rect().left_top() + egui::vec2(60.0, 60.0))
+                .show(ctx, |ui| {
+                    let pointer = ctx.pointer_latest_pos().unwrap_or(egui::Pos2::ZERO);
+                    ui.monospace(format!("pointer: ({:.0}, {:.0})", pointer.x, pointer.y));
+                    ui.monospace(format!("screen:  {:?}", ctx.screen_rect()));
+                    ui.separator();
+                    ui.label("regions");
+                    for (name, rect) in &self.layout_rects {
+                        ui.monospace(format!(
+                            "{name:9} x {:.0}..{:.0}  y {:.0}..{:.0}  w {:.0} h {:.0}",
+                            rect.min.x, rect.max.x, rect.min.y, rect.max.y,
+                            rect.width(), rect.height(),
+                        ));
+                    }
+                    ui.separator();
+                    ui.label("interaction");
+                    let keys: Vec<egui::Key> = ui.input(|i| i.keys_down.iter().copied().collect());
+                    ui.monospace(format!("keys: {:?}", keys));
+                });
+        } else {
+            ctx.set_debug_on_hover(false);
+        }
+
         ctx.request_repaint_after(std::time::Duration::from_millis(120));
     }
 }
