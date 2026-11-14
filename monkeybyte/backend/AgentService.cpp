@@ -353,7 +353,15 @@ nlohmann::json AgentService::send_impl(std::string text, const json& attachments
     }
     emit("user_message", {{"text", std::move(text)}, {"attachments", attachments}});
     request_turn();
-    return status();
+    // §SEND-BUSY 2026-11-14: a turn was just requested, but status() still
+    // shows busy=false — the driver thread has not latched running_ yet.
+    // Returning that stale snapshot made clients (MonkeyByte's stop button)
+    // disable at turn start and, when the SSE status event raced ahead of
+    // this HTTP response, stay disabled for the whole turn (no further
+    // state-change events fire while a tool such as execute_bash runs).
+    auto snapshot = status();
+    snapshot["busy"] = true;
+    return snapshot;
 }
 
 void AgentService::request_turn() {
