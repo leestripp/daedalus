@@ -7,7 +7,7 @@ description = "MonkeyByte agent chat — Rust rewrite (egui UI, rodio audio, thr
 [dependencies]
 eframe = "0.31"
 egui = "0.31"
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json"] }
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls", "json", "multipart"] }
 rodio = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -15,4 +15,4 @@ anyhow = "1"
 regex = "1"
 hound = "3"
 
-# Phase 4 (dictation): cpal = "0.15" — needs libasound2-dev on Ubuntu
+cpal = "0.15" # dictation — needs libasound2-dev on Ubuntu

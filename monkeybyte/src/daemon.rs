@@ -21,6 +21,7 @@ pub enum Event {
     UserMessage(serde_json::Value),
     AssistantDelta(serde_json::Value),
     Status(serde_json::Value),
+    Dictation(String),
     Other(String, serde_json::Value),
     BackendError(String),
 }

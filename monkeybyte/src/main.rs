@@ -7,6 +7,7 @@ mod log;
 mod narration;
 mod tts;
 mod workspace;
+mod dictation;
 
 use chat::{Bubble, Chat, Role};
 use eframe::egui;
@@ -43,6 +44,10 @@ struct MonkeyByteApp {
     /// Live rectangles of every major region, captured each frame from the
     /// panel show() responses — the UI-position ground truth.
     layout_rects: Vec<(String, egui::Rect)>,
+    recording: Option<dictation::Recording>,
+    events_tx: mpsc::Sender<daemon::Event>,
+    chimpflow: Option<tts::ChimpFlow>,
+    stt_model: String,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -56,6 +61,7 @@ enum LeftPanel {
 impl MonkeyByteApp {
     fn new() -> Self {
         let (tx, rx) = mpsc::channel();
+        let events_tx = tx.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let mut app = Self {
             chat: Chat::default(),
@@ -75,6 +81,10 @@ impl MonkeyByteApp {
             rename_buffer: String::new(),
             inspect: false,
             layout_rects: Vec::new(),
+            recording: None,
+            events_tx,
+            chimpflow: None,
+            stt_model: "whisper".to_string(),
         };
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
@@ -98,7 +108,11 @@ impl MonkeyByteApp {
                 log::log(&format!("daemon up: port={}", daemon.port));
                 daemon.events(app.events_cancel.clone(), tx);
                 app.status_line = format!("daemon ready on port {}", daemon.port);
-                app.narrator = narrator_from_settings(&daemon);
+                app.chimpflow = chimpflow_from_settings(&daemon, &mut app.stt_model);
+                app.narrator = app
+                    .chimpflow
+                    .clone()
+                    .and_then(|cf| tts::Narrator::spawn(cf).ok());
                 log::log(&format!("narrator: {}", if app.narrator.is_some() { "enabled" } else { "disabled" }));
                 let (sessions, active) = load_sessions(&daemon);
                 app.sessions = sessions;
@@ -155,6 +169,57 @@ impl MonkeyByteApp {
         }
         self.chat.busy = false;
         self.chat.seal();
+    }
+
+    fn start_dictation(&mut self) {
+        match dictation::start() {
+            Ok(recording) => {
+                self.recording = Some(recording);
+                self.status_line = "dictating…".to_string();
+            }
+            Err(err) => {
+                log::log(&format!("dictation start failed: {err}"));
+                self.status_line = format!("dictation: {err}");
+            }
+        }
+    }
+
+    fn stop_dictation(&mut self) {
+        let Some(rec) = self.recording.take() else { return };
+        let secs = rec.started.elapsed().as_secs_f32();
+        let samples = rec.samples.lock().map(|v| v.clone()).unwrap_or_default();
+        let channels = rec.channels as usize;
+        let rate = rec.rate;
+        let Some(cf) = self.chimpflow.clone() else {
+            self.status_line = "dictation: chimpflow not configured".to_string();
+            return;
+        };
+        let model = self.stt_model.clone();
+        let tx = self.events_tx.clone();
+        std::thread::spawn(move || {
+            log::log(&format!("dictation: {:.1}s captured, {} samples", secs, samples.len()));
+            if samples.is_empty() {
+                let _ = tx.send(daemon::Event::BackendError("dictation: no audio captured".into()));
+                return;
+            }
+            let mono = dictation::to_mono(&samples, channels);
+            let pcm = dictation::resample_linear(&mono, rate, 16000);
+            let wav = std::env::temp_dir().join("mb-dictation.wav");
+            let result = dictation::write_wav16(&wav, &pcm, 16000)
+                .and_then(|_| dictation::transcribe(&cf.base, &cf.api_key, &model, &wav));
+            let _ = std::fs::remove_file(&wav);
+            match result {
+                Ok(text) => {
+                    log::log(&format!("dictation: transcribed {} chars", text.len()));
+                    let _ = tx.send(daemon::Event::Dictation(text));
+                }
+                Err(err) => {
+                    log::log(&format!("dictation: transcribe failed: {err}"));
+                    let _ = tx.send(daemon::Event::BackendError(format!("dictation: {err}")));
+                }
+            }
+        });
+        self.status_line = "transcribing…".to_string();
     }
 
     fn delete_session(&mut self) {
@@ -256,6 +321,15 @@ impl MonkeyByteApp {
                 daemon::Event::Other(kind, _payload) => {
                     self.status_line = format!("event: {kind}");
                 }
+                daemon::Event::Dictation(text) => {
+                    self.status_line = "ready".to_string();
+                    if !text.trim().is_empty() {
+                        if !self.input.is_empty() && !self.input.ends_with(' ') {
+                            self.input.push(' ');
+                        }
+                        self.input.push_str(text.trim());
+                    }
+                }
                 daemon::Event::BackendError(message) => {
                     self.status_line = message;
                 }
@@ -290,7 +364,7 @@ fn restore_history(chat: &mut Chat, daemon: &daemon::Daemon) {
 
 /// Build a narrator from the daemon's chimpflow settings, if enabled.
 /// Field names mirror ../monkeybyte-electron/src/main/chimpflow.js.
-fn narrator_from_settings(daemon: &daemon::Daemon) -> Option<tts::Narrator> {
+fn chimpflow_from_settings(daemon: &daemon::Daemon, stt_model: &mut String) -> Option<tts::ChimpFlow> {
     let settings = daemon.request("GET", "/v1/settings", &serde_json::Value::Null).ok()?;
     log::log("GET /v1/settings ok");
     let cf = settings["chimpflow"].as_object()?;
@@ -302,13 +376,13 @@ fn narrator_from_settings(daemon: &daemon::Daemon) -> Option<tts::Narrator> {
     let host = get("serverUrl");
     let host = if host.is_empty() { "http://127.0.0.1" } else { host };
     let port = cf.get("port").and_then(|v| v.as_u64()).unwrap_or(8090);
-    let cf = tts::ChimpFlow {
+    *stt_model = get("sttModel").to_string();
+    Some(tts::ChimpFlow {
         base: format!("{host}:{port}"),
         api_key: get("apiKey").to_string(),
         tts_model: if get("ttsModel").is_empty() { "kokoro-82m" } else { get("ttsModel") }.to_string(),
         voice: if get("voice").is_empty() { "af_heart" } else { get("voice") }.to_string(),
-    };
-    tts::Narrator::spawn(cf).ok()
+    })
 }
 
 /// GET /v1/sessions → ([(id, name)], active id). Values, not refs to `self`:
@@ -533,7 +607,24 @@ impl eframe::App for MonkeyByteApp {
                     ui.horizontal(|ui| {
                         ui.weak("/");
                         if ui.button("\u{1f4ce}").on_hover_text("Attach image").clicked() {}
-                        if ui.button("\u{1f3a4}").on_hover_text("Dictation").clicked() {}
+                        let mic = if self.recording.is_some() { "\u{1f534}" } else { "\u{1f3a4}" };
+                        if ui
+                            .button(mic)
+                            .on_hover_text(if self.recording.is_some() { "Stop dictation" } else { "Dictate" })
+                            .clicked()
+                        {
+                            if self.recording.is_some() {
+                                self.stop_dictation();
+                            } else {
+                                self.start_dictation();
+                            }
+                        }
+                        if let Some(rec) = &self.recording {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 60, 60),
+                                format!("REC {:.0}s", rec.started.elapsed().as_secs_f32()),
+                            );
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui.button("Send").clicked()
                                 || (response.lost_focus() && enter_send)
