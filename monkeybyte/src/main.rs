@@ -3,6 +3,7 @@
 
 mod chat;
 mod daemon;
+mod log;
 mod narration;
 mod tts;
 
@@ -12,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
 
 fn main() -> eframe::Result<()> {
+    log::init();
     let options = eframe::NativeOptions::default();
     eframe::run_native(
         "MonkeyByte (Rust)",
@@ -52,18 +54,23 @@ impl MonkeyByteApp {
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
         let data_dir = format!("{home}/.config/monkeybyte-electron/backend");
+        log::log(&format!("spawning daemon: {executable}"));
         match daemon::spawn(&executable, &data_dir, 0) {
             Ok((daemon, _ui_token)) => {
+                log::log(&format!("daemon up: port={}", daemon.port));
                 daemon.events(app.events_cancel.clone(), tx);
                 app.status_line = format!("daemon ready on port {}", daemon.port);
                 app.narrator = narrator_from_settings(&daemon);
+                log::log(&format!("narrator: {}", if app.narrator.is_some() { "enabled" } else { "disabled" }));
                 let (sessions, active) = load_sessions(&daemon);
                 app.sessions = sessions;
                 app.active_session = active;
                 restore_history(&mut app.chat, &daemon);
+                log::log(&format!("startup ok: {} bubbles, {} sessions", app.chat.bubbles.len(), app.sessions.len()));
                 app.daemon = Some(daemon);
             }
             Err(error) => {
+                log::log(&format!("daemon SPAWN FAILED: {error}"));
                 app.status_line = format!("daemon failed: {error}");
             }
         }
@@ -84,6 +91,7 @@ impl MonkeyByteApp {
         self.chat.bubbles.push(Bubble { role: Role::Assistant, text: String::new(), live: true });
         let body = serde_json::json!({ "text": text, "attachments": [] });
         let path = if was_busy { "/v1/chat/steer" } else { "/v1/chat/send" };
+        log::log(&format!("POST {path}"));
         if let Some(daemon) = &self.daemon {
             if let Err(error) = daemon.request("POST", path, &body) {
                 self.status_line = format!("send failed: {error}");
@@ -95,6 +103,7 @@ impl MonkeyByteApp {
 
     fn stop(&mut self) {
         if let Some(daemon) = &self.daemon {
+            log::log("POST /v1/chat/cancel");
             let _ = daemon.request("POST", "/v1/chat/cancel", &serde_json::Value::Null);
         }
         if let Some(narrator) = &self.narrator {
@@ -216,6 +225,7 @@ fn restore_history(chat: &mut Chat, daemon: &daemon::Daemon) {
 /// Field names mirror ../monkeybyte-electron/src/main/chimpflow.js.
 fn narrator_from_settings(daemon: &daemon::Daemon) -> Option<tts::Narrator> {
     let settings = daemon.request("GET", "/v1/settings", &serde_json::Value::Null).ok()?;
+    log::log("GET /v1/settings ok");
     let cf = settings["chimpflow"].as_object()?;
     if !cf["enabled"].as_bool().unwrap_or(false) {
         return None;

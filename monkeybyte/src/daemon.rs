@@ -4,6 +4,7 @@
 
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
+use crate::log;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -87,6 +88,7 @@ impl Daemon {
         let url = format!("http://127.0.0.1:{}/v1/events", self.port);
         let token = self.bridge_token.clone();
         std::thread::spawn(move || {
+            log::log(&format!("SSE connecting: {url}"));
             while !cancel.load(Ordering::Relaxed) {
                 if let Err(error) = stream_events(&url, &token, &cancel, &tx) {
                     if cancel.load(Ordering::Relaxed) {
