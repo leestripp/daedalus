@@ -533,8 +533,11 @@ export function createChatView({ api, getWorkspace, onError }) {
       if (liveTurn) mergeLiveHistory(payload);
       else setHistory(payload);
       const latest = payload.at(-1);
-      if (speakOnComplete && latest?.role === 'assistant') {
+      if (speakOnComplete) {
         speakOnComplete = false;
+        // §STALE-BUFFER: flush on ANY assistant-turn end — gating on the
+        // history tail's role let a tool turn's unterminated text survive
+        // into the next turn, where it played ~40s late, out of order.
         flushNarration();
         if (pendingNotice) {
           const spoken = messageElement('assistant', streamedText).textContent.trim();
@@ -547,6 +550,7 @@ export function createChatView({ api, getWorkspace, onError }) {
     }
     else if (type === 'user_message') {
       if (!liveTurn) liveTurn = { depth: canonicalHistory.length, notices: [], streamed: null };
+      speechBuffer = ''; pendingNotice = null;  // §STALE-BUFFER: discard aborted-turn leftovers
       streaming = null;
       elements.messages.append(messageElement('user', payload.text));
       scroll();
