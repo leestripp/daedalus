@@ -4,7 +4,6 @@
 #include <string_view>
 #include <nlohmann/json.hpp>
 #include "daedalus/types/ImageAttachment.h"
-#include "daedalus/types/PendingUserMessage.h"
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -47,7 +46,7 @@ struct AppConfig {
     std::string chat_endpoint;
     std::filesystem::path target_directory;
     std::string agent_name;        // §Phase 8.8 — per-agent runtime-state namespace
-    // Stable per-chat persistence and prompt-cache ID (AgentConfig::session_id).
+    // §ContextCache: stable session id (from AgentConfig::session_id).
     // Fallback for the server-side prompt-cache key (e.g. Moonshot's
     // prompt_cache_key, which Kimi Code Plan requires for good hit
     // rates) when agent_name is empty (the default agent).
@@ -391,10 +390,6 @@ public:
     ///        projection of the conversation history (tool calls/results
     ///        elided). Empty when messages_ is not initialized yet.
     ///        Driving thread; do not call mid-turn.
-    /// Clear the active conversation and synchronously erase its persisted state.
-    /// Driving thread only; hosts must reject this operation while a turn is running.
-    void clear_history() { messages_->clear(); }
-
     [[nodiscard]] std::vector<daedalus::HistoryEntry> history_snapshot() const {
         if (!messages_) return {};
         return messages_->history_snapshot();
@@ -508,14 +503,8 @@ public:
     /// §MSG-HEADERS (2026-10-04): `source` is the free-form `kind:id`
     /// origin of this user turn (default "user") — stamped into the
     /// message's `_meta` so the model can tell who/what sent it and when.
-    // A SteerProvider is polled ONLY at a completed tool-results boundary.
-    // Returning a message inserts it after the complete assistant/tool block;
-    // nullopt leaves the chain unchanged. The callback runs on the turn thread.
-    using SteerProvider =
-        std::function<std::optional<daedalus::PendingUserMessage>()>;
     AgentState run_one_turn(const std::string& user_message,
-                            std::string_view source = "user",
-                            SteerProvider steer_provider = {});  // Phase 2.5: extracted agent cycle (returns when agent emits stop/cancel)
+                            std::string_view source = "user");  // Phase 2.5: extracted agent cycle (returns when agent emits stop/cancel)
 
     /// §READ-IMAGE-CORE follow-up (2026-08-10): queue host-supplied image
     /// attachments for the next chat request. Shares the read_image

@@ -291,16 +291,6 @@ fs::path make_temp_home(const std::string& tag) {
 // history for zero gain, re-triggering every cycle. The auto-trigger
 // tests below therefore seed a realistic restored-session history on
 // disk; the agent loads it like any returning session.
-fs::path session_transcript(const fs::path& project, std::string_view session_id) {
-    static constexpr char digits[] = "0123456789abcdef";
-    std::string encoded;
-    for (const unsigned char byte : session_id) {
-        encoded.push_back(digits[byte >> 4]);
-        encoded.push_back(digits[byte & 0x0f]);
-    }
-    return project / ".daedalus" / "daedalus" / ("messages-" + encoded + ".json");
-}
-
 void seed_history(const fs::path& project, int non_system_messages) {
     const fs::path dir = project / ".daedalus" / "daedalus";
     fs::create_directories(dir);
@@ -598,7 +588,7 @@ TEST_CASE("auto-compress at 90% fires AgentSink::on_compaction end-to-end") {
 
     {
         const fs::path transcript =
-            session_transcript(project, "auto-compress-e2e");
+            project / ".daedalus" / "daedalus" / "messages.json";
         REQUIRE(fs::is_regular_file(transcript));
         std::ifstream f(transcript);
         const json history = json::parse(f);
@@ -823,7 +813,7 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
     agent.shutdown();
     {
         const fs::path transcript =
-            session_transcript(project, "idle-immediate-e2e");
+            project / ".daedalus" / "daedalus" / "messages.json";
         REQUIRE(fs::is_regular_file(transcript));
         std::ifstream f(transcript);
         const json history = json::parse(f);
@@ -919,7 +909,7 @@ TEST_CASE("Agent::compress_context reports fallback delete via on_compaction") {
 
     {
         const fs::path transcript =
-            session_transcript(project, "fallback-report-e2e");
+            project / ".daedalus" / "daedalus" / "messages.json";
         REQUIRE(fs::is_regular_file(transcript));
         std::ifstream f(transcript);
         const json history = json::parse(f);

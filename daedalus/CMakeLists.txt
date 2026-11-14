@@ -290,7 +290,6 @@ set(TOOLS_SOURCES
 	src/tools/McpStatusTool.cpp
 	src/tools/VaultTool.cpp
 	src/tools/UserTool.cpp
-	src/tools/DebugLogTool.cpp
 	src/tools/SetStatusTool.cpp
 	src/tools/BashTool.cpp
 	src/tools/BashChainer.cpp

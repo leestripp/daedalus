@@ -45,7 +45,6 @@ public:
     enum Mode {
         ALL_STATUS, STATUS_THEN_TEXT, STATUS_THEN_STOP,
         SAME_STATE, RESET_THEN_STOP, CYCLING_STATUS, INVALID_THEN_STOP,
-        MULTI_THEN_STOP, TEXT_ONLY,
     };
 
     explicit StatusOnlyServer(Mode mode) : mode_(mode) {
@@ -162,13 +161,6 @@ private:
             body = seq == 0 ? status_tool_call_response(seq, "NotAState")
                             : stop_tool_call_response(seq);
             break;
-        case MULTI_THEN_STOP:
-            body = seq == 0 ? multi_tool_call_response(seq)
-                            : stop_tool_call_response(seq);
-            break;
-        case TEXT_ONLY:
-            body = text_response();
-            break;
         }
 
         const std::string resp =
@@ -187,21 +179,6 @@ private:
             R"(","type":"function","function":{"name":"set_status",)"
             R"("arguments":"{\"state\": \")" + std::string(state) +
             R"(\"}"}}]},)"
-            R"("finish_reason":"tool_calls"}],)"
-            R"("usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}})");
-    }
-
-    static std::string multi_tool_call_response(int seq) {
-        return std::string(
-            R"({"id":"chatcmpl-test","object":"chat.completion","choices":[)"
-            R"({"index":0,"message":{"role":"assistant","content":null,)"
-            R"("tool_calls":[)"
-            R"({"id":"call_multi_a_)" + std::to_string(seq) +
-            R"(","type":"function","function":{"name":"set_status",)"
-            R"("arguments":"{\"state\": \"Planning\"}"}},)"
-            R"({"id":"call_multi_b_)" + std::to_string(seq) +
-            R"(","type":"function","function":{"name":"set_status",)"
-            R"("arguments":"{\"state\": \"Acting\"}"}}]},)"
             R"("finish_reason":"tool_calls"}],)"
             R"("usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}})");
     }
@@ -247,15 +224,6 @@ struct ScratchDir {
     ~ScratchDir() {
         std::error_code ec;
         fs::remove_all(path, ec);
-    }
-};
-
-class CancelOnToolSink final : public daedalus::AgentSink {
-public:
-    LLMClient* client = nullptr;
-    void on_tool_result(std::string_view, std::string_view,
-                        const json&) noexcept override {
-        if (client) client->cancel();
     }
 };
 
@@ -348,90 +316,5 @@ TEST_SUITE("set_status terminal + same-kind breaker (§STATUS-KIND-BREAKER)") {
         client.initialize();
         CHECK(client.run_one_turn("hello") == AgentState::DONE);
         CHECK(server.request_count() == 4);
-    }
-
-    TEST_CASE("steer enters only after every completed tool result") {
-        StatusOnlyServer server(StatusOnlyServer::MULTI_THEN_STOP);
-        ScratchDir scratch("steer-completed-tool-block");
-        LLMClient client(make_config(server.base_url(), scratch.path));
-        client.initialize();
-        int polls = 0;
-        const auto state = client.run_one_turn(
-            "initial", "user:lee",
-            [&polls]() -> std::optional<daedalus::PendingUserMessage> {
-                ++polls;
-                if (polls == 1) {
-                    return daedalus::PendingUserMessage{
-                        "redirect the active work", {}, "steer:lee"};
-                }
-                return std::nullopt;
-            });
-        CHECK(state == AgentState::DONE);
-        REQUIRE(server.request_count() == 2);
-        CHECK(polls == 1);  // stop ends the next cycle; no further drain
-        const auto requests = server.request_bodies();
-        REQUIRE(requests.size() == 2);
-        const auto payload = json::parse(requests[1]);
-        const auto& messages = payload.at("messages");
-        auto steer = std::find_if(messages.begin(), messages.end(),
-            [](const json& message) {
-                return message.value("role", "") == "user"
-                    && message.value("content", "").find(
-                        "redirect the active work") != std::string::npos;
-            });
-        REQUIRE(steer != messages.end());
-        const auto index = static_cast<size_t>(std::distance(messages.begin(), steer));
-        REQUIRE(index >= 4);
-        CHECK((*steer).at("content").get<std::string>().starts_with(
-            "[from: steer:lee"));
-        CHECK(messages[index - 1].at("role") == "tool");
-        CHECK(messages[index - 2].at("role") == "tool");
-        CHECK(messages[index - 3].at("role") == "assistant");
-        REQUIRE(messages[index - 3].contains("tool_calls"));
-        CHECK(messages[index - 3].at("tool_calls").size() == 2);
-        CHECK(messages[index - 2].at("tool_call_id")
-              == messages[index - 3].at("tool_calls")[0].at("id"));
-        CHECK(messages[index - 1].at("tool_call_id")
-              == messages[index - 3].at("tool_calls")[1].at("id"));
-    }
-
-    TEST_CASE("steer is not injected into or after a final assistant message") {
-        StatusOnlyServer server(StatusOnlyServer::TEXT_ONLY);
-        ScratchDir scratch("steer-final-response-boundary");
-        LLMClient client(make_config(server.base_url(), scratch.path));
-        client.initialize();
-        bool polled = false;
-        const auto state = client.run_one_turn(
-            "initial", "user:lee",
-            [&polled]() -> std::optional<daedalus::PendingUserMessage> {
-                polled = true;
-                return daedalus::PendingUserMessage{"too late", {}, "steer:lee"};
-            });
-        CHECK(state == AgentState::DONE);
-        CHECK(server.request_count() == 1);
-        CHECK_FALSE(polled);
-        const auto requests = server.request_bodies();
-        REQUIRE(requests.size() == 1);
-        CHECK(requests[0].find("too late") == std::string::npos);
-    }
-
-    TEST_CASE("cancellation before the boundary leaves Steer undrained") {
-        StatusOnlyServer server(StatusOnlyServer::SAME_STATE);
-        ScratchDir scratch("steer-cancelled-before-boundary");
-        LLMClient client(make_config(server.base_url(), scratch.path));
-        auto sink = std::make_shared<CancelOnToolSink>();
-        sink->client = &client;
-        client.set_sink(sink);
-        client.initialize();
-        bool polled = false;
-        const auto state = client.run_one_turn(
-            "initial", "user:lee",
-            [&polled]() -> std::optional<daedalus::PendingUserMessage> {
-                polled = true;
-                return daedalus::PendingUserMessage{"do not consume", {}, "steer:lee"};
-            });
-        CHECK(state == AgentState::CANCELLED);
-        CHECK(server.request_count() == 1);
-        CHECK_FALSE(polled);
     }
 }

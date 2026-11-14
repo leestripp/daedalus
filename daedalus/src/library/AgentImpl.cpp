@@ -766,18 +766,6 @@ void AgentImpl::submit_user_message(std::string text,
         {std::move(text), std::move(images), std::move(source)});
 }
 
-
-void AgentImpl::submit_steer_message(std::string text,
-                                     std::vector<ImageAttachment> images,
-                                     std::string source)
-{
-    std::lock_guard<std::mutex> lk(pending_mutex_);
-    daedalus::PendingUserMessage message{
-        std::move(text), std::move(images), std::move(source)};
-    if (turn_active_) steering_messages_.push_back(std::move(message));
-    else pending_user_messages_.push_back(std::move(message));
-}
-
 bool AgentImpl::edit_pending_message(
     size_t index,
     std::string new_text,
@@ -832,8 +820,7 @@ void AgentImpl::cancel() noexcept
     bool queue_nonempty;
     {
         std::lock_guard<std::mutex> lk(pending_mutex_);
-        queue_nonempty = !pending_user_messages_.empty()
-                      || !steering_messages_.empty();
+        queue_nonempty = !pending_user_messages_.empty();
     }
     if (busy || queue_nonempty) {
         cancel_requested_.store(true, std::memory_order_release);
@@ -975,32 +962,6 @@ void AgentImpl::handle_scheduled_task(
     if (sink_) sink_->on_turn_requested(source);
 }
 
-namespace {
-
-daedalus::PendingUserMessage drain_joined_messages(
-    std::vector<daedalus::PendingUserMessage>& queue)
-{
-    daedalus::PendingUserMessage pending = std::move(queue.front());
-    queue.erase(queue.begin());
-    std::vector<std::string> sources;
-    sources.push_back(pending.source);
-    while (!queue.empty()) {
-        daedalus::PendingUserMessage next = std::move(queue.front());
-        queue.erase(queue.begin());
-        pending.text += "\n\n" + next.text;
-        pending.images.insert(pending.images.end(),
-                              std::make_move_iterator(next.images.begin()),
-                              std::make_move_iterator(next.images.end()));
-        if (std::ranges::find(sources, next.source) == sources.end()) {
-            pending.source += ", " + next.source;
-            sources.push_back(next.source);
-        }
-    }
-    return pending;
-}
-
-}  // namespace
-
 void AgentImpl::run_one_turn(std::stop_token st)
 {
     bind_background_completion_handler();
@@ -1030,13 +991,6 @@ void AgentImpl::run_one_turn(std::stop_token st)
         AgentImpl& agent;
         ~TurnActiveGuard() {
             std::lock_guard lk(agent.pending_mutex_);
-            if (!agent.steering_messages_.empty()) {
-                agent.pending_user_messages_.insert(
-                    agent.pending_user_messages_.end(),
-                    std::make_move_iterator(agent.steering_messages_.begin()),
-                    std::make_move_iterator(agent.steering_messages_.end()));
-                agent.steering_messages_.clear();
-            }
             agent.turn_active_ = false;
         }
     } turn_active_guard{*this};
@@ -1059,7 +1013,23 @@ void AgentImpl::run_one_turn(std::stop_token st)
         LOG_DEBUG("run_one_turn: dispatching "
                   + std::to_string(pending_user_messages_.size())
                   + " pending message(s) as one joined message");
-        pending = drain_joined_messages(pending_user_messages_);
+        pending = std::move(pending_user_messages_.front());
+        pending_user_messages_.erase(pending_user_messages_.begin());
+        std::vector<std::string> sources;
+        sources.push_back(pending.source);
+        while (!pending_user_messages_.empty()) {
+            PendingUserMessage next =
+                std::move(pending_user_messages_.front());
+            pending_user_messages_.erase(pending_user_messages_.begin());
+            pending.text += "\n\n" + next.text;
+            pending.images.insert(pending.images.end(),
+                                  std::make_move_iterator(next.images.begin()),
+                                  std::make_move_iterator(next.images.end()));
+            if (std::ranges::find(sources, next.source) == sources.end()) {
+                pending.source += ", " + next.source;
+                sources.push_back(next.source);
+            }
+        }
     }
 
     if (!body_->client) {
@@ -1088,13 +1058,8 @@ void AgentImpl::run_one_turn(std::stop_token st)
     }
     // §MSG-HEADERS: forward the queued message's origin so the
     // user message stamped into the chain names its real source.
-    ::AgentState r = body_->client->run_one_turn(
-        pending.text, pending.source, [this]()
-            -> std::optional<daedalus::PendingUserMessage> {
-            std::lock_guard<std::mutex> lk(pending_mutex_);
-            if (steering_messages_.empty()) return std::nullopt;
-            return drain_joined_messages(steering_messages_);
-        });
+    ::AgentState r = body_->client->run_one_turn(pending.text,
+                                                 pending.source);
     // §TURN-ERROR: mirror the client's terminal-error record so the
     // public Agent::turn_had_terminal_error()/last_error() reflect LLM
     // failures (fatal 4xx, retries exhausted) even though those turns
@@ -1263,11 +1228,6 @@ std::vector<daedalus::HistoryEntry> AgentImpl::history_snapshot() const
 {
     if (!body_ || !body_->client) return {};
     return body_->client->history_snapshot();
-}
-
-void AgentImpl::clear_history()
-{
-    if (body_ && body_->client) body_->client->clear_history();
 }
 
 ModelInfo AgentImpl::active_model() const noexcept

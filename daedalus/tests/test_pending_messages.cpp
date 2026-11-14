@@ -216,18 +216,6 @@ int run() {
     }
     std::cout << "[6] join-on-drain OK\n";
 
-    // ---- 7. Idle Steer falls back to the ordinary pending queue ---------
-    {
-        auto agent = make_agent();
-        agent.submit_steer_message("idle steering", {}, "steer:lee");
-        CHECK_MSG(agent.pending_count() == 1);
-        const auto pending = agent.pending_messages();
-        CHECK_MSG(pending.size() == 1);
-        CHECK_MSG(pending[0].text == "idle steering");
-        CHECK_MSG(pending[0].source == "steer:lee");
-    }
-    std::cout << "[7] idle Steer fallback OK\n";
-
     return 0;
 }
 

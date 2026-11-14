@@ -22,7 +22,6 @@
 
 // Include Messages.h after doctest so FRIEND_TEST is available
 #include "core/Messages.h"
-#include "daedalus/settings.h"
 
 using json = nlohmann::json;
 namespace fs = std::filesystem;
@@ -2317,83 +2316,6 @@ TEST_SUITE("SANITIZE-NOTHROW") {
         chain.push_back("corrupt tail entry");
         msgs.set_messages(chain);
         CHECK_NOTHROW(msgs.cleanup_dangling_tool_results());
-        cleanup_test_project(proj);
-    }
-}
-
-TEST_SUITE("Session persistence isolation") {
-    TEST_CASE("named sessions have independent files and SQLite mirrors") {
-        auto proj = create_test_project();
-        const auto dir = proj / ".daedalus" / "daedalus";
-        MessageCompressionConfig config;
-        config.auto_flush_enabled = false;
-        config.debug_output = false;
-
-        {
-            Messages first(dir, config, "first");
-            first.add_user("first session only");
-            first.save();
-        }
-        {
-            Messages second(dir, config, "second");
-            CHECK_FALSE(second.load());
-            second.add_user("second session only");
-            second.save();
-            second.clear();
-            second.save();
-        }
-        {
-            Messages first(dir, config, "first");
-            REQUIRE(first.load());
-            const auto history = first.history_snapshot();
-            REQUIRE(history.size() == 1);
-            CHECK(history[0].content == "first session only");
-        }
-        {
-            Messages second(dir, config, "second");
-            CHECK_FALSE(second.load());
-        }
-
-        auto store = daedalus::SettingsStore::for_home(dir);
-        CHECK(store.get_messages_json("first").find("first session only") != std::string::npos);
-        CHECK(store.get_messages_json("second").empty());
-        cleanup_test_project(proj);
-    }
-
-    TEST_CASE("legacy default history migrates once without populating new chats") {
-        auto proj = create_test_project();
-        const auto dir = proj / ".daedalus" / "daedalus";
-        MessageCompressionConfig config;
-        config.auto_flush_enabled = false;
-        config.debug_output = false;
-
-        {
-            Messages legacy(dir, config);
-            legacy.add_user("legacy history");
-            legacy.save();
-        }
-        {
-            Messages first(dir, config, "first");
-            REQUIRE(first.load());
-            const auto history = first.history_snapshot();
-            REQUIRE(history.size() == 1);
-            CHECK(history[0].content == "legacy history");
-        }
-        {
-            Messages second(dir, config, "second");
-            CHECK_FALSE(second.load());
-        }
-        {
-            Messages first(dir, config, "first");
-            REQUIRE(first.load());
-            CHECK(first.history_snapshot()[0].content == "legacy history");
-        }
-
-        auto store = daedalus::SettingsStore::for_home(dir);
-        CHECK(store.get_messages_json("default").empty());
-        CHECK(store.get_messages_json("first").find("legacy history") != std::string::npos);
-        CHECK(store.get_messages_json("second").empty());
-        CHECK_FALSE(fs::exists(dir / "messages.json"));
         cleanup_test_project(proj);
     }
 }

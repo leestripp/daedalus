@@ -5,7 +5,6 @@
 #include "tools/BrainTool.h"
 #include "tools/McpStatusTool.h"
 #include "tools/UserTool.h"
-#include "tools/DebugLogTool.h"
 #include "tools/SetStatusTool.h"
 #include "tools/BashTool.h"
 #include "tools/SkillTool.h"
@@ -88,9 +87,6 @@ void ToolFactory::initialize_tools() {
     // User interaction tools
     register_tool(std::make_shared<TellUserTool>());
     register_tool(std::make_shared<StopTool>());
-
-    // §DEBUG-LOG (2026-11-14): shared agent/app debug log (append/tail).
-    register_tool(std::make_shared<DebugLogTool>());
 
     // §COMPRESS-TOOL (2026-08-14): model-facing compression trigger,
     // restored. The tool only schedules compression — LLMClient turns the

@@ -91,9 +91,6 @@ public:
     void submit_user_message(std::string text,
                              std::vector<ImageAttachment> images,
                              std::string source);
-    void submit_steer_message(std::string text,
-                              std::vector<ImageAttachment> images,
-                              std::string source);
     [[nodiscard]] size_t pending_count() const noexcept {
         // §QUEUE-MUTEX (2026-09-10): internally synchronized — any thread.
         std::lock_guard<std::mutex> lk(pending_mutex_);
@@ -113,7 +110,6 @@ public:
     void clear_pending_messages() noexcept {
         std::lock_guard<std::mutex> lk(pending_mutex_);
         pending_user_messages_.clear();
-        steering_messages_.clear();
     }
     void cancel() noexcept;
 
@@ -159,7 +155,6 @@ public:
 
     // §HISTORY-SNAPSHOT (2026-09-10, MonkeyByte REQ-2). Driving thread.
     [[nodiscard]] std::vector<daedalus::HistoryEntry> history_snapshot() const;
-    void clear_history();
 
     /// @brief Names of MCP servers currently configured (loaded from the
     ///        SQLite SettingsStore during initialize(), with the legacy
@@ -275,10 +270,6 @@ private:
     // remains driving-thread-only.
     mutable std::mutex pending_mutex_;
     std::vector<daedalus::PendingUserMessage> pending_user_messages_;
-    // Mid-turn steering messages. Drained by the LLMClient only after the
-    // complete assistant/tool-results block; leftovers rejoin the ordinary
-    // queue under this mutex before turn_active_ becomes false.
-    std::vector<daedalus::PendingUserMessage> steering_messages_;
     // Guarded by pending_mutex_. Scheduled tasks inspect this while holding
     // the same lock, closing the dequeue/state-transition race.
     bool turn_active_ = false;

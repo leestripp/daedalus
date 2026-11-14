@@ -84,7 +84,6 @@ Link with `-ldaedalus -lcurl -lpthread -lssl -lcrypto -lpng -lpoppler-cpp`
 | Construct | `Agent(cfg, sink)` | Does not touch network/disk. |
 | Initialize | `agent.initialize()` | Opens `SettingsStore`, loads MCP, skills, memory. Idempotent. |
 | Drive a turn | `agent.submit_user_message(t)` then `agent.run_one_turn()` | Returns when agent emits `stop()`, errors, or is cancelled. |
-| Steer a turn | `agent.submit_steer_message(t, {}, "steer:<host>")` | Inserts only after all current tool results, before the next request; falls back to the pending queue if no safe boundary occurs. |
 | Inspect state | `agent.state()`, `agent.stats()` | Read-only. |
 | Cancel | `agent.cancel()` (or `run_one_turn(stop_token)`) | Idempotent. |
 | Tear down | `agent.shutdown()` | Idempotent. Called by dtor. |
@@ -1303,21 +1302,7 @@ agent:
    queued, and resubmitting duplicates it. The callback carries no message
    text; `pending_messages()` is available if the host needs to inspect it.
 
-2. **`Agent::submit_steer_message(text, images, source)`** — steer an
-   active turn without violating the provider's assistant/tool-call chain.
-   This is separate from the ordinary FIFO queue. The library drains steering
-   messages only after `run_agent_cycle()` has appended EVERY result for the
-   preceding assistant `tool_calls`, immediately before the next model request.
-   It never inserts into a streaming assistant response, between a tool call
-   and its result, or after a final assistant response. Multiple steering
-   submissions join FIFO with the same source/image rules as ordinary input.
-   If submitted idle, cancelled before the boundary, or the turn ends without
-   another tool cycle, steering moves into the ordinary pending queue instead
-   of being lost. The synchronized hand-off happens before `turn_active_`
-   becomes false. See `test_status_only_breaker.cpp` for the exact two-tool
-   outbound-chain and cancellation regressions.
-
-3. **Pending queue management** — hosts can inspect and rewrite the
+2. **Pending queue management** — hosts can inspect and rewrite the
    queue of not-yet-consumed user messages (e.g. a chat UI that shows
    the user's queued follow-ups and lets them edit or drop them):
 
@@ -1333,9 +1318,10 @@ agent:
    - `Agent::clear_pending_messages()` — drop the whole queue.
 
 > **Removed in v0.4.0:** `AgentSink::request_user_input(...)` and the
-> `ask_user` tool. Steer is host-initiated input at a safe tool boundary, not
-> a model-initiated prompting mechanism. Use ordinary `submit_user_message()`
-> for messages that must wait for a later turn.
+> `ask_user` tool. The agent has no mid-turn user-prompting path.
+> If your host needs a back-and-forth, submit the next user message
+> in the host's outer loop between `run_one_turn()` calls (or call
+> `agent.cancel()` to interrupt the current turn first).
 
 ### Example: minimal std::getline host
 

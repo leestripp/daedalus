@@ -1,0 +1,324 @@
+/* MonkeyByte dark theme - Catppuccin Mocha (design 11).
+ * Complete widget coverage: the app must not depend on the base GTK theme
+ * variant (gtk-application-prefer-dark-theme is deprecated since GTK 4.20;
+ * gtk-interface-color-scheme is set app-side as well, this CSS is the
+ * authoritative look). */
+
+/* palette: bg #1e1e2e, bg2 #181825, bg3 #313244, hover #45475a,
+   text #cdd6f4, text2 #a6adc8, muted #6c7086, accent #89b4fa,
+   error #f38ba8, success #a6e3a1, crust #11111b */
+
+window {
+  background-image: none;
+  box-shadow: none;
+  background-color: #1e1e2e;
+  color: #cdd6f4;
+}
+
+/* --- generic widget chrome ------------------------------------------- */
+
+/* Adwaita (GTK 4.20+) paints buttons with a background-image gradient and
+ * box-shadow, not background-color/border, and can stay in its light variant
+ * even when dark is requested - our background-color would sit UNDER that
+ * white image (white-on-white text). Every rule that repaints a widget must
+ * therefore also clear background-image/box-shadow/text-shadow. */
+
+/* Neutralize Adwaita's paint layers on every widget we repaint: GTK 4.20+
+ * Adwaita draws these with a background-image gradient + box-shadow and can
+ * remain in its light variant no matter what gtk-interface-color-scheme
+ * says, so our background-color would sit UNDER a white image. Same fix as
+ * the button rule above. */
+entry, textview, textview > text, spinbutton,
+switch, switch slider,
+headerbar, popover, popover > contents, tooltip,
+scrollbar, scrollbar slider,
+list > row, listview row, popover modelbutton {
+  background-image: none;
+  box-shadow: none;
+}
+
+button {
+  background-image: none;
+  box-shadow: none;
+  text-shadow: none;
+  background-color: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+button:hover { background-color: #45475a; }
+button:active { background-color: #585b70; }
+button:checked { background-color: #45475a; }
+button:disabled { color: #6c7086; background-color: #313244; }
+button.flat { background: none; border: none; }
+button.flat:hover { background-color: #313244; }
+button.suggested-action {
+  background-color: #89b4fa;
+  color: #11111b;
+  border-color: #89b4fa;
+}
+button.suggested-action:hover { background-color: #b4befe; }
+
+dropdown > button {
+  background-image: none;
+  box-shadow: none;
+  background-color: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+dropdown > button:hover { background-color: #45475a; }
+
+entry {
+  background-color: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+}
+entry:focus { border-color: #89b4fa; }
+entry:disabled { color: #6c7086; }
+
+/* GTK4 draws the editable area on the text child node, not the widget
+ * node - styling only textview leaves a white text area. */
+textview, textview > text {
+  background-color: #313244;
+  color: #cdd6f4;
+}
+textview {
+  border: 1px solid #45475a;
+  border-radius: 6px;
+}
+textview:focus { border-color: #89b4fa; }
+
+spinbutton {
+  background-color: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 6px;
+}
+spinbutton button { border: none; border-radius: 0; }
+
+switch {
+  background-color: #45475a;
+  border-radius: 14px;
+}
+switch:checked { background-color: #89b4fa; }
+switch slider { background-color: #cdd6f4; }
+
+checkbutton check, checkbutton radio {
+  background-color: #313244;
+  border: 1px solid #45475a;
+  color: #cdd6f4;
+}
+checkbutton check:checked, checkbutton radio:checked {
+  background-color: #89b4fa;
+  color: #11111b;
+}
+
+separator { background-image: none; box-shadow: none; background-color: #313244; }
+
+/* NOTE: GtkDropDown's popup is `popover.menu` - Adwaita styles
+ * `popover.menu > contents` at class specificity, which beats plain
+ * `popover > contents`, so the menu class must be named explicitly. */
+popover, popover > contents, popover.menu, popover.menu > contents {
+  background-color: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+  border-radius: 8px;
+}
+/* GtkDropDown popup (GTK4): the popover's `arrow` node and the intermediate
+ * containers (box / scrolledwindow / listview) are painted by Adwaita's light
+ * variant with background-images/backgrounds of their own, leaving the popup
+ * half light / half dark. Neutralize every layer between the popover and the
+ * rows, and repaint the arrow. */
+popover > arrow, popover arrow, popover.menu > arrow, popover.menu arrow {
+  background-image: none;
+  box-shadow: none;
+  background-color: #313244;
+  border-color: #45475a;
+}
+/* NOTE: Adwaita's `.view` class rule (`listview.view`, specificity 0,1,1)
+ * beats a plain `popover listview` selector (0,0,2) and paints the popup
+ * white - the class must be matched explicitly. Same for `popover.menu`
+ * (the GtkDropDown popup carries the `menu` class). */
+popover box, popover scrolledwindow, popover listview, popover listview.view,
+popover menu, popover item {
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  color: #cdd6f4;
+}
+/* `.activatable` on popup rows is another Adwaita class-specificity rule
+ * that outranks `popover listview row`; name it explicitly. */
+popover modelbutton, popover menuitem, popover item,
+popover listview row, popover listview row.activatable {
+  color: #cdd6f4;
+  background-color: transparent;
+  background-image: none;
+  box-shadow: none;
+  padding: 6px 10px;
+}
+popover modelbutton:hover, popover menuitem:hover, popover item:hover,
+popover listview row:hover {
+  background-color: #45475a;
+}
+popover listview row:selected {
+  background-color: #45475a;
+}
+
+tooltip, tooltip.background {
+  background-color: #313244;
+  color: #cdd6f4;
+  border: 1px solid #45475a;
+}
+
+headerbar {
+  background-color: #181825;
+  color: #cdd6f4;
+}
+
+scrollbar slider {
+  background-color: #45475a;
+  border-radius: 4px;
+}
+scrollbar slider:hover { background-color: #6c7086; }
+
+/* --- app layout ------------------------------------------------------- */
+
+.activity-bar {
+  background-color: #11111b;
+}
+.activity-bar button {
+  min-width: 40px;
+  min-height: 40px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: #6c7086;
+}
+.activity-bar button:hover { background-color: #313244; color: #cdd6f4; }
+.activity-bar button.active {
+  border-left-color: #89b4fa;
+  color: #89b4fa;
+  background: none;
+}
+
+.sidebar { background-color: #181825; }
+.sidebar-header { padding: 8px 12px; }
+.sidebar-header label {
+  font-size: 11px;
+  letter-spacing: 0.5px;
+  color: #a6adc8;
+}
+.workspace-path-bar { background-color: #313244; padding: 6px 12px; }
+
+.tab-bar { background-color: #181825; }
+.tab {
+  background-color: #181825;
+  color: #a6adc8;
+  padding: 0 12px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+}
+.tab:hover { background-color: #313244; }
+.tab.active {
+  background-color: #1e1e2e;
+  color: #cdd6f4;
+  border-bottom-color: #89b4fa;
+}
+
+.file-header {
+  background-color: #181825;
+  border-bottom: 1px solid #313244;
+  padding: 6px 12px;
+}
+
+.chat-panel { background-color: #181825; }
+.chat-header { padding: 12px 16px; }
+.chat-activity { padding: 4px 12px; border-top: 1px solid #313244; }
+.chat-input { padding: 12px; border-top: 1px solid #313244; }
+.error-banner { background-color: #f38ba8; color: #11111b; }
+
+.message-image { border-radius: 6px; }
+
+/* §MSG-HEADERS — origin line above a bubble whose message came from
+   outside the conversation (A2A peer, trigger, context compression).
+   Inherited color + opacity works on both themes. */
+.message-origin { font-size: 0.8em; opacity: 0.65; margin-bottom: 2px; }
+
+.message-user {
+  background-color: #89b4fa;
+  color: #11111b;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-left: 16px;
+}
+.message-assistant {
+  background-color: #313244;
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-right: 16px;
+}
+.tool-card { border-left: 3px solid #89b4fa; }
+.tool-card.success { border-left-color: #a6e3a1; }
+.tool-card.error { border-left-color: #f38ba8; }
+.tool-card.success .tool-status { color: #a6e3a1; }
+.tool-card.error .tool-status { color: #f38ba8; }
+
+.status-bar {
+  background-color: #89b4fa;
+  color: #11111b;
+  min-height: 24px;
+  padding: 0 12px;
+}
+
+.resizer { background-color: #313244; min-width: 6px; }
+.resizer:hover, .resizer.resizing { background-color: #89b4fa; }
+
+.muted { color: #6c7086; font-style: italic; }
+.monospace { font-family: monospace; }
+
+/* panels (settings cards, labels) */
+.card {
+  background-color: #313244;
+  border-radius: 8px;
+  padding: 10px;
+}
+.dim-label { color: #6c7086; font-size: 11px; }
+.accent { color: #89b4fa; }
+button.active { color: #89b4fa; border-bottom: 2px solid #89b4fa; border-radius: 0; }
+/* GTK4: GtkListBox's CSS node is `list` (the GTK3 `listbox` selector never
+ * matches). Adwaita's light variant explicitly paints `list` with a light
+ * background and dark text, so without these rules every ListBox in the app
+ * (workspace tree, folder pickers, search results) renders as a white box
+ * with black text. */
+list, listview, list.view, listview.view {
+  background-color: #181825;
+  color: #cdd6f4;
+}
+list > row {
+  color: #cdd6f4;
+  background-color: transparent;
+}
+list > row:hover { background-color: #313244; }
+list > row:selected, list > row.active { background-color: #45475a; }
+listview row:hover { background-color: #313244; }
+listview row:selected { background-color: #45475a; }
+.error { color: #f38ba8; }
+
+/* paned divider grips */
+paned > separator {
+  background-image: none;
+  box-shadow: none;
+}
+paned.horizontal > separator {
+  min-width: 6px;
+  background-color: #313244;
+}
+paned.horizontal > separator:hover {
+  background-color: #89b4fa;
+}
