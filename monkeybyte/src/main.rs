@@ -79,12 +79,10 @@ impl MonkeyByteApp {
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
         let data_dir = format!("{home}/.config/monkeybyte-electron/backend");
-        // One backend at a time — kill any orphaned Electron-era daemon
-        // (its parent window is gone; it only risks data-dir races now).
-        let _ = std::process::Command::new("pkill")
-            .args(["-x", "monkeybyte-electron-backend"])
-            .status();
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        // NOTE: never pkill the backend here — the name exceeds pkill's
+        // 15-char limit (silent no-op), and a legitimately running
+        // Electron app may own its daemon. Concurrent daemons share the
+        // data dir read-mostly; revisit only if state races appear.
         let ui_port = match daemon::start_ui_bridge() {
             Ok(port) => port,
             Err(err) => {
@@ -296,16 +294,19 @@ fn narrator_from_settings(daemon: &daemon::Daemon) -> Option<tts::Narrator> {
     let settings = daemon.request("GET", "/v1/settings", &serde_json::Value::Null).ok()?;
     log::log("GET /v1/settings ok");
     let cf = settings["chimpflow"].as_object()?;
-    if !cf["enabled"].as_bool().unwrap_or(false) {
+    log::log(&format!("chimpflow settings: {cf:?}"));
+    let get = |key: &str| cf.get(key).and_then(|v| v.as_str()).unwrap_or("");
+    if !cf.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
         return None;
     }
-    let host = cf["serverUrl"].as_str().unwrap_or("http://127.0.0.1");
-    let port = cf["port"].as_u64().unwrap_or(8090);
+    let host = get("serverUrl");
+    let host = if host.is_empty() { "http://127.0.0.1" } else { host };
+    let port = cf.get("port").and_then(|v| v.as_u64()).unwrap_or(8090);
     let cf = tts::ChimpFlow {
         base: format!("{host}:{port}"),
-        api_key: cf["apiKey"].as_str().unwrap_or("").to_string(),
-        tts_model: cf["ttsModel"].as_str().unwrap_or("kokoro-82m").to_string(),
-        voice: cf["voice"].as_str().unwrap_or("af_heart").to_string(),
+        api_key: get("apiKey").to_string(),
+        tts_model: if get("ttsModel").is_empty() { "kokoro-82m" } else { get("ttsModel") }.to_string(),
+        voice: if get("voice").is_empty() { "af_heart" } else { get("voice") }.to_string(),
     };
     tts::Narrator::spawn(cf).ok()
 }
