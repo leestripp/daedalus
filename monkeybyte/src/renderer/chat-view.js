@@ -178,6 +178,7 @@ export function createChatView({ api, getWorkspace, onError }) {
   function flushNarration() {
     const remainder = speechBuffer; speechBuffer = '';
     if (remainder.trim() && !dictating()) narration.speak(messageElement('assistant', remainder).textContent);
+    narration.release();  // §PREBUFFER: turn end frees a held first segment
   }
 
   function scroll() { elements.messages.scrollTop = elements.messages.scrollHeight; }

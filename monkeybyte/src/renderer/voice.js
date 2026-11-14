@@ -106,6 +106,9 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
   let master = null;    // rendering runs on Chromium's real-time audio thread,
   let cursor = 0;       // so scheduled audio plays gaplessly no matter how
   const live = new Set(); // busy the renderer main thread is with chat UI.
+  let burst = null;     // §PREBUFFER: first segment after silence, held until
+                        // the second is ready (or cap/turn-end) so playback
+                        // never opens with a thinking-gap hole.
 
   // §PIPELINE 2026-11-14: synthesis (TTS request + decode/normalize) starts
   // the moment speak() is called and runs in parallel; ordering is imposed
@@ -132,6 +135,15 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
     return context;
   }
 
+  function startSource(item, ctx) {
+    const startAt = Math.max(ctx.currentTime, cursor);
+    cursor = startAt + item.buffer.duration;
+    live.add(item.source);
+    item.source.onended = () => live.delete(item.source);
+    item.source.start(startAt);
+    onDebug(`tts play start ${item.label} at=${startAt.toFixed(2)} dur=${item.buffer.duration.toFixed(2)}`);
+  }
+
   async function play(prepared, ticket, label = '') {
     let clip = null;
     try {
@@ -150,15 +162,28 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(master);
-    // Schedule on the audio timeline: each segment starts exactly when the
-    // previous one ends. 'ended' events below are bookkeeping only — late
-    // event delivery under UI jank can no longer open playback gaps.
-    const startAt = Math.max(ctx.currentTime, cursor);
-    cursor = startAt + buffer.duration;
-    live.add(source);
-    source.onended = () => live.delete(source);
-    source.start(startAt);
-    onDebug(`tts play start ${label} at=${startAt.toFixed(2)} dur=${buffer.duration.toFixed(2)}`);
+    // §PREBUFFER: the first segment after silence holds briefly so the next
+    // can catch up; released by the second segment's readiness, the cap
+    // timer, turn end (release()), or cancel. Everything else chains on the
+    // audio clock — each segment starts exactly when the previous ends, so
+    // late 'ended' delivery under UI jank can never open playback gaps.
+    const item = { source, buffer, ticket, label };
+    if (burst?.first) {
+      clearTimeout(burst.timer);
+      startSource(burst.first, ctx);
+      burst = null;
+      startSource(item, ctx);
+    } else if (!live.size && cursor <= ctx.currentTime) {
+      const timer = setTimeout(() => {
+        if (burst?.first) startSource(burst.first, ensureGraph());
+        burst = null;
+      }, 5000);
+      timer.unref?.();
+      burst = { first: item, timer };
+      onDebug(`tts burst hold ${label}`);
+    } else {
+      startSource(item, ctx);
+    }
     const playStarted = performance.now();
     await new Promise((resolve) => source.addEventListener('ended', resolve, { once: true }));
     onDebug(`tts play end ${label} after ${Math.round(performance.now() - playStarted)}ms`);
@@ -175,12 +200,28 @@ export function createNarration(request, onError, onPlayed = () => {}, onDebug =
         .catch((error) => onError(error));
       return done;
     },
+    release() {
+      // Turn end: speak whatever is held immediately — a one-line reply
+      // should not wait out the prebuffer cap for a sibling that will
+      // never come.
+      if (burst?.first) {
+        clearTimeout(burst.timer);
+        startSource(burst.first, ensureGraph());
+        burst = null;
+        onDebug('tts burst released at turn end');
+      }
+    },
     cancel() {
       generation += 1;
       for (const source of live) {
         try { source.stop(); } catch { /* already ended or never started */ }
       }
       live.clear();
+      if (burst?.first) {
+        clearTimeout(burst.timer);
+        try { burst.first.source.start(); burst.first.source.stop(); } catch { /* resolve its waiter */ }
+        burst = null;
+      }
       if (context) cursor = context.currentTime;
       onDebug('tts cancel: clock reset');
     },

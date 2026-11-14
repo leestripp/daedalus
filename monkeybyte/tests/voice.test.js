@@ -134,6 +134,22 @@ test('narration schedules segments gaplessly on the audio clock', async () => {
   }
 });
 
+test('a held first segment releases at turn end without waiting out the cap', async () => {
+  const environment = stubPlaybackEnvironment();
+  try {
+    const narration = createNarration(async () => ({ base64: btoa('fake-bytes'), mime: 'audio/wav' }));
+    const only = narration.speak('Only sentence.');
+    await flush();
+    assert.equal(environment.sources[0].startTime, undefined);  // §PREBUFFER: held
+    narration.release();
+    assert.equal(environment.sources[0].startTime, 0);  // freed immediately
+    environment.sources[0].emit('ended');
+    await only;
+  } finally {
+    environment.restore();
+  }
+});
+
 test('cancel interrupts the current segment without counting it as played', async () => {
   const environment = stubPlaybackEnvironment();
   try {
