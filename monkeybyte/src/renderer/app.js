@@ -80,23 +80,23 @@ async function start() {
       if (tab && tab.kind !== 'file') api.browserExecute('browser.activate', { tab: tab.id }).catch(reportError);
       else api.browserExecute('browser.hide').catch(reportError);
     },
-    onSpecialClosed: (tab) => api.browserExecute('browser.close', { tab: tab.id }) });
+    onSpecialClosed: (tab) => api.browserExecute('browser.close', { tab: tab.id }).catch(reportError) });
   workspaceView = createWorkspaceView({
     api,
-    onOpenFile: (file, line) => editorView.openFile(file, line),
+    onOpenFile: (file, line) => editorView.openFile(file, line).catch(reportError),
     onWorkspaceChange: applySettings,
     onError: reportError,
-    onRenamePath: (root, oldPath, newPath) => editorView.renamePath(root, oldPath, newPath),
-    onDeletePath: (root, path) => editorView.deletePath(root, path),
+    onRenamePath: (root, oldPath, newPath) => editorView.renamePath(root, oldPath, newPath).catch(reportError),
+    onDeletePath: (root, path) => editorView.deletePath(root, path).catch(reportError),
     onShowHiddenChange: (showHidden) => saveSettings({ showHidden }),
   });
   const browserView = createBrowserView({ api, editor: editorView, onError: reportError,
     getHomeUrl: () => settings?.browserHomeUrl ?? '' });
   void browserView;
   const searchView = createSearchView({ api, getWorkspace: () => settings.workspace,
-    onOpenFile: (file, line) => editorView.openFile(file, line), onError: reportError });
+    onOpenFile: (file, line) => editorView.openFile(file, line).catch(reportError), onError: reportError });
   const gitView = createGitView({ api, getWorkspace: () => settings.workspace,
-    onOpenFile: (file) => editorView.openFile(file), onError: reportError });
+    onOpenFile: (file) => editorView.openFile(file).catch(reportError), onError: reportError });
   void searchView;
   chatView = createChatView({ api, getWorkspace: () => settings.workspace, onError: reportError });
   createResizers({

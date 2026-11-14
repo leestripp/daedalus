@@ -57,30 +57,48 @@ export function createBackendClient({ executable, dataDir, onEvent, executeUi })
     return uiServer.address().port;
   }
 
+  // §SSE-RECONNECT 2026-11-14: the event stream must survive backend
+  // restarts and transient drops — previously one failure ended events()
+  // permanently and the UI went silently deaf (chat froze, narration never
+  // fired) until the app was restarted.
   async function events() {
-    abortEvents = new AbortController();
-    try {
-      const response = await fetch(`http://127.0.0.1:${port}/v1/events`, {
-        headers: { 'X-MonkeyByte-Token': bridgeToken }, signal: abortEvents.signal,
-      });
-      if (!response.ok) throw new Error(`Event stream failed: ${response.status}`);
-      const decoder = new TextDecoder();
-      let buffer = '';
-      for await (const chunk of response.body) {
-        buffer += decoder.decode(chunk, { stream: true });
-        let boundary;
-        while ((boundary = buffer.indexOf('\n\n')) >= 0) {
-          const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
-          let type = 'message'; const data = [];
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event:')) type = line.slice(6).trim();
-            if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    let failures = 0;
+    while (!closing) {
+      abortEvents = new AbortController();
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}/v1/events`, {
+          headers: { 'X-MonkeyByte-Token': bridgeToken }, signal: abortEvents.signal,
+        });
+        if (!response.ok) throw new Error(`Event stream failed: ${response.status}`);
+        failures = 0;
+        const decoder = new TextDecoder();
+        let buffer = '';
+        for await (const chunk of response.body) {
+          buffer += decoder.decode(chunk, { stream: true });
+          let boundary;
+          while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+            const block = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+            let type = 'message'; const data = [];
+            for (const line of block.split('\n')) {
+              if (line.startsWith('event:')) type = line.slice(6).trim();
+              if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+            }
+            if (!data.length || type === 'ready') continue;
+            // A malformed block must not kill the whole stream.
+            try { onEvent(type, JSON.parse(data.join('\n'))); }
+            catch (parseError) {
+              if (!closing) onEvent('backend_error', { message: `Skipped malformed backend event: ${parseError.message}` });
+            }
           }
-          if (data.length && type !== 'ready') onEvent(type, JSON.parse(data.join('\n')));
+        }
+      } catch (error) {
+        if (closing || error.name === 'AbortError') return;
+        failures += 1;
+        if (failures <= 2 || failures % 10 === 0) {
+          onEvent('backend_error', { message: `Event stream lost (${error.message}); reconnecting…` });
         }
       }
-    } catch (error) {
-      if (!closing && error.name !== 'AbortError') onEvent('backend_error', { message: error.message });
+      await new Promise((resolve) => setTimeout(resolve, failures <= 2 ? 500 : 3000));
     }
   }
 
