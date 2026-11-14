@@ -57,7 +57,9 @@ impl MonkeyByteApp {
                 daemon.events(app.events_cancel.clone(), tx);
                 app.status_line = format!("daemon ready on port {}", daemon.port);
                 app.narrator = narrator_from_settings(&daemon);
-                restore_sessions(&mut app, &daemon);
+                let (sessions, active) = load_sessions(&daemon);
+                app.sessions = sessions;
+                app.active_session = active;
                 restore_history(&mut app.chat, &daemon);
                 app.daemon = Some(daemon);
             }
@@ -121,7 +123,9 @@ impl MonkeyByteApp {
                 "/v1/sessions/create",
                 &serde_json::json!({ "workspace": "default", "name": "New Chat" }),
             );
-            restore_sessions(self, daemon);
+            let (sessions, active) = load_sessions(daemon);
+            self.sessions = sessions;
+            self.active_session = active;
             restore_history(&mut self.chat, daemon);
         }
     }
@@ -227,19 +231,20 @@ fn narrator_from_settings(daemon: &daemon::Daemon) -> Option<tts::Narrator> {
     tts::Narrator::spawn(cf).ok()
 }
 
-/// GET /v1/sessions → [(id, name)], remembering the active id.
-fn restore_sessions(app: &mut MonkeyByteApp, daemon: &daemon::Daemon) {
+/// GET /v1/sessions → ([(id, name)], active id). Values, not refs to `self`:
+/// callers assign the fields while still holding a `&self.daemon` borrow.
+fn load_sessions(daemon: &daemon::Daemon) -> (Vec<(String, String)>, Option<String>) {
     let Ok(resp) = daemon.request("GET", "/v1/sessions", &serde_json::Value::Null) else {
-        return;
+        return (Vec::new(), None);
     };
     let entries = resp["sessions"].as_array().cloned()
         .or_else(|| resp.as_array().cloned())
         .unwrap_or_default();
-    app.sessions = entries
+    let sessions = entries
         .iter()
         .filter_map(|e| Some((e["id"].as_str()?.to_string(), e["name"].as_str()?.to_string())))
         .collect();
-    app.active_session = resp["activeId"].as_str().map(String::from);
+    (sessions, resp["activeId"].as_str().map(String::from))
 }
 
 impl eframe::App for MonkeyByteApp {
