@@ -133,11 +133,10 @@ test('narration holds the queue until each segment finishes playing', async () =
     // segment is still playing; the old start-chained queue created both.
     assert.equal(environment.players.length, 1);
     environment.players[0].emit('ended');
+    await first;  // play() returned → queue advanced to segment 2
     await flush();
-    await flush();  // §ENDED-RACE: pre-play listeners add one microtask hop
     assert.equal(environment.players.length, 2);
     environment.players[1].emit('ended');
-    await first;
     await second;
   } finally {
     environment.restore();
