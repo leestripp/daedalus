@@ -29,6 +29,8 @@ struct MonkeyByteApp {
     status_line: String,
     narrator: Option<tts::Narrator>,
     speech_buffer: String,
+    sessions: Vec<(String, String)>,
+    active_session: Option<String>,
 }
 
 impl MonkeyByteApp {
@@ -44,6 +46,8 @@ impl MonkeyByteApp {
             status_line: "starting daemon...".to_string(),
             narrator: None,
             speech_buffer: String::new(),
+            sessions: Vec::new(),
+            active_session: None,
         };
         let home = std::env::var("HOME").unwrap_or_default();
         let executable = format!("{home}/.local/lib/monkeybyte-electron/resources/backend/monkeybyte-electron-backend");
@@ -53,6 +57,7 @@ impl MonkeyByteApp {
                 daemon.events(app.events_cancel.clone(), tx);
                 app.status_line = format!("daemon ready on port {}", daemon.port);
                 app.narrator = narrator_from_settings(&daemon);
+                restore_sessions(&mut app, &daemon);
                 restore_history(&mut app.chat, &daemon);
                 app.daemon = Some(daemon);
             }
@@ -95,6 +100,30 @@ impl MonkeyByteApp {
         }
         self.chat.busy = false;
         self.chat.seal();
+    }
+
+    /// Switch to another chat session: server select, then reload transcript.
+    fn select_session(&mut self, id: &str) {
+        if let Some(narrator) = &self.narrator {
+            narrator.cancel();
+        }
+        if let Some(daemon) = self.daemon.as_ref() {
+            let _ = daemon.request("POST", "/v1/sessions/select", &serde_json::json!({ "id": id }));
+            self.active_session = Some(id.to_string());
+            restore_history(&mut self.chat, daemon);
+        }
+    }
+
+    fn create_session(&mut self) {
+        if let Some(daemon) = self.daemon.as_ref() {
+            let _ = daemon.request(
+                "POST",
+                "/v1/sessions/create",
+                &serde_json::json!({ "workspace": "default", "name": "New Chat" }),
+            );
+            restore_sessions(self, daemon);
+            restore_history(&mut self.chat, daemon);
+        }
     }
 
     /// Feed assistant text to the narrator: complete sentences speak as they
@@ -157,6 +186,7 @@ impl MonkeyByteApp {
 
 /// Prefill the transcript from the daemon's history (array of {role, content}).
 fn restore_history(chat: &mut Chat, daemon: &daemon::Daemon) {
+    chat.bubbles.clear();
     let Ok(history) = daemon.request("GET", "/v1/history", &serde_json::Value::Null) else {
         return;
     };
@@ -197,9 +227,46 @@ fn narrator_from_settings(daemon: &daemon::Daemon) -> Option<tts::Narrator> {
     tts::Narrator::spawn(cf).ok()
 }
 
+/// GET /v1/sessions → [(id, name)], remembering the active id.
+fn restore_sessions(app: &mut MonkeyByteApp, daemon: &daemon::Daemon) {
+    let Ok(resp) = daemon.request("GET", "/v1/sessions", &serde_json::Value::Null) else {
+        return;
+    };
+    let entries = resp["sessions"].as_array().cloned()
+        .or_else(|| resp.as_array().cloned())
+        .unwrap_or_default();
+    app.sessions = entries
+        .iter()
+        .filter_map(|e| Some((e["id"].as_str()?.to_string(), e["name"].as_str()?.to_string())))
+        .collect();
+    app.active_session = resp["activeId"].as_str().map(String::from);
+}
+
 impl eframe::App for MonkeyByteApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
+        egui::SidePanel::left("sessions")
+            .width_range(100.0..=300.0)
+            .default_width(200.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Chats");
+                    if ui.button("+").clicked() {
+                        self.create_session();
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    let sessions = self.sessions.clone();
+                    for (id, name) in sessions {
+                        let active = self.active_session.as_deref() == Some(id.as_str());
+                        if ui.selectable_label(active, &name).clicked() && !active {
+                            self.select_session(&id);
+                        }
+                    }
+                });
+            });
+
         egui::CentralPanel::default().show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.heading("MonkeyByte (Rust)");
