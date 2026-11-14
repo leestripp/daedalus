@@ -52,11 +52,27 @@ function appendMarkdown(container, markdown) {
 
 function messageElement(role, content) {
   const section = document.createElement('section');
+  const text = String(content);
+  // §COMPRESSION-NOTICE 2026-11-14: context-compression summaries are markdown
+  // prose that can quote glyphs like ✗/❌ and render giant headings — the
+  // "big cross on the compression" report. Show them as a compact, muted,
+  // collapsed notice instead of a full message bubble.
+  if (text.startsWith('[Context compressed')) {
+    section.className = 'message-bubble notice';
+    section.dataset.role = 'system';
+    const details = document.createElement('details');
+    details.className = 'compression-notice';
+    details.append(textElement('summary', '',
+      `🗜 Context compressed — summary of ${compactTokens(text.length)} chars`));
+    details.append(textElement('pre', 'chat-code', text));
+    section.append(details);
+    return section;
+  }
   section.className = `message-bubble ${role === 'user' ? 'user' : 'assistant'}`;
   section.dataset.role = role;
   const body = document.createElement('div');
   body.className = 'message-content';
-  appendMarkdown(body, content);
+  appendMarkdown(body, text);
   section.append(body);
   return section;
 }
