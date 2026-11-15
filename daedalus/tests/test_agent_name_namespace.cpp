@@ -129,12 +129,14 @@ static void test_two_agents_same_project_different_names() {
     (void)sptr_a; (void)sptr_b;
 
     daedalus::AgentConfig cfg_a;
+    cfg_a.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg_a.project_root = project;
     cfg_a.agent_name   = "alice";
     cfg_a.session_id   = "agent-A";
     daedalus::Agent agent_a(std::move(cfg_a), sptr_a);
 
     daedalus::AgentConfig cfg_b;
+    cfg_b.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg_b.project_root = project;
     cfg_b.agent_name   = "bob";
     cfg_b.session_id   = "agent-B";
@@ -149,6 +151,7 @@ static void test_two_agents_same_project_different_names() {
     assert(std::string(agent_b.agent_name()) == "bob");
     // Backward compat: getter on a default-cfg agent returns "".
     daedalus::AgentConfig cfg_default;
+    cfg_default.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     daedalus::Agent agent_default(std::move(cfg_default),
         std::make_shared<NullSink>());
     assert(agent_default.agent_name().empty());
@@ -189,6 +192,7 @@ static void test_initialize_rejects_bad_name() {
     // ".." looks like it could be a valid ancestor trick — must be
     // rejected before Agent::initialize() touches any filesystem.
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root = fresh_dir("reject");
     cfg.agent_name   = "..";
         daedalus::Agent bad(std::move(cfg), std::make_shared<NullSink>());

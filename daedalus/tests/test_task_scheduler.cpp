@@ -169,7 +169,10 @@ TEST_CASE("Recurring dispatch coalesces overdue slots and supports edit delete s
     TempDirectory temp;
     TaskScheduler scheduler(temp.path() / "scheduled_tasks.json");
     const auto overdue = format_utc(std::chrono::system_clock::now() - 90min);
-    const auto added = scheduler.add("repeat", "tick", "recurring", overdue, 1);
+    // Leave at least one second before the next legitimate dispatch: with a
+    // one-second interval, parallel-suite scheduling delay can turn the
+    // 100ms coalescing assertion into a race against the next whole second.
+    const auto added = scheduler.add("repeat", "tick", "recurring", overdue, 2);
     REQUIRE(added.value("status", "") == "success");
     const auto id = added.at("task").at("id").get<std::uint64_t>();
 
@@ -194,4 +197,16 @@ TEST_CASE("Recurring dispatch coalesces overdue slots and supports edit delete s
     const auto count = recorder.size();
     std::this_thread::sleep_for(50ms);
     CHECK(recorder.size() == count);
+}
+
+TEST_CASE("Stop reliably wakes a worker waiting on an empty queue") {
+    TempDirectory temp;
+    TaskScheduler scheduler(temp.path() / "scheduled_tasks.json");
+
+    // stop() must publish the stop request under the same mutex used by the
+    // worker's check-then-wait sequence; otherwise join() can wait forever.
+    for (int i = 0; i < 50; ++i) {
+        scheduler.start([](const ScheduledTask&) {});
+        scheduler.stop();
+    }
 }

@@ -100,6 +100,7 @@ TEST_CASE("custom BaseTool is registered and executable") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "custom-tool";
@@ -139,6 +140,7 @@ TEST_CASE("custom BaseTool can be registered after initialize") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "custom-tool-after";

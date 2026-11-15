@@ -101,6 +101,7 @@ int main() {
     }
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = "/tmp";
     cfg.session_id    = "no-dup-test";
     cfg.model_name    = "minimax-m2.7";

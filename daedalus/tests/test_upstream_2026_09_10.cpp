@@ -54,6 +54,7 @@ struct LegacyIntSink : public NullSink {
 
 daedalus::AgentConfig test_cfg(const std::string& dir) {
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     const auto base = std::filesystem::temp_directory_path() / dir;
     cfg.project_root  = base / "project";
     // Isolate from any real host settings store ($XDG_CONFIG_HOME/

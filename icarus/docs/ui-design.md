@@ -23,7 +23,7 @@ fallbacks for `--plain` / `--no-unicode`.
 ```text
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║  icarus — AI coding agent powered by daedalus                            ║
-║  Library: 0.7.2-1-gec1ab27                                                 ║
+║  Version:       1.4.0                                                 ║
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║  Active model: MiniMax-M2.7                                                ║
 ║  Model id:     MiniMax-M2.7                                                ║

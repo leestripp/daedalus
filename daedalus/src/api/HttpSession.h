@@ -54,13 +54,9 @@
 #include <expected>
 #include <functional>
 #include <future>
-#include <memory>
-#include <mutex>
-#include <queue>
 #include <stop_token>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 namespace daedalus::net {
@@ -163,8 +159,8 @@ public:
     /**
      * @brief Submit a request and get a future to the result
      *
-     * The request is queued and processed by the event-loop thread. Use
-     * the returned future to await the result.
+     * The request runs on its own worker thread. Use the returned future
+     * to await the result.
      *
      * @param request Request configuration
      * @return std::future<std::expected<HttpResponse, HttpError>>
@@ -205,8 +201,8 @@ public:
     /**
      * @brief Graceful shutdown
      *
-     * Stops accepting new requests, cancels in-flight ones, joins the
-     * event loop thread. Safe to call multiple times.
+     * Compatibility no-op. Per-request workers are tracked by their
+     * returned futures; connection pooling belongs to OmniNet.
      */
     void shutdown();
 
@@ -214,30 +210,6 @@ public:
 
 private:
     HttpSession();
-    // §NC-6: legacy event-loop helpers are no-ops now. The implementation
-    // in HttpSession.cpp uses per-request jthreads and OmniNet directly.
-    void event_loop(std::stop_token st);
-    struct RequestState;     // forward-declared for ABI; no longer used
-    void process_completed();
-    void add_to_multi(RequestState* state);
-    void remove_from_multi(RequestState* state, HttpError error);
-    static size_t write_cb(void* contents, size_t size, size_t nmemb, void* userp);
-    static size_t header_cb(void* contents, size_t size, size_t nmemb, void* userp);
-
-    // Worker thread + stop source for the legacy event loop. With the
-    // OmniNet rewrite these are unused but kept for ABI.
-    std::jthread worker_;
-    std::stop_source stop_source_;
-
-    // Legacy queue + in-flight tracking. Kept as members but never
-    // populated; the dtor's member-cleanup needs them to compile.
-    mutable std::mutex queue_mutex_;
-    std::condition_variable queue_cv_;
-    std::queue<std::unique_ptr<RequestState>> pending_;
-    std::vector<RequestState*> in_flight_;
-    std::mutex in_flight_mutex_;
-
-    std::atomic<bool> stop_{false};
     std::atomic<size_t> active_count_{0};
     std::atomic<size_t> completed_count_{0};
     std::atomic<size_t> total_count_{0};

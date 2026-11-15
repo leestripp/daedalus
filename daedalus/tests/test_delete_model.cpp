@@ -67,6 +67,7 @@ TEST_CASE("delete_model removes a configured model") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "delete-happy";
@@ -92,6 +93,7 @@ TEST_CASE("delete_model rejects an empty name") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "delete-empty";
@@ -115,6 +117,7 @@ TEST_CASE("delete_model on an unknown name is idempotent") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "delete-unknown";

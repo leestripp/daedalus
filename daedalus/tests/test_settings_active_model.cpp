@@ -38,6 +38,7 @@ int main() {
     {
         daedalus::AgentConfig cfg;
         cfg.project_root = "/tmp";
+        cfg.mcp_enabled = false;  // model lookup must not start real MCP servers
         cfg.model_name = "minimax-m2.7";  // Try to use a known model
         
         struct NullSink : daedalus::AgentSink {
@@ -75,6 +76,7 @@ int main() {
     {
         daedalus::AgentConfig cfg;
         cfg.project_root = "/tmp";
+        cfg.mcp_enabled = false;  // model lookup must not start real MCP servers
         // No model_name set - should use default from settings
         
         struct NullSink : daedalus::AgentSink {

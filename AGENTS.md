@@ -29,8 +29,8 @@ the archived GitLab repos and local backups.
 └── AGENTS.md          ← this file
 ```
 
-**Commit, tag, and push once** — one history covers everything. Tags are
-namespaced per component (see Versioning below).
+**Commit, tag, and push once** — one history covers everything. Bare `x.y.z`
+tags version the whole monorepo (see Versioning below).
 
 ## The architecture in one picture
 
@@ -109,7 +109,7 @@ daedalus's **user-tier store**:
 | `$XDG_DATA_HOME/daedalus/daedalus.db` | both hosts | Providers, models, MCP servers, encrypted vault, brain index (FTS5), tuning limits |
 | `$XDG_DATA_HOME/daedalus/brain/` | both hosts | §SECOND-BRAIN: global markdown knowledge base (PARA folders; `brain` tool) — source of truth, safe to edit by hand |
 | `$XDG_CONFIG_HOME/daedalus/vault.key` | both hosts | Vault master key |
-| `$XDG_DATA_HOME/daedalus/skills/`, `memory/` | both hosts | Global skills + session memory |
+| `$XDG_DATA_HOME/daedalus/skills/` | both hosts | User-global skills |
 | `<project>/.daedalus/daedalus[-<name>]/` | per workspace | Transcript (`messages.json`), crash mirror, per-project memory, logs |
 | `$XDG_DATA_HOME/monkeybyte/monkeybyte.db` | monkeybyte only | UI settings, prompts, workspace bindings |
 
@@ -157,12 +157,13 @@ ctest --test-dir build -L lib       # or cli / app slices
 cmake --build build --target static_analysis  # cppcheck umbrella
 ```
 
-Per-component test notes: daedalus is a doctest suite (~105 tests;
+Per-component test notes: daedalus is a doctest suite (100+ test binaries;
+live-LLM tests skipped unless `DAEDALUS_RUN_LIVE_LLM_TESTS=1`); icarus
 live-LLM tests skipped unless `DAEDALUS_RUN_LIVE_LLM_TESTS=1`); icarus
 has doctest tests (`cli_args`, `system_prompt`, `migrate`); monkeybyte
-has a hand-rolled assert runner (`unit_tests`) plus the ControlServer
-HTTP API for UI automation (`./monkeybyte/run.sh` runs the app with its
-local GSettings schema).
+has a hand-rolled assert runner (`unit_tests`) plus the three-route
+loopback ControlServer for UI automation (`./monkeybyte/run.sh` runs the app
+with its local GSettings schema).
 
 Verification bar before submitting anything: clean superbuild + full
 ctest green, no new static-analysis warnings.
@@ -209,7 +210,7 @@ tests, and security model. Treat it as the first stop before making changes.
 ### Project overview
 
 daedalus is a **C++23 autonomous agent library** that ships as a static library
-(`libdaedalus.a`) plus four worked example hosts under `demos/`. Hosts embed the
+(`libdaedalus.a`) plus five demo hosts under `demos/`. Hosts embed the
 library and drive one or more `daedalus::Agent` instances via a narrow public
 API. The library owns the agent loop; hosts receive all events through an
 `AgentSink` callback interface.
@@ -230,7 +231,7 @@ for the full rationale and verification steps.
 |-------|------------|
 | Language | C++23 (std::expected, std::flat_map, std::span, std::jthread, std::stop_token, std::print, deducing this) |
 | Build system | CMake 3.28+ |
-| Default compiler | Clang 17+ (GCC 13+ also supported) |
+| Compiler | System default; GCC 13+ or Clang 17+ (override with `CC`/`CXX`) |
 | JSON | nlohmann/json 3.11+ (system package OR fetched via CMake) |
 | HTTP/WebSocket | OmniNet (fetched from `gitlab.com/leestripp/omninet`) |
 | TLS | OpenSSL |
@@ -296,7 +297,7 @@ into `build/_deps/` on first build.
 | `src/library/a2a` | `A2aClient.cpp`, `A2aServer.cpp` | A2A (Agent2Agent Protocol) HTTP+JSON client + server |
 | `src/core` | `SettingsStore.cpp`, `SecondBrain.cpp`, `InterprocessLock.cpp`, `Messages.cpp`, `Logger.cpp`, ... | Settings, global brain + process locking, persistence, logging, compression, metrics |
 | `src/api` | `LLMClient.cpp`, `HttpSession.cpp`, `providers/*.cpp` | Provider-agnostic HTTP/SSE chat client + provider plugins (`ProviderPlugin` hook implementations: OpenAI-compatible default, MiniMax, Moonshot, LM Studio; see `docs/provider-plugins.md`) + prompt-cache helpers (`ContextStatus.h`, §ContextCache) |
-| `src/tools` | `ToolFactory.cpp`, `BashTool.cpp`, `SkillTool.cpp`, `MemoryTool.cpp`, `SerperSearchTool.cpp`, `PDFTool.cpp` (read_pdf, §PDF-CORE), ... | Core tool implementations registered by default |
+| `src/tools` | `ToolFactory.cpp`, `BashTool.cpp`, `SkillTool.cpp`, `MemoryTool.cpp`, `WebSearchTool.cpp`, `VaultTool.cpp`, `BrainTool.cpp`, `PDFTool.cpp` (read_pdf, §PDF-CORE), ... | Core tool implementations registered by default |
 | `demos/example-tools` | `GitTool.cpp`, `NetworkTool.cpp`, `SearchTool.cpp` (grep/wiki), `SystemInfoTool.cpp`, `BackgroundTool.cpp`, ... | Optional example / reference tool implementations |
 | `src/mcp` | `McpClient.cpp`, `McpServerManager.cpp`, `StdioMcpTransport.cpp`, `HttpMcpTransport.cpp` | MCP server integration |
 
@@ -305,7 +306,7 @@ into `build/_deps/` on first build.
 #### Configure and build
 
 ```bash
-# Default: Release build, clang++ preferred
+# Default: Release build, system compiler (GCC on Ubuntu); override with CC/CXX
 
 # §Monorepo (2026-09-24): PREFERRED — build everything from the repo root:
 #   (cd .. && cmake -S . -B build && cmake --build build -j$(nproc))
@@ -367,7 +368,7 @@ if missing the targets are omitted with a status message.
 | `DAEDALUS_DEMO_SETTINGS_TUI` | ON | `demos/daedalus-settings-tui/` |
 
 ```bash
-cmake -S . -B build -DCODEMAX_DEMO_WEBUI=ON
+cmake -S daedalus -B build -DDAEDALUS_DEMO_WEBUI=ON
 ```
 
 ### Code style guidelines
@@ -474,7 +475,7 @@ Key files:
 | `brain/.lock` | Same brain root | Bounded shared/exclusive inter-process lock for all brain operations |
 | `messages.json` | `<project>/.daedalus/daedalus[-<name>]/messages.json` | Conversation transcript |
 | `messages.json.crash` | Same dir | Crash mirror written by signal handlers |
-| `memory/memory.sqlite` | Same dir | Long-term memory |
+| `memory/memory.json` | Same dir | Long-term memory (JSON source of truth + SQLite recovery mirror) |
 
 Env-var resolution is documented in `docs/storage.md`. For CI/sandboxing you
 can collapse everything with `DAEDALUS_HOME=/tmp/foo`.
@@ -1098,9 +1099,11 @@ $XDG_DATA_HOME/icarus/
 ├── messages.json.tmp        # Auto-save temp file
 ├── messages.json.crash      # Crash-recovery copy
 ├── logs.txt                 # Timestamped on_log output (all levels)
-├── memory/memory.sqlite     # Persistent session memory
+├── memory/memory.json       # Persistent session memory
+├── todos.json               # Persistent todo list
+├── scheduled_tasks.json     # Persistent scheduled tasks
 ├── sessions/                # Saved sessions
-└── system_prompt.txt        # Legacy per-project overlay (unused)
+└── system_prompt.txt        # Optional additional Daedalus project overlay
 
 <project_root>/.daedalus/daedalus-<name>/
     # Named-agent variant of the above
@@ -1115,9 +1118,9 @@ Run `/paths` in a session for the fully-resolved list.
 2. <project_root>/AGENTS.md        (open standard for agent instructions)
 ```
 
-The legacy `<project_root>/.daedalus/daedalus/system_prompt.txt` overlay and
-the `<exe-dir>/system_prompt.txt` sidecar are **no longer read**. Migrate any
-instructions from those files into `AGENTS.md`.
+The executable-sidecar prompt is no longer read. Daedalus additionally appends
+`<project_root>/.daedalus/daedalus[-<name>]/system_prompt.txt` during agent
+initialization when that optional overlay exists.
 
 ---
 
@@ -1361,9 +1364,11 @@ src/monkeybyte/
                            daedalus's own per-session diagnostics live at
                            <workspace>/.daedalus/daedalus/logs/ (gitignored)
   http/
-    ApiClient              synchronous libcurl wrapper for the /api/* contract (§10)
-    EventSourceClient      SSE stream client for chat events (§7.7, §10.1)
-    ControlServer          OmniNet HTTP endpoint for UI automation/testing
+    ApiClient              legacy synchronous libcurl client helpers; the old
+                           workspace/chat/settings HTTP backend is not served
+    EventSourceClient      legacy SSE client helper
+    ControlServer          OmniNet loopback-only UI automation endpoint with
+                           /api/ui/geometry, /api/ui/commands, /api/ui/control
   tree/
     WorkspaceTree          lazy-loaded file tree logic; expansion-state memory (§4.2)
   ui/
@@ -1644,9 +1649,8 @@ re-configure (`CONFIGURE_DEPENDS`).
   `register_tool()` is replace-by-name (plus a new `unregister_tool()`),
   so re-registering a host tool on agent rebuild no longer duplicates the
   provider payload. monkeybyte still registers its host tools
-  (`AppUiTool`, `WebFetchTool`, `WebSearchTool`) once per process in
-  `ChatController::ensure_agent()` — kept as cheap insurance, no longer
-  strictly required.
+  (`AppUiTool`, `WebFetchTool`) on agent construction. Web search is the core
+  unified failover `web_search` tool, not a separate MonkeyByte search tool.
 - `/clear`, the 🗑 button, and workspace change (`ChatPanel::
   clear_history` → `ChatController::clear(true)`) also wipe daedalus's
   **persisted** message chain via `wipe_agent_session()`
@@ -1660,10 +1664,11 @@ re-configure (`CONFIGURE_DEPENDS`).
   settings-edit rebuild (`reset_agent` → `clear(false)`) deliberately
   keeps the persisted chain so the rebuilt agent resumes the visible
   conversation.
-- daedalus's `run_one_turn()` dispatches exactly **one** queued user
-  message per call — never leave a `submit_user_message()` pending
-  without a matching `run_one_turn()`, or every later prompt runs one
-  message behind.
+- daedalus's `run_one_turn()` drains the **entire pending queue**, joining
+  queued texts FIFO (blank-line separated), concatenating images, and merging
+  origins into one dispatch. The host still pairs submissions with driven
+  turns: an idle `submit_user_message()` without `run_one_turn()` remains
+  pending. Use `pending_count()` and `on_turn_requested()` for scheduling.
 - `/compress` is host-triggered context compression: the host only calls
   `Agent::compress_context()` (daedalus §AutoCompress) and updates the UI —
   daedalus summarizes the oldest ~70 % internally (same path as the 90 %

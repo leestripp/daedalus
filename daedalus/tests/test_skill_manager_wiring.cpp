@@ -53,6 +53,7 @@ fs::path fresh_dir(const std::string& tag) {
 
 daedalus::AgentConfig base_config(const fs::path& root) {
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = root / "project";
     cfg.daedalus_home = root / "home";
     fs::create_directories(cfg.project_root);

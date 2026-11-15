@@ -62,6 +62,7 @@ int main()
     // Construct Agent with no daedalus_home and no model — initialize()
     // should still succeed (it just doesn't have a real LLMClient to wire).
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root = "/tmp";
     cfg.session_id = "smoke-test";
 

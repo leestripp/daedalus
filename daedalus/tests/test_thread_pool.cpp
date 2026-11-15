@@ -64,6 +64,18 @@ static void drain_pool() {
     std::this_thread::sleep_for(20ms);
 }
 
+// A packaged_task releases its future before worker_loop() increments the
+// completed counter. Wait for that bookkeeping without assuming future.get()
+// is also a barrier for stats updates.
+static bool wait_for_completed_at_least(std::size_t target) {
+    auto& pool = ThreadPool::get_instance();
+    for (int i = 0; i < 100; ++i) {
+        if (pool.get_stats().completed_tasks >= target) return true;
+        std::this_thread::sleep_for(1ms);
+    }
+    return pool.get_stats().completed_tasks >= target;
+}
+
 // ============================================================================
 // Test: get_instance returns the same singleton
 // ============================================================================
@@ -127,8 +139,8 @@ TEST(multiple_tasks_concurrent) {
     }
 
     CHECK_EQ(counter.load(), 8);
-    auto after_stats = pool.get_stats();
-    CHECK(after_stats.completed_tasks >= before_stats.completed_tasks + 8);
+    CHECK(wait_for_completed_at_least(before_stats.completed_tasks + 8));
+    const auto after_stats = pool.get_stats();
     CHECK(after_stats.total_submitted >= before_stats.total_submitted + 8);
     return 0;
 }
@@ -242,8 +254,8 @@ TEST(stats_increment_after_task) {
     });
     fut.get();
 
-    auto after = pool.get_stats();
-    CHECK(after.completed_tasks > before.completed_tasks);
+    CHECK(wait_for_completed_at_least(before.completed_tasks + 1));
+    const auto after = pool.get_stats();
     CHECK(after.total_submitted > before.total_submitted);
     return 0;
 }

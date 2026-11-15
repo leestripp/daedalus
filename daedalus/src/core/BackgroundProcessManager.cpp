@@ -34,7 +34,11 @@
 // static void set_close_on_exec(int fd) { ... }
 
 BackgroundProcessManager::BackgroundProcessManager()
-    : temp_base_(std::filesystem::temp_directory_path() / TEMP_DIR_PREFIX) {
+    : temp_base_(std::filesystem::temp_directory_path()
+                 / (std::string(TEMP_DIR_PREFIX) + std::to_string(::getpid()))) {
+    // Each host process owns its capture namespace. Parallel test binaries
+    // (and concurrent Daedalus hosts) all start their logical IDs at bg_1;
+    // sharing one directory lets them unlink or truncate each other's files.
     ensure_temp_dir();
 }
 

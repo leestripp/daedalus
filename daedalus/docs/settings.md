@@ -1,266 +1,171 @@
 # Daedalus Settings System
 
-> Complete reference for the `daedalus::SettingsStore` API (v0.4.0+) and
-> the migration path from the legacy JSON-based `SettingsManager`.
+`daedalus::SettingsStore` is the public SQLite-backed settings API. It stores
+providers, models, MCP servers, web-search providers, agent limits, and several
+internal indexes/mirrors. Project transcripts and runtime files still belong in
+the per-project agent directory; see [`storage.md`](storage.md).
 
-*Last updated 2026-11-09.*
+The old `SettingsManager` and automatic JSON-to-SQLite migration have been
+removed. `servers.json` remains an explicit MCP fallback, not a general settings
+format.
 
----
+## Database location and lifetime
 
-## 1. Overview
-
-daedalus v0.4.0 introduced **`daedalus::SettingsStore`**: a SQLite-backed
-settings store that replaces the scattered JSON files (`config.json`,
-`mcp/servers.json`, `mcp/.env`) with a single database.
-
-**Key benefits:**
-- **Atomic transactions** — model writes are all-or-nothing
-- **Type-safe API** — no raw JSON parsing in host code
-- **Thread-safe** — SQLite opened in serialized mode
-- **Per-agent isolation** — `SettingsStore::for_home()` returns an isolated DB
-- **Auto-migration** — existing JSON config is imported on first run
-
-**Storage location:**
-```
+```text
 $XDG_DATA_HOME/daedalus/daedalus.db
-# e.g. ~/.local/share/daedalus/daedalus.db
+# normally ~/.local/share/daedalus/daedalus.db
 ```
-
-### Multi-process access and durability
-
-Every store opens with a five-second SQLite busy timeout and **WAL journal
-mode** (verified by querying `PRAGMA journal_mode`). WAL allows independent
-processes to share the store without rollback-journal reader/writer blocking.
-The `daedalus.db-wal` and `daedalus.db-shm` sidecars belong to the same logical
-database; do not discard them when inspecting or backing up live data.
-
-Schema creation and migration run in one `BEGIN IMMEDIATE` transaction. This
-serializes first-open work across processes and prevents duplicate
-`schema_version` inserts. Brain metadata/FTS upserts and deletes also have
-their own transactions (or join the surrounding reindex transaction). If WAL
-cannot be enabled on the backing filesystem, opening the store fails with an
-explicit error rather than silently falling back to unsafe rollback-journal
-sharing. See `docs/storage.md` §1.3 for the brain file-lock contract.
-
----
-
-## 2. Public API
-
-### 2.1 Header
 
 ```cpp
 #include <daedalus/settings.h>
+
+// Process-wide default store.
+daedalus::SettingsStore& global = daedalus::SettingsStore::instance();
+
+// Lightweight handle for <home>/daedalus.db (returned by value).
+auto isolated = daedalus::SettingsStore::for_home("/tmp/agent-home");
 ```
 
-### 2.2 Getting a SettingsStore
+Handles for the same path share a pooled SQLite connection. Methods are safe to
+call from multiple threads. Writes are immediate; there is no `load()`/`save()`
+cycle. `db_path()` reports the selected path and `has_data()` reports whether
+user configuration is present.
+
+Connections use SQLite serialized mode, a five-second busy timeout, and WAL.
+`daedalus.db-wal` and `daedalus.db-shm` are part of the live database and must be
+considered when copying or backing it up. Schema creation and migration are
+transactional. A filesystem that cannot provide the required WAL behavior is
+reported as an open error rather than silently treated as multi-process safe.
+
+## Providers and models
+
+Provider configuration owns shared connection details. A model references one
+provider by name.
 
 ```cpp
-namespace daedalus {
-
-// Global default (one DB per user)
-SettingsStore& store = SettingsStore::instance();
-
-// Per-agent isolated store (lives at <home>/daedalus.db)
-SettingsStore& agent_store = SettingsStore::for_home("/path/to/agent/home");
-```
-
-Both return a reference to a singleton-per-path. The underlying SQLite
-handle is managed by a connection pool (`DbPool`) — multiple
-`SettingsStore` wrappers can share the same handle without extra overhead.
-
-### 2.3 Provider and Model Configuration
-
-As of v0.6.0/v0.7.0, endpoint and credential information lives in a
-`ProviderConfig`, and each `ModelConfig` references a provider by name.
-This lets multiple models share one provider's host, API key, and
-endpoints.
-
-```cpp
-// Shared endpoint/credential configuration for one provider
 struct ProviderConfig {
-    std::string name;               // provider label, e.g. "minimax"
-    std::string host;               // https://api.example.com
-    std::string api_key;            // provider-level API key
-    std::string chat_endpoint;      // default "/v1/chat/completions"
-    std::string discovery_endpoint; // default "/v1/models"
-    int         timeout_seconds = 30;
-    std::string plugin;             // provider plugin name; empty = auto-detect
-                                    // from name/host (see docs/provider-plugins.md)
+    std::string name;
+    std::string host;
+    std::string api_key;
+    std::string chat_endpoint;
+    std::string discovery_endpoint;
+    int timeout_seconds = 30;
+    std::string plugin;          // empty = auto-detect from name/host
 };
 
-// One configured model; references a ProviderConfig for host/key/endpoints
 struct ModelConfig {
-    std::string name;              // settings key, e.g. "minimax-m3"
-    std::string provider;          // ProviderConfig::name
-    std::string model_id;          // actual model id, e.g. "MiniMax-M3"
-    int    max_context_size = 0;   // 0 = use built-in default (1M fallback)
-    double temperature     = 0.0;
+    std::string name;            // settings key
+    std::string provider;        // ProviderConfig::name
+    std::string model_id;        // provider's actual model identifier
+    int max_context_size = 0;    // 0 = model/plugin default
+    double temperature = 0.0;
 };
 ```
 
-#### Provider CRUD
+Example:
 
 ```cpp
-// Create or update a provider
-store.upsert_provider(ProviderConfig{
-    .name               = "minimax",
-    .host               = "https://api.minimax.chat",
-    .api_key            = "YOUR_API_KEY",
-    .chat_endpoint      = "/v1/chat/completions",
+auto& store = daedalus::SettingsStore::instance();
+store.upsert_provider(daedalus::ProviderConfig{
+    .name = "minimax",
+    .host = "https://api.minimax.io",
+    .api_key = "YOUR_API_KEY",
+    .chat_endpoint = "/v1/chat/completions",
     .discovery_endpoint = "/v1/models",
-    .timeout_seconds    = 30,
-    // .plugin          = "minimax",  // optional; auto-detected from
-                                     // name/host when left empty
+    .timeout_seconds = 30,
+    // .plugin = "minimax",     // optional
 });
-
-// Read
-std::optional<ProviderConfig> p = store.get_provider("minimax");
-std::vector<ProviderConfig> providers = store.list_providers_detailed();
-
-// Delete
-store.delete_provider("minimax");
-```
-
-#### Model CRUD
-
-```cpp
-// Create or update a model that uses the provider above
-store.upsert_model(ModelConfig{
-    .name      = "minimax-m3",
-    .provider  = "minimax",
-    .model_id  = "MiniMax-M3",
-    .temperature = 0.7
+store.upsert_model(daedalus::ModelConfig{
+    .name = "minimax-m3",
+    .provider = "minimax",
+    .model_id = "MiniMax-M3",
+    .max_context_size = 200000,
+    .temperature = 0.0,
 });
-
-// Read
-std::optional<ModelConfig> m = store.get_model("minimax-m3");
-std::vector<ModelConfig>   all = store.list_models();
-
-// Default model
-std::string default_name = store.get_default_model_name();
 store.set_default_model_name("minimax-m3");
-
-// Delete
-store.delete_model("old-model");
 ```
 
-#### Model Discovery
+Public operations:
 
-Query a provider's OpenAI-compatible `/v1/models` endpoint to discover
-available models. The model-based overload looks up the configured model,
-resolves its provider, and uses the provider's host/key/discovery endpoint:
+| Operation | API |
+|---|---|
+| Read one provider/model | `get_provider(name)`, `get_model(name)` |
+| List | `list_providers()`, `list_providers_detailed()`, `list_models()` |
+| Merge model with provider | `resolve_model(name)` |
+| Insert/update | `upsert_provider(p)`, `upsert_model(m)` |
+| Delete | `delete_provider(name)`, `delete_model(name)` |
+| Default/current selection | `get/set_default_model_name()`, `get/set_current_provider()` |
+
+Deleting a provider also removes its models. `ResolvedModelConfig` contains the
+merged host, credentials, endpoints, timeout, model values, and plugin hint.
+Provider plugin selection is documented in
+[`provider-plugins.md`](provider-plugins.md).
+
+### Discovery
 
 ```cpp
 #include <daedalus/Agent.h>
 
 auto result = daedalus::Agent::discover_models("minimax-m3");
 if (result.success) {
-    for (const auto& m : result.models) {
-        std::cout << m.id
-                  << " owned_by=" << m.owned_by
-                  << " ctx=" << m.context_length
-                  << " vision=" << m.supports_vision
-                  << " reasoning=" << m.supports_reasoning
-                  << "\n";
+    for (const auto& model : result.models) {
+        // model.id, context_length, supports_vision, supports_reasoning, ...
     }
 } else {
-    std::cerr << result.error_message << "\n";
+    // result.error_message
 }
 ```
 
-For ad-hoc discovery without a stored model, use the lower-level overload
-from `daedalus/model_discovery.h`:
+The model-based overload resolves the provider's host, key, and discovery
+endpoint. Lower-level ad-hoc discovery is available from
+`daedalus/model_discovery.h`:
 
 ```cpp
-#include <daedalus/model_discovery.h>
-
 auto result = daedalus::discover_models(
-    "https://api.minimax.chat", "YOUR_API_KEY", "/v1/models");
+    "https://api.example.com", "API_KEY", "/v1/models");
 ```
 
-### 2.4 Switching Models at Runtime
+### Runtime model/provider changes
 
-Use `Agent::switch_model()` to change the model for subsequent turns.
-On success the new model becomes the default in `SettingsStore`, the
-`AgentConfig::model_name` is updated, the internal `LLMClient` is
-reconfigured for the new endpoint / credentials / context size, and
-**the conversation history is cleared**.
+`Agent::switch_model(name)` validates the stored model, makes it the default,
+reconfigures the LLM client, and **clears conversation history**. This avoids
+carrying incompatible tool/schema state or an oversized context into the new
+model. `Agent::switch_provider(name)` persists the current provider and selects
+a model belonging to it when necessary. `active_provider_plugin()` reports the
+resolved plugin after the LLM client exists.
+
+## Key/value and agent settings
+
+Generic accessors are:
 
 ```cpp
-daedalus::Agent agent(cfg, sink);
-agent.initialize();
-
-// Start with a lightweight model for planning...
-agent.switch_model("minimax-m2.7");
-agent.submit_user_message("Plan the refactor");
-agent.run_one_turn();
-
-// ...then switch to a larger model for implementation.
-// History is cleared automatically so the bigger model's context
-// window is not consumed by the earlier planning turn.
-agent.switch_model("minimax-m3");
-agent.submit_user_message("Implement the plan");
-agent.run_one_turn();
+store.get_string(key, fallback);
+store.get_bool(key, fallback);
+store.get_int(key, fallback);
+store.set_string(key, value);
+store.set_bool(key, value);
+store.set_int(key, value);
 ```
 
-**Behaviour:**
+Typed helpers cover the settings consumed by the agent:
 
-| Step | Effect |
+| Setting | Default / behavior |
 |---|---|
-| Validation | Returns `false` immediately if the requested model is not in `SettingsStore`. |
-| Default update | `SettingsStore::set_default_model_name()` is updated so future sessions start with the new model. |
-| Config refresh | The `LLMClient` resolves the model's `provider`, then picks up the provider's `host`, `api_key`, `chat_endpoint`, the model's `model_id`, `temperature`, and `max_context_size`. |
-| History cleared | `Messages::clear()` + `save()` removes the on-disk transcript so the new model starts fresh. |
+| `auto_approve` | `false`; `get_auto_approve()` / `set_auto_approve()` |
+| Maximum agent iterations | 100 |
+| Maximum tool result | 10,000 bytes |
+| Maximum request | 4,000,000 bytes |
+| Maximum response | 5,000,000 bytes |
+| MCP schema soft cap | 5 percent |
+| Model context size | Explicit model row, then known model default, then 1,000,000 |
 
-**Rationale:** different models have different context windows and may
-also differ in API endpoint or provider. Clearing history avoids a
-`context_length_exceeded` error when moving from a large-context model
-to a smaller one, and guarantees the new model's first turn is not
-polluted by tool-call pairs generated for a different model's schema.
+The limit helpers are `get/set_max_agent_iterations`,
+`get/set_max_tool_result_size`, `get/set_max_request_size`,
+`get/set_max_response_size`, and `get/set_mcp_tool_schema_soft_cap_percent`.
+Hosts can override several of these per agent in `AgentConfig`; those overrides
+are not automatically written back to the store.
 
-### 2.5 Key-Value Settings
-
-```cpp
-// String
-std::string val = store.get_string("my_key", "default");
-store.set_string("my_key", "value");
-
-// Boolean
-bool flag = store.get_bool("auto_approve", false);
-store.set_auto_approve(true);
-
-// Integer
-int count = store.get_int("max_retries", 3);
-store.set_int("max_retries", 5);
-```
-
-### 2.6 Agent Settings
-
-```cpp
-// Max iterations (default 100)
-int max_iter = store.get_max_agent_iterations();
-
-// Tool result size limit (default 10,000 bytes)
-size_t tool_result_size = store.get_max_tool_result_size();
-
-// Request/response size limits (defaults 4MB / 5MB)
-size_t max_req = store.get_max_request_size();
-size_t max_res = store.get_max_response_size();
-
-// Auto-approve
-bool auto_approve = store.get_auto_approve();
-```
-
-### 2.7 MCP Tool Schema Soft Cap
-
-The MCP tool schema size is monitored against the model's context window:
-
-```cpp
-// Default 5% — warns if MCP tools exceed this fraction of context
-int cap_pct = store.get_mcp_tool_schema_soft_cap_percent();
-```
-
-### 2.8 Server Error Settings
+`ServerErrorSettings` controls retry behavior:
 
 ```cpp
 struct ServerErrorSettings {
@@ -270,247 +175,134 @@ struct ServerErrorSettings {
     double backoff_multiplier = 2.0;
     int max_retries_per_call = 10;
 };
-
-ServerErrorSettings ses = store.get_server_error_settings();
 ```
 
-### 2.9 Model Context Size Resolution
+Read it with `get_server_error_settings()`. Retry writes use the generic
+key/value API and the keys consumed by `SettingsStore`/the settings UIs.
+
+## Web-search providers
+
+The `web_search_providers` table is the active registry for the unified
+`web_search` tool. Each row has this public shape:
 
 ```cpp
-int ctx = store.get_max_context_size_for_model("minimax-m3");
-// Returns (in priority order):
-//   1. User's explicit setting from models table (if non-zero)
-//   2. Built-in default for known models (MiniMax-M3 → 500K, M2.7 → 200K, etc.)
-//   3. 1,000,000 (ultimate fallback)
+struct WebSearchProviderSettings {
+    std::string name;       // brave|tavily|exa|firecrawl|serper|serpapi|searxng|duckduckgo
+    bool enabled = false;
+    std::string api_key;
+    std::string base_url;   // SearXNG instance URL
+    std::string username;   // optional SearXNG Basic auth
+    std::string password;
+    int priority = 0;       // lower runs earlier
+};
 ```
 
-Built-in defaults:
+Read the ordered chain with `get_web_search_providers()` and update one row
+with `set_web_search_provider(settings)`. The tool reads the chain per call, so
+settings edits do not require an agent restart. Enabled providers are tried in
+priority order until one succeeds; forcing `provider` in the tool call bypasses
+the chain.
 
-| Model | Context Size |
-|-------|-------------|
-| MiniMax-M3 / minimax-m3 | 500,000 |
-| MiniMax-M2.7 / minimax-m2.7 | 200,000 |
-| GPT-4o | 128,000 |
-| Claude 3.5 Sonnet | 200,000 |
-| DeepSeek Chat | 128,000 |
-| (unknown) | 1,000,000 |
+- Brave, Tavily, Exa, Firecrawl, Serper, and SerpApi use `api_key`.
+- SearXNG uses `base_url` and optional Basic credentials. A bearer/API-key value
+  may also be supplied where supported by the current provider adapter.
+- DuckDuckGo needs no key and is enabled by default on a fresh store.
 
-### 2.10 Atomic Transactions
+`serper_config` and `searxng_config`, along with
+`get/set_serper_api_key()` and `get/set_searxng_settings()`, are legacy
+compatibility surfaces. Schema migration copies their values into the unified
+registry; `web_search` does not consult them at request time. New host code
+should use only `WebSearchProviderSettings`.
+
+## MCP servers
 
 ```cpp
-store.transaction([](SettingsStore& s) {
-    s.upsert_model(model1);
-    s.upsert_model(model2);
-    s.set_default_model_name("minimax-m3");
-    // All committed together, or all rolled back on any exception.
+using McpServer = daedalus::SettingsStore::McpServer;
+
+store.upsert_mcp_server(McpServer{
+    .name = "example",
+    .transport = "stdio",        // or streamable-http
+    .command = "uvx",
+    .args = {"example-server"},
+    .env = {{"TOKEN", "${TOKEN}"}},
+    .description = "Example",
+    .enabled = true,
 });
 ```
 
-### 2.11 Introspection
+Use `get_mcp_server`, `list_mcp_servers`, `upsert_mcp_server`,
+`delete_mcp_server`, and `has_mcp_servers`. The struct also has `url` and
+`bearer_token` for streamable HTTP. SQLite is authoritative over the legacy
+JSON fallback. See [`mcp_server.md`](mcp_server.md).
+
+## Atomic transactions
 
 ```cpp
-std::filesystem::path path = store.db_path();  // e.g. ~/.local/share/daedalus/daedalus.db
-bool has_data = store.has_data();              // true if models or kv_settings exist
+store.transaction([](daedalus::SettingsStore& tx) {
+    tx.set_string("key-a", "one");
+    tx.set_int("key-b", 2);
+    // Other store operations participate in the same transaction.
+});
 ```
 
----
+Use a transaction when related writes must succeed or fail together. Do not
+perform blocking network or UI work inside the callback.
 
-## 3. Per-Project Persistence (v0.3.5+)
+## Persistence mirrors and indexes
 
-`SettingsStore` also stores per-project session state (session memory and
-messages) under namespaced keys:
+The header also exposes low-level storage used internally:
 
-```cpp
-// Session memory
-std::string mem_json = store.get_session_memory(session_id);
-store.set_session_memory(session_id, json_blob);
-store.delete_session_memory(session_id);
+- `get/set/delete_session_memory()` and `get/set/delete_messages_json()` store
+  JSON mirrors under `mem.<session_id>` and `msg.<session_id>`. They are not a
+  replacement for the normal project `SessionMemory` and `Messages` lifecycle.
+- `VaultRow` accessors move encrypted, base64-encoded rows only. Use
+  `daedalus::SecretsVault` / the `vault` tool for plaintext operations; see
+  [`vault.md`](vault.md).
+- `BrainNoteRow` and search/index accessors maintain the rebuildable Second
+  Brain metadata and FTS5 cache. Markdown under the user brain directory is the
+  source of truth. Use `daedalus::SecondBrain` / the `brain` tool rather than
+  editing index rows directly.
 
-// Conversation messages
-std::string msg_json = store.get_messages_json(session_id);
-store.set_messages_json(session_id, json_blob);
-store.delete_messages_json(session_id);
-```
+Brain metadata and FTS updates are transactional. Independent processes sharing
+the brain also coordinate through its file lock; see [`storage.md`](storage.md).
 
-Keys are prefixed `mem.<session_id>` and `msg.<session_id>` in the
-`kv_settings` table.
+## Schema and migration
 
----
+The current schema version is **10**. Its major tables are:
 
-## 4. Migration from JSON
+| Table | Purpose |
+|---|---|
+| `providers` | Shared provider endpoint/credential configuration |
+| `models` | Model key, provider reference, model id, context size, temperature |
+| `kv_settings` | Scalar settings and internal JSON mirrors |
+| `mcp_servers` | MCP stdio/HTTP server registry |
+| `web_search_providers` | Unified web-search failover configuration |
+| `vault_entries` | Encrypted vault payloads and public metadata |
+| `brain_notes`, `brain_fts` | Rebuildable Second Brain index |
+| `schema_version` | Migration marker |
 
-Run the CLI migrator once to move data from legacy JSON files to the
-SQLite store:
+Legacy `serper_config` and `searxng_config` definitions remain in the migration
+path so older databases can be upgraded. Existing databases are migrated in
+version order; new databases are seeded directly. The eight web-search rows are
+also reseeded if the registry is empty.
+
+There is **no automatic import of legacy general JSON settings**. The Icarus
+migration command is the supported interactive migration path:
 
 ```bash
-daedalus-cli --migrate-data
+icarus --migrate-data         # preview
+icarus --migrate-data-apply   # apply
 ```
 
-The migrator (implemented in `src/tools/migrate.cpp`):
-1. Reads `config.json`, `mcp/servers.json`, `mcp/.env`
-2. Writes rows to `daedalus.db`
-3. Renames originals to `*.migrated`
+It copies legacy data without deleting the originals. MCP `servers.json` is
+separately retained as a read fallback when no same-named SQLite row exists.
+Placeholder credentials are not a substitute for configuring a real provider.
 
-After migration, all subsequent runs read exclusively from SQLite. No
-auto-migration happens at runtime — if the DB is empty, daedalus starts
-with an empty config rather than trying to read JSON again.
+## Source references
 
-Placeholder API keys (`YOUR_API_KEY_HERE`) are skipped by the migrator.
-## 5. Legacy SettingsManager (Deprecated)
-
-`SettingsManager` (in `src/core/SettingsManager.h`) is a **deprecated shim**
-that delegates to `SettingsStore`. It exists only for backward compatibility
-with code not yet updated to the new API.
-
-**Migration guide for internal code:**
-
-| Old (SettingsManager) | New (SettingsStore) |
-|----------------------|---------------------|
-| `sm->get_model(name)` | `store->get_model(name)` |
-| `sm->get_models()` | `store->list_models()` |
-| `sm->get_default_model_name()` | `store->get_default_model_name()` |
-| `sm->set_default_model(name)` | `store->set_default_model_name(name)` |
-| `sm->get_auto_approve()` | `store->get_auto_approve()` |
-| `sm->is_loaded()` | *(removed — SQLite is always ready)* |
-| `sm->load()` | *(removed — DB is auto-opened)* |
-| `sm->save()` | *(removed — writes are immediate)* |
-
-**Deletion timeline:** `SettingsManager` will be removed in v0.6.0.
-
----
-
-## 6. Schema
-
-The database schema is created idempotently on first open:
-
-```sql
-CREATE TABLE schema_version (version INTEGER PRIMARY KEY);
-CREATE TABLE models (
-    name             TEXT PRIMARY KEY,
-    host             TEXT NOT NULL,
-    api_key          TEXT NOT NULL,
-    model_id         TEXT NOT NULL,
-    chat_endpoint    TEXT NOT NULL DEFAULT '/v1/chat/completions',
-    max_context_size INTEGER NOT NULL DEFAULT 0,
-    temperature      REAL    NOT NULL DEFAULT 0.0
-);
-CREATE TABLE kv_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-CREATE TABLE mcp_servers (
-    name      TEXT PRIMARY KEY,
-    transport TEXT NOT NULL,
-    command   TEXT,
-    args_json TEXT,
-    env_json  TEXT,
-    url       TEXT
-);
--- legacy, pre-v8 (kept so migrate_to_v8 can copy values out):
-CREATE TABLE serper_config (id INTEGER PRIMARY KEY CHECK (id = 1), api_key TEXT NOT NULL);
-CREATE TABLE searxng_config (
-    id       INTEGER PRIMARY KEY CHECK (id = 1),
-    base_url TEXT NOT NULL,
-    username TEXT NOT NULL DEFAULT '',
-    password TEXT NOT NULL DEFAULT '',
-    enabled  INTEGER NOT NULL DEFAULT 1
-);
--- schema v8 (§WEB-SEARCH-CORE): unified web-search provider registry.
--- Seeded with the 8 built-in providers (duckduckgo enabled by default);
--- migrate_to_v8 copies a legacy serper_config api_key / searxng_config
--- row into the matching provider rows and marks them enabled.
-CREATE TABLE web_search_providers (
-    name     TEXT PRIMARY KEY,      -- brave|tavily|exa|firecrawl|serper|serpapi|searxng|duckduckgo
-    enabled  INTEGER NOT NULL DEFAULT 0,
-    api_key  TEXT NOT NULL DEFAULT '',
-    base_url TEXT NOT NULL DEFAULT '',   -- searxng instance URL
-    username TEXT NOT NULL DEFAULT '',   -- searxng HTTP Basic auth (optional)
-    password TEXT NOT NULL DEFAULT '',
-    priority INTEGER NOT NULL            -- failover chain order, lower = tried first
-);
-```
-
----
-
-## 7. Thread Safety
-
-All `SettingsStore` methods are safe to call from multiple threads. The
-underlying SQLite handle is opened in **serialized mode** (SQLite's
-default thread-safe mode). The `DbPool` uses a mutex to ensure one handle
-per unique `db_path`.
-
----
-
-## v0.5.0 — MCP server registry in SettingsStore
-
-The `mcp_servers` SQLite table replaces `~/.config/daedalus/mcp/servers.json`:
-
-```cpp
-#include <daedalus/settings.h>
-
-auto& store = daedalus::SettingsStore::instance();
-for (const auto& s : store.list_mcp_servers()) {
-    std::cout << s.name << " (" << s.transport << ")\n";
-}
-```
-
-### Schema v2
-
-The schema was bumped to v2 to add columns for full parity with `McpServerConfig`:
-
-```sql
-CREATE TABLE mcp_servers (
-    name         TEXT PRIMARY KEY,
-    transport    TEXT NOT NULL DEFAULT 'stdio',
-    command      TEXT,
-    args_json    TEXT,
-    env_json     TEXT,
-    url          TEXT,
-    bearer_token TEXT,
-    description  TEXT,
-    enabled      INTEGER NOT NULL DEFAULT 1
-);
-```
-
-Pre-v2 databases get an in-place ALTER TABLE migration on first open.
-
-### Public API
-
-```cpp
-struct McpServer {
-    std::string name;
-    std::string transport;        // stdio | streamable-http
-    std::string command;
-    std::vector<std::string> args;
-    std::map<std::string, std::string> env;
-    std::string url;
-    std::string bearer_token;
-    std::string description;
-    bool enabled = true;
-};
-
-std::optional<McpServer> get_mcp_server(std::string_view name) const;
-std::vector<McpServer>   list_mcp_servers() const;
-void upsert_mcp_server(const McpServer& s);
-void delete_mcp_server(std::string_view name);
-bool has_mcp_servers() const noexcept;
-```
-
-### McpServerManager integration
-
-`mcp::McpServerManager::load_from_store(store)` ingests McpServer rows
-into the same `configs_` map that `load_config(servers.json)` populates.
-Both APIs are interchangeable.
-
----
-
-## 8. File Locations Summary
-
----
-
-## 9. References
-
-- `include/daedalus/settings.h` — public SettingsStore API
-- `src/core/SettingsStore.cpp` — implementation
-- `src/tools/migrate.cpp` — CLI JSON→SQLite migration tool
-- `tests/test_settings_store.cpp` — unit tests
-- `tests/test_settings_store_e2e.cpp` — end-to-end wire test
-
-*Last updated 2026-07-18 (v0.5.2: removed auto-migration, removed SettingsMigrator).*
+- Public API: `include/daedalus/settings.h`
+- Provider/model types: `include/daedalus/types/ProviderConfig.h`
+- Implementation/migrations: `src/core/SettingsStore.cpp`
+- Store tests: `tests/test_settings_store*.cpp`,
+  `tests/test_mcp_servers_store.cpp`, and web-search tests
+- Storage paths: [`storage.md`](storage.md)

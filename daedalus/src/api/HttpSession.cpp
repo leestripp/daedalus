@@ -146,11 +146,7 @@ HttpSession& HttpSession::get_instance() {
 HttpSession::HttpSession() = default;
 HttpSession::~HttpSession() = default;
 
-void HttpSession::shutdown() {
-    stop_.store(true, std::memory_order_release);
-    stop_source_.request_stop();
-    if (worker_.joinable()) worker_.join();
-}
+void HttpSession::shutdown() {}
 
 HttpSession::Stats HttpSession::get_stats() const {
     Stats s{};
@@ -346,25 +342,5 @@ HttpSession::submit_batch(const std::vector<HttpRequest>& requests) {
     }
     return out;
 }
-
-// event_loop / process_completed / add_to_multi / remove_from_multi /
-// write_cb / header_cb / multi_ / worker_ / stop_source_ / queue_mutex_ /
-// queue_cv_ / pending_ / in_flight_ / in_flight_mutex_
-//
-// Legacy stubs: the original libcurl-multi event loop is gone.
-// OmniNet manages its own connection pool + thread pool internally.
-// These empty implementations are kept as private members so the
-// ABI surface (private methods + data members) is unchanged for
-// any embedder that #includes this header.
-struct HttpSession::RequestState {};
-
-void HttpSession::event_loop(std::stop_token /*st*/) {}
-void HttpSession::process_completed() {}
-void HttpSession::add_to_multi(RequestState* /*state*/) {}
-void HttpSession::remove_from_multi(RequestState* /*state*/, HttpError /*error*/) {}
-size_t HttpSession::write_cb(void* /*contents*/, size_t /*size*/,
-                                   size_t /*nmemb*/, void* /*userp*/) { return 0; }
-size_t HttpSession::header_cb(void* /*contents*/, size_t /*size*/,
-                                    size_t /*nmemb*/, void* /*userp*/) { return 0; }
 
 } // namespace daedalus::net

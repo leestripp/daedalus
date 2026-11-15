@@ -8,6 +8,8 @@
 #include <core/BackgroundProcessManager.h>
 #include <string>
 #include <chrono>
+#include <filesystem>
+#include <unistd.h>
 #include <thread>
 #include <atomic>
 #include <condition_variable>
@@ -15,6 +17,15 @@
 #include <csignal>
 
 using namespace std::chrono_literals;
+
+TEST_CASE("background capture files are isolated per host process") {
+    auto& manager = BackgroundProcessManager::get_instance();
+    const auto expected = std::filesystem::path(
+        "daedalus_bg_" + std::to_string(::getpid()));
+    CHECK(manager.get_temp_base().parent_path()
+          == std::filesystem::temp_directory_path());
+    CHECK(manager.get_temp_base().filename() == expected);
+}
 
 TEST_CASE("BackgroundProcessManager - start and stop simple command") {
     auto& manager = BackgroundProcessManager::get_instance();

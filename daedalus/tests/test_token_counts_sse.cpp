@@ -92,6 +92,7 @@ int main() {
 
     // Use the real settings that have API credentials
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = "/tmp";
     cfg.session_id    = "token-count-test";
     cfg.model_name    = "minimax-m2.7";   // matches settings.json entry

@@ -122,6 +122,7 @@ bool test_agent_uses_daedalus_home_db() {
     }
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = "/tmp";
     cfg.daedalus_home = home;
 
@@ -164,6 +165,7 @@ bool test_agent_uses_global_db_when_no_home() {
     }
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root = "/tmp";
     // NO daedalus_home set — must fall back to the global SettingsStore.
 
@@ -202,6 +204,7 @@ bool test_settings_store_direct_population() {
     }
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = "/tmp";
     cfg.daedalus_home = home;
 

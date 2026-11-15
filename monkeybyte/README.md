@@ -67,7 +67,7 @@ XDG data dirs, so the installed binary runs from anywhere:
 
 ## Optional local voice (ChimpFlow)
 
-MonkeyByte can use a local [ChimpFlow](../ChimpFlow) gateway for assistant
+MonkeyByte can use a local `ChimpFlow` gateway for assistant
 read-aloud and microphone dictation. Audio and transcripts stay on the
 machine; MonkeyByte accepts only loopback HTTP URLs (`localhost`,
 `127.0.0.1`, or `[::1]`).
@@ -139,9 +139,9 @@ The side-panel chat is a full agent session, not a one-shot prompt box:
   Always for that command), with a global auto-approve toggle in
   Settings → Interface.
 - **Skills, tools & MCP** — the agent loads workspace `.agents/skills/`,
-  built-in tools (file ops, search, git, web fetch/search, browser
-  control, image reading) and configured MCP servers; each group can be
-  disabled in Settings → Agent.
+  Daedalus core tools (shell, web search, memory, scheduling, image/PDF
+  reading), host tools (web fetch and UI/browser control), and configured MCP
+  servers; each group can be disabled in Settings → Agent.
 
 ## Project types
 
@@ -224,8 +224,8 @@ closing the tab closes the session.
 ## Tests
 
 ```bash
-cd build && ctest --output-on-failure   # all tests (incl. daedalus')
-./build/unit_tests                      # only monkeybyte's own suite
+ctest --test-dir build --output-on-failure  # all tests from monorepo root
+./build/monkeybyte/unit_tests              # only monkeybyte's own suite
 ```
 
 ## Project layout

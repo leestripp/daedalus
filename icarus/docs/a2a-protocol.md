@@ -21,14 +21,15 @@ The canonical A2A endpoints include:
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/.well-known/agent-card.json` | Agent discovery |
-| `POST` | `/message:send` | Send a message (non-streaming) |
-| `POST` | `/message:stream` | Send a message (streaming) |
-| `GET` | `/tasks` | List tasks |
-| `GET` | `/tasks/{id}` | Get task status |
-| `POST` | `/tasks/{id}:cancel` | Cancel a task |
-| `POST` | `/tasks/{id}:subscribe` | Subscribe to task updates |
+| `POST` | `/v1/message:send` | Send a message (non-streaming) |
+| `POST` | `/v1/message:stream` | Send a message (streaming) |
+| `GET` | `/v1/tasks` | List tasks |
+| `GET` | `/v1/tasks/{id}` | Get task status |
+| `POST` | `/v1/tasks/{id}:cancel` | Cancel a task |
+| `GET` or `POST` | `/v1/tasks/{id}:subscribe` | Subscribe to task updates |
 
-The legacy ACP v1 OpenAPI spec in [`acp-openapi.yaml`](acp-openapi.yaml) is
+All task/message operations are under `/v1`; only discovery stays at the
+well-known root. The legacy ACP v1 OpenAPI spec in [`acp-openapi.yaml`](acp-openapi.yaml) is
 retained for reference but is no longer implemented by icarus.
 
 ## Key Features
@@ -66,7 +67,7 @@ which provides 7 actions:
 | `get_task` | Poll task status |
 | `list_tasks` | List tasks |
 | `cancel_task` | Cancel a task |
-| `subscribe_to_task` | Subscribe to task updates |
+| `subscribe_to_task` | Subscribe to task updates (the Icarus daemon backend currently returns 501; use streaming send or polling) |
 
 Usage from the agent:
 ```json

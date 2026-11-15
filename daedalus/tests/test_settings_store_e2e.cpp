@@ -41,6 +41,7 @@ int main() {
     {
         daedalus::AgentConfig cfg;
         cfg.project_root = "/tmp";
+        cfg.mcp_enabled = false;  // settings E2E must not start real MCP servers
         // No daedalus_home / settings_path — AgentImpl uses the default,
         // which calls SettingsStore::instance() first; the store has our
         // model, so the JSON layer is bypassed.

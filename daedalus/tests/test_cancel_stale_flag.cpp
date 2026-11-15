@@ -47,6 +47,7 @@ struct ScratchDir {
 
 daedalus::AgentConfig make_cfg(const fs::path& dir, const std::string& session) {
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = dir.string();
     cfg.daedalus_home = dir.string();  // isolated, empty store → no LLMClient
     cfg.session_id    = session;

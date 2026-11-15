@@ -137,7 +137,7 @@ if(TEST_SOURCES)
   target_link_libraries(unit_tests PRIVATE ${MONKEYBYTE_CORE_LIB})
   add_test(NAME unit_tests COMMAND unit_tests)
   # §Monorepo (2026-09-24): "app" label for `ctest -L app` slices.
-  set_tests_properties(unit_tests PROPERTIES LABELS app)
+  set_tests_properties(unit_tests PROPERTIES LABELS app TIMEOUT 60)
 endif()
 
 # --- static analysis ---

@@ -1101,6 +1101,7 @@ add_test(NAME llm_lifecycle_callbacks_tests COMMAND daedalus_llm_lifecycle_callb
 set_tests_properties(llm_lifecycle_callbacks_tests PROPERTIES
     SKIP_RETURN_CODE 77
     LABELS "live-llm"
+    TIMEOUT 300
 )
 
 # Library does not call std::cin / std::cout / std::cerr (Phase 2.5: REPL
@@ -1785,6 +1786,7 @@ add_test(NAME daedalus_token_counts_sse_tests COMMAND daedalus_token_counts_sse_
 set_tests_properties(daedalus_token_counts_sse_tests PROPERTIES
     SKIP_RETURN_CODE 77
     LABELS "live-llm"
+    TIMEOUT 300
 )
 # §Phase 14: this test is skipped unless DAEDALUS_RUN_LIVE_LLM_TESTS=1.
 # It makes a real MiniMax API call; see test_token_counts_sse.cpp.
@@ -1814,6 +1816,7 @@ add_test(NAME daedalus_no_content_duplicate_tests COMMAND daedalus_no_content_du
 set_tests_properties(daedalus_no_content_duplicate_tests PROPERTIES
     SKIP_RETURN_CODE 77
     LABELS "live-llm"
+    TIMEOUT 300
 )
 # §Phase 14: skipped unless DAEDALUS_RUN_LIVE_LLM_TESTS=1 (above).
 
@@ -2185,3 +2188,13 @@ add_test(NAME web_search_tests COMMAND daedalus_web_search_tests)
 # parsers (canned fixtures), failover chain (injected fakes), schema v8
 # migration, ToolFactory roster. Hermetic: no network.
 # ============================================================================
+
+# Never let an intermittent test deadlock block the suite indefinitely.
+# Preserve intentional longer timeouts (concurrency, scheduler, live LLM).
+get_property(_daedalus_all_tests DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY TESTS)
+foreach(_test IN LISTS _daedalus_all_tests)
+    get_property(_timeout TEST ${_test} PROPERTY TIMEOUT)
+    if(NOT _timeout)
+        set_property(TEST ${_test} PROPERTY TIMEOUT 60)
+    endif()
+endforeach()

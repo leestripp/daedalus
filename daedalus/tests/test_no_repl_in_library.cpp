@@ -57,6 +57,7 @@ int main() {
     ScratchDir dir("repl");
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root = dir.path;
     cfg.session_id   = "no-repl-test";
 

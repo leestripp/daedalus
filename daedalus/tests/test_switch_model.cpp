@@ -79,6 +79,7 @@ TEST_CASE("switch_model rejects unknown model and leaves state intact") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "switch-reject";
@@ -124,6 +125,7 @@ TEST_CASE("switch_model clears conversation history") {
     REQUIRE(fs::is_regular_file(messages_file));
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "switch-clear";
@@ -162,6 +164,7 @@ TEST_CASE("switch_model updates compression config for new context size") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "switch-ctx";
@@ -197,6 +200,7 @@ TEST_CASE("switch_provider persists provider and switches to a model of that pro
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "switch-provider";
@@ -234,6 +238,7 @@ TEST_CASE("switch_model creates the LLMClient when none existed at startup") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "switch-create-client";
@@ -270,6 +275,7 @@ TEST_CASE("switch_model creates config for discovered provider model id") {
     fs::create_directories(project);
 
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = project;
     cfg.daedalus_home = home;
     cfg.session_id    = "switch-discovered";

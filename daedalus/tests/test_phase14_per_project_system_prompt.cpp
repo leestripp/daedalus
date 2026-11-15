@@ -55,6 +55,7 @@ void test_project_override_appended() {
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = tmp;
     cfg.system_prompt = "DEMO: the default CLI prompt.\n";
 
@@ -91,6 +92,7 @@ void test_project_override_replaces_empty() {
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = tmp;
     cfg.system_prompt = "";  // empty
 
@@ -120,6 +122,7 @@ void test_no_override_silent() {
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = tmp;
     cfg.system_prompt = "DEMO: only this text.";
 
@@ -149,6 +152,7 @@ void test_empty_override_silent() {
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = tmp;
     cfg.system_prompt = "DEMO: only this text.";
 
@@ -174,6 +178,7 @@ void test_no_daedalus_dir_silent() {
 
     auto sink = std::make_shared<RecordingSink>();
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root  = tmp;
     cfg.system_prompt = "DEMO: only this text.";
 

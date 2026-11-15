@@ -69,8 +69,10 @@ int main() {
     ScratchDir dir("sink");
 
     daedalus::AgentConfig cfg;
-    cfg.project_root = dir.path;
-    cfg.session_id   = "sink-test";
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
+    cfg.project_root  = dir.path;
+    cfg.daedalus_home = dir.path / "home";  // empty store: no real model/MCP
+    cfg.session_id    = "sink-test";
 
     daedalus::Agent agent(std::move(cfg), sink);
     agent.initialize();

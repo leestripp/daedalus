@@ -38,6 +38,7 @@ struct NullSink : public daedalus::AgentSink {
 
 daedalus::Agent make_agent() {
     daedalus::AgentConfig cfg;
+    cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
     cfg.project_root = std::filesystem::temp_directory_path()
                        / "daedalus_pending_msgs";
     return daedalus::Agent(cfg, std::make_shared<NullSink>());
@@ -183,6 +184,7 @@ int run() {
             std::filesystem::temp_directory_path() / "daedalus_qj_proj";
         std::filesystem::remove_all(qj_root);
         daedalus::AgentConfig qj_cfg;
+        qj_cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
         qj_cfg.project_root = qj_root;
         daedalus::Agent agent(qj_cfg, std::make_shared<NullSink>());
 

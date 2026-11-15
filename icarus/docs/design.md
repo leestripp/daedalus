@@ -167,7 +167,7 @@ cfg.system_prompt       = resolve_system_prompt(...);
 
 ## 5. A2A Client Tool Design
 
-### 5.1 Why a HostTool?
+### 5.1 Why a BaseTool?
 
 daedalus has a built-in mechanism for extending agent capabilities: `daedalus::BaseTool`. Registering `A2aTool` in the agent's tool registry means the agent can invoke A2A actions by name (e.g. `"get_agent_card"`) just like any other tool. The agent decides *when* to call A2A — not the other way around.
 
@@ -200,11 +200,16 @@ A2A uses HTTP as its transport. icarus runs an HTTP server bound to `127.0.0.1` 
 
 ### 6.2 Task lifecycle
 
-Each incoming message creates a fresh `daedalus::Agent` configured to auto-approve commands. The backend stores tasks in an in-memory map and supports:
+Each incoming message creates a fresh `daedalus::Agent` configured to auto-approve commands. The backend stores tasks in a process-local in-memory map (there is no task database and restart does not recover them) and supports:
 
 - `send_message` / `send_streaming_message`
 - `get_task`, `list_tasks`, `cancel_task`
 - `subscribe_to_task` (not implemented — returns 501)
+
+HTTP routes use `/v1/message:send`, `/v1/message:stream`, `/v1/tasks`,
+`/v1/tasks/{id}`, `/v1/tasks/{id}:cancel`, and
+`/v1/tasks/{id}:subscribe`; the agent card remains at
+`/.well-known/agent-card.json`.
 
 ### 6.3 A2aAgentSink — callback to event bridge
 
@@ -325,10 +330,10 @@ daedalus_signal_handler(int sig)
 
 ```
 $XDG_DATA_HOME/daedalus/              default: $HOME/.local/share/daedalus/
-$XDG_DATA_HOME/daedalus/daedalus.db   SettingsStore (models, MCP servers, memory)
+$XDG_DATA_HOME/daedalus/daedalus.db   SettingsStore (models, MCP servers, settings/mirrors)
 $XDG_DATA_HOME/daedalus/skills/       installed skills
 $XDG_CONFIG_HOME/daedalus/            default: $HOME/.config/daedalus/
-$XDG_CONFIG_HOME/daedalus/config.json  legacy read-fallback (auto-migrated)
+$XDG_CONFIG_HOME/daedalus/config.json  legacy path; use `icarus --migrate-data[-apply]` explicitly
 ```
 
 The distinction between data (`daedalus.db`) and config (`config.json` fallback) follows the XDG standard: data is for programs to read/write, config is for user-editable preferences.

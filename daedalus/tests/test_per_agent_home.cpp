@@ -93,6 +93,7 @@ int main() {
     {
         // ---- Agent A: configured to use home_a ----
         daedalus::AgentConfig cfg_a;
+        cfg_a.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
         cfg_a.daedalus_home = home_a;
         cfg_a.session_id  = "agent-A";
 
@@ -118,6 +119,7 @@ int main() {
 
         // ---- Agent B: configured to use home_b ----
         daedalus::AgentConfig cfg_b;
+        cfg_b.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
         cfg_b.daedalus_home = home_b;
         cfg_b.session_id  = "agent-B";
 

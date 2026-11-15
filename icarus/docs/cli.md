@@ -48,7 +48,7 @@ Print the version string and exit (exit code 0).
 
 ```
 $ icarus --version
-icarus 0.7.0 (daedalus 0.8.9)
+icarus 1.4.0   # derived from the repository tag
 ```
 
 ### `--home <dir>`
@@ -545,9 +545,11 @@ commands. `/settings` takes no arguments.
 
 #### `/memory [clear]`
 
-Show whether memory is enabled and the path of the memory store
-(`memory/memory.sqlite` inside the per-project agent directory).
-`/memory clear` clears session memory.
+Show whether memory is enabled and the configured memory path. The
+`SessionMemory` source of truth is `memory/memory.json` inside the per-project
+agent directory, with a recovery mirror in the global settings database.
+`/memory clear` clears session memory. (The older `ProjectPaths::memory_file()`
+helper used by this display still names the legacy `memory.sqlite` path.)
 
 #### `/history [N]`
 
@@ -715,7 +717,7 @@ On every interactive start, icarus prints a full configuration banner:
 ```
 ╔══════════════════════════════════════════════════════════════════════════╗
 ║  icarus — AI coding agent powered by daedalus                            ║
-║  Library: 0.7.6
+║  Version:       1.4.0
 ╠══════════════════════════════════════════════════════════════════════════╣
 ║  Active model:    minimax-m2.7                                          ║
 ║  Model id:        MiniMax-M2.7                                          ║
@@ -838,9 +840,11 @@ $XDG_DATA_HOME/icarus/
 ├── messages.json.crash                 # crash recovery copy
 ├── logs.txt                            # all on_log messages (ISO timestamped)
 ├── memory/
-│   └── memory.sqlite                   # persistent session memory
+│   └── memory.json                     # persistent session memory
 ├── sessions/                           # saved sessions
-└── skills-active/                      # skills enabled for this project
+├── skills/active/                      # project-local skill overrides
+├── todos.json                          # persistent todo list
+└── scheduled_tasks.json                # persistent scheduled tasks
 
 <project_root>/.daedalus/daedalus-<agent_name>/  # when --agent-name is used
 └── (same files as above)
@@ -888,7 +892,7 @@ New writes always go to the SQLite database. The `--migrate-data` tool copies
 ## 8. A2A Tool Reference
 
 The `a2a` tool is registered automatically at startup (when not in
-`--a2a-agent` mode). It is available as a daedalus HostTool — the agent
+`--a2a-agent` mode). It is available as a daedalus `BaseTool` — the agent
 can call it by name, passing JSON arguments. The implementation uses the
 A2A client built into the daedalus library (`daedalus::a2a::A2aClient`).
 

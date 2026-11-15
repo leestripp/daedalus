@@ -74,8 +74,17 @@ next `run_one_turn()` after user input. For proactive delivery while idle,
 implement `AgentSink::on_turn_requested()` and wake the host's normal input
 scheduler as described in **Wiring your own input source** below.
 
-Link with `-ldaedalus -lcurl -lpthread -lssl -lcrypto -lpng -lpoppler-cpp`
-(or whatever subset your host needs).
+Prefer CMake's exported target rather than manually reproducing the transitive
+OpenSSL, libpng, poppler, threading, and OmniNet dependencies:
+
+```cmake
+find_package(Daedalus CONFIG REQUIRED)
+target_link_libraries(your_host PRIVATE daedalus::daedalus)
+```
+
+For an in-tree host, link the `daedalus` target directly. The core transport is
+OmniNet/OpenSSL, not libcurl; the removed curl network classes are unrelated to
+this embedding API.
 
 ## Lifecycle
 
@@ -859,7 +868,7 @@ without using environment variables.
 #### `cfg.agent_name` — per-Agent runtime-state namespace (§Phase 8.8)
 
 If you want two Agents in the **same project** to have isolated
-runtime state — separate `messages.json` and `memory.json` so they
+runtime state — separate `messages.json` and `memory/memory.json` so they
 don't trample each other — set `cfg.agent_name` on each. Empty
 (default) means the default namespace. Non-empty values namespace the
 data folder under a single `.daedalus/` base:
@@ -904,10 +913,10 @@ filesystem write happens.
 **Orthogonal to `daedalus_home`** (Phase 8.5): `daedalus_home` is
 the *config-source* axis (the `SettingsStore` DB, MCP servers, skills).
 `agent_name` is the *runtime-state* axis (`messages.json`,
-`memory.json` inside the project). They don't combine into one
+`memory/memory.json` inside the project). They don't combine into one
 path.
 
-Namespaced: `messages.json`, `memory.json`, session files.
+Namespaced: `messages.json`, `memory/memory.json`, todos, and scheduled-task files.
 NOT namespaced (project-shared): `skills/`.
 The `SettingsStore` DB path is governed by `daedalus_home` (Phase
 8.5), not by `agent_name` — a "bob" agent reads the same DB as
@@ -1037,7 +1046,7 @@ handling behaviour as the streaming path.
 ### Per-server MCP gate (§Phase 15)
 
 `cfg.mcp_servers_disabled` is a `std::set<std::string>` of server
-names (matching the keys in `mcp_servers.json`). The disabled set
+names (matching names in the SettingsStore registry / `servers.json` fallback). The disabled set
 filters at three layers:
 
 1. **`McpServerManager::load_from_store()`** (or `load_config()`) drops
@@ -1065,8 +1074,7 @@ overlapping.
 
 If a name in `mcp_servers_disabled` doesn't match any key in
 `servers.json`, `Agent::initialize()` does NOT throw — it's
-silently ignored (the servers.json may be reloaded later and the
-name may appear). Hosts that want strict validation can call
+silently ignored (configuration may be reloaded later and the name may appear). Hosts that want strict validation can call
 `mcp_manager->list_configured_servers()` after construction and
 warn on missing names.
 
@@ -1146,7 +1154,9 @@ $XDG_DATA_HOME/daedalus/                          ← user config & settings (v0
 └── .daedalus/
     └── daedalus[-<agent_name>]/
         ├── messages.json
-        ├── memory.json
+        ├── memory/memory.json
+        ├── todos.json
+        ├── scheduled_tasks.json
         └── system_prompt.txt      ← (NEW) merged into cfg.system_prompt
 ```
 
@@ -1236,8 +1246,8 @@ via `agent.active_model().temperature` after `initialize()`.
 > mid-turn user-prompting path. If your host needs to interrupt a
 > turn, call `agent.cancel()` and prompt the host's outer loop.
 
-See [`sink.md`](sink.md) for the events the sink receives as the
-state machine transitions.
+See the **Callback Data Reference** above for the events the sink receives
+as the state machine transitions.
 
 ## Threading
 
@@ -1267,14 +1277,20 @@ void on_assistant_delta(std::string_view text) noexcept override {
 on the calling thread; the agent checks it between API chunks and
 between tool calls. `cancel()` is equivalent (and idempotent).
 
-The library never installs signal handlers. Hosts own signals
-(`SIGINT`, `SIGTERM`, etc.) and decide how to propagate to the agent.
+The library does not install ordinary `SIGINT`/`SIGTERM` handlers. Hosts own
+those signals and decide how to propagate cancellation to the agent. An
+explicit opt-in exception is `Agent::install_crash_handlers()`: it installs
+async-signal-safe fatal-crash handlers for `SIGSEGV`, `SIGABRT`, `SIGFPE`, and
+`SIGILL`, writes `messages.json.crash`, and re-raises the signal. Pair it with
+`uninstall_crash_handlers()` during graceful shutdown. It is never installed
+implicitly.
 
 ## Wiring your own input source (§Phase 5)
 
 The library is **input-source agnostic**. It never reads from
-`std::cin`, never installs signal handlers, never sets terminal
-raw mode. There is exactly one way to feed input to a running
+`std::cin`, never sets terminal raw mode, and never installs ordinary
+interrupt/termination signal handlers. Fatal crash handlers are a separate,
+explicit opt-in described under **Cancellation**. There is exactly one way to feed input to a running
 agent:
 
 1. **`Agent::submit_user_message(std::string)`** — push text into
@@ -1371,5 +1387,6 @@ that used to be flags are now host-side loops driving multiple Agents:
   event loop on the main thread, each Agent on its own worker thread.
 - **Web UI**: one Agent per HTTP session; agent events broadcast over SSE.
 
-See the `demos/` directory for working examples (Phase 7 will land
-the canonical TUI / web / manager demos).
+See `demos/daedalus-cli/` for the canonical interactive host and
+`demos/basic/`, `demos/multi-turn/`, `demos/streaming/`, and
+`demos/with-mcp/` for smaller embedding examples.

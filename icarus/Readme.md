@@ -7,7 +7,7 @@
 ## Features
 
 - **Interactive CLI mode** — conversational coding agent with persistent context
-- **Rich in-session commands** — 28 slash commands for models, providers, skills, tools, todos, settings, history, and more (see `docs/cli.md`)
+- **Rich in-session commands** — 31 slash commands for models, providers, skills, tools, todos, settings, history, and more (see `docs/cli.md`)
 - **A2A Agent Mode** — run as an HTTP server spoken to by an IDE or another A2A client
 - **A2A Client Tool** — the running agent can call remote A2A agents as tools
 - **MCP Support** — connects to MCP servers for tool access
@@ -48,11 +48,10 @@ Ubuntu 22.04 the bundled CMake is too old; install a newer one via
 `sudo snap install cmake --classic` or the
 [Kitware APT repository](https://apt.kitware.com/).
 
-Note: `libpoppler-cpp-dev` is required by **daedalus 1.0.1+** at
-configure time (`pkg_check_modules(POPPLER REQUIRED poppler-cpp)`)
-- without it the FetchContent build of daedalus fails. Since daedalus
-1.0.2 the `read_pdf` tool lives inside the library, so icarus also links
-poppler-cpp directly.
+Note: `libpoppler-cpp-dev` is required at configure time
+(`pkg_check_modules(POPPLER REQUIRED poppler-cpp)`). The built-in daedalus
+`read_pdf` tool lives inside the library, and icarus also links poppler-cpp
+directly.
 
 The daedalus library itself (plus linenoise and FTXUI) is fetched
 automatically by CMake FetchContent from its `main` branch - no manual step
@@ -79,7 +78,7 @@ cmake --build build --target install
 
 ```bash
 ~/.local/bin/icarus --version
-# -> icarus 1.0.0 (daedalus 1.0.1)
+# -> icarus <git-derived-version>   # e.g. icarus 1.4.0
 ```
 
 Make sure `~/.local/bin` is on your `PATH` (add

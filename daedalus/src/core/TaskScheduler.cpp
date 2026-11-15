@@ -332,8 +332,14 @@ void TaskScheduler::start(TriggerCallback callback) {
 
 void TaskScheduler::stop() noexcept {
     if (worker_.joinable()) {
-        worker_.request_stop();
-        wake_.notify_all();
+        {
+            // Match the worker's stop-check/wait mutex. Requesting and
+            // notifying without it allows the worker to check false, then
+            // miss our notification and sleep forever before join().
+            std::lock_guard lock(mutex_);
+            worker_.request_stop();
+            wake_.notify_all();
+        }
         worker_.join();
     }
     std::lock_guard lock(mutex_);

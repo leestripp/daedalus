@@ -96,6 +96,7 @@ int main() {
     // ---- Hermetic: no model configured ----
     {
         daedalus::AgentConfig cfg;
+        cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
         cfg.project_root = dir.path;
         cfg.session_id   = "llm-lifecycle-no-model";
         cfg.daedalus_home = dir.path / "home";
@@ -120,6 +121,7 @@ int main() {
     // ---- Live LLM: one streaming turn ----
     {
         daedalus::AgentConfig cfg;
+        cfg.mcp_enabled = false;  // unrelated to this test; never start real MCP servers
         cfg.project_root = dir.path / "live";
         cfg.session_id   = "llm-lifecycle-live";
         cfg.model_name   = "minimax-m2.7";
