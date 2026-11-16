@@ -275,6 +275,8 @@ scrollbar slider:hover { background-color: #6c7086; }
   padding: 6px 12px;
 }
 
+.editor-empty { background-color: #1e1e2e; }
+
 .chat-panel { background-color: #181825; }
 .chat-header { padding: 12px 16px; }
 .chat-activity { padding: 4px 12px; border-top: 1px solid #313244; }

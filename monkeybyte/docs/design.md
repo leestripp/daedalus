@@ -70,6 +70,8 @@ loaded into the source editor.
 
 The editor is GtkSourceView with tabs, dirty markers, save/save-as, line
 numbers, current-line highlight, word wrap, and configurable fonts/tab width.
+With no documents open, a solid editor-background surface fills the available
+body and centres the prompt to open a file from the Workspace.
 Markdown and HTML can open as rendered preview tabs. Fountain screenplay files
 have a dedicated preview and external-tool PDF export.
 

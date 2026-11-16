@@ -215,9 +215,13 @@ void EditorArea::apply_style_scheme() {
 // ── placeholder / visibility ────────────────────────────────────────
 void EditorArea::show_placeholder() {
     if (tabs_.empty()) {
-        placeholder_.set_text("Open a file from the Explorer");
+        placeholder_.set_text("Open a file from the Workspace.");
+        placeholder_.add_css_class("editor-empty");
         placeholder_.add_css_class("muted");
         if (!placeholder_.get_parent()) {
+            placeholder_.set_halign(Gtk::Align::FILL);
+            placeholder_.set_valign(Gtk::Align::FILL);
+            placeholder_.set_hexpand(true);
             placeholder_.set_vexpand(true);
             append(placeholder_);
         }
