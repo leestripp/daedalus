@@ -34,6 +34,10 @@ constexpr int kChatMin = 250; // no fixed max: the window bounds it (design §7)
 
 int clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
+constexpr char kNoMatchingBrowserTab[] =
+    "no matching browser tab; Markdown/HTML previews are custom viewers, "
+    "not browser.* tabs (use browser.open first)";
+
 // browser.* page evaluation: webkit_web_view_evaluate_javascript is async;
 // run a nested main loop until the finish callback fires (bounded by a
 // timeout). Safe here because UiControl handlers run on the GTK main
@@ -497,7 +501,8 @@ void MainWindow::register_ui_commands() {
             return nlohmann::json{{"ok", true}};
         });
     ctl.register_command("editor.open_as",
-        "Open a read-only preview tab {path, mode: markdown|html}",
+        "Open a custom read-only Markdown/HTML preview viewer "
+        "{path, mode: markdown|html}; not controllable by browser.*",
         [this](const nlohmann::json& a) {
             const std::string mode = a.value("mode", "markdown");
             editor_area_->open_file_as(a.value("path", ""),
@@ -506,7 +511,8 @@ void MainWindow::register_ui_commands() {
             return nlohmann::json{{"ok", true}};
         });
     ctl.register_command("browser.open",
-        "Open a URL in a browser tab {url} (e.g. a local dev server)",
+        "Open/register a browser tab controllable by browser.* {url} "
+        "(e.g. a local dev server)",
         [this](const nlohmann::json& a) {
             const std::string url = a.value("url", "");
             if (url.empty())
@@ -523,7 +529,7 @@ void MainWindow::register_ui_commands() {
         [this](const nlohmann::json& a) {
             auto* view = editor_area_->browser_view_for(a.value("tab", ""));
             if (!view)
-                return nlohmann::json{{"error", "no matching browser tab"}};
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
             const std::string url =
                 HtmlView::normalize_address(a.value("url", ""));
             if (url.empty())
@@ -538,7 +544,7 @@ void MainWindow::register_ui_commands() {
         [this](const nlohmann::json& a) {
             auto* view = editor_area_->browser_view_for(a.value("tab", ""));
             if (!view)
-                return nlohmann::json{{"error", "no matching browser tab"}};
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
             int max_chars = a.value("max_chars", 8000);
             max_chars = clamp(max_chars, 256, 20000);
             return eval_page_text(view, a.value("selector", ""), max_chars);
@@ -553,7 +559,7 @@ void MainWindow::register_ui_commands() {
         [this](const nlohmann::json& a) {
             auto* view = editor_area_->browser_view_for(a.value("tab", ""));
             if (!view)
-                return nlohmann::json{{"error", "no matching browser tab"}};
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
             const std::string expr = a.value("script", "");
             if (expr.empty())
                 return nlohmann::json{{"error", "missing script"}};
@@ -590,7 +596,7 @@ void MainWindow::register_ui_commands() {
         [this](const nlohmann::json& a) {
             auto* view = editor_area_->browser_view_for(a.value("tab", ""));
             if (!view)
-                return nlohmann::json{{"error", "no matching browser tab"}};
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
             int max_links = a.value("max", 100);
             max_links = clamp(max_links, 1, 500);
             const std::string selector = a.value("selector", "");
@@ -620,7 +626,7 @@ void MainWindow::register_ui_commands() {
         [this](const nlohmann::json& a) {
             auto* view = editor_area_->browser_view_for(a.value("tab", ""));
             if (!view)
-                return nlohmann::json{{"error", "no matching browser tab"}};
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
             auto entries = HtmlView::console_entries(view);
             int max_entries = a.value("max_entries", 50);
             max_entries = clamp(max_entries, 1, 200);
@@ -645,7 +651,7 @@ void MainWindow::register_ui_commands() {
         [this](const nlohmann::json& a) {
             auto* view = editor_area_->browser_view_for(a.value("tab", ""));
             if (!view)
-                return nlohmann::json{{"error", "no matching browser tab"}};
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
             std::vector<std::string> paths;
             if (a.contains("paths") && a["paths"].is_array())
                 for (const auto& p : a["paths"])
@@ -661,7 +667,8 @@ void MainWindow::register_ui_commands() {
             return nlohmann::json{{"ok", true}, {"files", paths}};
         });
     ctl.register_command("browser.list",
-        "Open browser tabs {} — [{url, title, active}]",
+        "List browser.*-controllable tabs {} — [{url, title, active}]; "
+        "custom Markdown/HTML preview viewers are excluded",
         [this](const nlohmann::json&) {
             nlohmann::json tabs = nlohmann::json::array();
             for (const auto& t : editor_area_->browser_tabs())
@@ -867,6 +874,24 @@ nlohmann::json MainWindow::geometry_json() const {
     sidebar_->get_size_request(req_w, req_h);
     const int sidebar_req = req_w;
     chat_panel_->get_size_request(req_w, req_h);
+    const auto paned_geometry = [](Gtk::Paned* paned) {
+        nlohmann::json out = {
+            {"position", paned->get_position()},
+            {"wide_handle", gtk_paned_get_wide_handle(GTK_PANED(paned->gobj())) != 0},
+        };
+        for (auto* child = gtk_widget_get_first_child(GTK_WIDGET(paned->gobj()));
+             child; child = gtk_widget_get_next_sibling(child)) {
+            if (g_strcmp0(gtk_widget_get_css_name(child), "separator") != 0)
+                continue;
+            int minimum = -1, natural = -1;
+            gtk_widget_measure(child, GTK_ORIENTATION_HORIZONTAL, -1,
+                               &minimum, &natural, nullptr, nullptr);
+            out["handle_width"] = gtk_widget_get_width(child);
+            out["handle_min_width"] = minimum;
+            out["handle_natural_width"] = natural;
+        }
+        return out;
+    };
     return {
         {"window", get_width()},
         {"sidebar", sidebar_->get_width()},
@@ -874,6 +899,8 @@ nlohmann::json MainWindow::geometry_json() const {
         {"chat", chat_panel_->get_width()},
         {"chat_req", req_w},
         {"text_scale", text_scale_factor()},
+        {"workspace_pane", paned_geometry(outer_paned_)},
+        {"agent_pane", paned_geometry(inner_paned_)},
     };
 }
 
@@ -1084,6 +1111,8 @@ void MainWindow::poll_git_status() {
 }
 
 bool MainWindow::on_close_request() {
+    services_.chat->set_double("playback-volume",
+                               services_.voice->playback_volume());
     // Save the actual current size, not the startup default — otherwise user
     // resizes never persist and a stale oversized value round-trips forever.
     const int w = get_width();

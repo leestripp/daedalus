@@ -18,6 +18,7 @@ public:
     virtual void play(std::uint32_t sample_rate, std::vector<float> samples,
                       std::function<void()> on_drained) = 0;
     virtual void stop_playback() = 0;
+    virtual void set_volume(float volume) = 0;
 };
 
 // RMS loudness normalisation shared by every PipeWire playback. Targets

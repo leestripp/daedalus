@@ -264,8 +264,10 @@ void test_chimpflow_http_contract() {
             return test_http_response(200, R"({"status":"ok","service":"chimpflow"})");
         if (request.url.ends_with("/v1/models"))
             return test_http_response(200, R"({"data":[{"id":"pocket-tts"}]})");
-        if (request.url.ends_with("/v1/voices"))
+        if (request.url.ends_with("/v1/voices?model=pocket-tts"))
             return test_http_response(200, R"({"data":[{"id":"alba"},{"id":"anna"}]})");
+        if (request.url.ends_with("/v1/voices?model=kokoro%20%2B%20chatterbox"))
+            return test_http_response(200, R"({"data":[{"id":"af_heart"}]})");
         if (request.url.ends_with("/v1/audio/speech"))
             return test_http_response(200, std::string("A\0B\x01", 4));
         if (request.url.ends_with("/v1/audio/transcriptions"))
@@ -294,8 +296,9 @@ void test_chimpflow_http_contract() {
               "authenticated endpoint uses bearer key " + std::to_string(i));
     }
     check(requests[1].url == "http://127.0.0.1:8090/v1/models" &&
-              requests[2].url == "http://127.0.0.1:8090/v1/voices",
-          "discovery URLs are exact");
+              requests[2].url ==
+                  "http://127.0.0.1:8090/v1/voices?model=pocket-tts",
+          "discovery URLs include the selected TTS model");
     const auto tts = nlohmann::json::parse(requests[3].body);
     check(tts.at("model") == "pocket-tts" && tts.at("voice") == "alba" &&
               tts.at("input") == "Hello from MonkeyByte" &&
@@ -307,6 +310,11 @@ void test_chimpflow_http_contract() {
               multipart.find("name=\"model\"\r\n\r\nwhisper\r\n") != std::string::npos &&
               requests[4].content_type.find("boundary=") != std::string::npos,
           "STT multipart preserves WAV bytes and includes model");
+    settings.tts_model = "kokoro + chatterbox";
+    check(client.list_voices(settings) == std::vector<std::string>{"af_heart"} &&
+              requests.back().url.ends_with(
+                  "/v1/voices?model=kokoro%20%2B%20chatterbox"),
+          "voice discovery percent-encodes the model query");
 
     for (const long status : {401L, 403L, 502L, 503L}) {
         ChimpFlowClient failing([&](const HttpRequest&, std::stop_token) {
@@ -573,6 +581,7 @@ public:
         ++playback_stops;
         drained = {};
     }
+    void set_volume(float value) override { volume = value; }
     void complete() {
         auto callback = std::move(drained);
         drained = {};
@@ -584,6 +593,7 @@ public:
     int play_calls = 0;
     int playback_stops = 0;
     bool recording = false;
+    float volume = 1.0F;
     std::uint32_t last_rate = 0;
     std::vector<float> last_samples;
     std::vector<float> recorded_samples;
@@ -634,9 +644,13 @@ void test_chimpflow_voice_service() {
             if (request.url.ends_with("/healthz"))
                 return test_http_response(200, R"({"status":"ok"})");
             if (request.url.ends_with("/v1/models"))
-                return test_http_response(200, R"({"data":[{"id":"pocket-tts"}]})");
-            if (request.url.ends_with("/v1/voices"))
+                return test_http_response(200, R"({"data":[{"id":"pocket-tts"},{"id":"kokoro-82m"},{"id":"chatterbox"}]})");
+            if (request.url.ends_with("/v1/voices?model=pocket-tts"))
                 return test_http_response(200, R"({"data":[{"id":"alba"},{"id":"anna"}]})");
+            if (request.url.ends_with("/v1/voices?model=kokoro-82m"))
+                return test_http_response(200, R"({"data":[{"id":"af_heart"},{"id":"af_bella"}]})");
+            if (request.url.ends_with("/v1/voices?model=chatterbox"))
+                return test_http_response(200, R"({"data":[{"id":"default"}]})");
             if (request.url.ends_with("/v1/audio/speech")) {
                 const auto json = nlohmann::json::parse(request.body);
                 state->spoken.push_back(json.at("input").get<std::string>());
@@ -667,6 +681,21 @@ void test_chimpflow_voice_service() {
     auto audio = std::make_shared<FakeAudioBackend>();
     VoiceService service(store, client, audio);
 
+    service.set_playback_volume(0.65F);
+    check(audio->volume == 0.65F && service.playback_volume() == 0.65F,
+          "speech volume reaches the audio backend");
+    service.toggle_playback_mute();
+    check(audio->volume == 0.0F && service.playback_volume() == 0.0F,
+          "mute sets playback volume to zero");
+    service.toggle_playback_mute();
+    check(audio->volume == 0.65F && service.playback_volume() == 0.65F,
+          "unmute restores the last audible volume");
+    service.set_playback_volume(-1.0F);
+    check(service.playback_volume() == 0.0F, "volume clamps negative input");
+    service.set_playback_volume(2.0F);
+    check(service.playback_volume() == 1.0F, "volume clamps excessive input");
+    service.set_playback_volume(0.65F);
+
     VoiceCatalog catalog;
     std::string discovery_error = "pending";
     service.discover(config, [&](const VoiceCatalog& result, const std::string& error) {
@@ -675,9 +704,31 @@ void test_chimpflow_voice_service() {
     });
     check(pump_voice_until([&] { return discovery_error != "pending"; }) &&
               discovery_error.empty() &&
-              catalog.models == std::vector<std::string>{"pocket-tts"} &&
+              catalog.models == (std::vector<std::string>{
+                                    "pocket-tts", "kokoro-82m", "chatterbox"}) &&
+              catalog.selected_model == "pocket-tts" &&
               catalog.voices == (std::vector<std::string>{"alba", "anna"}),
-          "discovery returns models/voices on the main context");
+          "discovery returns models and selected-model voices on the main context");
+    config.tts_model = "kokoro-82m";
+    discovery_error = "pending";
+    service.discover(config, [&](const VoiceCatalog& result, const std::string& error) {
+        catalog = result;
+        discovery_error = error;
+    });
+    check(pump_voice_until([&] { return discovery_error != "pending"; }) &&
+              discovery_error.empty() && catalog.selected_model == "kokoro-82m" &&
+              catalog.voices == (std::vector<std::string>{"af_heart", "af_bella"}),
+          "changing model discovers that model's voices");
+    config.tts_model = "removed-model";
+    discovery_error = "pending";
+    service.discover(config, [&](const VoiceCatalog& result, const std::string& error) {
+        catalog = result;
+        discovery_error = error;
+    });
+    check(pump_voice_until([&] { return discovery_error != "pending"; }) &&
+              discovery_error.empty() && catalog.selected_model == "pocket-tts" &&
+              catalog.voices == (std::vector<std::string>{"alba", "anna"}),
+          "stale saved model falls back to an available model and its voices");
 
     std::string transcript;
     std::string last_error;

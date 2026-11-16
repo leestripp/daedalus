@@ -23,8 +23,10 @@ public:
                "form fills), list its links (browser.links), and read "
                "captured console/page errors (browser.console) for "
                "debugging; read the current editor text selection, and read "
-               "window geometry. browser.* commands accept an optional "
-               "{tab: url} arg to target a specific open tab.";
+               "window geometry. editor.open_as opens a custom read-only "
+               "Markdown/HTML preview viewer, NOT a browser tab. browser.* "
+               "commands operate only on browser tabs created by browser.open "
+               "and accept an optional {tab: url} arg to target one.";
     }
 
     nlohmann::json get_definition() const override {

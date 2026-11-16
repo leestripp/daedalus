@@ -34,6 +34,12 @@
     <key name="name" type="s"><default>"system"</default></key>
   </schema>
   <schema id="io.github.monkeybyte.chat" path="/io/github/monkeybyte/chat/">
+    <key name="playback-volume" type="d">
+      <default>1.0</default>
+      <range min="0.0" max="1.0"/>
+      <summary>Speech playback volume</summary>
+      <description>Linear ChimpFlow playback gain, from silence to full volume.</description>
+    </key>
     <key name="selected-model" type="s"><default>""</default></key>
   </schema>
 </schemalist>

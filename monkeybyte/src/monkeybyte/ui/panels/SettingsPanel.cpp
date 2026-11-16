@@ -60,25 +60,69 @@ void save_interface_guarded(SettingsStore& store, const InterfaceSettings& s) {
 }
 
 Gtk::Box* group_header(const Glib::ustring& text) {
-    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+    auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    box->add_css_class("settings-section-header");
     auto* label = Gtk::make_managed<Gtk::Label>(text);
     label->set_halign(Gtk::Align::START);
-    label->add_css_class("dim-label");
+    label->add_css_class("settings-section-title");
     auto* sep = Gtk::make_managed<Gtk::Separator>();
+    sep->add_css_class("settings-section-rule");
     box->append(*label);
     box->append(*sep);
     return box;
 }
 
 Gtk::Box* field_row(const Glib::ustring& label, Gtk::Widget& control) {
-    auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    auto* row = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 20);
+    row->add_css_class("settings-field");
     auto* l = Gtk::make_managed<Gtk::Label>(label);
     l->set_halign(Gtk::Align::START);
-    l->set_hexpand(true);
-    row->set_margin_start(8);
+    l->set_size_request(220, -1);
+    l->set_wrap(true);
     row->append(*l);
+
+    const bool fill_width = dynamic_cast<Gtk::Entry*>(&control) ||
+                            dynamic_cast<Gtk::PasswordEntry*>(&control) ||
+                            dynamic_cast<Gtk::DropDown*>(&control) ||
+                            dynamic_cast<Gtk::SpinButton*>(&control);
+    control.set_hexpand(fill_width);
+    control.set_halign(fill_width ? Gtk::Align::FILL : Gtk::Align::END);
     row->append(control);
     return row;
+}
+
+class SettingsScroll final : public Gtk::ScrolledWindow {
+public:
+    void set_content(Gtk::Box& page) {
+        page_ = &page;
+        add_css_class("settings-scroll");
+        page.add_css_class("settings-page");
+        page.set_halign(Gtk::Align::CENTER);
+        page.set_hexpand(false);
+        set_child(page);
+    }
+
+protected:
+    void size_allocate_vfunc(int width, int height, int baseline) override {
+        if (page_) {
+            constexpr int max_content_width = 900;
+            constexpr int horizontal_gutter = 48;
+            const int target = std::max(0, std::min(max_content_width,
+                                                    width - horizontal_gutter));
+            int requested_width = 0;
+            int requested_height = 0;
+            page_->get_size_request(requested_width, requested_height);
+            if (requested_width != target) page_->set_size_request(target, -1);
+        }
+        Gtk::ScrolledWindow::size_allocate_vfunc(width, height, baseline);
+    }
+
+private:
+    Gtk::Box* page_ = nullptr;
+};
+
+void finish_settings_page(SettingsScroll& scroll, Gtk::Box& page) {
+    scroll.set_content(page);
 }
 
 std::string selected_dropdown_text(const Gtk::DropDown& dropdown) {
@@ -255,17 +299,25 @@ SettingsPanel::~SettingsPanel() {
 
 SettingsPanel::SettingsPanel(AppServices& services)
     : Gtk::Box(Gtk::Orientation::VERTICAL), services_(services) {
-    auto* header = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL);
-    header->add_css_class("sidebar-header");
-    auto* title = Gtk::make_managed<Gtk::Label>("SETTINGS");
+    add_css_class("settings-panel");
+    auto* header = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+    header->add_css_class("settings-header");
+    auto* title = Gtk::make_managed<Gtk::Label>("Settings");
     title->set_halign(Gtk::Align::START);
+    title->add_css_class("settings-title");
+    auto* subtitle = Gtk::make_managed<Gtk::Label>(
+        "Configure your workspace, agent, and integrations");
+    subtitle->set_halign(Gtk::Align::START);
+    subtitle->add_css_class("settings-subtitle");
     header->append(*title);
+    header->append(*subtitle);
     append(*header);
 
-    // ── sub-tab segmented row (§4.5) ─────────────────────────────────
-    auto* tabs = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL);
-    tabs->set_margin_start(8);
-    tabs->set_margin_end(8);
+    auto* body = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 0);
+    body->set_vexpand(true);
+    auto* tabs = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 4);
+    tabs->add_css_class("settings-nav");
+    tabs->set_size_request(184, -1);
     const char* names[] = {"Interface", "Providers", "Models", "Workspace",
                            "MCP Servers", "Agent", "Web Search", "ChimpFlow",
                            "Search", "Paths"};
@@ -275,6 +327,9 @@ SettingsPanel::SettingsPanel(AppServices& services)
     for (int i = 0; i < 10; ++i) {
         auto* b = Gtk::make_managed<Gtk::Button>(names[i]);
         b->set_has_frame(false);
+        b->add_css_class("settings-nav-button");
+        b->set_halign(Gtk::Align::FILL);
+        if (auto* child = b->get_child()) child->set_halign(Gtk::Align::START);
         b->signal_clicked().connect([this, i, id = ids[i]] {
             stack_->set_visible_child(id);
             if (std::string_view(id) == "chimpflow") refresh_chimpflow_catalog();
@@ -289,9 +344,11 @@ SettingsPanel::SettingsPanel(AppServices& services)
         tabs->append(*b);
     }
     tab_buttons_[0]->add_css_class("active");
-    append(*tabs);
+    body->append(*tabs);
+    body->append(*Gtk::make_managed<Gtk::Separator>(Gtk::Orientation::VERTICAL));
 
     stack_->set_vexpand(true);
+    stack_->set_hexpand(true);
     stack_->add(*build_interface_tab(), "interface");
     stack_->add(*build_providers_tab(), "providers");
     stack_->add(*build_models_tab(), "models");
@@ -302,10 +359,12 @@ SettingsPanel::SettingsPanel(AppServices& services)
     stack_->add(*build_chimpflow_tab(), "chimpflow");
     stack_->add(*build_search_tab(), "search");
     stack_->add(*build_paths_tab(), "paths");
-    append(*stack_);
+    body->append(*stack_);
+    append(*body);
 
     // ── footer ───────────────────────────────────────────────────────
     auto* footer = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    footer->add_css_class("settings-footer");
     footer->set_margin(8);
     status_label_.set_halign(Gtk::Align::START);
     status_label_.set_hexpand(true);
@@ -320,7 +379,7 @@ SettingsPanel::SettingsPanel(AppServices& services)
 
 // ── Tab 1: Interface (§4.5) ─────────────────────────────────────────
 Gtk::Widget* SettingsPanel::build_interface_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
     box->set_margin(12);
 
@@ -623,13 +682,13 @@ Gtk::Widget* SettingsPanel::build_interface_tab() {
         });
     box->append(*reset_btn);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     return scroll;
 }
 
 // ── Tab 2: Providers (§4.5) ─────────────────────────────────────────
 Gtk::Widget* SettingsPanel::build_providers_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
     box->set_margin(12);
 
@@ -670,7 +729,7 @@ Gtk::Widget* SettingsPanel::build_providers_tab() {
     actions->append(*lmstudio);
     box->append(*actions);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     refresh_providers();
     return scroll;
 }
@@ -769,7 +828,7 @@ void SettingsPanel::refresh_providers() {
 
 // ── Tab 3: Models (§4.5) ────────────────────────────────────────────
 Gtk::Widget* SettingsPanel::build_models_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
     box->set_margin(12);
 
@@ -811,7 +870,7 @@ Gtk::Widget* SettingsPanel::build_models_tab() {
     actions->append(*add);
     box->append(*actions);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     refresh_models();
     return scroll;
 }
@@ -937,7 +996,7 @@ void SettingsPanel::refresh_models() {
 //   2. Model prompt overrides (advanced) — the §4.5 per-model bindings;
 //      these always win over the workspace type prompt.
 Gtk::Widget* SettingsPanel::build_workspace_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     box->set_margin(12);
 
@@ -1047,7 +1106,7 @@ Gtk::Widget* SettingsPanel::build_workspace_tab() {
     });
     box->append(*add);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     refresh_project_types();
     refresh_prompts();
     return scroll;
@@ -1111,7 +1170,7 @@ void SettingsPanel::refresh_prompts() {
 
 // ── Tab 5: MCP Servers (§4.5) ───────────────────────────────────────
 Gtk::Widget* SettingsPanel::build_mcp_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     box->set_margin(12);
 
@@ -1142,7 +1201,7 @@ Gtk::Widget* SettingsPanel::build_mcp_tab() {
     buttons->append(*add_json);
     box->append(*buttons);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     refresh_mcp();
     return scroll;
 }
@@ -1288,7 +1347,7 @@ void SettingsPanel::toggle_tool(const std::string& name, bool enabled) {
 }
 
 Gtk::Widget* SettingsPanel::build_agent_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
     box->set_margin(12);
 
@@ -1412,7 +1471,7 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
             signal_agent_config_changed_.emit();
         }));
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     return scroll;
 }
 
@@ -1423,7 +1482,7 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
 // SHARED daedalus SettingsStore (schema v8 web_search_providers table),
 // so icarus and the settings TUI see the same configuration.
 Gtk::Widget* SettingsPanel::build_web_search_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     box->set_margin(12);
 
@@ -1564,12 +1623,12 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
         box->append(*card);
     }
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     return scroll;
 }
 
 Gtk::Widget* SettingsPanel::build_search_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
     box->set_margin(12);
 
@@ -1624,7 +1683,7 @@ Gtk::Widget* SettingsPanel::build_search_tab() {
     });
     box->append(*reset);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     return scroll;
 }
 
@@ -1632,7 +1691,7 @@ Gtk::Widget* SettingsPanel::build_search_tab() {
 // Read-only listing of every filesystem location MonkeyByte and its
 // embedded libraries use. Not affected by the Save button.
 Gtk::Widget* SettingsPanel::build_paths_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
     box->set_margin(12);
 
@@ -1720,13 +1779,13 @@ Gtk::Widget* SettingsPanel::build_paths_tab() {
              "Runtime data used by OmniNet tools.",
              dp.omninet_data_dir().string());
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     return scroll;
 }
 
 // ── ChimpFlow (§CHIMPFLOW) ──────────────────────────────────────────
 Gtk::Widget* SettingsPanel::build_chimpflow_tab() {
-    auto* scroll = Gtk::make_managed<Gtk::ScrolledWindow>();
+    auto* scroll = Gtk::make_managed<SettingsScroll>();
     auto* box = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 12);
     box->set_margin(12);
 
@@ -1769,6 +1828,9 @@ Gtk::Widget* SettingsPanel::build_chimpflow_tab() {
     chimpflow_tts_model_ = Gtk::make_managed<Gtk::DropDown>();
     replace_dropdown_items(*chimpflow_tts_model_, chimpflow_tts_items_, {},
                            current.tts_model, updating_chimpflow_);
+    chimpflow_tts_model_->property_selected().signal_changed().connect([this] {
+        if (!updating_chimpflow_) refresh_chimpflow_catalog();
+    });
     box->append(*field_row("TTS model", *chimpflow_tts_model_));
 
     chimpflow_stt_model_ = Gtk::make_managed<Gtk::Entry>();
@@ -1803,7 +1865,7 @@ Gtk::Widget* SettingsPanel::build_chimpflow_tab() {
     chimpflow_status_->add_css_class("dim-label");
     box->append(*chimpflow_status_);
 
-    scroll->set_child(*box);
+    finish_settings_page(*scroll, *box);
     return scroll;
 }
 
@@ -1846,10 +1908,14 @@ void SettingsPanel::refresh_chimpflow_catalog() {
             }
             const auto current = chimpflow_from_widgets();
             replace_dropdown_items(*chimpflow_tts_model_, chimpflow_tts_items_,
-                                   catalog.models, current.tts_model,
+                                   catalog.models, catalog.selected_model,
                                    updating_chimpflow_);
+            const bool voice_is_available =
+                std::find(catalog.voices.begin(), catalog.voices.end(),
+                          current.voice) != catalog.voices.end();
             replace_dropdown_items(*chimpflow_voice_, chimpflow_voice_items_,
-                                   catalog.voices, current.voice,
+                                   catalog.voices,
+                                   voice_is_available ? current.voice : "",
                                    updating_chimpflow_);
             chimpflow_preview_->set_sensitive(
                 !selected_dropdown_text(*chimpflow_voice_).empty());

@@ -156,6 +156,10 @@ class Playback final {
 public:
     ~Playback() { stop(); }
 
+    void set_volume(float volume) {
+        volume_.store(std::clamp(volume, 0.0F, 1.0F), std::memory_order_release);
+    }
+
     void start(std::uint32_t rate, std::vector<float> samples,
                std::function<void()> on_drained) {
         if (samples.empty()) throw std::invalid_argument("Cannot play empty audio");
@@ -258,6 +262,12 @@ private:
                     std::copy_n(self.samples_.begin() +
                                 static_cast<std::ptrdiff_t>(self.position_), count,
                                 destination);
+                    const float volume =
+                        self.volume_.load(std::memory_order_acquire);
+                    if (volume != 1.0F) {
+                        std::for_each_n(destination, count,
+                            [volume](float& sample) { sample *= volume; });
+                    }
                     self.position_ += count;
                     std::fill(destination + count, destination + frames, 0.0f);
                     data.chunk->size = frames * sizeof(float);
@@ -298,6 +308,7 @@ private:
     bool flush_requested_ = false;
     std::atomic<bool> drained_pending_{false};
     std::function<void()> on_drained_;
+    std::atomic<float> volume_{1.0F};
 };
 
 class PipeWireAudio final : public AudioBackend {
@@ -316,6 +327,7 @@ public:
         playback_.start(sample_rate, std::move(samples), std::move(on_drained));
     }
     void stop_playback() override { playback_.stop(); }
+    void set_volume(float volume) override { playback_.set_volume(volume); }
 
 private:
     Capture capture_;

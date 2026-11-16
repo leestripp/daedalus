@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <daedalus/ProviderPlugin.h>
 #include <daedalus/ProviderRegistry.h>
 #include <daedalus/settings.h>
@@ -301,10 +302,13 @@ void ChatPanel::build_header() {
     clear_btn_.set_tooltip_text("Clear chat");
     clear_btn_.signal_clicked().connect([this] { clear_history(); });
 
+    build_volume_controls();
+
     header->append(*title);
     header->append(model_dropdown_);
     header->append(thinking_dropdown_);
     header->append(stop_btn_);
+    header->append(volume_btn_);
     header->append(clear_btn_);
     append(*header);
 
@@ -313,6 +317,58 @@ void ChatPanel::build_header() {
     error_banner_.set_visible(false);
     error_banner_.set_wrap(true);
     append(error_banner_);
+}
+
+void ChatPanel::build_volume_controls() {
+    volume_btn_.set_always_show_arrow(false);
+    volume_btn_.set_tooltip_text("Speech volume");
+
+    auto* contents = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 8);
+    contents->set_margin(12);
+    auto* heading = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    auto* title = Gtk::make_managed<Gtk::Label>("Speech volume");
+    title->set_hexpand(true);
+    title->set_halign(Gtk::Align::START);
+    heading->append(*title);
+    heading->append(volume_label_);
+    contents->append(*heading);
+
+    volume_scale_.set_range(0.0, 1.0);
+    volume_scale_.set_increments(0.01, 0.1);
+    volume_scale_.set_value(services_.voice->playback_volume());
+    volume_scale_.set_size_request(180, -1);
+    volume_scale_.set_tooltip_text("Speech volume");
+    volume_scale_.signal_value_changed().connect([this] {
+        if (updating_volume_) return;
+        services_.voice->set_playback_volume(
+            static_cast<float>(volume_scale_.get_value()));
+        update_volume_controls();
+    });
+    contents->append(volume_scale_);
+
+    mute_btn_.signal_clicked().connect([this] {
+        services_.voice->toggle_playback_mute();
+        updating_volume_ = true;
+        volume_scale_.set_value(services_.voice->playback_volume());
+        updating_volume_ = false;
+        update_volume_controls();
+    });
+    contents->append(mute_btn_);
+
+    auto* popover = Gtk::make_managed<Gtk::Popover>();
+    popover->set_child(*contents);
+    volume_btn_.set_popover(*popover);
+    update_volume_controls();
+}
+
+void ChatPanel::update_volume_controls() {
+    const float volume = services_.voice->playback_volume();
+    const int percent = static_cast<int>(std::lround(volume * 100.0F));
+    volume_label_.set_text(std::to_string(percent) + "%");
+    mute_btn_.set_label(volume == 0.0F ? "Unmute" : "Mute");
+    volume_btn_.set_icon_name(volume == 0.0F ? "audio-volume-muted-symbolic"
+                              : volume < 0.5F ? "audio-volume-low-symbolic"
+                                               : "audio-volume-high-symbolic");
 }
 
 // ── messages (§7.3) ─────────────────────────────────────────────────

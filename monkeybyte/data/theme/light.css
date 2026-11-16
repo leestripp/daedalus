@@ -183,6 +183,7 @@ scrollbar slider {
 }
 scrollbar slider:hover { background-color: #8c8fa1; }
 
+
 /* --- app layout ------------------------------------------------------- */
 
 .activity-bar { background-color: #e6e9ef; }
@@ -216,6 +217,28 @@ scrollbar slider:hover { background-color: #8c8fa1; }
   outline-offset: -3px;
 }
 
+/* Settings: compact navigation + readable, centred preference forms. */
+.settings-header { padding: 20px 24px 12px; }
+.settings-title { font-size: 24px; font-weight: 700; }
+.settings-subtitle { color: #6c6f85; font-size: 13px; }
+.settings-nav { padding: 8px 12px 16px; }
+.settings-panel .settings-nav-button {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-weight: 500;
+}
+.settings-panel .settings-nav-button.active {
+  color: #1e66f5;
+  background-color: #ccd0da;
+  border: 1px solid #bcc0cc;
+  border-radius: 8px;
+  font-weight: 600;
+}
+.settings-section-header { margin-top: 12px; }
+.settings-section-title { color: #1e66f5; font-size: 12px; font-weight: 700; }
+.settings-section-rule { background-color: #bcc0cc; }
+.settings-field { min-height: 36px; padding: 4px 8px; }
+.settings-footer { padding: 4px 16px; }
 
 .sidebar { background-color: #e6e9ef; }
 .sidebar-header { padding: 8px 12px; }
@@ -287,7 +310,7 @@ scrollbar slider:hover { background-color: #8c8fa1; }
   padding: 0 12px;
 }
 
-.resizer { background-color: #ccd0da; min-width: 6px; }
+.resizer { background-color: #ccd0da; min-width: 4px; }
 .resizer:hover, .resizer.resizing { background-color: #1e66f5; }
 
 .muted { color: #8c8fa1; font-style: italic; }
@@ -325,9 +348,10 @@ paned > separator {
   box-shadow: none;
 }
 paned.horizontal > separator {
-  min-width: 6px;
+  min-width: 4px;
   background-color: #ccd0da;
 }
 paned.horizontal > separator:hover {
+  min-width: 4px;
   background-color: #1e66f5;
 }

@@ -49,6 +49,16 @@ borders; keyboard focus uses a complete outline. Do not use a one-sided active
 border: Adwaita adds a bottom border to focused flat buttons, which otherwise
 combines with the active stripe to produce an L-shaped artifact.
 
+### Settings
+
+Settings replaces the editor/chat area and uses a vertical section rail beside
+the active page. Each page is centred in a responsive column capped at 900 px;
+the column shrinks with the available width. Shared form rows use a 220 px
+label and a fixed 20 px gap rather than allowing labels to expand across the
+window. Entries and dropdowns fill the remaining row width, while switches and
+compact controls stay end-aligned. Keep this geometry independent of the
+settings persistence and backend handlers.
+
 ### Workspace and editor
 
 `FileService` is the workspace filesystem boundary. All workspace paths must
@@ -156,6 +166,12 @@ local/remote URLs, device viewport presets, rotation/fit-to-window, console
 capture, link listing, JavaScript evaluation, file upload, and closing/listing
 tabs. Browser tabs are ephemeral and are not persisted as workspace files.
 
+`editor.open_as` opens Markdown/HTML in a **custom read-only preview viewer**.
+These previews are a separate tab type, not browser tabs: they do not appear in
+`browser.list` and cannot be driven by `browser.navigate`, `browser.read`,
+`browser.eval`, `browser.links`, `browser.console`, `browser.upload`, or
+`browser.close`. Use `browser.open` when the agent needs `browser.*` control.
+
 Long URLs must be ellipsized in the tab header. Console forwarding is batched
 and size-bounded to prevent WebKit IPC or a chatty page from flooding the GTK
 main thread. Preview rendering escapes untrusted content before converting it
@@ -215,7 +231,9 @@ address. No other MonkeyByte workspace/chat/settings REST endpoints exist.
 ChimpFlow is optional and loopback-only (`localhost`, `127.0.0.1`, or `[::1]`).
 It supplies local TTS and STT through dedicated `tts` + `stt` credentials. An
 empty key field resolves `CHIMPFLOW_KEY` at request time. Voice support is
-opt-in.
+opt-in. Discovery uses `GET /v1/voices?model=<selected-model>`; changing the
+TTS model refreshes its voices and discards a saved voice that is unavailable
+for that model. A stale saved model falls back to the first discovered model.
 
 PipeWorker capture/playback and ChimpFlow network calls run on worker threads;
 `VoiceService` public operations and widget callbacks remain on the UI thread.
@@ -228,6 +246,10 @@ unlocked before stopping/joining the loop. Playback completion is based on the
 `drained` event.
 
 Playback is normalized to 0.12 RMS with at most 4× gain and a 0.98 peak limit.
+The Agent header's speaker popover controls live playback gain for both read-aloud
+and voice previews. Mute sets gain to zero and unmute restores the last audible
+level. `io.github.monkeybyte.chat playback-volume` is loaded at startup and saved
+by the window close handler.
 Read-aloud segments streamed assistant/tell_user sentences FIFO; restored
 history, user messages, tool cards, and status notices are not spoken.
 Dictation inserts text at the input cursor for review and never auto-sends.

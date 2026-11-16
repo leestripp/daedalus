@@ -45,6 +45,8 @@ struct AppServices {
           editor(Gio::Settings::create("io.github.monkeybyte.editor")),
           theme_settings(Gio::Settings::create("io.github.monkeybyte.theme")),
           chat(Gio::Settings::create("io.github.monkeybyte.chat")) {
+        voice->set_playback_volume(
+            static_cast<float>(chat->get_double("playback-volume")));
         // One-time: move legacy monkeybyte.db model rows into the daedalus
         // provider/model registry (design §10.2). Idempotent.
         model_bridge::migrate_legacy_models(store, daedalus::SettingsStore::instance());

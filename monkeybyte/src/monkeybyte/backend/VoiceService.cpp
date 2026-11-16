@@ -7,6 +7,7 @@
 #include "monkeybyte/backend/MarkdownToHtml.h"
 #include "monkeybyte/backend/Wav.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace monkeybyte {
@@ -45,6 +46,16 @@ VoiceService::~VoiceService() {
     join_workers();
     std::lock_guard lock(posted_mutex_);
     posted_.clear();
+}
+
+void VoiceService::set_playback_volume(float volume) {
+    playback_volume_ = std::clamp(volume, 0.0F, 1.0F);
+    if (playback_volume_ > 0.0F) last_audible_volume_ = playback_volume_;
+    audio_->set_volume(playback_volume_);
+}
+
+void VoiceService::toggle_playback_mute() {
+    set_playback_volume(playback_volume_ > 0.0F ? 0.0F : last_audible_volume_);
 }
 
 void VoiceService::join_workers() {
@@ -103,9 +114,16 @@ void VoiceService::discover(const ChimpFlowSettings& config,
             VoiceCatalog catalog;
             std::string error;
             try {
-                client_->health(config, token);
-                catalog.models = client_->list_models(config, token);
-                catalog.voices = client_->list_voices(config, token);
+                auto discovery_config = config;
+                client_->health(discovery_config, token);
+                catalog.models = client_->list_models(discovery_config, token);
+                if (!catalog.models.empty() &&
+                    std::find(catalog.models.begin(), catalog.models.end(),
+                              discovery_config.tts_model) == catalog.models.end()) {
+                    discovery_config.tts_model = catalog.models.front();
+                }
+                catalog.selected_model = discovery_config.tts_model;
+                catalog.voices = client_->list_voices(discovery_config, token);
             } catch (const std::exception& e) {
                 error = e.what();
             } catch (...) {

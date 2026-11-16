@@ -1374,11 +1374,13 @@ src/monkeybyte/
   ui/
     MainWindow             single top-level window; owns all panels (§2)
     ActivityBar, Sidebar, EditorArea, StatusBar, UiControl, UiGuard.h, FileIcons.h
-    HtmlView               WebKit read-only viewer for EditorArea's preview
-                           tabs (markdown via backend/MarkdownToHtml, raw
-                           HTML files, and browser tabs with a nav/address
-                           bar — agent-drivable via the browser.open /
-                           browser.navigate / browser.read / browser.eval /
+    HtmlView               WebKit viewer for two distinct EditorArea tab types:
+                           custom read-only previews (markdown via
+                           backend/MarkdownToHtml or raw HTML, opened with
+                           editor.open_as; NOT browser.* controllable), and
+                           browser tabs with a nav/address bar (opened with
+                           browser.open and agent-drivable via browser.navigate /
+                           browser.read / browser.eval /
                            browser.links / browser.console / browser.upload /
                            browser.list / browser.close UiControl commands,
                            §6; captures console.* + page errors via an

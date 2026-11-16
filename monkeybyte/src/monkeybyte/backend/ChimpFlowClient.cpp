@@ -34,6 +34,25 @@ std::string lower(std::string_view value) {
     return out;
 }
 
+std::string url_encode(std::string_view value) {
+    constexpr char hex[] = "0123456789ABCDEF";
+    std::string encoded;
+    for (const unsigned char c : value) {
+        const bool unreserved = (c >= 'a' && c <= 'z') ||
+                                (c >= 'A' && c <= 'Z') ||
+                                (c >= '0' && c <= '9') || c == '-' ||
+                                c == '_' || c == '.' || c == '~';
+        if (unreserved) {
+            encoded.push_back(static_cast<char>(c));
+        } else {
+            encoded.push_back('%');
+            encoded.push_back(hex[c >> 4]);
+            encoded.push_back(hex[c & 0x0F]);
+        }
+    }
+    return encoded;
+}
+
 std::string body_text(const HttpResponse& response) {
     if (response.body.empty()) return {};
     return std::string(reinterpret_cast<const char*>(response.body.data()),
@@ -255,8 +274,11 @@ std::vector<std::string> ChimpFlowClient::list_models(
 
 std::vector<std::string> ChimpFlowClient::list_voices(
     const ChimpFlowSettings& settings, std::stop_token token) const {
+    std::string path = "/v1/voices";
+    if (!settings.tts_model.empty())
+        path += "?model=" + url_encode(settings.tts_model);
     return parse_ids("voice discovery",
-                     exchange(settings, "/v1/voices", true, "GET", {}, {}, 10, token));
+                     exchange(settings, path, true, "GET", {}, {}, 10, token));
 }
 
 std::vector<std::uint8_t> ChimpFlowClient::synthesize(

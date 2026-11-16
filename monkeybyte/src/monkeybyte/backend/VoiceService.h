@@ -30,6 +30,7 @@ std::string speech_text(const std::string& markdown);
 struct VoiceCatalog {
     std::vector<std::string> models;
     std::vector<std::string> voices;
+    std::string selected_model;
 };
 
 enum class DictationState { Idle, Recording, Transcribing };
@@ -61,6 +62,10 @@ public:
 
     void toggle_dictation();
     void stop_all();
+
+    void set_playback_volume(float volume);
+    void toggle_playback_mute();
+    float playback_volume() const { return playback_volume_; }
 
     DictationState dictation_state() const { return dictation_state_; }
     bool speech_active() const { return speech_active_; }
@@ -102,6 +107,8 @@ private:
     std::shared_ptr<ChimpFlowClient> client_;
     std::shared_ptr<AudioBackend> audio_;
     ChimpFlowSettings settings_;
+    float playback_volume_ = 1.0F;
+    float last_audible_volume_ = 1.0F;
 
     std::deque<SpeechRequest> speech_queue_;
     std::optional<SpeechRequest> current_speech_;

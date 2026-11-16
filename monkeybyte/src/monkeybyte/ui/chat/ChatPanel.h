@@ -68,6 +68,8 @@ public:
 
 private:
     void build_header();
+    void build_volume_controls();
+    void update_volume_controls();
     void build_messages();
     void build_input();
     void wire_controller();
@@ -138,6 +140,11 @@ private:
     Gtk::DropDown model_dropdown_;
     Gtk::DropDown thinking_dropdown_; // §ThinkingLevel — per-model levels
     Gtk::Button stop_btn_, clear_btn_;
+    Gtk::MenuButton volume_btn_;
+    Gtk::Scale volume_scale_{Gtk::Orientation::HORIZONTAL};
+    Gtk::Label volume_label_;
+    Gtk::Button mute_btn_;
+    bool updating_volume_ = false;
 
     // banner + messages
     Gtk::Label error_banner_;
