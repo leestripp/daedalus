@@ -19,7 +19,9 @@
 #include "monkeybyte/backend/VoiceService.h"
 #include "monkeybyte/backend/SkillDiscovery.h"
 #include "monkeybyte/tree/WorkspaceTree.h"
+#include "monkeybyte/ui/ActivityBar.h"
 #include "monkeybyte/ui/FileIcons.h"
+#include "monkeybyte/ui/theme/ThemeManager.h"
 #include "monkeybyte/ui/HtmlView.h"
 #include "monkeybyte/ui/chat/Markdown.h"
 #include "monkeybyte/ui/chat/ScrollPin.h"
@@ -1792,6 +1794,71 @@ void test_browser_console_capture_is_bounded() {
     window.hide();
 }
 
+void test_activity_bar_theme_borders() {
+    auto app = Gtk::Application::create();
+    auto display = Gdk::Display::get_default();
+    if (!display) {
+        std::cout << "  skip: activity bar theme borders (no display)\n";
+        return;
+    }
+
+    const auto pump = [](int milliseconds) {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::milliseconds(milliseconds);
+        while (std::chrono::steady_clock::now() < deadline) {
+            while (g_main_context_iteration(nullptr, FALSE)) {}
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    };
+
+    for (const std::string theme : {"dark", "light"}) {
+        auto provider = Gtk::CssProvider::create();
+        provider->load_from_path(monkeybyte::ThemeManager::data_dir() +
+                                 "/theme/" + theme + ".css");
+        Gtk::StyleContext::add_provider_for_display(
+            display, provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+        Gtk::Window window;
+        auto* bar = Gtk::make_managed<monkeybyte::ActivityBar>();
+        window.set_child(*bar);
+        window.show();
+        pump(50);
+
+        std::vector<Gtk::Button*> buttons;
+        for (auto* child = bar->get_first_child(); child;
+             child = child->get_next_sibling()) {
+            if (auto* button = dynamic_cast<Gtk::Button*>(child))
+                buttons.push_back(button);
+        }
+        check(buttons.size() == 4, theme + " activity bar: four icon buttons");
+        if (buttons.size() != 4) {
+            window.hide();
+            Gtk::StyleContext::remove_provider_for_display(display, provider);
+            continue;
+        }
+
+        for (std::size_t selected = 0; selected < buttons.size(); ++selected) {
+            bar->set_active(static_cast<monkeybyte::ActivityBar::Panel>(selected));
+            buttons[selected]->grab_focus();
+            pump(10);
+            for (std::size_t index = 0; index < buttons.size(); ++index) {
+                const auto& button = *buttons[index];
+                const auto& classes = button.get_css_classes();
+                const bool active = std::find(classes.begin(), classes.end(),
+                                              "active") != classes.end();
+                check(active == (index == selected),
+                      theme + " activity bar: exactly the selected button is active");
+                const auto border = button.get_style_context()->get_border();
+                check(border.get_left() == 1 && border.get_right() == 1 &&
+                          border.get_top() == 1 && border.get_bottom() == 1,
+                      theme + " activity bar: focused selection has four equal borders");
+            }
+        }
+        window.hide();
+        Gtk::StyleContext::remove_provider_for_display(display, provider);
+    }
+}
+
 void test_scroll_pin_kinetic_cancel() {
     auto app = Gtk::Application::create();
     if (!Gdk::Display::get_default()) {
@@ -1896,6 +1963,7 @@ int main() {
     test_fountain_zoom();
     test_browser_long_url_layout();
     test_browser_console_capture_is_bounded();
+    test_activity_bar_theme_borders();
     test_scroll_pin_kinetic_cancel();
 
     std::cout << (failures == 0 ? "\nALL TESTS PASSED\n"

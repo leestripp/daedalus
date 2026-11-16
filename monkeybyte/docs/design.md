@@ -43,7 +43,11 @@ routes are not served by MonkeyByte.
 The activity bar is the only sidebar-panel switcher. Panels cover workspace,
 search, Git, and settings. Sizer drags and direct width controls update panel
 widths; widths are persisted in GSettings. Keyboard shortcuts and the command
-palette use the same actions as visible controls.
+palette use the same actions as visible controls. The selected activity button
+is an inset rounded tile with an accent-coloured icon and symmetric 1 px
+borders; keyboard focus uses a complete outline. Do not use a one-sided active
+border: Adwaita adds a bottom border to focused flat buttons, which otherwise
+combines with the active stripe to produce an L-shaped artifact.
 
 ### Workspace and editor
 

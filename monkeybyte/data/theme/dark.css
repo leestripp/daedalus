@@ -193,18 +193,33 @@ scrollbar slider:hover { background-color: #6c7086; }
 .activity-bar button {
   min-width: 40px;
   min-height: 40px;
-  border: none;
-  border-left: 2px solid transparent;
-  border-radius: 0;
-  background: none;
+  margin: 2px 4px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: transparent;
   color: #6c7086;
 }
-.activity-bar button:hover { background-color: #313244; color: #cdd6f4; }
-.activity-bar button.active {
-  border-left-color: #89b4fa;
-  color: #89b4fa;
-  background: none;
+.activity-bar button:hover {
+  background-color: #313244;
+  color: #cdd6f4;
 }
+.activity-bar button.active {
+  border-color: #45475a;
+  background-color: #313244;
+  color: #89b4fa;
+}
+.activity-bar button.active:hover { background-color: #45475a; }
+/* Adwaita adds a second bottom border to focused flat buttons. */
+.activity-bar button:focus, .activity-bar button:active {
+  border-width: 1px;
+  outline: none;
+}
+.activity-bar button:focus-visible {
+  outline: 2px solid #89b4fa;
+  outline-offset: -3px;
+}
+
 
 .sidebar { background-color: #181825; }
 .sidebar-header { padding: 8px 12px; }
