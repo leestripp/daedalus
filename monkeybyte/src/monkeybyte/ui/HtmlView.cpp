@@ -378,6 +378,9 @@ struct BrowserState {
     // §6 screen-size presets (📱 nav-bar menu): 0×0 = fit to window.
     int dev_w = 0, dev_h = 0;
     const char* dev_ua = nullptr; // mobile UA override, nullptr = default
+    std::string dev_id;
+    std::string dev_label;
+    bool dev_rotated = false;
     Gtk::MenuButton* device_btn = nullptr;
 };
 
@@ -551,25 +554,25 @@ constexpr char kAndroidUa[] =
     "Mobile Safari/537.36";
 
 // Index-aligned with the menu sections built in browser_page().
-constexpr DevicePreset kDevicePresets[] = {
+constexpr HtmlView::DevicePreset kDevicePresets[] = {
     // Phones
-    {"iPhone SE — 375×667", 375, 667, kIphoneUa},
-    {"iPhone 14/15 — 390×844", 390, 844, kIphoneUa},
-    {"iPhone Pro Max — 430×932", 430, 932, kIphoneUa},
-    {"Galaxy S — 360×800", 360, 800, kAndroidUa},
-    {"Pixel 8 — 412×915", 412, 915, kAndroidUa},
+    {"iphone-se", "iPhone SE — 375×667", 375, 667, kIphoneUa},
+    {"iphone-14-15", "iPhone 14/15 — 390×844", 390, 844, kIphoneUa},
+    {"iphone-pro-max", "iPhone Pro Max — 430×932", 430, 932, kIphoneUa},
+    {"galaxy-s", "Galaxy S — 360×800", 360, 800, kAndroidUa},
+    {"pixel-8", "Pixel 8 — 412×915", 412, 915, kAndroidUa},
     // Tablets (modern tablets default to desktop UA — no spoof)
-    {"iPad Mini — 744×1133", 744, 1133, nullptr},
-    {"iPad — 768×1024", 768, 1024, nullptr},
-    {"iPad Pro 11\u2033 — 834×1194", 834, 1194, nullptr},
-    {"Galaxy Tab S — 800×1280", 800, 1280, nullptr},
+    {"ipad-mini", "iPad Mini — 744×1133", 744, 1133, nullptr},
+    {"ipad", "iPad — 768×1024", 768, 1024, nullptr},
+    {"ipad-pro-11", "iPad Pro 11\u2033 — 834×1194", 834, 1194, nullptr},
+    {"galaxy-tab-s", "Galaxy Tab S — 800×1280", 800, 1280, nullptr},
     // Laptops
-    {"Laptop — 1366×768", 1366, 768, nullptr},
-    {"Laptop — 1440×900", 1440, 900, nullptr},
-    {"Laptop — 1536×864", 1536, 864, nullptr},
+    {"laptop-1366x768", "Laptop — 1366×768", 1366, 768, nullptr},
+    {"laptop-1440x900", "Laptop — 1440×900", 1440, 900, nullptr},
+    {"laptop-1536x864", "Laptop — 1536×864", 1536, 864, nullptr},
     // Desktops
-    {"Desktop — 1920×1080", 1920, 1080, nullptr},
-    {"Desktop — 2560×1440", 2560, 1440, nullptr},
+    {"desktop-1920x1080", "Desktop — 1920×1080", 1920, 1080, nullptr},
+    {"desktop-2560x1440", "Desktop — 2560×1440", 2560, 1440, nullptr},
 };
 constexpr int kPresetPhones = 0, kPresetTablets = 5, kPresetLaptops = 9,
               kPresetDesktops = 12, kPresetCount = 14;
@@ -607,19 +610,33 @@ void clamp_allocate(GtkWidget* w, int width, int height, int baseline) {
 // respond immediately; reload applies a UA change for UA-sniffing sites.
 // The size request is the ONLY layout channel — the clamp layout above
 // reads it directly (expand/alignment flags are irrelevant inside it).
-void apply_device(BrowserState* s, int w, int h, const char* ua,
-                  const std::string& label) {
+HtmlView::DeviceSize apply_device(BrowserState* s, int w, int h,
+                                  const char* ua, const std::string& id,
+                                  const std::string& label, bool rotated) {
     s->dev_w = w;
     s->dev_h = h;
     s->dev_ua = ua;
+    s->dev_id = id;
+    s->dev_label = label;
+    s->dev_rotated = rotated;
     auto* widget = GTK_WIDGET(s->view);
     gtk_widget_set_size_request(widget, w > 0 ? w : -1, h > 0 ? h : -1);
     WebKitSettings* settings = webkit_web_view_get_settings(s->view);
     webkit_settings_set_user_agent(settings, ua ? ua : kDesktopUserAgent);
-    if (s->device_btn)
+    if (s->device_btn) {
+        const std::string suffix = rotated ? " (rotated)" : "";
         s->device_btn->set_tooltip_text(
-            label.empty() ? "Screen size presets" : "Screen size: " + label);
+            label.empty() ? "Screen size presets"
+                          : "Screen size: " + label + suffix);
+    }
     webkit_web_view_reload(s->view);
+    return {w, h, s->dev_id, s->dev_label, s->dev_rotated};
+}
+
+BrowserState* browser_state(WebKitWebView* view) {
+    if (!view) return nullptr;
+    return static_cast<BrowserState*>(
+        g_object_get_data(G_OBJECT(view), kBrowserStateKey));
 }
 
 // Vertical box: nav bar (back/forward/reload + address entry) over the view.
@@ -665,7 +682,7 @@ Gtk::Widget* browser_page(WebKitWebView* view, const std::string& initial_url) {
     device_btn->set_tooltip_text("Screen size presets");
 
     auto* state = new BrowserState{view, address, back, forward, {}, {},
-                                   0, 0, nullptr, device_btn};
+                                   0, 0, nullptr, "", "", false, device_btn};
 
     {
         auto menu = Gio::Menu::create();
@@ -699,16 +716,18 @@ Gtk::Widget* browser_page(WebKitWebView* view, const std::string& initial_url) {
                         .get();
                 if (i < 0 || i >= kPresetCount) return;
                 const auto& d = kDevicePresets[i];
-                apply_device(state, d.w, d.h, d.ua, d.label);
+                apply_device(state, d.width, d.height, d.user_agent, d.id,
+                             d.label, false);
             });
         group->add_action("rotate", [state] {
             if (state->dev_w > 0)
                 apply_device(state, state->dev_h, state->dev_w, state->dev_ua,
-                             std::to_string(state->dev_h) + "×" +
-                                 std::to_string(state->dev_w) + " (rotated)");
+                             state->dev_id, state->dev_label,
+                             !state->dev_rotated);
         });
-        group->add_action("fit",
-                          [state] { apply_device(state, 0, 0, nullptr, ""); });
+        group->add_action("fit", [state] {
+            apply_device(state, 0, 0, nullptr, "", "", false);
+        });
         device_btn->insert_action_group("browser_view", group);
         device_btn->set_menu_model(menu);
     }
@@ -896,6 +915,55 @@ WebKitWebView* HtmlView::browser_view_of(Gtk::Widget* browser_page) {
     auto* state = static_cast<BrowserState*>(
         g_object_get_data(G_OBJECT(browser_page->gobj()), kBrowserStateKey));
     return state ? state->view : nullptr;
+}
+
+std::span<const HtmlView::DevicePreset> HtmlView::device_presets() {
+    return kDevicePresets;
+}
+
+std::optional<HtmlView::DeviceSize>
+HtmlView::device_size(WebKitWebView* view) {
+    const auto* state = browser_state(view);
+    if (!state) return std::nullopt;
+    return DeviceSize{state->dev_w, state->dev_h, state->dev_id,
+                      state->dev_label, state->dev_rotated};
+}
+
+std::expected<HtmlView::DeviceSize, std::string>
+HtmlView::set_device_preset(WebKitWebView* view, std::string_view id_or_label,
+                            bool rotate) {
+    auto* state = browser_state(view);
+    if (!state) return std::unexpected("not a browser view");
+    const auto it = std::find_if(
+        std::begin(kDevicePresets), std::end(kDevicePresets),
+        [id_or_label](const DevicePreset& preset) {
+            return id_or_label == preset.id || id_or_label == preset.label;
+        });
+    if (it == std::end(kDevicePresets))
+        return std::unexpected("unknown device preset: " +
+                               std::string(id_or_label));
+    return apply_device(state, rotate ? it->height : it->width,
+                        rotate ? it->width : it->height, it->user_agent,
+                        it->id, it->label, rotate);
+}
+
+std::expected<HtmlView::DeviceSize, std::string>
+HtmlView::rotate_device(WebKitWebView* view) {
+    auto* state = browser_state(view);
+    if (!state) return std::unexpected("not a browser view");
+    if (state->dev_w <= 0)
+        return std::unexpected(
+            "Fit to Window has no fixed size to rotate; select a preset first");
+    return apply_device(state, state->dev_h, state->dev_w, state->dev_ua,
+                        state->dev_id, state->dev_label,
+                        !state->dev_rotated);
+}
+
+std::expected<HtmlView::DeviceSize, std::string>
+HtmlView::fit_device_to_window(WebKitWebView* view) {
+    auto* state = browser_state(view);
+    if (!state) return std::unexpected("not a browser view");
+    return apply_device(state, 0, 0, nullptr, "", "", false);
 }
 
 std::vector<HtmlView::ConsoleEntry>

@@ -214,9 +214,13 @@ Features:
   previews alongside code tabs ("Open as …" in the Workspace tree).
 - **Agent integration** — the chat agent can drive and inspect browser
   tabs (`browser.open / navigate / read / eval / links / console /
-  upload`), e.g. open your app, read the rendered page, click around and
-  report console errors. Also available over the HTTP control port for
-  external automation.
+  upload / device`), e.g. open your app, read the rendered page, click
+  around and report console errors. `browser.device {}` lists the stable
+  preset IDs and current viewport; `{preset:"iphone-14-15"}` selects a
+  device, `{rotate:true}` rotates it, and `{fit:true}` fills the tab. This
+  drives the same real WebKit viewport and User-Agent path as the 📱 menu,
+  so the agent can verify responsive breakpoints with `browser.eval`.
+  Also available over the HTTP control port for external automation.
 
 Browser tabs keep no history across restarts and can't be saved/deleted —
 closing the tab closes the session.

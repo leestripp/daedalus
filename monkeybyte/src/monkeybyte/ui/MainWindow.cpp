@@ -142,6 +142,25 @@ nlohmann::json eval_page_text(WebKitWebView* view, const std::string& selector,
     page["ok"] = true;
     return page;
 }
+nlohmann::json device_size_json(const HtmlView::DeviceSize& size) {
+    return {{"preset", size.preset},
+            {"label", size.label},
+            {"width", size.width},
+            {"height", size.height},
+            {"rotated", size.rotated},
+            {"fit", size.width == 0 && size.height == 0}};
+}
+
+nlohmann::json device_presets_json() {
+    auto presets = nlohmann::json::array();
+    for (const auto& preset : HtmlView::device_presets())
+        presets.push_back({{"id", preset.id},
+                           {"label", preset.label},
+                           {"width", preset.width},
+                           {"height", preset.height},
+                           {"mobile", preset.user_agent != nullptr}});
+    return presets;
+}
 } // namespace
 
 // GNOME "Large Text" / font scaling (org.gnome.desktop.interface
@@ -665,6 +684,43 @@ void MainWindow::register_ui_commands() {
                     return nlohmann::json{{"error", "no such file: " + p}};
             HtmlView::queue_upload_files(view, paths);
             return nlohmann::json{{"ok", true}, {"files", paths}};
+        });
+    // Responsive layout testing uses the exact same preset state and
+    // WebKit sizing path as the nav-bar device menu. With no action,
+    // return the stable preset IDs plus the current selection.
+    ctl.register_command("browser.device",
+        "List/select browser viewport presets {preset?, rotate?, fit?, tab?} "
+        "— no action lists {presets, current}; preset is an ID such as "
+        "iphone-14-15, ipad, galaxy-s, desktop-1920x1080; rotate:true "
+        "rotates the selected/current preset; fit:true fills the tab",
+        [this](const nlohmann::json& a) {
+            auto* view = editor_area_->browser_view_for(a.value("tab", ""));
+            if (!view)
+                return nlohmann::json{{"error", kNoMatchingBrowserTab}};
+            const std::string preset = a.value("preset", "");
+            const bool rotate = a.value("rotate", false);
+            const bool fit = a.value("fit", false);
+            if (fit && (!preset.empty() || rotate))
+                return nlohmann::json{
+                    {"error", "fit cannot be combined with preset or rotate"}};
+
+            auto operation = [&]() -> std::expected<HtmlView::DeviceSize,
+                                                    std::string> {
+                if (fit) return HtmlView::fit_device_to_window(view);
+                if (!preset.empty())
+                    return HtmlView::set_device_preset(view, preset, rotate);
+                if (rotate) return HtmlView::rotate_device(view);
+                if (const auto current = HtmlView::device_size(view))
+                    return *current;
+                return std::unexpected("could not read browser viewport");
+            };
+            const auto size = operation();
+            if (!size) return nlohmann::json{{"error", size.error()}};
+            auto out = nlohmann::json{{"ok", true},
+                                      {"current", device_size_json(*size)}};
+            if (preset.empty() && !rotate && !fit)
+                out["presets"] = device_presets_json();
+            return out;
         });
     ctl.register_command("browser.list",
         "List browser.*-controllable tabs {} — [{url, title, active}]; "

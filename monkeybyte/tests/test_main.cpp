@@ -23,6 +23,7 @@
 #include "monkeybyte/ui/FileIcons.h"
 #include "monkeybyte/ui/theme/ThemeManager.h"
 #include "monkeybyte/ui/HtmlView.h"
+#include "monkeybyte/ui/chat/AppUiTool.h"
 #include "monkeybyte/ui/chat/Markdown.h"
 #include "monkeybyte/ui/chat/ScrollPin.h"
 #include "monkeybyte/ui/chat/UserCommands.h"
@@ -39,6 +40,7 @@
 #include <sqlite3.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -48,6 +50,7 @@
 #include <iostream>
 #include <string>
 #include <limits>
+#include <memory>
 #include <thread>
 #include <unordered_set>
 
@@ -1776,6 +1779,179 @@ void test_fountain_zoom() {
           "zoom: snapped to 5% steps");
 }
 
+void test_browser_device_tool_schema() {
+    std::cout << "test_browser_device_tool_schema\n";
+    monkeybyte::AppUiTool tool;
+    const auto definition = tool.get_definition().dump();
+    check(definition.find("browser.device") != std::string::npos,
+          "device presets: app_ui_control advertises browser.device");
+    check(definition.find("iphone-14-15") != std::string::npos,
+          "device presets: tool schema includes a stable preset example");
+    const auto presets = monkeybyte::HtmlView::device_presets();
+    check(presets.size() == 14, "device presets: complete menu is exposed");
+    std::unordered_set<std::string> ids;
+    for (const auto& preset : presets) {
+        ids.insert(preset.id);
+        check(preset.width > 0 && preset.height > 0,
+              std::string("device presets: positive dimensions for ") + preset.id);
+    }
+    check(ids.size() == presets.size(), "device presets: IDs are unique");
+}
+
+struct BrowserEvalOutcome {
+    std::atomic<bool> done{false};
+    std::string json;
+    std::string error;
+};
+
+nlohmann::json browser_eval_json(WebKitWebView* view,
+                                 const std::string& script) {
+    auto outcome = std::make_shared<BrowserEvalOutcome>();
+    webkit_web_view_evaluate_javascript(
+        view, script.c_str(), -1, nullptr, nullptr, nullptr,
+        [](GObject* object, GAsyncResult* result, gpointer data) {
+            const std::unique_ptr<std::shared_ptr<BrowserEvalOutcome>> holder(
+                static_cast<std::shared_ptr<BrowserEvalOutcome>*>(data));
+            auto& out = **holder;
+            GError* error = nullptr;
+            JSCValue* value = webkit_web_view_evaluate_javascript_finish(
+                WEBKIT_WEB_VIEW(object), result, &error);
+            if (error) {
+                out.error = error->message;
+                g_error_free(error);
+            } else if (value && jsc_value_is_string(value)) {
+                char* json = jsc_value_to_string(value);
+                out.json = json;
+                g_free(json);
+            } else {
+                out.error = "script did not return a string";
+            }
+            if (value) g_object_unref(value);
+            out.done.store(true, std::memory_order_release);
+        },
+        new std::shared_ptr<BrowserEvalOutcome>(outcome));
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(5);
+    while (!outcome->done.load(std::memory_order_acquire) &&
+           std::chrono::steady_clock::now() < deadline) {
+        while (g_main_context_iteration(nullptr, FALSE)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    if (!outcome->done.load(std::memory_order_acquire))
+        return {{"error", "browser evaluation timed out"}};
+    if (!outcome->error.empty()) return {{"error", outcome->error}};
+    return nlohmann::json::parse(outcome->json, nullptr,
+                                 /*allow_exceptions=*/false);
+}
+
+void pump_browser_events(int milliseconds) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(milliseconds);
+    while (std::chrono::steady_clock::now() < deadline) {
+        while (g_main_context_iteration(nullptr, FALSE)) {}
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
+void settle_browser(WebKitWebView* view) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(5);
+    while (webkit_web_view_is_loading(view) &&
+           std::chrono::steady_clock::now() < deadline)
+        pump_browser_events(10);
+    pump_browser_events(100);
+}
+
+nlohmann::json browser_viewport_metrics(WebKitWebView* view) {
+    return browser_eval_json(
+        view,
+        "JSON.stringify({width: window.innerWidth, height: window.innerHeight,"
+        " userAgent: navigator.userAgent})");
+}
+
+void test_browser_device_viewport() {
+    std::cout << "test_browser_device_viewport\n";
+    auto app = Gtk::Application::create();
+    if (!Gdk::Display::get_default()) {
+        std::cout << "  skip: browser device viewport (no display)\n";
+        return;
+    }
+    Gtk::Window window;
+    window.set_default_size(900, 700);
+    auto* page = monkeybyte::HtmlView::create_browser(
+        "data:text/html,<title>Viewport test</title><p>responsive</p>");
+    window.set_child(*page);
+    window.show();
+    auto* view = monkeybyte::HtmlView::browser_view_of(page);
+    check(view != nullptr, "device viewport: WebKit view exists");
+    if (!view) {
+        window.hide();
+        return;
+    }
+    settle_browser(view);
+    const auto initial = monkeybyte::HtmlView::device_size(view);
+    check(initial && initial->width == 0 && initial->height == 0 &&
+              initial->preset.empty(),
+          "device viewport: starts in Fit to Window mode");
+
+    const auto phone = monkeybyte::HtmlView::set_device_preset(
+        view, "iphone-14-15");
+    check(phone && phone->width == 390 && phone->height == 844 &&
+              phone->preset == "iphone-14-15" && !phone->rotated,
+          "device viewport: stable ID selects iPhone preset");
+    settle_browser(view);
+    auto metrics = browser_viewport_metrics(view);
+    check(metrics.value("width", 0) == 390 &&
+              metrics.value("height", 0) == 844,
+          "device viewport: iPhone preset changes real WebKit dimensions");
+    check(metrics.value("userAgent", "").find("iPhone") != std::string::npos,
+          "device viewport: phone preset applies mobile User-Agent");
+
+    const auto rotated = monkeybyte::HtmlView::rotate_device(view);
+    check(rotated && rotated->width == 844 && rotated->height == 390 &&
+              rotated->rotated,
+          "device viewport: rotate swaps selected dimensions");
+    settle_browser(view);
+    metrics = browser_viewport_metrics(view);
+    check(metrics.value("width", 0) == 844 &&
+              metrics.value("height", 0) == 390,
+          "device viewport: rotation changes real WebKit dimensions");
+
+    const auto desktop = monkeybyte::HtmlView::set_device_preset(
+        view, "desktop-1920x1080");
+    check(desktop && desktop->width == 1920 && desktop->height == 1080,
+          "device viewport: desktop preset is selectable");
+    settle_browser(view);
+    metrics = browser_viewport_metrics(view);
+    check(metrics.value("width", 0) == 1920 &&
+              metrics.value("height", 0) == 1080,
+          "device viewport: large desktop uses a scrollable full-size viewport");
+    check(metrics.value("userAgent", "").find("Mobile") == std::string::npos,
+          "device viewport: desktop preset restores desktop User-Agent");
+
+    const auto fitted = monkeybyte::HtmlView::fit_device_to_window(view);
+    check(fitted && fitted->width == 0 && fitted->height == 0 &&
+              fitted->preset.empty() && !fitted->rotated,
+          "device viewport: Fit to Window clears fixed preset state");
+    settle_browser(view);
+    metrics = browser_viewport_metrics(view);
+    check(metrics.value("width", 0) > 0 &&
+              metrics.value("width", 0) < 1920,
+          "device viewport: Fit to Window restores the allocated tab width");
+
+    const auto invalid = monkeybyte::HtmlView::set_device_preset(
+        view, "not-a-device");
+    check(!invalid && invalid.error().find("unknown device preset") !=
+                          std::string::npos,
+          "device viewport: unknown preset returns a clear error");
+    const auto rotate_fit = monkeybyte::HtmlView::rotate_device(view);
+    check(!rotate_fit && rotate_fit.error().find("select a preset") !=
+                              std::string::npos,
+          "device viewport: rotating Fit to Window explains the required action");
+    window.hide();
+    pump_browser_events(20);
+}
+
 void test_browser_long_url_layout() {
     auto app = Gtk::Application::create();
     if (!Gdk::Display::get_default()) {
@@ -2012,6 +2188,8 @@ int main() {
     test_user_commands();
     test_html_to_text();
     test_fountain_zoom();
+    test_browser_device_tool_schema();
+    test_browser_device_viewport();
     test_browser_long_url_layout();
     test_browser_console_capture_is_bounded();
     test_activity_bar_theme_borders();

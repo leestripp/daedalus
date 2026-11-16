@@ -171,8 +171,9 @@ tabs. Browser tabs are ephemeral and are not persisted as workspace files.
 `editor.open_as` opens Markdown/HTML in a **custom read-only preview viewer**.
 These previews are a separate tab type, not browser tabs: they do not appear in
 `browser.list` and cannot be driven by `browser.navigate`, `browser.read`,
-`browser.eval`, `browser.links`, `browser.console`, `browser.upload`, or
-`browser.close`. Use `browser.open` when the agent needs `browser.*` control.
+`browser.eval`, `browser.links`, `browser.console`, `browser.upload`,
+`browser.device`, or `browser.close`. Use `browser.open` when the agent
+needs `browser.*` control.
 
 Long URLs must be ellipsized in the tab header. Console forwarding is batched
 and size-bounded to prevent WebKit IPC or a chatty page from flooding the GTK
@@ -192,7 +193,7 @@ Current commands are:
 |---|---|
 | Layout | `sizer.begin`, `sizer.delta`, `sizer.end`, `panel.width`, `panel.switch` |
 | Editor | `editor.open`, `editor.open_as`, `editor.selection` |
-| Browser | `browser.open`, `browser.navigate`, `browser.read`, `browser.eval`, `browser.links`, `browser.console`, `browser.upload`, `browser.list`, `browser.close` |
+| Browser | `browser.open`, `browser.navigate`, `browser.read`, `browser.eval`, `browser.links`, `browser.console`, `browser.upload`, `browser.device`, `browser.list`, `browser.close` |
 | Introspection/testing | `app.geometry`, `app.measure`, `app.screenshot`, `app.themeprobe`, `app.widgettree`, `app.commands` |
 | Chat | `chat.send`, `chat.cancel` |
 
@@ -200,6 +201,17 @@ Argument details live beside each registration in `ui/MainWindow.cpp` and in
 `app.commands`. Commands return structured JSON, normally `{"ok": ...}` or
 `{"error": ...}`. Browser evaluation is asynchronous at the WebKit boundary but
 presented through the same command result contract.
+
+`browser.device` exposes the 📱 menu's responsive-testing state. With no
+action it returns all presets (stable `id`, menu `label`, dimensions, and
+`mobile` UA flag) plus `current`. `{preset:"iphone-14-15"}` selects a
+preset; add `rotate:true` to swap its dimensions. `{rotate:true}` without
+a preset rotates the current fixed size, and `{fit:true}` restores the
+allocated tab size. Actions return the selected dimensions and rotation
+state. Preset selection and rotation reload the page, as the menu does, so
+UA-sniffing sites see the updated User-Agent. The actual viewport can then
+be verified with `browser.eval` using `window.innerWidth` and
+`window.innerHeight`.
 
 ### Loopback HTTP control server
 

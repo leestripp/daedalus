@@ -1,8 +1,12 @@
 #pragma once
 
 #include <gtkmm.h>
+#include <expected>
 #include <functional>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <webkit/webkit.h>
 
@@ -71,6 +75,37 @@ public:
     // create_html_file (nullptr for markdown views). Lets UiControl
     // commands (browser.read/navigate/list) drive an open browser tab.
     static WebKitWebView* browser_view_of(Gtk::Widget* browser_page);
+
+    // Responsive-testing presets shared by the nav-bar menu and
+    // browser.device. IDs are stable agent/automation identifiers; labels
+    // are the human-readable menu text. A null user_agent selects the
+    // standard desktop UA.
+    struct DevicePreset {
+        const char* id;
+        const char* label;
+        int width;
+        int height;
+        const char* user_agent;
+    };
+
+    // Current preset geometry. 0×0 and an empty preset mean Fit to Window.
+    struct DeviceSize {
+        int width = 0;
+        int height = 0;
+        std::string preset;
+        std::string label;
+        bool rotated = false;
+    };
+
+    static std::span<const DevicePreset> device_presets();
+    static std::optional<DeviceSize> device_size(WebKitWebView* view);
+    static std::expected<DeviceSize, std::string>
+    set_device_preset(WebKitWebView* view, std::string_view id_or_label,
+                      bool rotate = false);
+    static std::expected<DeviceSize, std::string>
+    rotate_device(WebKitWebView* view);
+    static std::expected<DeviceSize, std::string>
+    fit_device_to_window(WebKitWebView* view);
 
     // A captured console/page-error entry (design §6 browser.console).
     struct ConsoleEntry {

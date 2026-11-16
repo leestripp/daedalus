@@ -22,7 +22,9 @@ public:
                "JavaScript in the page (browser.eval — DOM state, clicks, "
                "form fills), list its links (browser.links), and read "
                "captured console/page errors (browser.console) for "
-               "debugging; read the current editor text selection, and read "
+               "debugging, and list/select responsive device viewport "
+               "presets (browser.device) for layout testing; read the "
+               "current editor text selection, and read "
                "window geometry. editor.open_as opens a custom read-only "
                "Markdown/HTML preview viewer, NOT a browser tab. browser.* "
                "commands operate only on browser tabs created by browser.open "
@@ -38,7 +40,8 @@ public:
              "panel.switch | editor.open | editor.open_as | browser.open | "
              "browser.navigate | browser.read | browser.eval | "
              "browser.links | browser.console | browser.upload | "
-             "browser.list | browser.close | editor.selection | "
+             "browser.device | browser.list | browser.close | "
+             "editor.selection | "
              "app.geometry | app.commands"},
         };
         properties["args"] = {
@@ -51,6 +54,9 @@ public:
              "{selector:'main',max_chars:4000} for browser.read, "
              "{script:'document.title'} for browser.eval, "
              "{max_entries:50,clear:true} for browser.console, "
+             "{} for browser.device preset list/current size, "
+             "{preset:'iphone-14-15',rotate:false} to select a viewport, "
+             "{fit:true} to fill the tab, "
              "{path:'/abs/file'} for browser.upload (queue file, then "
              "click the page's file input via browser.eval)"},
         };
