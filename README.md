@@ -9,6 +9,12 @@ monorepo.
 | [`icarus/`](icarus/) | Terminal host — streaming REPL with slash commands and an A2A (Agent2Agent) HTTP server mode. |
 | [`monkeybyte/`](monkeybyte/) | Desktop host — GTK4/gtkmm code editor with agent chat panel, WebKit previews, and an HTTP UI-automation server. |
 
+The library distinguishes **Send**-style normal messages, which queue for the
+next task, from thread-safe **Steer** messages, which inject guidance into the
+active task after a complete tool-call batch. MonkeyByte exposes both from the
+composer; hosts embed the behavior with
+[`Agent::submit_steer_message()`](daedalus/docs/embedding.md#wiring-your-own-input-source-phase-5).
+
 ## Build everything
 
 ```bash

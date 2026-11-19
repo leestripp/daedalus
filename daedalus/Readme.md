@@ -14,8 +14,9 @@ changes. Start with [`docs/index.md`](docs/index.md) and
 
 ## What the library provides
 
-- A synchronous, host-driven agent loop with queued user messages,
-  cancellation, context compaction, persistent transcripts, and crash recovery.
+- A synchronous, host-driven agent loop with queued normal user messages,
+  thread-safe steering for the active turn, cancellation, context compaction,
+  persistent transcripts, and crash recovery.
 - OpenAI-compatible providers plus provider-specific plugins for MiniMax,
   Moonshot/Kimi, and LM Studio, including streaming and thinking controls.
 - A focused built-in tool set: bash, user/status controls, skills, session

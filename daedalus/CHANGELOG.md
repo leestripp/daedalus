@@ -48,6 +48,21 @@
 
 ### Added
 
+- **§STEER-MESSAGE (2026-11-19): safe mid-turn guidance for the active
+  task.** The new public `Agent::submit_steer_message(text, source)` API uses
+  a separate mutex-protected queue rather than the normal next-turn FIFO. The
+  driving thread drains it only before a new model cycle or after a
+  non-terminal cycle has completely returned, so an assistant response
+  containing multiple tool calls is always followed by every matching tool
+  result before a steer arrives. `pending_steer_count()` closes the
+  submission-vs-shutdown race with an empty-prompt, steer-only continuation;
+  `clear_steer_messages()` discards uninjected guidance after cancellation or
+  failure. MonkeyByte exposes the behavior as a **Steer** button directly
+  above **Send**, enabled only while a turn is processing and preserving
+  composer text if the turn ends first. Normal Send semantics are unchanged.
+  The provider-conversation regression returns two tool calls in one response
+  and asserts the exact assistant → tool A → tool B → steer sequence.
+
 - **§SCHEDULED-TASKS (2026-11-11): persistent one-shot and recurring agent
   tasks.** The new `schedule_task` tool supports add/list/edit/delete with UTC
   `run_at` deadlines or fixed `interval_seconds` recurrence. Each agent stores

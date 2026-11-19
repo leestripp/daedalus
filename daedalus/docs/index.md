@@ -9,13 +9,14 @@ embedding `libdaedalus.a` and for core contributors.
 
 | File | Audience | Description |
 |------|----------|-------------|
-| [`embedding.md`](embedding.md) | **Host developers** | Complete embedding guide: minimum viable host, `AgentSink` contract, config, lifecycle, cancellation, provider/model setup, composition patterns. |
+| [`embedding.md`](embedding.md) | **Host developers** | Complete embedding guide: minimum viable host, `AgentSink` contract, config, lifecycle, normal and steer input queues, cancellation, provider/model setup, composition patterns. |
 
 ### Quick Reference (in embedding.md)
 
 | Section | What it covers |
 |---------|---------------|
 | [Callback Data Reference](embedding.md#callback-data-reference) | **What data each callback receives** — critical for understanding when to use `on_tool_call` vs `on_log` vs `on_assistant_delta` |
+| [Input Sources](embedding.md#wiring-your-own-input-source-phase-5) | Normal queued messages versus safe mid-turn steering, including thread-safety and shutdown-race rules |
 | [Provider / Model Configuration](embedding.md#provider--model-configuration) | How to create `ProviderConfig` and `ModelConfig` entries in `SettingsStore` |
 
 ## Agent Internals

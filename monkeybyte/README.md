@@ -120,9 +120,11 @@ The side-panel chat is a full agent session, not a one-shot prompt box:
 
 - **Keep typing while it works** — the input is never disabled. Messages
   sent mid-turn with **Send** are queued (FIFO) and run when the current
-  turn finishes. **Steer** (above Send) instead injects guidance into the
-  active task after the current complete tool-call batch, before the next
-  model request. Stop interrupts the current turn and clears queued work;
+  turn finishes. To steer an active task, type the guidance and click
+  **Steer** (above Send) while the turn is still running; it is injected
+  after the current complete tool-call batch, before the next model request.
+  If the turn ends first, the text stays in the composer so it can be sent
+  normally. Stop interrupts the current turn and clears queued work;
   cancelled turns never leak stale messages into the next one.
 - **Session continuity** — the conversation persists across restarts
   (per workspace). On startup the transcript you see is the agent's own
