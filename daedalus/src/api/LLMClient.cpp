@@ -3039,6 +3039,43 @@ void LLMClient::uninstall_crash_handlers() {
     // Accumulated assistant text goes to sink_->on_assistant_delta(text).
     // ===================================================================
 
+void LLMClient::submit_steer_message(std::string text, std::string source) {
+    std::lock_guard lock(steer_mutex_);
+    pending_steer_messages_.push_back(
+        {std::move(text), source.empty() ? "user" : std::move(source)});
+}
+
+size_t LLMClient::pending_steer_count() const noexcept {
+    std::lock_guard lock(steer_mutex_);
+    return pending_steer_messages_.size();
+}
+
+void LLMClient::clear_steer_messages() noexcept {
+    std::lock_guard lock(steer_mutex_);
+    pending_steer_messages_.clear();
+}
+
+bool LLMClient::append_pending_steer_messages(json& messages) {
+    std::vector<PendingSteerMessage> pending;
+    {
+        std::lock_guard lock(steer_mutex_);
+        if (pending_steer_messages_.empty()) return false;
+        pending.swap(pending_steer_messages_);
+    }
+
+    // SAFETY: callers invoke this only before a new model cycle or after
+    // run_agent_cycle() has returned ACT/BUILD_TEST. In the latter case the
+    // assistant's ENTIRE tool-call batch and all matching tool results have
+    // already been appended. A user message here cannot split a tool block.
+    for (auto& steer : pending) {
+        json user_msg = {{"role", "user"}, {"content", std::move(steer.text)}};
+        Messages::stamp(user_msg, steer.source);
+        messages.push_back(std::move(user_msg));
+    }
+    if (messages_) messages_->mark_dirty();
+    return true;
+}
+
 AgentState LLMClient::run_one_turn(const std::string& user_message,
                                    std::string_view source) {
     // §AutoCompress: hold the turn guard for the whole turn so
@@ -3265,6 +3302,11 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
         messages.push_back(std::move(user_msg));
     }
 
+    // §STEER-MESSAGE: a steer that arrived just after the previous turn's
+    // final boundary is safe to consume now, before this turn's first API
+    // request. AgentImpl permits an empty normal prompt for this case.
+    append_pending_steer_messages(messages);
+
     // PERSIST-DIRTY (2026-08-31): the pushes above went through the raw
     // json& reference, bypassing add_*() - mark the chain dirty so the
     // write-through flush worker persists the new turn promptly instead
@@ -3347,6 +3389,16 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
         }
 
         AgentState result_state = run_agent_cycle(api_url, messages, tool_defs);
+
+        // §STEER-MESSAGE: this is the safe mid-turn injection boundary.
+        // run_agent_cycle() has returned, its per-tool cleanup is complete,
+        // and for ACT/BUILD_TEST every result in the tool-call batch is in
+        // history. Do NOT move this into the per-tool loop: a user message
+        // between outstanding tool results violates provider chain rules.
+        if (result_state == AgentState::ACT
+            || result_state == AgentState::BUILD_TEST) {
+            append_pending_steer_messages(messages);
+        }
 
         // Auto-compress at 90% threshold OR when the host asked for it via
         // Agent::compress_context() (§AutoCompress).

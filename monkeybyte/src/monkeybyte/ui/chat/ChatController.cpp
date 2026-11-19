@@ -543,6 +543,30 @@ void ChatController::run_pending_turn() {
     }
 }
 
+bool ChatController::steer_message(const std::string& text) {
+    if (text.empty()) return false;
+
+    // Match normal Send's agent-only editor context, but keep the immediate
+    // chat echo limited to what the user actually typed.
+    std::string full = text;
+    if (context_provider_) {
+        std::string ctx;
+        ui_guard("context_provider", [&] { ctx = context_provider_(); });
+        if (!ctx.empty()) full = ctx + "\n\n" + text;
+    }
+
+    // Serialize submission with the worker's final queue check. Either the
+    // worker observes this steer before going Idle, or this returns false
+    // and the panel leaves the text in the composer for a normal Send.
+    {
+        std::lock_guard lock(state_mutex_);
+        if (!agent_ || state_ != ChatState::Processing) return false;
+        agent_->submit_steer_message(std::move(full), interactive_source());
+    }
+    user_message_sent.emit(text);
+    return true;
+}
+
 void ChatController::send_message(const std::string& text,
                                   const std::string& model_display) {
     // Empty text is reserved for run_pending_turn(): daedalus already owns
@@ -567,11 +591,11 @@ void ChatController::send_message(const std::string& text,
         if (!ctx.empty()) full = ctx + "\n\n" + text;
     }
 
-    // Every message lands in the host queue first. When a turn is already
-    // running the message stays queued and the turn thread's drain loop
-    // picks it up when the agent exits its current loop — daedalus's own
-    // submit_user_message queue is not safe to touch cross-thread, so the
-    // turn thread is the ONLY thread that ever talks to it. The push and
+    // Every NORMAL message lands in the host queue first. When a turn is
+    // already running it stays queued until the turn thread's drain loop
+    // picks it up. Keeping normal submission on the driving thread preserves
+    // editor context and echo ordering; steers use their own thread-safe API.
+    // The push and
     // the state check/transition share state_mutex_ with the drain loop's
     // final empty-check, so a message can never strand between "queue
     // empty" and "gone Idle".
@@ -625,12 +649,19 @@ void ChatController::send_message(const std::string& text,
                         }
                     } else if (reason != "error"
                                && (turn_requested_
-                                   || (agent_ && agent_->pending_count() > 0))) {
+                                   || (agent_ && agent_->pending_count() > 0)
+                                   || (agent_
+                                       && agent_->pending_steer_count() > 0))) {
                         // The completion is already in daedalus's queue.
                         // Clearing the flag and checking it in this same
                         // critical section prevents a final-check/Idle race.
                         turn_requested_ = false;
                     } else {
+                        // Error cleanup shares the final state lock so a
+                        // last-moment Steer either joins this cleanup or
+                        // sees the terminal state and is rejected.
+                        if (reason == "error" && agent_)
+                            agent_->clear_steer_messages();
                         // Final queue check and the resting-state
                         // transition are one atomic step: a main-thread
                         // send either landed in the queue before this
@@ -684,6 +715,8 @@ void ChatController::send_message(const std::string& text,
                             " message(s) in daedalus's queue — clearing");
                         agent_->clear_pending_messages();
                     }
+                    // Steering belongs to the interrupted task only.
+                    agent_->clear_steer_messages();
                 }
                 else if (s == daedalus::AgentState::Error) {
                     reason = "error";
@@ -694,6 +727,9 @@ void ChatController::send_message(const std::string& text,
                         ? "The agent reported an error."
                         : details);
                 } else if (agent_->turn_had_terminal_error()) {
+                    // A failed task must not leak uninjected guidance into
+                    // an unrelated later prompt.
+                    agent_->clear_steer_messages();
                     // §7.2 / §TURN-ERROR (daedalus 2b25f27, our BUG-4):
                     // terminal LLM failure (e.g. a fatal HTTP 4xx like
                     // "invalid temperature") still ends the turn as Done —
@@ -723,6 +759,8 @@ void ChatController::send_message(const std::string& text,
         if (!transitioned) {
             // Exception path: the loop's atomic transition never ran.
             std::lock_guard lock(state_mutex_);
+            if (reason == "error" && agent_)
+                agent_->clear_steer_messages();
             state_ = rest;
         }
         state_changed.emit(rest);

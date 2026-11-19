@@ -93,6 +93,7 @@ private:
     void set_processing(bool processing);
     void show_error(const std::string& message);
     void on_send();
+    void on_steer();
     // §READ-IMAGE — attach-button flow: vision gate, file dialog, then
     // the chosen path is appended to the input as ![name](path), which
     // daedalus's LLMClient turns into an image_url content part.
@@ -155,6 +156,7 @@ private:
     // input
     Gtk::TextView input_;
     Gtk::Button send_btn_;
+    Gtk::Button steer_btn_;
     Gtk::MenuButton commands_btn_; // §7.8 — "/" user commands
     Gtk::Button attach_btn_;       // §READ-IMAGE — image attachment
     Gtk::Button mic_btn_;          // §CHIMPFLOW — dictation toggle

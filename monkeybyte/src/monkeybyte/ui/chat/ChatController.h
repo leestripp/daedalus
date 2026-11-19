@@ -53,6 +53,9 @@ public:
     ChatController& operator=(const ChatController&) = delete;
 
     void send_message(const std::string& text, const std::string& model_display);
+    // Inject guidance into the active turn after its current complete
+    // tool-call batch. Returns false when no agent turn is actively running.
+    bool steer_message(const std::string& text);
     // GTK-main-thread entry point for AgentSink::on_turn_requested. The
     // library has already queued the completion; this only schedules a drain.
     void run_pending_turn();
@@ -190,8 +193,9 @@ private:
     // the remainder going FIRST on the next send, and sharing
     // state_mutex_ makes "busy -> enqueue" vs. "queue empty -> go Idle"
     // atomic so a message can never strand behind the drain loop's final
-    // empty check. The turn thread alone feeds daedalus; §QUEUE-JOIN
-    // (2026-10-04) — the drain loop joins the whole queue into ONE
+    // empty check. The turn thread alone feeds this NORMAL queue;
+    // steer_message() uses daedalus's separate synchronized mid-turn queue.
+    // §QUEUE-JOIN (2026-10-04) — the drain loop joins the whole queue into ONE
     // message per submit + run_one_turn, in FIFO order.
     std::deque<std::string> queued_messages_;
     // Set by a background-completion wake while the worker is busy. The

@@ -766,6 +766,22 @@ void AgentImpl::submit_user_message(std::string text,
         {std::move(text), std::move(images), std::move(source)});
 }
 
+void AgentImpl::submit_steer_message(std::string text, std::string source) {
+    if (!body_->client) {
+        LOG_WARNING("Agent::submit_steer_message() ignored: no initialized model client");
+        return;
+    }
+    body_->client->submit_steer_message(std::move(text), std::move(source));
+}
+
+size_t AgentImpl::pending_steer_count() const noexcept {
+    return body_->client ? body_->client->pending_steer_count() : 0;
+}
+
+void AgentImpl::clear_steer_messages() noexcept {
+    if (body_->client) body_->client->clear_steer_messages();
+}
+
 bool AgentImpl::edit_pending_message(
     size_t index,
     std::string new_text,
@@ -987,6 +1003,10 @@ void AgentImpl::run_one_turn(std::stop_token st)
     // whole turn. A stop_requested token leaves the message queued
     // (checked above, before consuming).
     PendingUserMessage pending;
+    // A steer submitted during the tiny previous-turn shutdown window is
+    // sufficient work on its own; LLMClient drains it before the first cycle.
+    const bool has_pending_steer =
+        body_->client && body_->client->pending_steer_count() > 0;
     struct TurnActiveGuard {
         AgentImpl& agent;
         ~TurnActiveGuard() {
@@ -996,38 +1016,42 @@ void AgentImpl::run_one_turn(std::stop_token st)
     } turn_active_guard{*this};
     {
         std::lock_guard<std::mutex> lk(pending_mutex_);
-        if (pending_user_messages_.empty()) {
-            // No queued message — no-op.
+        if (pending_user_messages_.empty() && !has_pending_steer) {
+            // No queued normal or steer message — no-op.
             return;
         }
         turn_active_ = true;
-        // §QUEUE-JOIN (2026-10-04): drain the WHOLE queue as ONE message.
-        // Messages submitted while a turn was busy (a follow-up change, a
-        // correction to an earlier queued item, ...) are the user's single
-        // intent for the next turn — dispatching them one at a time made
-        // the model answer a stale message after newer ones and cost one
-        // full turn per queued item. Join texts FIFO with a blank line,
-        // concatenate images in queue order, and merge sources (identical
-        // → that source; mixed → distinct sources, first-appearance order,
-        // comma-joined, so the §MSG-HEADERS wire header stays truthful).
-        LOG_DEBUG("run_one_turn: dispatching "
-                  + std::to_string(pending_user_messages_.size())
-                  + " pending message(s) as one joined message");
-        pending = std::move(pending_user_messages_.front());
-        pending_user_messages_.erase(pending_user_messages_.begin());
-        std::vector<std::string> sources;
-        sources.push_back(pending.source);
-        while (!pending_user_messages_.empty()) {
-            PendingUserMessage next =
-                std::move(pending_user_messages_.front());
+        // Steer-only continuation: LLMClient owns that separate queue, so
+        // the normal queue's front()/join path is skipped entirely.
+        if (!pending_user_messages_.empty()) {
+            // §QUEUE-JOIN (2026-10-04): drain the WHOLE queue as ONE message.
+            // Messages submitted while a turn was busy (a follow-up change, a
+            // correction to an earlier queued item, ...) are the user's single
+            // intent for the next turn — dispatching them one at a time made
+            // the model answer a stale message after newer ones and cost one
+            // full turn per queued item. Join texts FIFO with a blank line,
+            // concatenate images in queue order, and merge sources (identical
+            // → that source; mixed → distinct sources, first-appearance order,
+            // comma-joined, so the §MSG-HEADERS wire header stays truthful).
+            LOG_DEBUG("run_one_turn: dispatching "
+                      + std::to_string(pending_user_messages_.size())
+                      + " pending message(s) as one joined message");
+            pending = std::move(pending_user_messages_.front());
             pending_user_messages_.erase(pending_user_messages_.begin());
-            pending.text += "\n\n" + next.text;
-            pending.images.insert(pending.images.end(),
-                                  std::make_move_iterator(next.images.begin()),
-                                  std::make_move_iterator(next.images.end()));
-            if (std::ranges::find(sources, next.source) == sources.end()) {
-                pending.source += ", " + next.source;
-                sources.push_back(next.source);
+            std::vector<std::string> sources;
+            sources.push_back(pending.source);
+            while (!pending_user_messages_.empty()) {
+                PendingUserMessage next =
+                    std::move(pending_user_messages_.front());
+                pending_user_messages_.erase(pending_user_messages_.begin());
+                pending.text += "\n\n" + next.text;
+                pending.images.insert(pending.images.end(),
+                                      std::make_move_iterator(next.images.begin()),
+                                      std::make_move_iterator(next.images.end()));
+                if (std::ranges::find(sources, next.source) == sources.end()) {
+                    pending.source += ", " + next.source;
+                    sources.push_back(next.source);
+                }
             }
         }
     }

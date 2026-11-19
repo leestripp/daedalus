@@ -471,6 +471,13 @@ void ChatPanel::build_input() {
     send_btn_.add_css_class("suggested-action");
     send_btn_.signal_clicked().connect([this] { on_send(); });
 
+    steer_btn_.set_label("Steer");
+    steer_btn_.add_css_class("suggested-action");
+    steer_btn_.set_tooltip_text(
+        "Inject guidance into the running agent after its current tool-call batch");
+    steer_btn_.set_sensitive(false);
+    steer_btn_.signal_clicked().connect([this] { on_steer(); });
+
     // §READ-IMAGE — image attachment. Emits ![name](path) into the input,
     // which daedalus turns into an image_url part for vision models.
     attach_btn_.set_icon_name("mb-file-image-symbolic");
@@ -511,7 +518,11 @@ void ChatPanel::build_input() {
     bar->append(attach_btn_);
     bar->append(mic_btn_);
     bar->append(*input_scroll);
-    bar->append(send_btn_);
+    auto* send_stack = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::VERTICAL, 6);
+    send_stack->set_valign(Gtk::Align::END);
+    send_stack->append(steer_btn_);
+    send_stack->append(send_btn_);
+    bar->append(*send_stack);
     append(*bar);
 }
 
@@ -519,6 +530,7 @@ void ChatPanel::build_input() {
 void ChatPanel::wire_controller() {
     marshal<ChatState>(controller_->state_changed, [this](ChatState s) {
         set_processing(s == ChatState::Processing || s == ChatState::Cancelling);
+        steer_btn_.set_sensitive(s == ChatState::Processing);
         // §7.6 — the strip mirrors the agent state at all times.
         if (s == ChatState::Processing) show_activity("Thinking…");
         else if (s == ChatState::Cancelling) show_activity("Cancelling…");
@@ -871,6 +883,22 @@ void ChatPanel::on_send() {
     error_banner_.set_visible(false);
     input_.get_buffer()->set_text("");
     controller_->send_message(text, current_model_display());
+}
+
+void ChatPanel::on_steer() {
+    const auto text = input_.get_buffer()->get_text();
+    if (text.empty()
+        || text.find_first_not_of(" \t\n\r") == Glib::ustring::npos)
+        return;
+
+    if (controller_->steer_message(text)) {
+        error_banner_.set_visible(false);
+        input_.get_buffer()->set_text("");
+    } else {
+        // The turn may have ended between the click and submission. Keep the
+        // composer intact so the user can send it as the next normal task.
+        show_error("The agent is no longer running. Use Send to start a new task.");
+    }
 }
 
 nlohmann::json ChatPanel::send_message_sync(const std::string& text,

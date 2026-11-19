@@ -2152,6 +2152,23 @@ target_link_libraries(daedalus_status_only_breaker_tests PRIVATE
 )
 add_test(NAME status_only_breaker_tests COMMAND daedalus_status_only_breaker_tests)
 
+# §STEER-MESSAGE: prove cross-thread guidance lands only after a complete
+# multi-tool result block, using a gated in-process OpenAI-compatible server.
+add_executable(daedalus_steer_message_tests
+    test_steer_messages.cpp
+)
+target_include_directories(daedalus_steer_message_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_steer_message_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME steer_message_tests COMMAND daedalus_steer_message_tests)
+
 # ============================================================================
 # §Monorepo (2026-09-24): label every daedalus test "lib" so the superbuild
 # root can offer `ctest -L lib` slices. Must happen here — test names are

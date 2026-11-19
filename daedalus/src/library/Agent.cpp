@@ -49,6 +49,15 @@ void Agent::submit_user_message(std::string text,
     impl_->submit_user_message(std::move(text), std::move(imgs),
                                std::move(source));
 }
+void Agent::submit_steer_message(std::string text, std::string source)
+{
+    impl_->submit_steer_message(std::move(text), std::move(source));
+}
+size_t Agent::pending_steer_count() const noexcept
+{
+    return impl_->pending_steer_count();
+}
+void Agent::clear_steer_messages() noexcept { impl_->clear_steer_messages(); }
 void Agent::cancel() noexcept { impl_->cancel(); }
 size_t Agent::pending_count() const noexcept { return impl_->pending_count(); }
 

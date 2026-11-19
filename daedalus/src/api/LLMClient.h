@@ -158,6 +158,22 @@ private:
     std::mutex turn_mutex_;
     std::atomic<bool> turn_active_{false};
 
+    // §STEER-MESSAGE (2026-11-19): host guidance queued independently of
+    // the normal next-turn user queue. Cross-thread submits only touch this
+    // mutex-protected queue; the driving thread drains it at a completed
+    // cycle boundary, never between an assistant tool_call and its results.
+    struct PendingSteerMessage {
+        std::string text;
+        std::string source;
+    };
+    mutable std::mutex steer_mutex_;
+    std::vector<PendingSteerMessage> pending_steer_messages_;
+
+    // Append a snapshot of the steer queue to the stored conversation.
+    // Called by run_one_turn() before its first cycle and after a complete
+    // non-terminal tool cycle (all results already committed).
+    bool append_pending_steer_messages(json& messages);
+
     // §TURN-ERROR (2026-09-10, MonkeyByte BUG-4): the last terminal
     // (will_retry=false) error of the current/most recent turn. Terminal
     // LLM failures end the turn as DONE — hosts query
@@ -505,6 +521,13 @@ public:
     /// message's `_meta` so the model can tell who/what sent it and when.
     AgentState run_one_turn(const std::string& user_message,
                             std::string_view source = "user");  // Phase 2.5: extracted agent cycle (returns when agent emits stop/cancel)
+
+    /// §STEER-MESSAGE: queue guidance for the active turn from any thread.
+    /// It is injected after the current complete tool-call batch (or before
+    /// the next cycle when queued between turns), never during tool cleanup.
+    void submit_steer_message(std::string text, std::string source = "user");
+    [[nodiscard]] size_t pending_steer_count() const noexcept;
+    void clear_steer_messages() noexcept;
 
     /// §READ-IMAGE-CORE follow-up (2026-08-10): queue host-supplied image
     /// attachments for the next chat request. Shares the read_image

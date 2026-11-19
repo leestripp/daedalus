@@ -130,6 +130,24 @@ public:
                              std::vector<ImageAttachment> imgs,
                              std::string source);
 
+    /// @brief Queue a steer message for the active turn. Unlike
+    ///        submit_user_message(), this does NOT wait for the whole task
+    ///        to finish. The driving thread injects it after the current
+    ///        complete tool-call batch has returned and every tool result
+    ///        is committed, immediately before the next model request.
+    ///
+    /// Thread-safe: callable from any thread (for example, a UI Steer
+    /// button). A message arriving between turns is consumed before the
+    /// next turn's first request; pending_steer_count() lets hosts prevent
+    /// that shutdown race from stranding it. Call initialize() first.
+    void submit_steer_message(std::string text, std::string source = "user");
+
+    /// @brief Number of steer messages not yet injected into a model cycle.
+    [[nodiscard]] size_t pending_steer_count() const noexcept;
+
+    /// @brief Drop uninjected steer messages (for example after cancellation).
+    void clear_steer_messages() noexcept;
+
     /// @brief Number of submitted user messages not yet consumed by
     ///        run_one_turn(). Anything other than the expected 0/1 means
     ///        submits and turns have drifted out of sync.

@@ -1290,8 +1290,8 @@ implicitly.
 The library is **input-source agnostic**. It never reads from
 `std::cin`, never sets terminal raw mode, and never installs ordinary
 interrupt/termination signal handlers. Fatal crash handlers are a separate,
-explicit opt-in described under **Cancellation**. There is exactly one way to feed input to a running
-agent:
+explicit opt-in described under **Cancellation**. There are two deliberately distinct ways to feed
+input to an agent:
 
 1. **`Agent::submit_user_message(std::string)`** — push text into
    the agent's pending-message queue. The next `run_one_turn()`
@@ -1318,8 +1318,25 @@ agent:
    queued, and resubmitting duplicates it. The callback carries no message
    text; `pending_messages()` is available if the host needs to inspect it.
 
-2. **Pending queue management** — hosts can inspect and rewrite the
-   queue of not-yet-consumed user messages (e.g. a chat UI that shows
+2. **`Agent::submit_steer_message(text, source)`** — queue host guidance for
+   the ACTIVE turn instead of waiting for the next task. Submission is
+   thread-safe. The driving thread drains this separate queue only before a
+   new model cycle or after a non-terminal cycle has completely returned.
+   For an assistant response containing multiple tool calls, this means ALL
+   matching tool results are already adjacent in history; a steer is never
+   inserted between an individual tool return and the rest of its batch.
+
+   `Agent::pending_steer_count()` reports uninjected messages. A host should
+   include it in its turn-shutdown check so a steer submitted just as the
+   previous turn ends gets another `run_one_turn()` (an empty normal prompt
+   is valid for this steer-only continuation). At the start of that turn the
+   steer is consumed before the first request.
+   `Agent::clear_steer_messages()` discards uninjected guidance after cancel
+   or failure so it cannot leak into an unrelated later task. Call
+   `initialize()` before submitting a steer.
+
+3. **Pending queue management** — hosts can inspect and rewrite the
+   NORMAL next-turn queue of not-yet-consumed user messages (e.g. a chat UI that shows
    the user's queued follow-ups and lets them edit or drop them):
 
    - `Agent::pending_messages()` — snapshot of the queue as
@@ -1334,10 +1351,9 @@ agent:
    - `Agent::clear_pending_messages()` — drop the whole queue.
 
 > **Removed in v0.4.0:** `AgentSink::request_user_input(...)` and the
-> `ask_user` tool. The agent has no mid-turn user-prompting path.
-> If your host needs a back-and-forth, submit the next user message
-> in the host's outer loop between `run_one_turn()` calls (or call
-> `agent.cancel()` to interrupt the current turn first).
+> `ask_user` tool. The model has no tool-driven user-prompting path. A host
+> may either submit the next normal message between `run_one_turn()` calls
+> or use the bounded steer-injection path above.
 
 ### Example: minimal std::getline host
 

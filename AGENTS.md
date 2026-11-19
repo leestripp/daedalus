@@ -1673,6 +1673,12 @@ re-configure (`CONFIGURE_DEPENDS`).
   origins into one dispatch. The host still pairs submissions with driven
   turns: an idle `submit_user_message()` without `run_one_turn()` remains
   pending. Use `pending_count()` and `on_turn_requested()` for scheduling.
+- **Steer vs Send (§STEER-MESSAGE, 2026-11-19):** Send keeps the normal FIFO
+  above. Steer uses `submit_steer_message()` and a separate synchronized queue
+  consumed only before a new model cycle or after a complete non-terminal
+  tool-call batch. Never inject inside the per-tool loop or between a
+  multi-call assistant and all of its results. The worker's final drain check
+  includes `pending_steer_count()`; cancel/error clears uninjected steers.
 - `/compress` is host-triggered context compression: the host only calls
   `Agent::compress_context()` (daedalus §AutoCompress) and updates the UI —
   daedalus summarizes the oldest ~70 % internally (same path as the 90 %

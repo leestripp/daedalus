@@ -139,8 +139,18 @@ queue-join behavior: messages accumulated before a dispatch can be joined into
 one model input, with image attachments concatenated and origin metadata
 retained. Never leave an idle submission without a driving turn.
 
-Stop cancels the current turn; it does not silently discard later queued user
-intent. Cancellation still emits tool results for any interrupted tool-call
+The composer has separate **Send** and **Steer** buttons. Send always uses the
+normal FIFO above. Steer is enabled only while processing and calls
+`Agent::submit_steer_message()` through its own synchronized queue. Daedalus
+injects it before the next model cycle, only after the current complete
+assistant tool-call batch and every matching result are committed. It never
+injects inside per-tool execution/cleanup or between results in a multi-tool
+batch. The worker includes `pending_steer_count()` in its final drain check,
+closing the submission-vs-Idle race. Cancellation and terminal errors clear
+uninjected steers; normal queued sends retain their existing semantics.
+
+Stop cancels the current turn and clears later queued user intent. Cancellation
+still emits tool results for any interrupted tool-call
 chain. Error, completion, and queued-turn transitions are delivered through
 `AgentSink`, not inferred by scraping terminal output.
 
