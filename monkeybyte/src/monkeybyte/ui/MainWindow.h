@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 
 namespace monkeybyte {
@@ -68,6 +69,7 @@ private:
     // text back via signal_idle. The shared atomics let the detached
     // worker bail out safely after the window is destroyed.
     sigc::connection git_poll_conn_;
+    std::chrono::steady_clock::time_point last_git_fetch_attempt_{};
     std::shared_ptr<std::atomic<bool>> alive_ =
         std::make_shared<std::atomic<bool>>(true);
     std::shared_ptr<std::atomic<bool>> git_poll_in_flight_ =

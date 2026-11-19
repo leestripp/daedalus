@@ -31,6 +31,7 @@ namespace monkeybyte {
 namespace {
 constexpr int kSidebarMin = 150, kSidebarMax = 500;
 constexpr int kChatMin = 250; // no fixed max: the window bounds it (design §7)
+constexpr auto kGitFetchInterval = std::chrono::minutes(1);
 
 int clamp(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
@@ -1082,6 +1083,7 @@ void MainWindow::on_workspace_changed(const std::string& path) {
     ui_guard("on_workspace_changed",
              [&] { services_.store.set("workspace", path); });
     services_.files.set_workspace(path);
+    last_git_fetch_attempt_ = {};
     // §RESTORE-RETRY — the cleared view shows the NEW workspace's session
     // history (nothing was reloaded here, so a pre-existing conversation
     // in the target workspace never appeared).
@@ -1117,51 +1119,49 @@ void MainWindow::update_status_branch() {
         status_bar_->set_branch_info("Not a git repo");
         return;
     }
-    // §8 — branch + dirty count (read-only; same refresh triggers as before).
-    std::string text = st.branch;
-    if (!st.changes.empty())
-        text += " · " + std::to_string(st.changes.size()) +
-                (st.changes.size() == 1 ? " change" : " changes");
-    status_bar_->set_branch_info(text);
+    status_bar_->set_git_info(st);
 }
 
 // §8 — timer tick (every 3 s). GitService::status spawns git subprocesses,
 // which can block on large repos, so the work runs on a detached thread
 // and only the label update is marshaled back to the main loop. Ticks
 // skipped while a previous poll is still running; a transient spawn
-// failure keeps the previous label for this tick.
+// failure keeps the previous label for this tick. Remote-tracking refs are
+// refreshed separately, once a minute, rather than fetching on every tick.
 void MainWindow::poll_git_status() {
     const auto& ws = services_.files.workspace();
     if (ws.empty()) return; // label already hidden by the workspace path
+    const auto now = std::chrono::steady_clock::now();
+    const bool fetch_remote =
+        now - last_git_fetch_attempt_ >= kGitFetchInterval;
     bool expected = false;
     if (!git_poll_in_flight_->compare_exchange_strong(expected, true))
         return;
+    if (fetch_remote) last_git_fetch_attempt_ = now;
     // try/catch: std::thread construction can throw std::system_error, and
     // an exception escaping this GLib timeout would abort the process.
     try {
-        std::thread([this, alive = alive_, in_flight = git_poll_in_flight_, ws] {
-            std::optional<std::string> text; // nullopt = keep the old label
+        std::thread([this, alive = alive_, in_flight = git_poll_in_flight_, ws,
+                     fetch_remote] {
+            std::optional<GitService::Status> status;
             try {
-                const auto st = GitService::status(ws);
-                if (st.is_repo) {
-                    std::string t = st.branch;
-                    if (!st.changes.empty())
-                        t += " · " + std::to_string(st.changes.size()) +
-                             (st.changes.size() == 1 ? " change" : " changes");
-                    text = std::move(t);
-                } else {
-                    text = "Not a git repo";
-                }
+                if (fetch_remote) GitService::fetch_upstream(ws);
+                status = GitService::status(ws);
             } catch (const std::exception&) {
                 // git spawn failed — leave the label alone this tick
             }
-            Glib::signal_idle().connect_once([this, alive, text] {
-                if (*alive && text) status_bar_->set_branch_info(*text);
+            Glib::signal_idle().connect_once([this, alive, status] {
+                if (!*alive || !status) return;
+                if (status->is_repo)
+                    status_bar_->set_git_info(*status);
+                else
+                    status_bar_->set_branch_info("Not a git repo");
             });
             in_flight->store(false);
         }).detach();
     } catch (const std::system_error& e) { // thread spawn failed
         Logger::instance().error(std::string("poll_git_status: ") + e.what());
+        if (fetch_remote) last_git_fetch_attempt_ = {};
         git_poll_in_flight_->store(false); // let the next tick retry
     }
 }

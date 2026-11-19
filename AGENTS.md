@@ -1338,7 +1338,9 @@ src/monkeybyte/
                            SettingsStore (the registry the agent loads, §10.2);
                            parse_json() imports raw provider JSON
                            ("mcpServers" wrapper / keyed / bare, §5.4)
-    GitService             branch + porcelain status (read-only panel, §4.4)
+    GitService             branch + porcelain status + upstream ahead/behind;
+                           bounded non-interactive tracking-ref fetch for the
+                           status bar (read-only working tree/panel, §4.4)
     WebFetch               synchronous GET for the web_fetch agent tool,
                            built on OmniNet's HttpClient (redirects, 10 s
                            timeout, 2 MB cap, §6)

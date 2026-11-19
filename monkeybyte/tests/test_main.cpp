@@ -3,6 +3,7 @@
 // SettingsStore, FileService).
 
 #include "monkeybyte/backend/FileService.h"
+#include "monkeybyte/backend/GitService.h"
 #include "monkeybyte/backend/AudioEngine.h"
 #include "monkeybyte/backend/FileKind.h"
 #include "monkeybyte/backend/FileTemplates.h"
@@ -20,6 +21,7 @@
 #include "monkeybyte/backend/SkillDiscovery.h"
 #include "monkeybyte/tree/WorkspaceTree.h"
 #include "monkeybyte/ui/ActivityBar.h"
+#include "monkeybyte/ui/StatusBar.h"
 #include "monkeybyte/ui/FileIcons.h"
 #include "monkeybyte/ui/theme/ThemeManager.h"
 #include "monkeybyte/ui/HtmlView.h"
@@ -74,6 +76,109 @@ fs::path make_temp_dir(const std::string& name) {
     fs::remove_all(dir);
     fs::create_directories(dir);
     return dir;
+}
+
+void test_git_service() {
+    std::cout << "GitService\n";
+    const auto dir = make_temp_dir("git_service");
+    const auto remote = dir / "remote.git";
+    const auto local = dir / "local";
+    const auto other = dir / "other";
+    const auto unlinked = dir / "unlinked";
+
+    const auto run = [](const std::string& command) {
+        return std::system((command + " >/dev/null 2>&1").c_str()) == 0;
+    };
+    const auto git = [&](const fs::path& repo, const std::string& args) {
+        return run("git -C '" + repo.string() + "' " + args);
+    };
+    const auto write = [](const fs::path& path, const std::string& text) {
+        std::ofstream out(path);
+        out << text;
+    };
+    const auto configure_identity = [&](const fs::path& repo) {
+        return git(repo, "config user.name 'MonkeyByte Test'") &&
+               git(repo, "config user.email 'monkeybyte@localhost'");
+    };
+
+    check(!monkeybyte::GitService::status(dir).is_repo,
+          "plain directory is not a git repository");
+    check(run("git init --bare --initial-branch=main '" + remote.string() + "'"),
+          "create bare remote");
+    check(run("git init --initial-branch=main '" + local.string() + "'"),
+          "create local repository");
+    check(configure_identity(local), "configure local git identity");
+    write(local / "tracked.txt", "initial\n");
+    check(git(local, "add tracked.txt") &&
+              git(local, "commit -m 'Initial commit'") &&
+              git(local, "remote add origin '" + remote.string() + "'") &&
+              git(local, "push -u origin main"),
+          "publish initial main branch");
+
+    auto status = monkeybyte::GitService::status(local);
+    check(status.is_repo && status.branch == "main",
+          "read repository and branch");
+    check(status.upstream == "origin/main" && status.divergence_valid,
+          "read configured upstream");
+    check(status.ahead == 0 && status.behind == 0 && status.changes.empty(),
+          "newly pushed branch is synchronized and clean");
+    check(monkeybyte::format_git_status(status) ==
+              "main · origin/main · up to date",
+          "format synchronized status-bar label");
+
+    check(run("git clone '" + remote.string() + "' '" + other.string() + "'") &&
+              configure_identity(other),
+          "clone second repository");
+    write(other / "remote.txt", "remote\n");
+    check(git(other, "add remote.txt") &&
+              git(other, "commit -m 'Remote commit'") &&
+              git(other, "push origin main"),
+          "push a commit from the second clone");
+
+    status = monkeybyte::GitService::status(local);
+    check(status.behind == 0,
+          "local-only status does not fetch on every poll");
+    check(monkeybyte::GitService::fetch_upstream(local),
+          "fetch upstream tracking refs");
+    status = monkeybyte::GitService::status(local);
+    check(status.ahead == 0 && status.behind == 1,
+          "remote commit is reported as incoming");
+    check(monkeybyte::format_git_status(status) ==
+              "main · origin/main · ↓1",
+          "format remote-ahead status-bar label");
+
+    write(local / "local.txt", "local\n");
+    check(git(local, "add local.txt") && git(local, "commit -m 'Local commit'"),
+          "create a divergent local commit");
+    write(local / "tracked.txt", "initial\ndirty\n");
+    status = monkeybyte::GitService::status(local);
+    check(status.ahead == 1 && status.behind == 1,
+          "diverged branch reports both directions");
+    check(status.changes.size() == 1 && status.changes[0].status == 'M',
+          "working-tree change is retained with tracking information");
+    check(monkeybyte::format_git_status(status) ==
+              "main · origin/main · ↓1 · ↑1 · 1 change",
+          "format diverged status-bar label");
+    const auto tooltip = monkeybyte::format_git_tooltip(status);
+    check(tooltip.find("Remote ahead: 1 commit (incoming)") != std::string::npos &&
+              tooltip.find("Local ahead: 1 commit (outgoing)") != std::string::npos,
+          "tooltip explains incoming and outgoing arrows");
+
+    check(run("git init --initial-branch=main '" + unlinked.string() + "'") &&
+              configure_identity(unlinked),
+          "create repository without an upstream");
+    write(unlinked / "file.txt", "content\n");
+    check(git(unlinked, "add file.txt") && git(unlinked, "commit -m 'Local only'"),
+          "commit branch without an upstream");
+    status = monkeybyte::GitService::status(unlinked);
+    check(status.upstream.empty() && !status.divergence_valid,
+          "branch without upstream has no misleading zero counts");
+    check(!monkeybyte::GitService::fetch_upstream(unlinked),
+          "fetch is a no-op without an upstream");
+    check(monkeybyte::format_git_status(status) == "main · no upstream",
+          "format missing-upstream status-bar label");
+
+    fs::remove_all(dir);
 }
 
 // ── FileKind (Plan.md — system file associations) ───────────────────
@@ -2164,6 +2269,7 @@ int main() {
     Gio::init(); // giomm wrap table (GFileInfo, GAppInfo, …)
 
     test_file_service();
+    test_git_service();
     test_file_kind();
     test_file_templates();
     test_project_types();

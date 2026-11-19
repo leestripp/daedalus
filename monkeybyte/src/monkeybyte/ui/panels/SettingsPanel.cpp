@@ -1493,7 +1493,10 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
         "provider (Bing/DuckDuckGo HTML) needs no key, SearXNG needs your "
         "instance URL, the rest need an "
         "API key. Agents with a built-in browser can also search the web "
-        "like a human — this chain backs the web_search tool itself.");
+        "like a human — this chain backs the web_search tool itself. "
+        "Note: SearXNG itself has NO API keys — its 'API key/token' field "
+        "is optional and only for instances behind a token-gating reverse "
+        "proxy; a Basic-auth instance uses the user/pass fields instead.");
     hint->set_halign(Gtk::Align::START);
     hint->set_wrap(true);
     hint->add_css_class("dim-label");
@@ -1570,6 +1573,11 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
         } else if (p.name == "searxng") {
             sub += p.base_url.empty() ? " · needs instance URL"
                                       : " · " + p.base_url;
+            if (!p.base_url.empty())
+                sub += p.username.empty() && p.api_key.empty()
+                           ? " · no auth"
+                           : (p.username.empty() ? " · token auth"
+                                                 : " · basic auth");
         } else {
             sub += p.api_key.empty() ? " · needs API key" : " · key set";
         }
@@ -1587,7 +1595,7 @@ Gtk::Widget* SettingsPanel::build_web_search_tab() {
                     save_field(name, [v](auto& r) { r.base_url = v; });
                 }));
             card->append(*entry_row(
-                "API key/token", p.api_key, true,
+                "Token (optional)", p.api_key, true,
                 [save_field, name = p.name](const std::string& v) {
                     save_field(name, [v](auto& r) { r.api_key = v; });
                 }));

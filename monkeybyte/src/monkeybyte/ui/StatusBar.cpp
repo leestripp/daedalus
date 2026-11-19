@@ -19,7 +19,54 @@ std::string kformat(int n) {
     return buf;
 }
 
+std::string change_count(std::size_t count) {
+    return std::to_string(count) + (count == 1 ? " change" : " changes");
+}
+
+std::string commit_count(unsigned int count) {
+    return std::to_string(count) + (count == 1 ? " commit" : " commits");
+}
+
 } // namespace
+
+std::string format_git_status(const GitService::Status& status) {
+    std::string text = status.branch;
+    if (status.upstream.empty()) {
+        text += " · no upstream";
+    } else {
+        text += " · " + status.upstream;
+        if (status.divergence_valid) {
+            if (status.behind > 0)
+                text += " · ↓" + std::to_string(status.behind);
+            if (status.ahead > 0)
+                text += " · ↑" + std::to_string(status.ahead);
+            if (status.ahead == 0 && status.behind == 0)
+                text += " · up to date";
+        }
+    }
+    if (!status.changes.empty())
+        text += " · " + change_count(status.changes.size());
+    return text;
+}
+
+std::string format_git_tooltip(const GitService::Status& status) {
+    std::string text = "Branch: " + status.branch;
+    if (status.upstream.empty()) {
+        text += "\nNo upstream remote-tracking branch is configured.";
+    } else {
+        text += "\nUpstream: " + status.upstream;
+        if (status.divergence_valid) {
+            text += "\nRemote ahead: " + commit_count(status.behind) +
+                    " (incoming)";
+            text += "\nLocal ahead: " + commit_count(status.ahead) +
+                    " (outgoing)";
+        } else {
+            text += "\nIncoming/outgoing comparison is unavailable.";
+        }
+    }
+    text += "\nWorking tree: " + change_count(status.changes.size());
+    return text;
+}
 
 StatusBar::StatusBar() : Gtk::Box(Gtk::Orientation::HORIZONTAL) {
     add_css_class("status-bar");
@@ -27,6 +74,7 @@ StatusBar::StatusBar() : Gtk::Box(Gtk::Orientation::HORIZONTAL) {
 
     branch_label_.set_halign(Gtk::Align::START);
     branch_label_.set_hexpand(true);
+    branch_label_.set_ellipsize(Pango::EllipsizeMode::END);
     branch_label_.set_visible(false);
     model_label_.set_halign(Gtk::Align::END);
 
@@ -36,7 +84,14 @@ StatusBar::StatusBar() : Gtk::Box(Gtk::Orientation::HORIZONTAL) {
 
 void StatusBar::set_branch_info(const std::string& text) {
     branch_label_.set_text(text);
+    branch_label_.set_tooltip_text("");
     branch_label_.set_visible(!text.empty());
+}
+
+void StatusBar::set_git_info(const GitService::Status& status) {
+    branch_label_.set_text(format_git_status(status));
+    branch_label_.set_tooltip_text(format_git_tooltip(status));
+    branch_label_.set_visible(true);
 }
 
 void StatusBar::set_model(const std::string& model) {

@@ -79,7 +79,11 @@ The workspace tree watches for filesystem changes. Refresh logic must avoid
 clobbering a dirty editor and must tolerate agent-generated changes. Search is
 performed by `SearchService`, with persisted exclude patterns. Git status is
 read through `GitService`; staging/commit UI is intentionally not implied by
-the read-only panel.
+the read-only panel. The bottom status bar also shows the upstream branch,
+incoming commits (`↓`, remote ahead), outgoing commits (`↑`, local ahead), and
+the working-tree change count. Local state is polled every three seconds;
+remote-tracking refs are fetched off-thread at most once a minute with a
+15-second, non-interactive bound. Hovering the label explains the counts.
 
 ### Workspace types
 
