@@ -776,7 +776,7 @@ void ChatController::send_message(const std::string& text,
 
 // §7.8 /compress — ask daedalus to compress the live session's history
 // (Agent::compress_context, daedalus §AutoCompress): no user message, no
-// summary prompt, no reseed. daedalus runs the same 70/30 LLM-summary
+// summary prompt, no reseed. daedalus runs the same configurable-ratio LLM-summary
 // path as the 90% auto trigger. When a turn is running the request is a
 // flag consumed at the end of the current cycle (honored even on
 // cancel); when idle daedalus compresses IMMEDIATELY and synchronously

@@ -156,12 +156,32 @@ Typed helpers cover the settings consumed by the agent:
 | Maximum tool result | 10,000 bytes |
 | Maximum request | 4,000,000 bytes |
 | Maximum response | 5,000,000 bytes |
+| `compression_ratio_percent` | 80; allowed values 50, 60, 70, 80, 90 |
+| `second_brain_directory` | `<user_data_root>/brain`; must be a non-empty absolute path |
 | MCP schema soft cap | 5 percent |
 | Model context size | Explicit model row, then known model default, then 1,000,000 |
 
 The limit helpers are `get/set_max_agent_iterations`,
 `get/set_max_tool_result_size`, `get/set_max_request_size`,
 `get/set_max_response_size`, and `get/set_mcp_tool_schema_soft_cap_percent`.
+Use `get/set_compression_ratio_percent` for the old-history compression split.
+The setter accepts only the five listed values and throws `std::invalid_argument`
+otherwise; corrupt persisted values safely fall back to 80. MonkeyByte exposes a
+stepped slider and icarus exposes a dropdown under Agent settings. The percentage
+applies to non-system messages, and the actual boundary can move forward to keep
+assistant tool calls and all their results together. See
+[`how_compress_works.md`](how_compress_works.md).
+
+Use `get/set_second_brain_directory` for the Global Second Brain's Markdown
+root. MonkeyByte provides a folder picker and absolute-path field under Agent
+settings; icarus's shared Agent tab edits the same value. The directory and its
+PARA folders are created on first use. A change takes effect on the next brain
+operation and reindexes the selected tree. It selects a different knowledge
+base; it never moves or copies notes. Empty/relative setters throw
+`std::invalid_argument`, and invalid persisted relative paths fall back to the
+default instead of resolving against the process working directory. See
+[`storage.md`](storage.md#13-global-second-brain-and-multi-process-storage).
+
 Hosts can override several of these per agent in `AgentConfig`; those overrides
 are not automatically written back to the store.
 

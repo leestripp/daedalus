@@ -22,6 +22,7 @@
 #include <ctime>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <system_error>
@@ -287,12 +288,28 @@ SecondBrain::SecondBrain(fs::path brain_root, SettingsStore store)
 
 SecondBrain& SecondBrain::global()
 {
-    // Magic static — thread-safe init. The brain lives beside the global
-    // SettingsStore DB so every agent/project on this machine shares it.
-    static SecondBrain instance(
-        Paths::global().user_data_root() / "brain",
-        SettingsStore::instance());
-    return instance;
+    // Resolve the configured root on every call. Keep instances for previous
+    // roots alive so an in-flight operation can safely finish even if another
+    // process changes the setting. The next operation uses the newly selected
+    // knowledge base; notes are deliberately NOT moved between roots.
+    static std::mutex instances_mutex;
+    static std::map<std::string, std::unique_ptr<SecondBrain>> instances;
+
+    auto& store = SettingsStore::instance();
+    const fs::path root = store.get_second_brain_directory();
+    const std::string key = root.lexically_normal().string();
+
+    std::lock_guard<std::mutex> lock(instances_mutex);
+    auto it = instances.find(key);
+    if (it == instances.end()) {
+        auto instance = std::make_unique<SecondBrain>(root, store);
+        // brain_notes is a cache for the selected directory. Reconcile it on
+        // every root change so rows from the previous knowledge base cannot
+        // leak into list/search results.
+        (void)instance->reindex();
+        it = instances.emplace(key, std::move(instance)).first;
+    }
+    return *it->second;
 }
 
 const std::vector<std::string>& SecondBrain::folders()

@@ -1544,8 +1544,8 @@ size_t Messages::compute_safe_split() const {
 }
 
 void Messages::split_messages(json& prefix, json& middle, json& suffix) const {
-    // Split at (compress_ratio * 100)% / ((1 - compress_ratio) * 100)%
-    // Default: 70% / 30% - compress the oldest 70%, keep the newest 30%
+    // Split at (compress_ratio * 100)% / ((1 - compress_ratio) * 100)%.
+    // Default: 80% / 20% — compress the oldest 80%, keep the newest 20%.
     //
     // CRITICAL: Ensure we don't split in the middle of a tool call pair.
     // A tool call pair is:
@@ -1620,11 +1620,11 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
     // it needs to finish. We don't want to give up early.
     //
     // IF ALL 3 RETRIES FAIL: We return empty string. The caller (compress())
-    // will then fall back to DELETING THE FIRST 70% OF MESSAGES as a
+    // will then fall back to DELETING THE CONFIGURED SAFE PREFIX as a
     // last-resort measure to prevent context overflow. We have NO OTHER
     // CHOICE - if the API is down or rate-limited, the only way to keep
     // the agent running is to shrink the context manually. Better to lose
-    // 70% of context than to have the agent crash from overflow.
+    // the selected older context than to have the agent crash from overflow.
     // ============================================================================
 
     // Build request payload
@@ -1642,7 +1642,7 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
     // so it never sees the clamp the main chat path applies. Models with a
     // fixed server-side temperature (Kimi k2.7-code / k3 / kimi-for-coding
     // = 1.0) HARD-REJECT any other value, which used to fail all 3 attempts
-    // and silently delete 70% of the context via the fallback below.
+    // and silently delete the configured context prefix via the fallback below.
     // If you touch this, keep tests/test_auto_compress.cpp's
     // "compression request carries provider-clamped temperature" green.
     request_payload["temperature"] = config_.temperature;
@@ -1734,11 +1734,11 @@ std::string Messages::call_llm_for_summary(const std::string& prompt) {
 
     // ALL 3 ATTEMPTS FAILED. Return empty string.
     // The caller (compress()) will see this and fall back to deleting
-    // the first 70% of messages to prevent context overflow.
+    // the configured safe prefix to prevent context overflow.
     // We have NO OTHER CHOICE - if the API is down or rate-limited,
     // we MUST reduce context size to keep the agent running.
     LOG_CERR(ERROR,  "[Messages] All " << num_attempts << " compression attempts failed."
-              << " Caller will fall back to deleting first 70% of messages."
+              << " Caller will fall back to deleting the configured safe prefix."
               << '\n');
     return {};
 }
@@ -1805,7 +1805,7 @@ CompressResult Messages::compress() {
         std::lock_guard<std::mutex> lk(messages_mutex_);
 
         // Get the indices of messages to delete (given section)
-        auto [s, e] = get_compression_indices();  // 70/30 split with safe point
+        auto [s, e] = get_compression_indices();  // configured ratio, safe point
 
         // If no messages, nothing to compress
         if (s >= e) {
@@ -1845,59 +1845,43 @@ CompressResult Messages::compress() {
     std::string summary = call_llm_for_summary(prompt);
 
     if (summary.empty()) {
-        // ============================================================================
+        // ====================================================================
         // COMPRESSION FAILED - LAST RESORT FALLBACK (DO NOT REMOVE)
-        // ============================================================================
-        // The compression API call failed (3 retries with timeouts 30s, 60s, 120s
-        // all timed out or errored). We have NO OTHER CHOICE but to delete the
-        // first 70% of messages to prevent context overflow. If we don't, the
-        // next API call will exceed the model's context window and the agent
-        // will crash. Better to lose 70% of context than to crash entirely.
-        //
-        // The agent will lose the early messages but keep:
-        //   - The system message (first)
-        //   - The last 30% of messages (recent context)
-        // This gives the agent enough context to continue working, even if
-        // it loses the history of what it was doing earlier.
-        // ============================================================================
+        // ====================================================================
+        // All summary attempts failed. Delete exactly the same configured,
+        // tool-chain-safe prefix identified before the summary request. NEVER
+        // recalculate an independent percentage here: splitting an assistant
+        // tool_call from its role=tool result orphans the result and makes the
+        // next provider request invalid. The range was captured under the
+        // message lock and no history mutation occurs during the API call.
+        // ====================================================================
 
         std::lock_guard<std::mutex> lk(messages_mutex_);
-        size_t total = messages_.size();
+        const size_t total = messages_.size();
         if (total <= 5) {
-            // Too few messages to safely delete 70% - just give up
-            LOG_CERR(ERROR,  "[CONTEXT] Compression failed and only " << total
+            LOG_CERR(ERROR, "[CONTEXT] Compression failed and only " << total
                       << " messages remain. Cannot safely reduce. Giving up."
                       << '\n');
             return {CompressOutcome::Failed, {}};
         }
 
-        // Calculate the safe split point: keep system + last 30%
-        size_t keep_count = std::max(size_t(2), total * 30 / 100);  // At least system + 1 other
-        size_t delete_count = total - keep_count;
-
-        // Find the start index for deletion (skip system message at index 0)
-        size_t delete_start = (total > 0 && messages_[0].value("role", "") == "system") ? 1 : 0;
-        // But make sure we don't delete more than delete_count
-        if (delete_start >= total) delete_start = 0;
-        size_t actual_delete_count = std::min(delete_count, total - delete_start);
-
-        if (actual_delete_count == 0) {
-            LOG_CERR(WARNING,  "[CONTEXT] Cannot safely reduce context (only system msg?). Giving up."
+        if (start_idx >= end_idx || end_idx > total) {
+            LOG_CERR(WARNING, "[CONTEXT] Cannot safely reduce context (invalid compression range). Giving up."
                       << '\n');
             return {CompressOutcome::Failed, {}};
         }
 
-        LOG_CERR(ERROR,  "[CONTEXT] FALLBACK: All compression attempts failed."
+        const size_t actual_delete_count = end_idx - start_idx;
+        LOG_CERR(ERROR, "[CONTEXT] FALLBACK: All compression attempts failed."
                   << '\n');
-        LOG_CERR(INFO,  "[CONTEXT] FALLBACK: Deleting first " << actual_delete_count
-                  << " of " << total << " messages to prevent context overflow."
+        LOG_CERR(INFO, "[CONTEXT] FALLBACK: Deleting first " << actual_delete_count
+                  << " non-system messages using the configured safe split."
                   << '\n');
-        LOG_CERR(INFO,  "[CONTEXT] FALLBACK: Keeping system message + last "
-                  << (total - actual_delete_count) << " messages."
-                  << '\n');
+        LOG_CERR(INFO, "[CONTEXT] FALLBACK: Keeping system message + last "
+                  << (total - end_idx) << " messages." << '\n');
 
-        messages_.erase(messages_.begin() + delete_start,
-                        messages_.begin() + delete_start + actual_delete_count);
+        messages_.erase(messages_.begin() + start_idx,
+                        messages_.begin() + end_idx);
         // §PERSIST-RACE: the fallback rewrite was never marked dirty,
         // so the reduced chain could be lost if the process died before
         // the next add_*(). Publish it now (lock held above).
@@ -1967,7 +1951,7 @@ CompressResult Messages::compress() {
 
     // §Phase 5.1: route through Logger instead of std::cout.
     LOG_CERR(INFO, "\n[CONTEXT] Compressed " << before_count << " messages to " << after_count << " messages.");
-    LOG_CERR(INFO, "[CONTEXT] Structure: system + user(summary) + suffix(last 50%)");
+    LOG_CERR(INFO, "[CONTEXT] Structure: system + user(summary) + configured retained suffix");
     LOG_CERR(INFO, "[CONTEXT] Messages summarized: " << middle_count << " messages -> 1 summary");
 
     std::string result = new_messages.dump();

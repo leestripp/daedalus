@@ -264,7 +264,8 @@ CREATE TABLE IF NOT EXISTS vault_entries (
 );
 
 -- §SECOND-BRAIN (schema v10): Second Brain index. Source of truth is the
--- markdown tree (<user_data_root>/brain/<folder>/<id>.md); these tables
+-- markdown tree (second_brain_directory/<folder>/<id>.md, default
+-- <user_data_root>/brain); these tables
 -- are a rebuildable cache. brain_notes holds metadata for list/reindex
 -- diffs (mtime+size); brain_fts is the FTS5 full-text index over
 -- title/tags/body. porter unicode61 tokenizer: stemming + Unicode folding.
@@ -1270,6 +1271,35 @@ size_t SettingsStore::get_max_response_size() const
     return static_cast<size_t>(get_int("max_response_size", 5000000));
 }
 
+int SettingsStore::get_compression_ratio_percent() const
+{
+    constexpr int default_percent = 80;
+    const int value = get_int("compression_ratio_percent", default_percent);
+    if (value < 50 || value > 90 || value % 10 != 0) {
+        LOG_WARNING("Invalid compression_ratio_percent="
+                    + std::to_string(value)
+                    + "; using default 80 (allowed: 50, 60, 70, 80, 90)");
+        return default_percent;
+    }
+    return value;
+}
+
+std::filesystem::path SettingsStore::get_second_brain_directory() const
+{
+    const fs::path default_path = Paths::global().user_data_root() / "brain";
+    const std::string configured = get_string("second_brain_directory", "");
+    if (configured.empty()) return default_path;
+
+    const fs::path path(configured);
+    if (!path.is_absolute()) {
+        LOG_WARNING("Invalid second_brain_directory='" + configured
+                    + "'; using default " + default_path.string()
+                    + " (an absolute path is required)");
+        return default_path;
+    }
+    return path.lexically_normal();
+}
+
 int SettingsStore::get_mcp_tool_schema_soft_cap_percent() const
 {
     return get_int("mcp_tool_schema_soft_cap_percent", 5);
@@ -1279,6 +1309,22 @@ void SettingsStore::set_max_agent_iterations(int v)        { set_int("max_agent_
 void SettingsStore::set_max_tool_result_size(size_t v)    { set_int("max_tool_result_size", static_cast<int>(v)); }
 void SettingsStore::set_max_request_size(size_t v)         { set_int("max_request_size", static_cast<int>(v)); }
 void SettingsStore::set_max_response_size(size_t v)        { set_int("max_response_size", static_cast<int>(v)); }
+void SettingsStore::set_compression_ratio_percent(int v)
+{
+    if (v < 50 || v > 90 || v % 10 != 0) {
+        throw std::invalid_argument(
+            "compression_ratio_percent must be one of 50, 60, 70, 80, 90");
+    }
+    set_int("compression_ratio_percent", v);
+}
+void SettingsStore::set_second_brain_directory(const std::filesystem::path& path)
+{
+    if (path.empty() || !path.is_absolute()) {
+        throw std::invalid_argument(
+            "second_brain_directory must be a non-empty absolute path");
+    }
+    set_string("second_brain_directory", path.lexically_normal().string());
+}
 void SettingsStore::set_mcp_tool_schema_soft_cap_percent(int v) { set_int("mcp_tool_schema_soft_cap_percent", v); }
 
 ServerErrorSettings SettingsStore::get_server_error_settings() const

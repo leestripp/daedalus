@@ -55,15 +55,16 @@ struct MessageCompressionConfig {
 
     // Split ratio: compress the FIRST (compress_ratio * 100)% of messages,
     // keep the LAST ((1 - compress_ratio) * 100)% intact.
-    // Default: compress oldest 70%, keep newest 30%
-    float compress_ratio = 0.70f;             // Compress first 70%, keep last 30%
+    // Default: compress oldest 80%, keep newest 20%. Hosts expose this as
+    // a choice of 50/60/70/80/90 percent through SettingsStore.
+    float compress_ratio = 0.80f;             // Compress first 80%, keep last 20%
     
     // What to keep intact (messages, not including system at index 0)
     // Note: keep_head_count and keep_tail_count are DEPRECATED - we now compress ALL non-system messages
     // The compressed history rebuilds as:
     //   system + user(synthetic message carrying the summary —
     //   §COMPRESS-USER-MSG: strict templates require the first message
-    //   after system to be a user msg) + suffix(newest 30%)
+    //   after system to be a user msg) + suffix(newest 20% by default)
     // Keeping these as placeholders (not used) for backward compatibility with tests
     int keep_head_count = 2;                  // DEPRECATED - not used anymore
     int keep_tail_count = 2;                 // DEPRECATED - not used anymore
@@ -121,7 +122,7 @@ struct MessageCompressionConfig {
 enum class CompressOutcome {
     Compressed,         ///< Summary generated; CompressResult::compressed_json is valid.
     NothingToCompress,  ///< History too small / empty middle; nothing changed.
-    FallbackDeleted,    ///< Summary failed; oldest ~70% deleted as last resort.
+    FallbackDeleted,    ///< Summary failed; configured safe prefix deleted as last resort.
                         ///< The context WAS reduced — callers must still fire
                         ///< on_compaction and must NOT schedule a retry.
     Failed,             ///< Summary failed AND history too small to safely reduce.

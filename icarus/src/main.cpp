@@ -1435,6 +1435,7 @@ int main(int argc, char* argv[]) {
                         store.get_max_tool_result_size(),
                         store.get_max_request_size(),
                         store.get_max_response_size(),
+                        store.get_compression_ratio_percent(),
                         store.get_mcp_tool_schema_soft_cap_percent(),
                     };
 
@@ -1555,7 +1556,8 @@ int main(int argc, char* argv[]) {
                         std::cout << ") fully apply on next launch.\n";
                     }
 
-                    // Remaining Agent-tab kv values (iterations, size caps)
+                    // Remaining Agent-tab kv values (iterations, size caps,
+                    // compression ratio)
                     // are read at initialize() — no runtime API.
                     // (Web-search provider edits are NOT tracked here: the
                     // §WEB-SEARCH-CORE web_search tool reads its provider
@@ -1565,10 +1567,11 @@ int main(int argc, char* argv[]) {
                         store.get_max_tool_result_size(),
                         store.get_max_request_size(),
                         store.get_max_response_size(),
+                        store.get_compression_ratio_percent(),
                         store.get_mcp_tool_schema_soft_cap_percent(),
                     };
                     if (kv_after != kv_before) {
-                        std::cout << "[SETTINGS] Agent limits/retry "
+                        std::cout << "[SETTINGS] Agent limits/retry/compression "
                                      "changes apply on next launch.\n";
                     }
 

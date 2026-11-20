@@ -145,7 +145,10 @@ Use `memories` to discover an ID before `forget`. See
 
 `brain` manages one user-global plain-Markdown knowledge base shared by all
 projects. Notes live in PARA folders: `inbox`, `projects`, `areas`, `resources`,
-and `archives`. `[[note-id]]` in a body creates a wiki link.
+and `archives`. `[[note-id]]` in a body creates a wiki link. The absolute root is
+`second_brain_directory` (default `<data_root>/brain`), editable in MonkeyByte
+and icarus Agent settings. Changing it selects and reindexes another tree on the
+next operation; it does not move notes.
 
 | Action | Required arguments | Optional arguments |
 |---|---|---|

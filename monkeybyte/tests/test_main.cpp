@@ -33,6 +33,7 @@
 #include <gdkmm/display.h>
 #include <gtkmm/application.h>
 #include <gtkmm/box.h>
+#include <gtkmm/icontheme.h>
 #include <gtkmm/window.h>
 #include <giomm/init.h>
 #include <glibmm/init.h>
@@ -2126,6 +2127,46 @@ void test_browser_console_capture_is_bounded() {
     window.hide();
 }
 
+void test_bundled_voice_icons() {
+    std::cout << "test_bundled_voice_icons\n";
+    static constexpr const char* names[] = {
+        "mb-microphone-symbolic",
+        "mb-record-symbolic",
+        "mb-synchronizing-symbolic",
+        "mb-volume-muted-symbolic",
+        "mb-volume-low-symbolic",
+        "mb-volume-high-symbolic",
+    };
+    const fs::path icon_dir = monkeybyte::ThemeManager::data_dir() + "/icons";
+    for (const char* name : names) {
+        check(fs::is_regular_file(icon_dir / (std::string(name) + ".svg")),
+              std::string("voice icon is bundled: ") + name);
+    }
+
+    auto app = Gtk::Application::create();
+    auto display = Gdk::Display::get_default();
+    if (!display) {
+        std::cout << "  skip: voice icon lookup (no display)\n";
+        return;
+    }
+    auto theme = Gtk::IconTheme::create();
+    theme->add_search_path(icon_dir.string());
+
+    // Reproduce a minimal container: a configured theme with no system icon
+    // files. App-private search paths must still resolve every voice control.
+    // This must be an independent instance; GTK rejects theme-name changes on
+    // the display singleton, which would make this check a false positive.
+    static constexpr const char* missing_theme =
+        "monkeybyte-test-no-system-icons";
+    theme->set_theme_name(missing_theme);
+    check(theme->get_theme_name() == missing_theme,
+          "voice icon test uses a missing host theme");
+    for (const char* name : names) {
+        check(theme->has_icon(name),
+              std::string("voice icon resolves without host theme: ") + name);
+    }
+}
+
 void test_activity_bar_theme_borders() {
     auto app = Gtk::Application::create();
     auto display = Gdk::Display::get_default();
@@ -2298,6 +2339,7 @@ int main() {
     test_browser_device_viewport();
     test_browser_long_url_layout();
     test_browser_console_capture_is_bounded();
+    test_bundled_voice_icons();
     test_activity_bar_theme_borders();
     test_scroll_pin_kinetic_cancel();
 

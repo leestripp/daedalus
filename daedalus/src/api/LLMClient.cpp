@@ -276,6 +276,8 @@ LLMClient::LLMClient(const AppConfig& config, daedalus::SettingsStore* settings_
                 settings_store->get_max_context_size_for_model(config_.model);
         }
         messages_config.model = config_.model;
+        messages_config.compress_ratio =
+            static_cast<float>(settings_store->get_compression_ratio_percent()) / 100.0f;
         messages_config.max_compress_output = 1500;
         // Compression timeout. First attempt is 30s, retries grow to 60s and 120s
         // (see Messages::call_llm_for_summary).
@@ -377,6 +379,8 @@ void LLMClient::set_config(const AppConfig& config) {
     if (settings_store_) {
         mc.max_context_size = settings_store_->get_max_context_size_for_model(
             config_.model_name.empty() ? config_.model : config_.model_name);
+        mc.compress_ratio =
+            static_cast<float>(settings_store_->get_compression_ratio_percent()) / 100.0f;
     }
     mc.model        = config_.model;
     mc.api_url      = config_.base_url + config_.chat_endpoint;

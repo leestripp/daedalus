@@ -366,9 +366,9 @@ void ChatPanel::update_volume_controls() {
     const int percent = static_cast<int>(std::lround(volume * 100.0F));
     volume_label_.set_text(std::to_string(percent) + "%");
     mute_btn_.set_label(volume == 0.0F ? "Unmute" : "Mute");
-    volume_btn_.set_icon_name(volume == 0.0F ? "audio-volume-muted-symbolic"
-                              : volume < 0.5F ? "audio-volume-low-symbolic"
-                                               : "audio-volume-high-symbolic");
+    volume_btn_.set_icon_name(volume == 0.0F ? "mb-volume-muted-symbolic"
+                              : volume < 0.5F ? "mb-volume-low-symbolic"
+                                               : "mb-volume-high-symbolic");
 }
 
 // ── messages (§7.3) ─────────────────────────────────────────────────
@@ -486,7 +486,7 @@ void ChatPanel::build_input() {
 
     // §CHIMPFLOW — click-to-record, click-again-to-transcribe. The
     // transcript is inserted for review, never sent automatically.
-    mic_btn_.set_icon_name("audio-input-microphone-symbolic");
+    mic_btn_.set_icon_name("mb-microphone-symbolic");
     mic_btn_.set_tooltip_text("Start dictation");
     mic_btn_.signal_clicked().connect([this] { on_microphone(); });
 
@@ -739,21 +739,21 @@ void ChatPanel::update_microphone(DictationState state) {
     switch (state) {
     case DictationState::Idle:
         mic_btn_.remove_css_class("destructive-action");
-        mic_btn_.set_icon_name("audio-input-microphone-symbolic");
+        mic_btn_.set_icon_name("mb-microphone-symbolic");
         refresh_microphone();
         if (!processing_) stop_activity("Ready");
         break;
     case DictationState::Recording:
         mic_btn_.set_sensitive(true);
         mic_btn_.add_css_class("destructive-action");
-        mic_btn_.set_icon_name("media-record-symbolic");
+        mic_btn_.set_icon_name("mb-record-symbolic");
         mic_btn_.set_tooltip_text("Stop and transcribe");
         if (!processing_) show_activity("Listening…");
         break;
     case DictationState::Transcribing:
         mic_btn_.set_sensitive(false);
         mic_btn_.remove_css_class("destructive-action");
-        mic_btn_.set_icon_name("emblem-synchronizing-symbolic");
+        mic_btn_.set_icon_name("mb-synchronizing-symbolic");
         mic_btn_.set_tooltip_text("Transcribing…");
         if (!processing_) show_activity("Transcribing…");
         break;

@@ -2,8 +2,8 @@
 // demos/daedalus-settings-tui/AgentTab.cpp
 //
 // Agent tab: typed form over the kv_settings-backed agent options
-// (auto_approve, thinking_level, size limits, MCP soft cap, current
-// provider) plus the server_error retry/backoff group. Values are loaded
+// (auto_approve, thinking_level, context-compression ratio, Second Brain path, size limits,
+// MCP soft cap, current provider) plus the server_error retry/backoff group. Values are loaded
 // on open and written back with the "Save" button. Web-search provider
 // keys live on the Web Search tab (§WEB-SEARCH-CORE).
 
@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 
 namespace settings_tui {
 
@@ -29,6 +30,11 @@ struct AgentState
     bool auto_approve = false;
     std::string current_provider;
     std::string thinking_level;
+    int compression_ratio_index = 3;  // 50/60/70/80/90 -> default 80
+    std::string second_brain_directory;
+    std::vector<std::string> compression_ratio_entries{
+        "50% (keep 50%)", "60% (keep 40%)", "70% (keep 30%)",
+        "80% (keep 20%)", "90% (keep 10%)"};
     std::string max_agent_iterations;
     std::string max_tool_result_size;
     std::string max_request_size;
@@ -60,6 +66,10 @@ Component MakeAgentTab(AppContext& ctx)
         st->auto_approve         = ctx.store.get_auto_approve();
         st->current_provider     = ctx.store.get_current_provider();
         st->thinking_level       = ctx.store.get_string("thinking_level", "default");
+        st->compression_ratio_index =
+            (ctx.store.get_compression_ratio_percent() - 50) / 10;
+        st->second_brain_directory =
+            ctx.store.get_second_brain_directory().string();
         st->max_agent_iterations = std::to_string(ctx.store.get_max_agent_iterations());
         st->max_tool_result_size = std::to_string(ctx.store.get_max_tool_result_size());
         st->max_request_size     = std::to_string(ctx.store.get_max_request_size());
@@ -82,6 +92,9 @@ Component MakeAgentTab(AppContext& ctx)
         size_t tool_result = 0, request = 0, response = 0;
         double backoff = 0.0;
 
+        if (st->second_brain_directory.empty() ||
+            !std::filesystem::path(st->second_brain_directory).is_absolute())
+            { st->form_error = "second_brain_directory must be a non-empty absolute path"; return; }
         if (!ParseInt(st->max_agent_iterations, max_iter) || max_iter <= 0)
             { st->form_error = "max_agent_iterations must be a positive integer"; return; }
         if (!ParseSize(st->max_tool_result_size, tool_result))
@@ -120,6 +133,8 @@ Component MakeAgentTab(AppContext& ctx)
         // (which deliberately persists nothing itself). Same pattern as the
         // server_error kv keys below.
         ctx.store.set_string("thinking_level", thinking_level);
+        ctx.store.set_compression_ratio_percent(50 + st->compression_ratio_index * 10);
+        ctx.store.set_second_brain_directory(st->second_brain_directory);
         ctx.store.set_max_agent_iterations(max_iter);
         ctx.store.set_max_tool_result_size(tool_result);
         ctx.store.set_max_request_size(request);
@@ -141,6 +156,12 @@ Component MakeAgentTab(AppContext& ctx)
     // -- components ---------------------------------------------------------
     auto row_provider   = FormRow("current_provider", &st->current_provider, false, save);
     auto row_thinking   = FormRow("thinking_level (default/none/low/high/max)", &st->thinking_level, false, save);
+    auto compression_dropdown = Dropdown(&st->compression_ratio_entries,
+                                         &st->compression_ratio_index);
+    auto row_compression = Renderer(compression_dropdown, [compression_dropdown] {
+        return hbox({text("old history to compress "), compression_dropdown->Render()});
+    });
+    auto row_brain_dir  = FormRow("second_brain_directory (absolute)", &st->second_brain_directory, false, save);
     auto row_max_iter   = FormRow("max_agent_iterations", &st->max_agent_iterations, false, save);
     auto row_tool_size  = FormRow("max_tool_result_size", &st->max_tool_result_size, false, save);
     auto row_req_size   = FormRow("max_request_size", &st->max_request_size, false, save);
@@ -159,15 +180,16 @@ Component MakeAgentTab(AppContext& ctx)
 
     auto form = Container::Vertical({
         approve_check,
-        row_provider, row_thinking, row_max_iter, row_tool_size, row_req_size, row_res_size,
+        row_provider, row_thinking, row_compression, row_brain_dir, row_max_iter,
+        row_tool_size, row_req_size, row_res_size,
         row_soft_cap,
         se_enabled_check, row_se_initial, row_se_max, row_se_backoff, row_se_retries,
         Container::Horizontal({btn_save, btn_reload}),
     });
 
     return Renderer(form,
-        [st, approve_check, row_provider, row_thinking, row_max_iter, row_tool_size, row_req_size,
-         row_res_size, row_soft_cap, se_enabled_check, row_se_initial,
+        [st, approve_check, row_provider, row_thinking, row_compression, row_brain_dir, row_max_iter,
+         row_tool_size, row_req_size, row_res_size, row_soft_cap, se_enabled_check, row_se_initial,
          row_se_max, row_se_backoff, row_se_retries, btn_save, btn_reload] {
             Elements rows;
             rows.push_back(text(" agent settings ") | bold);
@@ -175,6 +197,10 @@ Component MakeAgentTab(AppContext& ctx)
             rows.push_back(approve_check->Render());
             rows.push_back(row_provider->Render());
             rows.push_back(row_thinking->Render());
+            rows.push_back(row_compression->Render());
+            rows.push_back(row_brain_dir->Render());
+            rows.push_back(text("  Markdown root; changing it selects a different KB (notes are not moved).") | dim);
+            rows.push_back(text("  The next brain operation uses the new directory.") | dim);
             rows.push_back(row_max_iter->Render());
             rows.push_back(row_tool_size->Render());
             rows.push_back(row_req_size->Render());

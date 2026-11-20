@@ -360,7 +360,7 @@ last-message buffer used by `/continue`. Equivalent to `/memory clear`.
 #### `/compress`
 
 Compress the conversation context (daedalus `Agent::compress_context()`).
-Uses the same 70/30 split + LLM summary as the automatic 90%-threshold
+Uses the same configurable old-history split + LLM summary as the automatic 90%-threshold
 trigger. When no turn is running it happens immediately; during a turn it is
 deferred to the end of the current agent cycle. No-op when no model is
 configured.
@@ -530,9 +530,14 @@ resets conversation history and says so; MCP server enable/disable toggles
 are applied live. The Agent-tab `thinking_level` field is applied to the
 running agent when the TUI closes (same as `/level`). Added/edited/removed
 MCP servers and the remaining
-Agent-tab values (iteration/size limits, retry, Serper key) are read at
-startup only — icarus prints a note when those need a relaunch. If
-`current_provider` is empty when the TUI opens it is seeded from the
+Agent-tab values (iteration/size limits, compression ratio, retry, Serper key)
+are read at startup only — icarus prints a note when those need a relaunch.
+The **old history to compress** dropdown offers 50%, 60%, 70%, 80% (default),
+and 90%; the remaining recent history is retained. The
+**second_brain_directory** field selects the absolute Second Brain Markdown
+root (default `<data_root>/brain`). It applies on the next brain operation,
+without a relaunch; changing it reindexes the selected tree and never moves
+notes. If `current_provider` is empty when the TUI opens it is seeded from the
 active model's provider (daedalus only writes it on a provider switch).
 
 The old `/settings` subcommands (`providers`, `models`, `add-provider`,

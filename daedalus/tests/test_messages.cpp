@@ -55,6 +55,9 @@ Messages create_test_messages(const fs::path& proj_root, int keep_head = 2, int 
     config.keep_tail_count = keep_tail;
     config.max_context_size = 200000;
     config.compress_threshold = 0.9f;
+    // These legacy regression cases specify 70/30 in their names and
+    // expectations. New default/ratio coverage below sets its own config.
+    config.compress_ratio = 0.70f;
     config.debug_output = false;  // Disable debug output in tests
     // §CRASH-2 (2026-07-16): tests disable the background flush thread
     // by default. Most tests want full control over when save() is
@@ -1951,6 +1954,134 @@ TEST_SUITE("Compression Regression - Safe Split with Tool Calls") {
         CHECK(end >= 70);
         CHECK(end <= 72);
 
+        cleanup_test_project(proj);
+    }
+}
+
+TEST_SUITE("Configurable Compression Ratio") {
+    json make_ratio_tool_call(const std::string& id) {
+        return {{"role", "assistant"},
+                {"tool_calls", json::array({{{"id", id}, {"type", "function"},
+                    {"function", {{"name", "some_tool"}, {"arguments", "{}"}}}}})}};
+    }
+
+    json make_ratio_tool_result(const std::string& id) {
+        return {{"role", "tool"}, {"tool_call_id", id}, {"content", "result"}};
+    }
+
+    TEST_CASE("Default is 80/20") {
+        const MessageCompressionConfig config;
+        CHECK(config.compress_ratio == doctest::Approx(0.80));
+
+        auto proj = create_test_project();
+        MessageCompressionConfig test_config;
+        test_config.auto_flush_enabled = false;
+        test_config.debug_output = false;
+        Messages msgs(proj / ".daedalus" / "daedalus", test_config);
+
+        json history = json::array({make_msg("system", "System prompt")});
+        for (int i = 0; i < 100; ++i) {
+            history.push_back(make_msg("user", "User " + std::to_string(i)));
+        }
+        msgs.set_messages(history);
+        const auto [start, end] = msgs.get_compression_indices();
+        CHECK(start == 1);
+        CHECK(end == 81);  // 80 non-system messages, exclusive end
+        cleanup_test_project(proj);
+    }
+
+    TEST_CASE("Every supported percentage produces the requested plain-message split") {
+        for (const int percent : {50, 60, 70, 80, 90}) {
+            CAPTURE(percent);
+            auto proj = create_test_project();
+            MessageCompressionConfig config;
+            config.compress_ratio = static_cast<float>(percent) / 100.0f;
+            config.auto_flush_enabled = false;
+            config.debug_output = false;
+            Messages msgs(proj / ".daedalus" / "daedalus", config);
+
+            json history = json::array({make_msg("system", "System prompt")});
+            for (int i = 0; i < 100; ++i) {
+                history.push_back(make_msg("user", "User " + std::to_string(i)));
+            }
+            msgs.set_messages(history);
+            const auto [start, end] = msgs.get_compression_indices();
+            CHECK(start == 1);
+            CHECK(end == static_cast<size_t>(percent + 1));
+            cleanup_test_project(proj);
+        }
+    }
+
+    TEST_CASE("Every supported percentage extends across a straddling tool pair") {
+        for (const int percent : {50, 60, 70, 80, 90}) {
+            CAPTURE(percent);
+            auto proj = create_test_project();
+            MessageCompressionConfig config;
+            config.compress_ratio = static_cast<float>(percent) / 100.0f;
+            config.auto_flush_enabled = false;
+            config.debug_output = false;
+            Messages msgs(proj / ".daedalus" / "daedalus", config);
+
+            json history = json::array({make_msg("system", "System prompt")});
+            for (int i = 1; i < percent; ++i) {
+                history.push_back(make_msg("user", "Before " + std::to_string(i)));
+            }
+            // Absolute indices `percent` and `percent + 1`: the requested
+            // split initially includes the call but not its result.
+            history.push_back(make_ratio_tool_call("boundary-call"));
+            history.push_back(make_ratio_tool_result("boundary-call"));
+            while (history.size() < 101) {
+                history.push_back(make_msg("user", "Tail " + std::to_string(history.size())));
+            }
+            msgs.set_messages(history);
+
+            const auto [start, end] = msgs.get_compression_indices();
+            CHECK(start == 1);
+            CHECK(end == static_cast<size_t>(percent + 2));
+            CHECK(end - start == static_cast<size_t>(percent + 1));
+            // The retained suffix starts after BOTH messages, never with the
+            // orphaned role=tool result.
+            CHECK(msgs.get_messages()[end].value("role", "") == "user");
+            cleanup_test_project(proj);
+        }
+    }
+
+    TEST_CASE("Fallback deletion reuses the configured tool-safe range") {
+        auto proj = create_test_project();
+        MessageCompressionConfig config;
+        config.compress_ratio = 0.80f;
+        config.auto_flush_enabled = false;
+        config.debug_output = false;
+        config.api_url = "http://127.0.0.1:1/v1/chat/completions";
+        config.api_key = "test-key";
+        config.compression_timeout = 1;
+        Messages msgs(proj / ".daedalus" / "daedalus", config);
+
+        json history = json::array({make_msg("system", "System prompt")});
+        for (int i = 0; i < 8; ++i) {
+            history.push_back(make_msg("user", "Before " + std::to_string(i)));
+        }
+        history.push_back(make_ratio_tool_call("fallback-boundary"));
+        history.push_back(make_ratio_tool_result("fallback-boundary"));
+        history.push_back(make_msg("user", "tail user"));
+        history.push_back(make_msg("assistant", "tail assistant"));
+        msgs.set_messages(history);
+
+        // 12 non-system messages -> target 9 at 80%; the tool result at
+        // absolute index 10 extends the safe prefix through index 10.
+        const auto [start, end] = msgs.get_compression_indices();
+        REQUIRE(start == 1);
+        REQUIRE(end == 11);
+
+        const auto result = msgs.compress();  // connection refused -> fallback
+        CHECK(result.outcome == CompressOutcome::FallbackDeleted);
+        REQUIRE(msgs.size() == 3);
+        CHECK(msgs.get_messages()[0].value("role", "") == "system");
+        CHECK(msgs.get_messages()[1].value("content", "") == "tail user");
+        CHECK(msgs.get_messages()[2].value("content", "") == "tail assistant");
+        for (const auto& message : msgs.get_messages()) {
+            CHECK(message.value("role", "") != "tool");
+        }
         cleanup_test_project(proj);
     }
 }

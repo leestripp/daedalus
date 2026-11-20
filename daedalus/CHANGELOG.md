@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- **Container-safe voice-control icons.** MonkeyByte no longer relies on the
+  host Adwaita theme for the microphone, recording, synchronizing, or three
+  playback-volume glyphs. Those six states now use bundled `mb-*-symbolic`
+  SVGs like the rest of the UI. A regression test resolves every asset with a
+  deliberately missing host theme, and a live isolated GTK check verifies the
+  Agent controls without placeholder squares.
+
 - **§SECOND-BRAIN-IPC (2026-11-09): Global Second Brain writes are now safe
   across independent agents and hosts.** Every operation shares a bounded
   brain-root `flock(2)` (shared readers, exclusive mutations/reindex), covering
@@ -47,6 +54,24 @@
   model request and the loop continues to an explicit `stop`.
 
 ### Added
+
+- **Configurable Second Brain location.** The shared
+  `second_brain_directory` setting selects an absolute Markdown root instead
+  of permanently binding the process-wide singleton to its first XDG path.
+  MonkeyByte provides a folder picker/path field and icarus an Agent-tab input.
+  The next brain operation selects and reindexes the configured tree, while
+  existing notes are never moved automatically. Regression coverage verifies
+  persistence, validation, mounted-path writes, root switching, and restoration
+  without stale search results.
+
+- **Configurable context-compression split.** Daedalus now defaults to an
+  **80/20** old/recent message split, with 50/60/70/80/90 percent choices in the
+  shared `compression_ratio_percent` setting. MonkeyByte exposes a stepped
+  slider and icarus a dropdown in Agent settings. Both successful compression
+  and summary-failure fallback use the same tool-chain-safe boundary, which
+  moves forward rather than orphaning a tool result. Regression tests cover
+  every choice, persistence/validation, straddling tool calls, and fallback
+  deletion; MonkeyByte's real slider was also driven through AT-SPI.
 
 - **§STEER-MESSAGE (2026-11-19): safe mid-turn guidance for the active
   task.** The new public `Agent::submit_steer_message(text, source)` API uses

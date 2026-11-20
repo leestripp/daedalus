@@ -1,31 +1,19 @@
 # How Context Compression Works
 
-daedalus has a context compression system that keeps conversations manageable during long tasks. The **"70/30 Split"** algorithm compresses the **first 70%** of messages while keeping the **last 30%** intact, preserving recent context for the agent to continue working.
+daedalus has a context compression system that keeps conversations manageable during long tasks. Its **configurable split** summarizes the oldest non-system messages while retaining the newest messages verbatim. The default is **80/20**: compress 80%, keep 20%.
 
----
+MonkeyByte's Agent settings provide a slider and icarus's Agent settings provide a dropdown. Both offer **50%, 60%, 70%, 80%, and 90%** in the shared `compression_ratio_percent` setting. The percentage controls the old-history portion, not the 90%-of-tokens automatic trigger.
 
-## Why "70/30 Split"?
-
-The old approach ("compress all") caused issues:
-- Agent lost too much context
-- Strange behavior after compression
-- Tool call mismatches from orphaned results
-
-The current "70/30 Split" approach:
-- Compresses the **oldest 70%** of messages (the bulk of historical context)
-- Keeps the **newest 30%** intact (so the agent can continue working seamlessly)
-- Splits at a **safe point** (NOT in the middle of a tool call pair)
-
-This gives the LLM a small, recent context window where it can pick up exactly where it left off.
+The split is always moved forward when necessary to preserve complete tool-call chains. Correct provider message structure takes precedence over hitting the requested percentage exactly.
 
 ---
 
 ## Algorithm Overview
 
 ```
-BEFORE: [system, msg1, msg2, ..., msgN*0.7, msgN*0.7+1, ..., msgN]
+BEFORE: [system, msg1, msg2, ..., msgN*0.8, msgN*0.8+1, ..., msgN]
               ───────────────────────────────────────────────
-                    FIRST 70%                LAST 30%
+                 OLDER 80% (DEFAULT)      NEWER 20% (DEFAULT)
                        ↓                       ↓
                 CONVERT TO PLAIN TEXT      KEEP INTACT
                        ↓                       ↓
@@ -33,31 +21,31 @@ BEFORE: [system, msg1, msg2, ..., msgN*0.7, msgN*0.7+1, ..., msgN]
                        ↓
                   GET SUMMARY
                        ↓
-AFTER:  [system, user(summary), msgN*0.7+1, ..., msgN]
+AFTER:  [system, user(summary), msgN*0.8+1, ..., msgN]
             ───────   ──────────────   ─────────────────
-            SYSTEM    FIRST 70%        LAST 30% KEPT
+            SYSTEM    OLDER 80%        NEWER 20% KEPT
                       SUMMARIZED
                       (replaced)
 ```
 
 | Region | Action | Why |
 |--------|--------|-----|
-| **First 70%** | Converted to plain text → sent to LLM → replaced by summary | Most tokens are here; old context |
-| **Last 30%** | Kept intact in messages array | Recent work, agent needs this to continue |
+| **Selected older portion** | Converted to plain text → sent to LLM → replaced by summary | Most tokens are here; old context |
+| **Remaining recent portion** | Kept intact in messages array | Recent work, agent needs this to continue |
 | **Split Point** | Adjusted to NOT break a tool call pair | Prevents orphaned tool_calls / orphan tool results |
 
 ### Why This Works
 
 1. **No orphaned tool_calls**: The split is at a SAFE point (after a completed tool call chain or after any non-tool message)
 2. **Summary captures the past**: The LLM summary condenses the bulk of old context
-3. **Recent context preserved**: The last 30% gives the agent a tight window to continue work
+3. **Recent context preserved**: The retained recent portion gives the agent a tight window to continue work
 4. **Clean message chain**: `[system, user(summary), suffix]` - the first message after system is a user message, which strict chat templates require
 
 ---
 
 ## Safe Split Point (Critical)
 
-The 70/30 split point must NOT fall in the middle of a tool call chain. A tool call chain looks like:
+The configured split point must NOT fall in the middle of a tool call chain. A tool call chain looks like:
 
 ```
 [assistant, tool_calls: [{id: "X"}]]   ← tool call
@@ -69,72 +57,67 @@ If we split between these two, the tool result becomes orphaned (its tool_call_i
 ### Algorithm
 
 ```cpp
-// 1. Calculate target split at 70%
-size_t target_split = (total_non_system * 70) / 100;
+// 1. Calculate the requested split from the configured ratio.
+size_t target = static_cast<size_t>(total_non_system * config_.compress_ratio);
 
-// 2. Find all tool_call_ids that would be in the "first 70%" (compressed) range
-std::unordered_set<std::string> first_70_tool_calls;
-for (size_t i = 1; i <= target_split; ++i) {
-    if (msg is assistant with tool_calls) {
-        for each tc: first_70_tool_calls.insert(tc.id);
+// 2. Find every tool_call id in the candidate compressed prefix.
+std::unordered_set<std::string> prefix_tool_call_ids;
+for (size_t i = 1; i <= target && i < messages_.size(); ++i) {
+    if (messages_[i] is an assistant with tool_calls) {
+        prefix_tool_call_ids.insert(each tool_call id);
     }
 }
 
-// 3. Walk through messages looking for any tool result that references a first_70 tool_call
-//    If found, the safe split point must be BEFORE that tool result
-for (size_t i = 1; i <= target_split; ++i) {
-    if (msg is tool && msg.tool_call_id in first_70_tool_calls) {
-        // This tool result pairs with a tool call in the first 70%
-        // Adjust safe_split_point to BEFORE this tool result
-        safe_split_point = i - 1;
-        break;
-    }
+// 3. Extend the prefix FORWARD until every result paired with one of
+//    those calls is also inside it. Never leave a role=tool result in
+//    the retained suffix without its assistant parent.
+while (a matching result lies beyond target) {
+    target = absolute index of that result;
 }
 
-// 4. Split at safe_split_point
+// 4. Both split_messages() and get_compression_indices() use this same
+//    compute_safe_split() result.
+return std::min(target, total_non_system);
 ```
 
 ### Edge Case: Insufficient Safe Split
 
-If the first valid safe split point is too far from the 70% target (e.g., a huge tool call chain in the first half), we may end up splitting at a different percentage. The goal is to ALWAYS split at a safe point, even if it's not exactly 70%.
+If a tool chain crosses the requested boundary, the split moves forward beyond the configured target. The effective compressed percentage can therefore be higher than requested. This is intentional: always preserve a valid chain rather than an exact percentage.
 
 ---
 
 ## Compression Flow
 
 ```
-1. EXTRACT FIRST 70% (safe split)
+1. EXTRACT CONFIGURED OLDER PREFIX (safe split)
    │
    ├── get_compression_indices() → (start_idx, end_idx)
-   ├── Make COPY of messages [start_idx, end_idx)
-   └── Check for safe split point (don't break tool call pairs)
+   └── Make a COPY of messages [start_idx, end_idx)
 
-2. DELETE IMMEDIATELY
-   │
-   └── messages_.erase(start_idx, end_idx)
-       ⚠️ Context is already reduced - even if LLM fails!
-
-3. CONVERT TO PLAIN TEXT
+2. CONVERT COPY TO PLAIN TEXT
    │
    └── messages_to_plain_text(middle_copy)
-       (Removes JSON overhead ~50%)
+       (originals remain untouched during the summary request)
 
-4. SEND TO LLM
+3. SEND TO LLM
    │
    ├── Build compression prompt
-   └── call_llm_for_summary(prompt)
+   └── call_llm_for_summary(prompt), up to 3 attempts
 
-5. IF LLM SUCCEEDS → Add summary
+4. IF LLM SUCCEEDS
    │
-   └── Rebuild: [system, user(summary), ...suffix]
+   ├── Delete exactly [start_idx, end_idx)
+   ├── Rebuild: [system, user(summary), ...retained suffix]
+   └── outcome = Compressed
 
-6. IF LLM FAILS → Continue anyway
+5. IF LLM FAILS
    │
-   └── Context already reduced. Return nullopt, caller continues main loop.
+   ├── FALLBACK: delete exactly the SAME safe range, without a summary
+   └── outcome = FallbackDeleted
 
-7. CONTINUE MAIN LOOP
+6. CONTINUE MAIN LOOP
    │
-   └── DO NOT exit to user input. Continue agent cycle.
+   └── Both reductions fire on_compaction(); never orphan tool results.
 ```
 
 ---
@@ -201,7 +184,7 @@ Host calls agent.compress_context()
 ┌─────────────────────────────────────────┐
 │ messages_->compress() called            │
 │                                         │
-│ 1. Extract first 70% (safe split)       │
+│ 1. Extract configured prefix (safe split)       │
 │ 2. Convert COPY to plain text           │
 │    (originals are NOT deleted yet)      │
 │ 3. Send to LLM for summary              │
@@ -211,11 +194,11 @@ Host calls agent.compress_context()
 ┌─────────────────────────────────────────┐
 │ If LLM succeeds:                        │
 │ → Delete middle, rebuild with summary   │
-│ → messages_ = [system, user(summary), suffix(last 30%)]
+│ → messages_ = [system, user(summary), retained suffix]
 │ → outcome = Compressed                  │
 │                                         │
 │ If LLM fails (all 3 attempts):          │
-│ → FALLBACK: delete oldest ~70% anyway   │
+│ → FALLBACK: delete same safe prefix   │
 │   (context reduced, no summary)         │
 │ → outcome = FallbackDeleted             │
 │                                         │
@@ -240,7 +223,7 @@ Agent Cycle Completes
 │                                         │
 │ if (messages_->should_compress(tokens)) │
 │     → compress() called                 │
-│     → First 70% deleted                 │
+│     → Configured prefix deleted                 │
 │     → Summary added if LLM succeeds     │
 └─────────────────────────────────────────┘
     │
@@ -301,7 +284,7 @@ struct MessageCompressionConfig {
     size_t max_context_size = 1000000;     // API token limit
     float compress_threshold = 0.9f;       // Trigger at 90%
     size_t max_compress_output = 1500;     // Max tokens in summary
-    float compress_ratio = 0.70f;          // NEW: Compress first 70%, keep last 30%
+    float compress_ratio = 0.80f;          // Default: compress first 80%, keep last 20%
     std::string model = "MiniMax-M2.7";
     std::string api_url;
     std::string api_key;
@@ -318,25 +301,25 @@ struct MessageCompressionConfig {
 | Method | Purpose |
 |--------|---------|
 | `should_compress(tokens)` | Check if compression needed (threshold) |
-| `compress()` | Main entry point - deletes first 70%, compresses copy |
-| `get_compression_indices()` | Returns (start, end) for first 70% with SAFE split |
+| `compress()` | Main entry point - deletes configured prefix, compresses copy |
+| `get_compression_indices()` | Returns (start, end) for configured prefix with SAFE split |
 | `replace_messages(json)` | Replace messages_ with compressed version |
 
 ---
 
 ## Compression Algorithm Details
 
-### Step 1: Find Safe Split Point at 70%
+### Step 1: Find Safe Split Point at the Configured Percentage
 
 ```cpp
 get_compression_indices():
     total_non_system = messages_.size() - 1  // exclude system
-    target_split = (total_non_system * 70) / 100  // 70% of non-system
+    target_split = total_non_system * config_.compress_ratio
     
     // Find tool_call_ids in target middle range
-    first_70_tool_calls = {tool_call_ids from assistants in [1, target_split]}
+    prefix_tool_call_ids = {tool_call_ids from assistants in [1, target_split]}
     
-    // Check if any tool result in [1, target_split] references first_70_tool_calls
+    // Check if any tool result in [1, target_split] references prefix_tool_call_ids
     // If so, adjust safe_split_point before that tool result
     
     return (1, 1 + safe_split_point)  // start=1, end=exclusive
@@ -349,24 +332,24 @@ compress():
     auto [start_idx, end_idx] = get_compression_indices()
 
     // Make COPY; originals stay intact until the summary succeeds
-    json first_70_copy = messages_[start_idx to end_idx)
+    json prefix_copy = messages_[start_idx to end_idx)
 
     // Convert COPY to plain text
-    string plain_text = messages_to_plain_text(first_70_copy)
+    string plain_text = messages_to_plain_text(prefix_copy)
 
     // Call LLM for summary (3 attempts, growing timeouts:
     // compression_timeout, 2x, 4x — default 30s/60s/120s)
     string summary = call_llm_for_summary(prompt)
 
     if (summary.empty()) {
-        // LAST-RESORT FALLBACK: delete the oldest ~70% anyway so the
+        // LAST-RESORT FALLBACK: delete the same configured safe prefix so the
         // next API call cannot overflow the context window.
-        messages_.erase(oldest ~70%)
+        messages_.erase(start_idx, end_idx)
         return {FallbackDeleted, {}};  // context reduced WITHOUT a summary
     }
 
     // Success: delete middle, rebuild as
-    // system + user(summary) + last 30%
+    // system + user(summary) + retained recent suffix
     ...
     return {Compressed, new_messages.dump()};
 ```
@@ -407,7 +390,7 @@ to go out with the model row's raw temperature. Models with a fixed
 server-side temperature (Kimi K3.1 `kimi-k3.1-pro*` / `k3.1-pro*`,
 `kimi-for-coding*` / `k3` / `kimi-k2.7-code` = 1.0) **hard-reject** any
 other value, so all 3 summary
-attempts failed and the last-resort fallback silently deleted ~70% of the
+attempts failed and the last-resort fallback silently deleted the configured safe prefix of the
 context — compression "worked" only by throwing history away. The
 regression test is `tests/test_auto_compress.cpp` → *"compression
 request carries provider-clamped temperature"*.
@@ -420,22 +403,22 @@ interface — never send raw model settings.
 
 ## Compression Prompt
 
-The LLM is given a focused prompt to summarize the first 70%:
+The LLM is given a focused prompt to summarize the configured older portion:
 
 ```
 You are a compression assistant for a coding agent conversation.
 
-Your job is to SUMMARIZE the OLDEST 70% of a conversation. This portion
+Your job is to SUMMARIZE the given older portion of a conversation. This portion
 contains the main work that was done. You need to compress it into a
 concise summary.
 
-FIRST 70% OF CONVERSATION TO SUMMARIZE:
+SELECTED OLDER CONVERSATION TO SUMMARIZE:
 [messages converted to plain text]
 
 Requirements:
 - Maximum 500 words (~1500 tokens output)
 - Focus on: key decisions made, files modified, commands run, errors encountered
-- Be concise - this is a transitional summary to bridge the recent 30%
+- Be concise - this is a transitional summary to bridge the retained recent portion
 - Output ONLY the summary text, nothing else
 
 Format your output as:
@@ -455,18 +438,18 @@ prefix, suffix, or explanation. Just output the summary in the format above.
 ```
 messages = [
     {role: "system", content: "You are a coding agent..."},       // Index 0 (kept)
-    {role: "user", content: "Build an app that does X"},           // First 70%
-    {role: "assistant", content: "I'll analyze the code..."},     // First 70%
-    {role: "tool", content: "File contents..."},                   // First 70%
-    {role: "assistant", content: "I see the issue..."},            // First 70%
+    {role: "user", content: "Build an app that does X"},           // Older portion
+    {role: "assistant", content: "I'll analyze the code..."},     // Older portion
+    {role: "tool", content: "File contents..."},                   // Older portion
+    {role: "assistant", content: "I see the issue..."},            // Older portion
     {role: "tool", content: "Bash output..."},                      // SAFE SPLIT (here)
-    {role: "assistant", content: "Making changes..."},             // Last 30% (kept)
-    {role: "tool", content: "Result..."},                            // Last 30% (kept)
+    {role: "assistant", content: "Making changes..."},             // Retained portion (kept)
+    {role: "tool", content: "Result..."},                            // Retained portion (kept)
     ... (potentially hundreds of messages)
 ]
 ```
 
-### After Compression (70/30 Split, ~21 messages)
+### After Compression (80/20 default, ~15 messages)
 ```
 messages = [
     {role: "system", content: "You are a coding agent..."},       // Kept
@@ -474,8 +457,8 @@ messages = [
      conversation was summarized. Summary of the removed messages:
      KEY EVENTS: ...\nFILES: ...\nNEXT: ...
      Continue the current task.]"},
-    {role: "assistant", content: "Making changes..."},             // Last 30% (kept)
-    {role: "tool", content: "Result..."}                            // Last 30% (kept)
+    {role: "assistant", content: "Making changes..."},             // Retained portion (kept)
+    {role: "tool", content: "Result..."}                            // Retained portion (kept)
 ]
 ```
 
@@ -497,7 +480,7 @@ The summary rides inside a synthetic leading **user** message:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `compress_threshold` | 0.9 | Trigger auto-compress at 90% |
-| `compress_ratio` | 0.70 | Compress first 70%, keep last 30% |
+| `compress_ratio` | 0.80 | Compress first 80%, keep last 20%; selectable 0.50–0.90 in 0.10 steps |
 | `max_compress_output` | 1500 | Max tokens in LLM summary |
 | `compression_timeout` | 30 | Base seconds per LLM attempt; 3 attempts use base, 2x, 4x (default 30s/60s/120s) |
 
@@ -536,7 +519,7 @@ Compression generates debug files in `/tmp/` for troubleshooting:
 
 | File | Content |
 |------|---------|
-| `/tmp/daedalus_compress_middle.txt` | First 70% messages being compressed |
+| `/tmp/daedalus_compress_middle.txt` | Older portion messages being compressed |
 
 ---
 
@@ -575,7 +558,7 @@ After compression (success or failure), the main loop MUST continue:
 - Agent resumes with reduced context
 
 If LLM fails during compression:
-- The fallback deletes the oldest ~70% (context reduced, no summary)
+- The fallback deletes the configured safe prefix (context reduced, no summary)
 - `compress()` returns `CompressOutcome::FallbackDeleted`
 - `on_compaction(before, after)` still fires — hosts see the reduction
 - No retry is scheduled for a host-requested compress
@@ -594,9 +577,9 @@ If LLM fails during compression:
 | **Use case** | Agent sheds stale context proactively | Fresh start from the host | Prevent context overflow |
 
 Both methods follow the same flow:
-1. Copy the first 70% (at safe split point), summarize via LLM
+1. Copy the configured older portion (at safe split point), summarize via LLM
 2. On success, delete the middle and rebuild with the summary
-3. On failure, fall back to deleting the oldest ~70% without a summary
+3. On failure, fall back to deleting the same configured safe prefix without a summary
 4. Both reductions fire `on_compaction()`
 5. Continue main loop (don't exit)
 
@@ -607,7 +590,7 @@ Both methods follow the same flow:
 ### LLM Failure During Compression
 
 If `call_llm_for_summary()` returns empty string after all 3 attempts:
-1. The fallback deletes the oldest ~70% of `messages_` (last resort to
+1. The fallback deletes the configured safe prefix of `messages_` (last resort to
    prevent context overflow)
 2. Context is reduced (even without summary)
 3. `compress()` returns `CompressOutcome::FallbackDeleted`
@@ -640,7 +623,7 @@ Run message tests to verify compression:
 ```
 
 Key test cases:
-- `split_messages` - verifies 70/30 split with safe point
+- `split_messages` - verifies every 50/60/70/80/90 split and tool-safe boundaries
 - `should_compress` - verifies threshold detection
 - `compress` - verifies full compression flow
 - `safe_split_point` - verifies split doesn't break tool call chains

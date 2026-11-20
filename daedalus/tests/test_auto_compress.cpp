@@ -768,6 +768,9 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
         m.temperature      = 0.0;
         store.upsert_model(m);
         store.set_default_model_name("big");
+        // Non-default value proves the SettingsStore row reaches Messages,
+        // rather than merely changing the standalone split helper.
+        store.set_compression_ratio_percent(50);
     }
 
     fs::path project = home / "project";
@@ -786,7 +789,7 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
     agent.initialize();
 
     // Build a real history: 3 turns → system + 3x(user+assistant) = 7
-    // messages, so the 70/30 split has a non-empty middle.
+    // messages, so the configured 50/50 split has a non-empty middle.
     for (int i = 0; i < 3; ++i) {
         agent.submit_user_message("hello " + std::to_string(i));
         agent.run_one_turn();
@@ -818,7 +821,9 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
         std::ifstream f(transcript);
         const json history = json::parse(f);
         REQUIRE(history.size() >= 2);
-        CHECK(history.size() < 7);   // first 70% collapsed into the summary
+        // Eight messages before compression (including context-status):
+        // seven non-system at 50% -> three removed, four retained + summary.
+        CHECK(history.size() == 6);  // system + summary + four retained
         CHECK(history[0].value("role", "") == "system");
         CHECK(history[1].value("role", "") == "user");
     }
@@ -830,7 +835,7 @@ TEST_CASE("Agent::compress_context compresses immediately when idle") {
 TEST_CASE("Agent::compress_context reports fallback delete via on_compaction") {
     // §COMPRESS-REPORT: when ALL summary attempts fail (here: HTTP 500 on
     // every compression request), Messages::compress() falls back to
-    // deleting the oldest ~70% WITHOUT a summary. That is a real context
+    // deleting the configured safe prefix WITHOUT a summary. That is a real context
     // reduction and MUST surface as on_compaction — before the fix the
     // fallback returned the same nullopt as a genuine failure, so hosts
     // keying success off on_compaction misreported it ("failed, but the
@@ -893,7 +898,7 @@ TEST_CASE("Agent::compress_context reports fallback delete via on_compaction") {
         CHECK(server.compression_requests() == 3);   // 3 attempts, all failed
         CHECK(server.main_requests() == 3);          // no extra turn was run
 
-        // Transcript reduced WITHOUT a summary wrapper: system + last 30%.
+        // Transcript reduced WITHOUT a summary wrapper: system + retained suffix.
         agent.shutdown();
     }
 

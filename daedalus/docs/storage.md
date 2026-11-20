@@ -77,12 +77,19 @@ And so on.
 ### 1.3 Global Second Brain and multi-process storage
 
 The Global Second Brain is **user-tier**, shared by every project and host that
-uses the same data root:
+uses the same settings database. Its Markdown root comes from the
+`second_brain_directory` setting and defaults to `<data_root>/brain`. MonkeyByte
+and icarus both expose this setting under Agent settings. It must be an absolute
+path (for example, a mounted `/workspace/...` directory), and the PARA folders
+are created on first use. Changing the setting takes effect on the next brain
+operation and reindexes the newly selected tree; notes are never moved or copied
+automatically. Empty or relative paths are rejected rather than resolved against
+a process-specific working directory.
 
 | Concrete file / dir | Resolves to | Notes |
 |---|---|---|
-| Markdown notes | `<data_root>/brain/{inbox,projects,areas,resources,archives}/` | Source of truth; one `<note-id>.md` per note |
-| Brain lock | `<data_root>/brain/.lock` | POSIX `flock(2)` shared for reads, exclusive for every mutation/reindex |
+| Markdown notes | `<second_brain_directory>/{inbox,projects,areas,resources,archives}/` | Source of truth; one `<note-id>.md` per note |
+| Brain lock | `<second_brain_directory>/.lock` | POSIX `flock(2)` shared for reads, exclusive for every mutation/reindex |
 | Settings + brain index | `<data_root>/daedalus.db` | SQLite settings plus rebuildable `brain_notes` / `brain_fts` tables |
 | SQLite WAL sidecars | `<data_root>/daedalus.db-wal`, `<data_root>/daedalus.db-shm` | Required runtime state; created as needed in WAL mode |
 

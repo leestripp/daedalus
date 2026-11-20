@@ -471,14 +471,17 @@ Key files:
 | File | Location | Purpose |
 |------|----------|---------|
 | `daedalus.db` | `$XDG_DATA_HOME/daedalus/daedalus.db` | SQLite settings and brain index; WAL mode required |
-| `brain/` | `$XDG_DATA_HOME/daedalus/brain/` | Global Second Brain Markdown source of truth |
-| `brain/.lock` | Same brain root | Bounded shared/exclusive inter-process lock for all brain operations |
+| `brain/` | `second_brain_directory` (default `$XDG_DATA_HOME/daedalus/brain/`) | Global Second Brain Markdown source of truth; configurable in MonkeyByte/Icarus Agent settings |
+| `brain/.lock` | Configured brain root | Bounded shared/exclusive inter-process lock for all brain operations |
 | `messages.json` | `<project>/.daedalus/daedalus[-<name>]/messages.json` | Conversation transcript |
 | `messages.json.crash` | Same dir | Crash mirror written by signal handlers |
 | `memory/memory.json` | Same dir | Long-term memory (JSON source of truth + SQLite recovery mirror) |
 
 Env-var resolution is documented in `docs/storage.md`. For CI/sandboxing you
-can collapse everything with `DAEDALUS_HOME=/tmp/foo`.
+can collapse everything with `DAEDALUS_HOME=/tmp/foo`. The Second Brain root
+must be absolute; changing it selects and reindexes a different tree on the
+next brain operation, never moves notes, and must not be tied to a workspace or
+host-specific project folder.
 
 Second Brain mutations hold the brain-root `flock` exclusively and readers hold
 it shared; never narrow that coverage to only the file write. Note replacement
@@ -1413,8 +1416,9 @@ tests/
   test_main.cpp            single assert-based test runner (no framework)
 data/                      gschema XML + dark.css / light.css (Catppuccin-style themes)
                            + icons/ (mb-*-symbolic SVG set: activity bar, file
-                           tree/tabs via ui/FileIcons.h, tool cards, buttons —
-                           icon search path registered in main.cpp)
+                           tree/tabs via ui/FileIcons.h, tool cards, voice and
+                           other buttons — all app-owned; no host icon-theme
+                           dependency; search path registered in main.cpp)
 resources/                 monkeybyte.desktop launcher entry + monkeybyte.svg icon
                            + banner.png / icon.png / icon_192x192.jpg (README
                            and packaging artwork)

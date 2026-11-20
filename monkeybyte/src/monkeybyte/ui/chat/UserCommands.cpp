@@ -8,7 +8,7 @@ namespace monkeybyte {
 const std::vector<UserCommand>& user_commands() {
     static const std::vector<UserCommand> kCommands = {
         {"init", "Create or update AGENTS.md for this workspace"},
-        {"compress", "Request context compression (daedalus summarizes the oldest ~70%)"},
+        {"compress", "Request context compression (daedalus summarizes the configured old-history percentage)"},
         {"clear", "Clear the chat history and reset the agent session"},
         {"usage", "Show token and context usage for this session"},
         {"tools", "List the agent's registered tools"},

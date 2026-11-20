@@ -26,6 +26,7 @@
 #include <string>
 
 #include <daedalus/settings.h>
+#include <daedalus/paths.h>
 
 namespace fs = std::filesystem;
 
@@ -412,6 +413,74 @@ void test_s11_provider_migration() {
     std::cout << "[ok] S11: v3 → v4 provider migration\n";
 }
 
+// ===========================================================================
+// S12: configurable context-compression ratio
+// ===========================================================================
+void test_s12_compression_ratio() {
+    TmpHome h("s12");
+    auto s = daedalus::SettingsStore::for_home(h.path);
+
+    EXPECT(s.get_compression_ratio_percent() == 80);
+    for (const int percent : {50, 60, 70, 80, 90}) {
+        s.set_compression_ratio_percent(percent);
+        EXPECT(s.get_compression_ratio_percent() == percent);
+    }
+
+    for (const int invalid : {0, 49, 55, 95, 100}) {
+        bool threw = false;
+        try {
+            s.set_compression_ratio_percent(invalid);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        EXPECT(threw);
+        EXPECT(s.get_compression_ratio_percent() == 90);  // unchanged
+    }
+
+    // Corrupt/legacy values never leak into the split calculation.
+    s.set_int("compression_ratio_percent", 75);
+    EXPECT(s.get_compression_ratio_percent() == 80);
+    std::cout << "[ok] S12: compression ratio defaults, validates, and persists\n";
+}
+
+
+// ===========================================================================
+// S13: configurable Second Brain Markdown directory
+// ===========================================================================
+void test_s13_second_brain_directory() {
+    TmpHome h("s13");
+    auto s = daedalus::SettingsStore::for_home(h.path);
+
+    const fs::path expected_default =
+        daedalus::Paths::global().user_data_root() / "brain";
+    EXPECT(s.get_second_brain_directory() == expected_default);
+
+    const fs::path custom = (h.path / "mounted" / "knowledge").lexically_normal();
+    s.set_second_brain_directory(custom);
+    EXPECT(s.get_second_brain_directory() == custom);
+    EXPECT(s.get_string("second_brain_directory", "") == custom.string());
+
+    // Persistence is in the shared DB, not tied to the current workspace.
+    auto reopened = daedalus::SettingsStore::for_home(h.path);
+    EXPECT(reopened.get_second_brain_directory() == custom);
+
+    for (const fs::path& invalid : {fs::path{}, fs::path("relative/brain")}) {
+        bool threw = false;
+        try {
+            s.set_second_brain_directory(invalid);
+        } catch (const std::invalid_argument&) {
+            threw = true;
+        }
+        EXPECT(threw);
+        EXPECT(s.get_second_brain_directory() == custom);  // unchanged
+    }
+
+    // A corrupt/legacy relative value cannot redirect writes to the CWD.
+    s.set_string("second_brain_directory", "old-projects/brain");
+    EXPECT(s.get_second_brain_directory() == expected_default);
+    std::cout << "[ok] S13: Second Brain directory defaults, validates, and persists\n";
+}
+
 }  // namespace
 
 int main() {
@@ -426,12 +495,14 @@ int main() {
     test_s9_schema_idempotent();
     test_s10_sql_injection_resistance();
     test_s11_provider_migration();
+    test_s12_compression_ratio();
+    test_s13_second_brain_directory();
 
     if (failures) {
         std::cerr << "\ntest_settings_store: " << failures
-                  << " FAILED (of 11 tests)\n";
+                  << " FAILED (of 13 tests)\n";
         return 1;
     }
-    std::cout << "\ntest_settings_store: 11 tests passed\n";
+    std::cout << "\ntest_settings_store: 13 tests passed\n";
     return 0;
 }

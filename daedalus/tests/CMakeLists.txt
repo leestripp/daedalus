@@ -71,6 +71,19 @@ target_link_libraries(daedalus_second_brain_tests PRIVATE
 )
 add_test(NAME second_brain_tests COMMAND daedalus_second_brain_tests)
 
+add_executable(daedalus_second_brain_global_tests
+    test_second_brain_global.cpp
+)
+target_include_directories(daedalus_second_brain_global_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/src
+)
+target_link_libraries(daedalus_second_brain_global_tests PRIVATE
+    daedalus
+    pthread
+)
+add_test(NAME second_brain_global_tests COMMAND daedalus_second_brain_global_tests)
+
 find_package(SQLite3 REQUIRED)
 add_executable(daedalus_second_brain_concurrency_tests
     test_second_brain_concurrency.cpp

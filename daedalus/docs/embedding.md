@@ -632,7 +632,7 @@ void on_compaction(std::size_t before, std::size_t after) noexcept;
 
 This also fires when compression's last-resort fallback ran: if the
 summary LLM call fails on all attempts, daedalus deletes the oldest
-~70% of messages anyway (to keep the next API call inside the context
+the configured safe prefix anyway (to keep the next API call inside the context
 window) and reports the reduction through `on_compaction` — the context
 changed even though no summary was produced. Hosts should treat the
 callback as "the context was reduced", not "a summary was generated".

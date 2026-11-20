@@ -167,8 +167,13 @@ summary as a user message.
 MonkeyByte registers `AppUiTool` and `WebFetchTool`; Daedalus supplies its core
 tools including `execute_bash` and unified `web_search`. Configured MCP tools
 appear as `mcp__<server>__<tool>`. Settings → Agent controls disabled tools,
-skills, and MCP servers. Registration is replace-by-name, and runtime disables
-change the live tool surface.
+skills, and MCP servers. Its **Context Compression** slider selects 50–90% of
+old history to summarize in 10% steps (default 80%); the shared Daedalus setting
+is also available in icarus as a dropdown. The **Second Brain** section edits
+the shared absolute Markdown directory, with a folder picker and immediate
+persistence. The next brain operation uses and reindexes that directory; notes
+are not moved automatically. Registration is replace-by-name, and runtime
+disables change the live tool surface.
 
 Bash approval is interactive unless auto-approve or a command-specific session
 approval applies. Auto-approve is not a sandbox. Web results and fetched pages
@@ -281,6 +286,12 @@ by the window close handler.
 Read-aloud segments streamed assistant/tell_user sentences FIFO; restored
 history, user messages, tool cards, and status notices are not spoken.
 Dictation inserts text at the input cursor for review and never auto-sends.
+The microphone, record, synchronizing, and three playback-volume states use
+app-owned `mb-*-symbolic.svg` assets under `data/icons`, resolved through the
+icon search path registered at startup. Do not replace them with Adwaita or
+other host-theme names: minimal containers do not necessarily ship those
+themes. Every symbolic control icon must remain in the app-private set so it
+recolours with the active CSS foreground without a host package dependency.
 
 ## 8. Threading and error containment
 

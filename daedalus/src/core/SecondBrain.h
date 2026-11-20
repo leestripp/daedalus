@@ -5,7 +5,8 @@
 // shared by every agent on this machine.
 //
 // Design (see docs/storage.md):
-//   - Source of truth: markdown files under <user_data_root>/brain/,
+//   - Source of truth: markdown files under second_brain_directory (default
+//     <user_data_root>/brain/),
 //     organised in an inbox + PARA folders (projects / areas / resources /
 //     archives). Human-readable and editable with any editor — the agent
 //     runtime owns nothing you cannot open in vim.
@@ -17,10 +18,11 @@
 //     SettingsStore DB) is a REBUILDABLE CACHE over the files — never a
 //     second source of truth. brain_reindex rebuilds it from disk.
 //
-// GLOBAL by design: SecondBrain::global() always targets the process-wide
-// brain dir + global SettingsStore, regardless of any agent's per-project
-// daedalus_home — the knowledge base is reachable from every project,
-// exactly like SecretsVault::global().
+// GLOBAL by design: SecondBrain::global() uses the directory persisted in the
+// global SettingsStore, regardless of any agent's per-project daedalus_home.
+// The default is <user_data_root>/brain; hosts can select another absolute
+// directory. Changing it selects a different knowledge base (no implicit move)
+// and takes effect on the next brain operation.
 //
 // Thread/process safety: public operations serialise on an internal mutex and
 // a bounded flock(2) at <brain_root>/.lock. Writers hold it exclusively;
@@ -64,8 +66,10 @@ public:
     /// with a temp dir + SettingsStore::for_home). Creates the folder tree.
     SecondBrain(std::filesystem::path brain_root, SettingsStore store);
 
-    /// Process-wide singleton: <Paths::global().user_data_root()>/brain
-    /// over SettingsStore::instance(). Created on first call.
+    /// Process-wide entry point over SettingsStore::instance(). Uses the
+    /// persisted second_brain_directory (default <user_data_root>/brain),
+    /// creating and indexing that root on first selection. Instances for old
+    /// roots remain alive so concurrent operations can finish safely.
     static SecondBrain& global();
 
     /// The five folders, in display order. inbox first.

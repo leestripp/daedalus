@@ -22,6 +22,7 @@
 #include <daedalus/paths.h>
 #include <daedalus/settings.h>
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -84,7 +85,8 @@ Gtk::Box* field_row(const Glib::ustring& label, Gtk::Widget& control) {
     const bool fill_width = dynamic_cast<Gtk::Entry*>(&control) ||
                             dynamic_cast<Gtk::PasswordEntry*>(&control) ||
                             dynamic_cast<Gtk::DropDown*>(&control) ||
-                            dynamic_cast<Gtk::SpinButton*>(&control);
+                            dynamic_cast<Gtk::SpinButton*>(&control) ||
+                            dynamic_cast<Gtk::Scale*>(&control);
     control.set_hexpand(fill_width);
     control.set_halign(fill_width ? Gtk::Align::FILL : Gtk::Align::END);
     row->append(control);
@@ -1354,6 +1356,7 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
     auto in = [](const std::vector<std::string>& v, const std::string& s) {
         return std::find(v.begin(), v.end(), s) != v.end();
     };
+    auto& registry = daedalus::SettingsStore::instance();
 
     // ── BEHAVIOR: bash auto-approve gate (ChatController reads
     //    agent.auto_approve on every agent build) ──────────────────────
@@ -1367,6 +1370,114 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
         [this](bool on) {
             services_.store.set("agent.auto_approve", on ? "1" : "0");
         }));
+
+    // ── CONTEXT COMPRESSION: the oldest selected percentage is
+    // summarized; the newest remainder stays verbatim. Daedalus adjusts
+    // the exact boundary forward when needed to keep every assistant
+    // tool_call together with all of its role=tool results.
+    box->append(*group_header("CONTEXT COMPRESSION"));
+    auto* compression_scale = Gtk::make_managed<Gtk::Scale>(
+        Gtk::Orientation::HORIZONTAL);
+    compression_scale->set_range(50, 90);
+    compression_scale->set_increments(10, 10);
+    compression_scale->set_digits(0);
+    compression_scale->set_draw_value(true);
+    compression_scale->set_value_pos(Gtk::PositionType::RIGHT);
+    compression_scale->set_value(registry.get_compression_ratio_percent());
+    compression_scale->set_tooltip_text(
+        "Percentage of old history to summarize (50–90%, in steps of 10). "
+        "The remaining recent history is kept intact.");
+    compression_scale->signal_value_changed().connect(
+        [this, compression_scale] {
+            const int percent = std::clamp(
+                static_cast<int>(std::lround(compression_scale->get_value() / 10.0)) * 10,
+                50, 90);
+            if (static_cast<int>(compression_scale->get_value()) != percent) {
+                compression_scale->set_value(percent);
+                return;
+            }
+            ui_guard("compression ratio", [&] {
+                daedalus::SettingsStore::instance()
+                    .set_compression_ratio_percent(percent);
+            });
+            signal_agent_config_changed_.emit();
+        });
+    box->append(*field_row("Old history to compress (%)", *compression_scale));
+    auto* compression_hint = Gtk::make_managed<Gtk::Label>(
+        "Default 80/20: summarize 80%, keep 20%. The safe split may move "
+        "forward to preserve complete tool-call chains.");
+    compression_hint->set_halign(Gtk::Align::START);
+    compression_hint->set_wrap(true);
+    compression_hint->add_css_class("dim-label");
+    box->append(*compression_hint);
+
+    // ── SECOND BRAIN: user-tier Markdown source of truth. This is an
+    // explicit absolute path so mounted/container layouts never depend on
+    // a host-specific home or project directory. Changing roots selects a
+    // different KB; it deliberately does not move the user's notes.
+    box->append(*group_header("SECOND BRAIN"));
+    auto* brain_directory = Gtk::make_managed<Gtk::Entry>();
+    brain_directory->set_text(registry.get_second_brain_directory().string());
+    brain_directory->set_tooltip_text(
+        "Absolute directory for Second Brain Markdown notes. Created on "
+        "first use. Existing notes are not moved when this changes.");
+    auto apply_brain_directory = [this, brain_directory] {
+        try {
+            daedalus::SettingsStore::instance().set_second_brain_directory(
+                brain_directory->get_text().raw());
+            status_label_.set_text(
+                "Second Brain directory saved; the next brain operation uses it.");
+        } catch (const std::exception& e) {
+            status_label_.set_text(std::string("Second Brain directory: ") + e.what());
+        }
+    };
+    brain_directory->signal_activate().connect(apply_brain_directory);
+    box->append(*field_row("Markdown directory", *brain_directory));
+
+    auto* brain_buttons = Gtk::make_managed<Gtk::Box>(Gtk::Orientation::HORIZONTAL, 8);
+    brain_buttons->set_halign(Gtk::Align::END);
+    auto* choose_brain_directory = Gtk::make_managed<Gtk::Button>("Choose folder…");
+    choose_brain_directory->signal_clicked().connect(
+        [this, brain_directory, apply_brain_directory] {
+            auto* toplevel = toplevel_of(*this);
+            if (!toplevel) return;
+            auto dialog = Gtk::FileDialog::create();
+            dialog->set_title("Choose Second Brain directory");
+            std::error_code ec;
+            const auto current = std::filesystem::path(brain_directory->get_text().raw());
+            if (std::filesystem::is_directory(current, ec)) {
+                dialog->set_initial_folder(Gio::File::create_for_path(current.string()));
+            }
+            dialog->select_folder(
+                *toplevel,
+                [this, dialog, brain_directory, apply_brain_directory](
+                    Glib::RefPtr<Gio::AsyncResult>& result) {
+                    try {
+                        auto folder = dialog->select_folder_finish(result);
+                        if (!folder || folder->get_path().empty()) return;
+                        brain_directory->set_text(folder->get_path());
+                        apply_brain_directory();
+                    } catch (const Gtk::DialogError&) {
+                        return;  // cancelled
+                    } catch (const std::exception& e) {
+                        status_label_.set_text(
+                            std::string("Choose Second Brain directory: ") + e.what());
+                    }
+                });
+        });
+    auto* save_brain_directory = Gtk::make_managed<Gtk::Button>("Apply location");
+    save_brain_directory->signal_clicked().connect(apply_brain_directory);
+    brain_buttons->append(*choose_brain_directory);
+    brain_buttons->append(*save_brain_directory);
+    box->append(*brain_buttons);
+    auto* brain_hint = Gtk::make_managed<Gtk::Label>(
+        "Shared by MonkeyByte and Icarus. The next brain operation uses the "
+        "new location; notes are never moved automatically. Default: the "
+        "Daedalus data directory/brain.");
+    brain_hint->set_halign(Gtk::Align::START);
+    brain_hint->set_wrap(true);
+    brain_hint->add_css_class("dim-label");
+    box->append(*brain_hint);
 
     // ── SKILLS: per-skill enable/disable (host policy, §4.5) ─────────
     box->append(*group_header("SKILLS"));
@@ -1417,7 +1528,6 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
 
     // ── LIMITS + MCP master switch ────────────────────────────────────
     box->append(*group_header("LIMITS"));
-    auto& registry = daedalus::SettingsStore::instance();
     auto limit_row = [this](const Glib::ustring& label, double lo, double hi,
                             double value, std::function<void(int)> apply) {
         auto* spin = Gtk::make_managed<Gtk::SpinButton>();
@@ -1769,6 +1879,10 @@ Gtk::Widget* SettingsPanel::build_paths_tab() {
              "daedalus.db settings store and user-installed skill packs "
              "(design §10.2).",
              dp.user_data_root().string());
+    add_path("Second Brain directory",
+             "Configured Markdown knowledge-base root (shared with Icarus).",
+             daedalus::SettingsStore::instance()
+                 .get_second_brain_directory().string());
     add_path("State directory",
              "Logs, chat history, and usage stats.",
              dp.user_state_root().string());

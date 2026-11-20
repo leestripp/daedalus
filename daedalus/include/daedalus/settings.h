@@ -206,6 +206,19 @@ public:
     /// Get max_response_size from kv_settings. Default 5000000 (5MB).
     size_t get_max_response_size() const;
 
+    /// Percentage of the oldest non-system messages selected for context
+    /// compression. Only 50, 60, 70, 80, or 90 are valid; the remainder is
+    /// retained verbatim. Default 80. Invalid persisted values fall back to
+    /// the default rather than weakening the message-chain safety checks.
+    int get_compression_ratio_percent() const;
+
+    /// Root directory containing the Second Brain's Markdown PARA folders.
+    /// Defaults to <user_data_root>/brain. Invalid persisted values (empty or
+    /// relative paths) fall back to that default. The directory is created on
+    /// first use; changing it selects a different knowledge base, it does not
+    /// move or copy notes.
+    std::filesystem::path get_second_brain_directory() const;
+
     // -----------------------------------------------------------------------
     // v0.5.0: MCP tool schema soft-cap percent (used by LLMClient).
     // Default 5% — §18.9.C.
@@ -223,6 +236,12 @@ public:
     void set_max_tool_result_size(size_t v);
     void set_max_request_size(size_t v);
     void set_max_response_size(size_t v);
+    /// Set the compression percentage. Throws std::invalid_argument unless
+    /// v is exactly one of 50, 60, 70, 80, or 90.
+    void set_compression_ratio_percent(int v);
+    /// Select the Second Brain Markdown root. Throws std::invalid_argument
+    /// for an empty or relative path. Existing notes are never moved.
+    void set_second_brain_directory(const std::filesystem::path& path);
     void set_mcp_tool_schema_soft_cap_percent(int v);
 
     // -----------------------------------------------------------------------
