@@ -90,8 +90,10 @@ void test_git_service() {
     const auto run = [](const std::string& command) {
         return std::system((command + " >/dev/null 2>&1").c_str()) == 0;
     };
+    const std::string git_no_maintenance =
+        "git -c maintenance.auto=false -c gc.auto=0 ";
     const auto git = [&](const fs::path& repo, const std::string& args) {
-        return run("git -C '" + repo.string() + "' " + args);
+        return run(git_no_maintenance + "-C '" + repo.string() + "' " + args);
     };
     const auto write = [](const fs::path& path, const std::string& text) {
         std::ofstream out(path);
@@ -104,9 +106,12 @@ void test_git_service() {
 
     check(!monkeybyte::GitService::status(dir).is_repo,
           "plain directory is not a git repository");
-    check(run("git init --bare --initial-branch=main '" + remote.string() + "'"),
-          "create bare remote");
-    check(run("git init --initial-branch=main '" + local.string() + "'"),
+    check(run(git_no_maintenance + "init --bare --initial-branch=main '" +
+              remote.string() + "'") &&
+              git(remote, "config maintenance.auto false") &&
+              git(remote, "config gc.auto 0"),
+          "create bare remote without automatic maintenance");
+    check(run(git_no_maintenance + "init --initial-branch=main '" + local.string() + "'"),
           "create local repository");
     check(configure_identity(local), "configure local git identity");
     write(local / "tracked.txt", "initial\n");
@@ -127,7 +132,7 @@ void test_git_service() {
               "main · origin/main · up to date",
           "format synchronized status-bar label");
 
-    check(run("git clone '" + remote.string() + "' '" + other.string() + "'") &&
+    check(run(git_no_maintenance + "clone '" + remote.string() + "' '" + other.string() + "'") &&
               configure_identity(other),
           "clone second repository");
     write(other / "remote.txt", "remote\n");
@@ -181,7 +186,7 @@ void test_git_service() {
               tooltip.find("Local ahead: 1 commit (outgoing)") != std::string::npos,
           "tooltip explains incoming and outgoing arrows");
 
-    check(run("git init --initial-branch=main '" + unlinked.string() + "'") &&
+    check(run(git_no_maintenance + "init --initial-branch=main '" + unlinked.string() + "'") &&
               configure_identity(unlinked),
           "create repository without an upstream");
     write(unlinked / "file.txt", "content\n");
