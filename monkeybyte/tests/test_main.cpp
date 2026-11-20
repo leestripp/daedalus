@@ -139,8 +139,24 @@ void test_git_service() {
     status = monkeybyte::GitService::status(local);
     check(status.behind == 0,
           "local-only status does not fetch on every poll");
-    check(monkeybyte::GitService::fetch_upstream(local),
-          "fetch upstream tracking refs");
+    // Git's automatic post-fetch maintenance deliberately detaches itself.
+    // Trace the real fetch to ensure this UI poller never leaves that orphan
+    // behind (notably permanent under a non-reaping container PID 1).
+    const auto trace_path = dir / "fetch.trace";
+    const char* old_trace = std::getenv("GIT_TRACE");
+    const std::string saved_trace = old_trace ? old_trace : "";
+    setenv("GIT_TRACE", trace_path.c_str(), 1);
+    const bool fetched = monkeybyte::GitService::fetch_upstream(local);
+    if (old_trace)
+        setenv("GIT_TRACE", saved_trace.c_str(), 1);
+    else
+        unsetenv("GIT_TRACE");
+    check(fetched, "fetch upstream tracking refs");
+    std::ifstream trace_file(trace_path);
+    const std::string trace((std::istreambuf_iterator<char>(trace_file)),
+                            std::istreambuf_iterator<char>());
+    check(trace.find("maintenance run --auto") == std::string::npos,
+          "fetch does not spawn detached automatic maintenance");
     status = monkeybyte::GitService::status(local);
     check(status.ahead == 0 && status.behind == 1,
           "remote commit is reported as incoming");

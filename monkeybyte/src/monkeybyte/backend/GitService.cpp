@@ -105,8 +105,12 @@ bool GitService::fetch_upstream(const std::filesystem::path& dir) {
     // Do not let an unattended UI poll ask for credentials on the controlling
     // terminal. coreutils timeout also bounds SSH/network stalls; a failed
     // fetch simply leaves the previous remote-tracking state in place.
+    // Automatic maintenance is disabled because Git deliberately detaches it:
+    // pclose() cannot reap that grandchild, which becomes a permanent zombie
+    // under a non-reaping container PID 1 on every minute-long poll cycle.
     const std::string cmd =
-        "timeout 15s env GIT_TERMINAL_PROMPT=0 SSH_ASKPASS_REQUIRE=never git -C " +
+        "timeout 15s env GIT_TERMINAL_PROMPT=0 SSH_ASKPASS_REQUIRE=never "
+        "git -c maintenance.auto=false -c gc.auto=0 -C " +
         shell_quote(dir.string()) +
         " fetch --quiet --no-tags </dev/null 2>/dev/null";
     run_command(cmd, rc);

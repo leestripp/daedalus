@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **MonkeyByte's minute Git fetch no longer leaks one zombie per poll.** Git
+  automatically launched `git maintenance run --auto --quiet --detach` after
+  every fetch; that detached grandchild was orphaned and became permanent under
+  the container's non-reaping PID 1. The UI's read-only fetch now disables
+  automatic maintenance and legacy auto-GC while leaving normal repository
+  maintenance configuration untouched. A real-fetch `GIT_TRACE` regression
+  proves no detached maintenance command is spawned.
+
 - **Container-safe voice-control icons.** MonkeyByte no longer relies on the
   host Adwaita theme for the microphone, recording, synchronizing, or three
   playback-volume glyphs. Those six states now use bundled `mb-*-symbolic`
