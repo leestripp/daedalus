@@ -40,6 +40,12 @@ int main() {
     setenv("DAEDALUS_DATA_HOME", global_home.c_str(), 1);
 
     auto& store = SettingsStore::instance();
+    const fs::path expected_db = global_home / "daedalus.db";
+    if (store.db_path() != expected_db) {
+        std::cerr << "Test isolation failure: global settings DB is "
+                  << store.db_path() << ", expected " << expected_db << '\n';
+        return 2;
+    }
     const fs::path expected_default =
         Paths::global().user_data_root() / "brain";
     assert(store.get_second_brain_directory() == expected_default);
