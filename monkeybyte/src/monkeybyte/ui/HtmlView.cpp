@@ -830,23 +830,52 @@ Gtk::Widget* browser_page(WebKitWebView* view, const std::string& initial_url) {
     return box;
 }
 
-} // namespace
-
-Gtk::Widget* HtmlView::create_markdown(const std::string& markdown,
-                                       const std::string& base_dir, bool dark) {
-    auto* view = WEBKIT_WEB_VIEW(webkit_web_view_new());
-    const std::string doc = MarkdownToHtml::to_document(markdown, dark);
-
+void load_markdown_document(WebKitWebView* view, const std::string& markdown,
+                            const std::string& base_dir, bool dark,
+                            guint64 refresh_serial = 0) {
+    std::string doc = MarkdownToHtml::to_document(markdown, dark);
+    if (refresh_serial != 0) {
+        // file:// images otherwise stay cached under their unchanged URL.
+        // This trusted, numeric-only script runs after the generated document
+        // body (raw Markdown HTML/scripts are removed by MarkdownToHtml).
+        const std::string cache_buster =
+            "<script>for (const image of document.images) {"
+            "const source = new URL(image.getAttribute('src'), document.baseURI);"
+            "if (source.protocol === 'file:') {"
+            "source.searchParams.set('monkeybyte-refresh', '" +
+            std::to_string(refresh_serial) +
+            "'); image.src = source.href; }}</script>";
+        const auto body_end = doc.rfind("</body>");
+        if (body_end != std::string::npos) doc.insert(body_end, cache_buster);
+    }
     std::string base_uri;
     if (char* uri = g_filename_to_uri(base_dir.c_str(), nullptr, nullptr)) {
         base_uri = uri;
         g_free(uri);
         if (!base_uri.ends_with('/')) base_uri += '/';
     }
-    attach_external_link_policy(view);
     webkit_web_view_load_html(view, doc.c_str(),
                               base_uri.empty() ? nullptr : base_uri.c_str());
+}
+
+} // namespace
+
+Gtk::Widget* HtmlView::create_markdown(const std::string& markdown,
+                                       const std::string& base_dir, bool dark) {
+    auto* view = WEBKIT_WEB_VIEW(webkit_web_view_new());
+    attach_external_link_policy(view);
+    load_markdown_document(view, markdown, base_dir, dark);
     return wrap_view(view);
+}
+
+bool HtmlView::reload_markdown(Gtk::Widget& markdown_page,
+                               const std::string& markdown,
+                               const std::string& base_dir, bool dark) {
+    if (!WEBKIT_IS_WEB_VIEW(markdown_page.gobj())) return false;
+    auto* view = WEBKIT_WEB_VIEW(markdown_page.gobj());
+    static guint64 refresh_serial = 0;
+    load_markdown_document(view, markdown, base_dir, dark, ++refresh_serial);
+    return true;
 }
 
 Gtk::Widget* HtmlView::create_html_content(const std::string& html,

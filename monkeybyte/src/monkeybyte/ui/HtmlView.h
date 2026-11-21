@@ -26,6 +26,13 @@ public:
     static Gtk::Widget* create_markdown(const std::string& markdown,
                                         const std::string& base_dir, bool dark);
 
+    // Re-render an existing Markdown page from updated source. Relative
+    // images are loaded again from base_dir; false means the widget is not
+    // a Markdown WebKit view.
+    static bool reload_markdown(Gtk::Widget& markdown_page,
+                                const std::string& markdown,
+                                const std::string& base_dir, bool dark);
+
     // Rendered HTML document string (e.g. a Fountain screenplay converted
     // by an external tool, Plan.md P4). Bare document view, no nav bar;
     // http(s) links open in the system browser like the markdown view.

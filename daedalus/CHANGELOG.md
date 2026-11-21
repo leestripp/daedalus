@@ -63,6 +63,12 @@
 
 ### Added
 
+- **Refreshable Markdown previews in MonkeyByte.** The document header now has
+  a **Refresh** button that re-reads the active Markdown file without closing
+  its tab. Refreshes also apply the current theme and cache-bust local image
+  URLs, so screenshots replaced at the same path appear immediately. A real
+  WebKit regression verifies updated document content and changed image data.
+
 - **Configurable Second Brain location.** The shared
   `second_brain_directory` setting selects an absolute Markdown root instead
   of permanently binding the process-wide singleton to its first XDG path.

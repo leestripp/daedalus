@@ -215,6 +215,8 @@ Features:
   across the full viewport.
 - **Preview tabs** — workspace markdown and HTML files open as rendered
   previews alongside code tabs ("Open as …" in the Workspace tree).
+  Markdown previews have a **Refresh** button in the file header that
+  reloads the document and its relative images from disk.
 - **Agent integration** — the chat agent can drive and inspect browser
   tabs (`browser.open / navigate / read / eval / links / console /
   upload / device`), e.g. open your app, read the rendered page, click

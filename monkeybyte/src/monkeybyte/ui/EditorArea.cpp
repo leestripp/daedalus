@@ -83,6 +83,12 @@ EditorArea::EditorArea(AppServices& services)
     header_name_.set_max_width_chars(60);
     header_name_.set_ellipsize(Pango::EllipsizeMode::END);
     header_status_.add_css_class("muted");
+    refresh_btn_.set_label("↻ Refresh");
+    refresh_btn_.set_has_frame(false);
+    refresh_btn_.set_tooltip_text("Reload Markdown and images from disk");
+    refresh_btn_.signal_clicked().connect([this] {
+        ui_guard("refresh_markdown_preview", [this] { refresh_active_preview(); });
+    });
     save_btn_.set_label("💾 Save");
     save_btn_.set_has_frame(false);
     save_btn_.signal_clicked().connect([this] { save_active(); });
@@ -102,6 +108,7 @@ EditorArea::EditorArea(AppServices& services)
     close_btn_.signal_clicked().connect([this] { close_tab(active_); });
     header_.append(header_name_);
     header_.append(header_status_);
+    header_.append(refresh_btn_);
     header_.append(save_btn_);
     header_.append(delete_btn_);
     header_.append(close_btn_);
@@ -301,6 +308,7 @@ void EditorArea::update_header() {
         header_name_.set_text("");
         header_name_.set_tooltip_text("");
         header_status_.set_text("");
+        refresh_btn_.set_visible(false);
         save_btn_.set_sensitive(false);
         delete_btn_.set_sensitive(false);
         return;
@@ -310,6 +318,7 @@ void EditorArea::update_header() {
     header_name_.set_tooltip_text(tab.name);
     // Viewer tabs are read-only: Save never applies. Browser tabs hold a
     // URL, not a workspace file: Delete does not apply either.
+    refresh_btn_.set_visible(tab.kind == FileOpenMode::MarkdownPreview);
     save_btn_.set_sensitive(tab.kind == FileOpenMode::Text && tab.is_dirty &&
                             !tab.is_saving);
     delete_btn_.set_sensitive(tab.kind != FileOpenMode::Browser);
@@ -351,6 +360,23 @@ void EditorArea::open_file(const std::string& path, int line) {
     if (line > 0) goto_line(line);
 }
 
+void EditorArea::refresh_active_preview() {
+    if (active_ == kNoActive || active_ >= tabs_.size()) return;
+    Tab& tab = tabs_[active_];
+    if (tab.kind != FileOpenMode::MarkdownPreview || !tab.viewer_page) return;
+
+    auto content = services_.files.read(tab.path);
+    if (!content) {
+        header_status_.set_text("Error: " + content.error());
+        return;
+    }
+    const bool dark = services_.theme.current() != "light";
+    const std::string base_dir =
+        std::filesystem::path(tab.path).parent_path().string();
+    if (HtmlView::reload_markdown(*tab.viewer_page, *content, base_dir, dark))
+        header_status_.set_text("");
+}
+
 void EditorArea::open_file_as(const std::string& path, FileOpenMode mode) {
     if (mode == FileOpenMode::Text) {
         open_file(path);
@@ -379,8 +405,8 @@ void EditorArea::open_file_as(const std::string& path, FileOpenMode mode) {
     switch_to(tabs_.size() - 1);
 }
 
-// Read-only WebKit viewer page (§6 preview tabs). The theme palette is baked
-// in at open time; reopen the preview after a theme switch.
+// Read-only WebKit viewer page (§6 preview tabs). Markdown refreshes also
+// reapply the current theme palette.
 Gtk::Widget* EditorArea::build_viewer_page(FileOpenMode kind,
                                            const std::string& path,
                                            const std::string& content) {

@@ -1989,6 +1989,62 @@ void settle_browser(WebKitWebView* view) {
     pump_browser_events(100);
 }
 
+void test_markdown_preview_reload() {
+    std::cout << "test_markdown_preview_reload\n";
+    auto app = Gtk::Application::create();
+    if (!Gdk::Display::get_default()) {
+        std::cout << "  skip: Markdown preview reload (no display)\n";
+        return;
+    }
+    const auto dir = make_temp_dir("markdown_preview_reload");
+    const auto image = dir / "shot.svg";
+    const auto write_image = [&](int width) {
+        std::ofstream out(image);
+        out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\""
+            << width << "\" height=\"7\"><rect width=\"" << width
+            << "\" height=\"7\" fill=\"red\"/></svg>";
+    };
+    write_image(11);
+
+    Gtk::Window window;
+    auto* page = monkeybyte::HtmlView::create_markdown(
+        "# Before\n\n![screenshot](shot.svg)", dir.string(), true);
+    window.set_child(*page);
+    window.show();
+    check(WEBKIT_IS_WEB_VIEW(page->gobj()),
+          "Markdown reload: document page owns a WebKit view");
+    auto* view = WEBKIT_WEB_VIEW(page->gobj());
+    settle_browser(view);
+    auto rendered = browser_eval_json(
+        view, "JSON.stringify({text: document.body.innerText,"
+              " width: document.images[0].naturalWidth})");
+    check(rendered.value("text", "").find("Before") != std::string::npos &&
+              rendered.value("width", 0) == 11,
+          "Markdown reload: initial document and relative image load");
+
+    write_image(22);
+    check(monkeybyte::HtmlView::reload_markdown(
+              *page, "# After\n\n![screenshot](shot.svg)", dir.string(), false),
+          "Markdown reload: existing page accepts updated source");
+    settle_browser(view);
+    rendered = browser_eval_json(
+        view, "JSON.stringify({text: document.body.innerText,"
+              " width: document.images[0].naturalWidth})");
+    check(rendered.value("text", "").find("After") != std::string::npos &&
+              rendered.value("text", "").find("Before") == std::string::npos,
+          "Markdown reload: updated Markdown replaces the old document");
+    check(rendered.value("width", 0) == 22,
+          "Markdown reload: changed screenshot is read again from disk");
+
+    Gtk::Box not_a_preview;
+    check(!monkeybyte::HtmlView::reload_markdown(
+              not_a_preview, "# Nope", dir.string(), true),
+          "Markdown reload: rejects a non-preview widget");
+    window.hide();
+    pump_browser_events(20);
+    fs::remove_all(dir);
+}
+
 nlohmann::json browser_viewport_metrics(WebKitWebView* view) {
     return browser_eval_json(
         view,
@@ -2356,6 +2412,7 @@ int main() {
     test_user_commands();
     test_html_to_text();
     test_fountain_zoom();
+    test_markdown_preview_reload();
     test_browser_device_tool_schema();
     test_browser_device_viewport();
     test_browser_long_url_layout();

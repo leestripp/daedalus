@@ -119,6 +119,8 @@ private:
     void update_header();
     Gtk::Widget* build_viewer_page(FileOpenMode kind, const std::string& path,
                                    const std::string& content);
+    // Re-read the active Markdown preview from disk without closing its tab.
+    void refresh_active_preview();
 
     // find / replace bar
     void build_search_bar();
@@ -138,7 +140,7 @@ private:
     Gtk::Box header_;           // file header (§6.3)
     Gtk::Label header_name_;
     Gtk::Label header_status_;
-    Gtk::Button save_btn_, delete_btn_, close_btn_;
+    Gtk::Button refresh_btn_, save_btn_, delete_btn_, close_btn_;
     Gtk::ScrolledWindow view_scroller_;
     Gtk::Stack body_stack_; // "text" page = view_scroller_; one page per viewer tab
 
