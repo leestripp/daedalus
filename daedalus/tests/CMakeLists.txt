@@ -2182,6 +2182,23 @@ target_link_libraries(daedalus_steer_message_tests PRIVATE
 )
 add_test(NAME steer_message_tests COMMAND daedalus_steer_message_tests)
 
+# §VerificationLoop: sequential worker/verifier supervision, correction rounds,
+# exact verdict parsing, stable static prompt prefix, and no premature Done.
+add_executable(daedalus_verification_loop_tests
+    test_verification_loop.cpp
+)
+target_include_directories(daedalus_verification_loop_tests PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
+    ${PROJECT_SOURCE_DIR}/include
+    ${nlohmann_json_INCLUDE_DIR}
+)
+target_link_libraries(daedalus_verification_loop_tests PRIVATE
+    daedalus
+    nlohmann_json::nlohmann_json
+    pthread
+)
+add_test(NAME verification_loop_tests COMMAND daedalus_verification_loop_tests)
+
 # ============================================================================
 # §Monorepo (2026-09-24): label every daedalus test "lib" so the superbuild
 # root can offer `ctest -L lib` slices. Must happen here — test names are

@@ -427,6 +427,8 @@ int main(int argc, char* argv[]) {
     cfg.clear_memory         = args.clear_memory_flag;
     cfg.worker_threads       = args.thread_count_override;
     cfg.max_agent_iterations = 600;
+    // Experimental worker → verifier double agent loop (shared library).
+    cfg.verification_enabled = true;
     cfg.stream              = args.stream_enabled;
     cfg.daedalus_home        = args.daedalus_home;
     cfg.agent_name          = args.agent_name;
@@ -662,14 +664,14 @@ int main(int argc, char* argv[]) {
             [&agent](bool on) { agent.set_auto_approve(on); });
 
         sink->set_turn_request_handler([&input_queue] {
-            // The completion is already in the Agent's pending queue. Wake
-            // pop() only; main consumes it without submitting a duplicate.
+            // The completion is already in the Agent's normal or steer
+            // queue. Wake pop() only; main consumes it without a duplicate.
             input_queue.wake();
         });
 
         bool header_printed = false;
         while (!g_shutting_down.load()) {
-            if (agent.pending_count() > 0) {
+            if (agent.pending_count() > 0 || agent.pending_steer_count() > 0) {
                 header_printed = false;
                 input_thread.resume();
                 sink->start_agent_turn();

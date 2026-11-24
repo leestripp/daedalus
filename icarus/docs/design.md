@@ -128,12 +128,17 @@ cfg.memory_enabled      = !args.no_memory;      // Persistent session memory
 cfg.clear_memory        = args.clear_memory_flag;
 cfg.worker_threads      = args.thread_count_override;
 cfg.max_agent_iterations = 600;
+cfg.verification_enabled = true;                // Experimental worker → verifier loop
 cfg.stream              = args.stream_enabled;   // SSE token streaming
 cfg.daedalus_home       = resolved_path;         // SQLite DB location
 cfg.agent_name          = args.agent_name;       // Per-agent namespace
 cfg.skills_dirs         = {...};                // Skill discovery paths
 cfg.system_prompt       = resolve_system_prompt(...);
 ```
+
+The experimental verification supervisor keeps worker and verifier roles on
+the same model, tools, and transcript. Background completions can wake either
+the normal input queue or the supervisor's suspended steer queue.
 
 ### 4.2 What daedalus owns
 

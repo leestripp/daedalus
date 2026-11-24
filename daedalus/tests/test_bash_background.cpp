@@ -161,20 +161,21 @@ TEST_CASE("BashTool synchronous mode still works") {
     CHECK(result["output"].get<std::string>().find("hello sync") != std::string::npos);
 }
 
-TEST_CASE("BashTool background guidance permits finishing the current turn") {
+TEST_CASE("BashTool background guidance covers concurrent jobs and detached services") {
     BashTool tool;
     const auto definition = tool.get_definition();
     const auto& function = definition.at("function");
     const std::string description = function.at("description").get<std::string>();
     CHECK(description.find("do not poll for completion") != std::string::npos);
-    CHECK(description.find("set_status(\"Done\")") != std::string::npos);
-    CHECK(description.find("or stop") != std::string::npos);
-    CHECK(description.find("wakes the agent") != std::string::npos);
+    CHECK(description.find("steer message") != std::string::npos);
+    CHECK(description.find("suspends and resumes") != std::string::npos);
+    CHECK(description.find("detached=true") != std::string::npos);
 
-    const std::string background =
-        function.at("parameters").at("properties").at("background")
-            .at("description").get<std::string>();
+    const auto& properties = function.at("parameters").at("properties");
+    const std::string background = properties.at("background")
+        .at("description").get<std::string>();
     CHECK(background.find("Do not poll for completion") != std::string::npos);
-    CHECK(background.find("set_status(\"Done\")") != std::string::npos);
-    CHECK(background.find("or stop") != std::string::npos);
+    CHECK(background.find("Multiple jobs may run concurrently") != std::string::npos);
+    CHECK(background.find("detached=true") != std::string::npos);
+    CHECK(properties.at("detached").at("type") == "boolean");
 }

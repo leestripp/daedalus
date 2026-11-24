@@ -421,7 +421,8 @@ void on_tool_result(std::string_view name,
     "process_id": "bg_1",
     "pid": 12345,
     "command": "python3 -m http.server 8000",
-    "message": "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you. Use action=poll only for intermediate output, action=send for stdin, or action=stop to terminate."
+    "detached": false,
+    "message": "Background process started. Multiple jobs may run concurrently. Do not poll for completion: the exit status and final output will arrive later as a steer message. If this agent stops while the result is outstanding, a verified supervisor suspends and resumes this same agent after delivery. Use action=poll only for intermediate output."
   }
 }
 ```
@@ -945,7 +946,10 @@ for the full field list. The most-used fields:
 | `model_name` | Looked up in `SettingsStore` → model references provider → host / key / endpoint / model id. |
 | `api_key`, `api_host`, `chat_endpoint` | Optional overrides (skip settings lookup entirely). |
 | `auto_approve` | `std::optional<bool>`. Set: authoritative — `true` skips `request_command_approval`, `false` forces prompts (store ignored). Unset: legacy fallback to `SettingsStore::get_auto_approve()`. Runtime toggle: `Agent::set_auto_approve()`. |
-| `max_agent_iterations` | Hard cap. The agent stops when this is reached. |
+| `max_agent_iterations` | Hard cap for each worker/verifier inner loop. The agent stops when this is reached. |
+| `verification_enabled` | Default `false`. Opt in to a worker → verifier double loop over one shared transcript and the same model/tools. The verifier must issue exactly `VERDICT: APPROVED`; corrections return to the worker, and premature worker `Done` is suppressed. |
+| `max_verification_rounds` | Default `3`; values below `1` are treated as `1`. An initial worker pass plus its first verification is round 1. Exhaustion ends with an error, never implicit approval. |
+| `verification_prompt` | Optional host override for the verifier's role instructions. The exact-verdict protocol is always appended. Role text rides in the transient trailing system message, leaving the persistent base prompt/cache prefix stable. |
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
 | `session_id` | Opaque correlation id (logged, surfaced to sinks). |
 | `system_prompt` | Override the role the agent plays. See [`docs/agent_system_prompts.md`](./agent_system_prompts.md) — the library appends 9 more sections (tool defs, MCP status, skills, memory, context stats, and the two **always-on** `# State Machine` + `# Reserved Agent Directories` blocks) below your text. |

@@ -38,6 +38,7 @@ not required.
 | `action` | string | No | `run` (default), `start`, `poll`, `send`, `stop` |
 | `timeout` | integer | No | Synchronous timeout, 1–3600 seconds; default 60 |
 | `background` | boolean | No | Shorthand for `action=start` |
+| `detached` | boolean | No | For `start`; default `false`. Opt an intentional long-lived service out of the verified supervisor's required-job wait set |
 | `process_id` | string | poll/send/stop | ID returned by `start` |
 | `input` | string | send | Data written to process stdin |
 | `clear_output` | boolean | No | Clear buffered output after `poll` |
@@ -56,12 +57,18 @@ are preserved. Long-running commands emit sanitized progress chunks between
 `on_tool_call` and `on_tool_result`; incremental sanitization preserves split
 escape sequences across chunk boundaries.
 
-After a background start, do not poll merely to wait for termination. A natural
-exit queues one `trigger:background-process` completion containing final status
-and output, then invokes `AgentSink::on_turn_requested()` so the host can wake
-its scheduler. The agent may finish the current turn with `stop` or
-`set_status("Done")`. Explicit `stop` does not generate that natural-exit
-message. Poll only for intermediate output.
+Multiple background jobs may run concurrently. After a start, do not poll
+merely to wait for termination. A natural exit queues one
+`trigger:background-process` steer completion containing final status and
+output, then invokes `AgentSink::on_turn_requested()` so the host can wake the
+same agent's scheduler. It is injected only at a complete tool-call boundary.
+
+With verification enabled, a worker or verifier that stops while a required
+job is outstanding is suspended instead of advancing to verification or final
+`Done`; completion delivery resumes that same inner loop. `detached=true` is
+for intentional long-lived services and excludes a job from this wait set, but
+its eventual completion is still reported. Explicit `stop` does not generate a
+natural-exit message. Poll only for intermediate output.
 
 ### Approval and security
 

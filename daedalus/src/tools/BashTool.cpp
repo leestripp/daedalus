@@ -62,7 +62,11 @@ json BashTool::get_definition() const {
                     })},
                     {"background", json::object({
                         {"type", "boolean"},
-                        {"description", "Shorthand for action=start. Start detached and return a process_id. Do not poll for completion: natural exit sends status and final output as a later user message that wakes the agent, so you may safely call set_status(\"Done\") or stop after starting. Poll only for intermediate output."}
+                        {"description", "Shorthand for action=start. Start in the background and return a process_id. Do not poll for completion: natural exit sends status and final output as a steer message that wakes the same agent. Multiple jobs may run concurrently. By default a verified agent waits for outstanding results before worker/verifier transitions; set detached=true only for intentional long-lived services. Poll only for intermediate output."}
+                    })},
+                    {"detached", json::object({
+                        {"type", "boolean"},
+                        {"description", "For action=start only. Default false: the job's completion must be consumed before a verified worker/verifier transition. True excludes an intentional long-lived service from that wait set; its completion is still reported."}
                     })},
                     {"action", json::object({
                         {"type", "string"},
@@ -113,6 +117,7 @@ json BashTool::execute(const json& args, FileIO& file_io, ToolProgressFn progres
         std::string process_id;
         std::string input;
         bool clear_output = false;
+        bool detached = false;
 
         const json& obj = args.is_object() ? args : json::parse(args.get<std::string>());
 
@@ -121,6 +126,9 @@ json BashTool::execute(const json& args, FileIO& file_io, ToolProgressFn progres
         }
         if (obj.contains("background") && obj["background"].get<bool>()) {
             action = Action::Start;
+        }
+        if (obj.contains("detached")) {
+            detached = obj["detached"].get<bool>();
         }
         if (obj.contains("command")) {
             command = obj["command"].get<std::string>();
@@ -191,7 +199,7 @@ json BashTool::execute(const json& args, FileIO& file_io, ToolProgressFn progres
             return run_sync(command, project_path, timeout_seconds, progress);
 
         case Action::Start:
-            return run_background(command, project_path, process_id);
+            return run_background(command, project_path, process_id, detached);
 
         case Action::Poll:
             if (process_id.empty()) {
@@ -298,7 +306,8 @@ json BashTool::run_sync(const std::string& command,
 
 json BashTool::run_background(const std::string& command,
                               const std::string& project_path,
-                              const std::string& requested_id) {
+                              const std::string& requested_id,
+                              bool detached) {
     auto& manager = BackgroundProcessManager::get_instance();
 
     // BackgroundProcessManager assigns its own process IDs. If the caller
@@ -328,7 +337,10 @@ json BashTool::run_background(const std::string& command,
         {"process_id", process_id},
         {"pid", static_cast<int>(info->pid)},
         {"command", command},
-        {"message", "Process started in background. Do not poll for completion: you may safely end this turn with set_status(\"Done\") or stop, and the exit status and final output will arrive later as a user message that wakes you. Use action=poll only for intermediate output, action=send for stdin, or action=stop to terminate."}
+        {"detached", detached},
+        {"message", detached
+            ? "Detached process started. Its exit status and final output will arrive later as a steer message, but it will not hold up worker/verifier transitions. Do not poll for completion; use action=poll only for intermediate output."
+            : "Background process started. Multiple jobs may run concurrently. Do not poll for completion: the exit status and final output will arrive later as a steer message. If this agent stops while the result is outstanding, a verified supervisor suspends and resumes this same agent after delivery. Use action=poll only for intermediate output."}
     });
 }
 

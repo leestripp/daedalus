@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <mutex>
 #include <stop_token>
+#include <unordered_set>
 
 #include "api/HttpSession.h"
 #include "core/FileIO.h"
@@ -81,6 +82,12 @@ struct AppConfig {
     // can fully control the agent's persona. Empty = library default role.
     std::string system_prompt;
 
+    // §VerificationLoop: optional second agent loop over the same message
+    // stream. Mapped verbatim from AgentConfig by AgentImpl.
+    bool verification_enabled = false;
+    int max_verification_rounds = 3;
+    std::string verification_prompt;
+
     // §Phase 14: optional 1-line note about the system_info tool. The host
     // can use this to remind the agent when to call system_info (or not).
     // Empty = no note appended.
@@ -104,8 +111,20 @@ enum class AgentState : std::uint8_t {
     ACT,         // Execution phase - implements changes
     BUILD_TEST,  // Verification phase - runs compiler/tests
     DONE,        // Task completed successfully
-    CANCELLED    // Interrupted by user (ESC key)
+    CANCELLED,   // Interrupted by user (ESC key)
+    WAITING      // Supervisor suspended until required background output arrives
 };
+
+// Final-response protocol used by the verification agent. Invalid or missing
+// verdicts are never interpreted as approval.
+enum class VerificationVerdict : std::uint8_t {
+    Approved,
+    ChangesRequired,
+    Invalid,
+};
+
+[[nodiscard]] VerificationVerdict parse_verification_verdict(
+    std::string_view text) noexcept;
 
 // §State Machine: callback used to report LLM-driven public-state
 // transitions (set_status tool) up to the owner (AgentImpl).
@@ -165,6 +184,9 @@ private:
     struct PendingSteerMessage {
         std::string text;
         std::string source;
+        // Set only for background-process completions. The supervisor keeps
+        // the job outstanding until this notification enters the conversation.
+        std::string background_process_id;
     };
     mutable std::mutex steer_mutex_;
     std::vector<PendingSteerMessage> pending_steer_messages_;
@@ -239,6 +261,28 @@ private:
     // prev — preserving behaviour for direct LLMClient users.
     StateChangeCallback state_change_cb_;
     int fallback_prev_public_state_ = 0;  // daedalus::AgentState int value
+    void dispatch_state_change(daedalus::AgentState new_state);
+
+    // §VerificationLoop: role-specific instructions ride in the existing
+    // transient trailing system message. The persistent base system prompt
+    // and preceding conversation remain byte-stable for provider caching.
+    bool verification_turn_active_ = false;
+    bool verifier_loop_active_ = false;
+    std::string active_role_prompt_;
+    int verification_round_ = 0;
+    enum class SuspendedVerificationPhase : std::uint8_t { Worker, Verifier };
+    std::optional<SuspendedVerificationPhase> verification_suspended_;
+
+    // Required jobs started by either inner loop. Detached services and jobs
+    // without a completion route are deliberately excluded. A naturally
+    // exited job remains here until its completion is consumed from the steer
+    // queue, preventing a worker→verifier handoff before the worker sees it.
+    // Guarded by steer_mutex_: public clear_steer_messages() is thread-safe.
+    std::unordered_set<std::string> required_background_jobs_;
+    void track_background_tool_result(std::string_view function_name,
+                                      const json& arguments,
+                                      const json& result);
+    [[nodiscard]] bool has_required_background_jobs();
 
     // §Phase 5.1: cancellation flows through this stop_source.
     // Agent::cancel() → LLMClient::cancel() → cancel_source_.request_stop().
@@ -525,7 +569,8 @@ public:
     /// §STEER-MESSAGE: queue guidance for the active turn from any thread.
     /// It is injected after the current complete tool-call batch (or before
     /// the next cycle when queued between turns), never during tool cleanup.
-    void submit_steer_message(std::string text, std::string source = "user");
+    void submit_steer_message(std::string text, std::string source = "user",
+                              std::string background_process_id = {});
     [[nodiscard]] size_t pending_steer_count() const noexcept;
     void clear_steer_messages() noexcept;
 

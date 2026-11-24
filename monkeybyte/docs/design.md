@@ -126,7 +126,9 @@ marshalled to GTK with dispatchers; widgets are only touched on the GTK main
 thread.
 
 The agent configuration is rebuilt when relevant provider/model, MCP, prompt,
-skill, or tool policy changes. A rebuild normally preserves the persisted
+skill, or tool policy changes. The experimental worker → verifier supervisor is
+enabled; both roles use the selected model, tools, and shared transcript.
+A rebuild normally preserves the persisted
 conversation. `/clear`, the clear button, and workspace changes additionally
 wipe the persisted transcript and crash/temp mirrors so old messages cannot
 reappear on the next agent construction.
@@ -146,7 +148,9 @@ injects it before the next model cycle, only after the current complete
 assistant tool-call batch and every matching result are committed. It never
 injects inside per-tool execution/cleanup or between results in a multi-tool
 batch. The worker includes `pending_steer_count()` in its final drain check,
-closing the submission-vs-Idle race. Cancellation and terminal errors clear
+closing the submission-vs-Idle race. Background completions use the same safe
+steer boundary and can resume a verified supervisor suspended on required job
+output. Cancellation and terminal errors clear
 uninjected steers; normal queued sends retain their existing semantics.
 
 Stop cancels the current turn and clears later queued user intent. Cancellation

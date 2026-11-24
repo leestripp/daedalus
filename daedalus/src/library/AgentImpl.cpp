@@ -62,6 +62,8 @@ constexpr AgentState map_from_internal(::AgentState s) noexcept {
         case ::AgentState::BUILD_TEST:  return AgentState::Verifying;
         case ::AgentState::DONE:        return AgentState::Done;
         case ::AgentState::CANCELLED:   return AgentState::Cancelled;
+        // Waiting is internal supervisor state, not a new public state.
+        case ::AgentState::WAITING:     return AgentState::Verifying;
     }
     return AgentState::Error;
 }
@@ -109,6 +111,9 @@ AppConfig make_app_config(const AgentConfig& cfg,
     out.session_auto_flush = cfg.session_auto_flush;  // §AUTO-FLUSH-CFG
     out.memory_in_prompt = cfg.memory_in_prompt;
     out.system_prompt  = cfg.system_prompt;   // §Phase 6: host-supplied role
+    out.verification_enabled = cfg.verification_enabled;
+    out.max_verification_rounds = cfg.max_verification_rounds;
+    out.verification_prompt = cfg.verification_prompt;
     if (!cfg.user_agent.empty()) out.user_agent = cfg.user_agent;  // §UA
     out.stream         = cfg.stream;            // §Phase 9.8: SSE streaming
     // §Phase 8.7: temperature resolution. Explicit cfg.temperature >= 0
@@ -917,7 +922,19 @@ void AgentImpl::handle_background_completion(
         + event.dump(2, ' ', false,
                      nlohmann::json::error_handler_t::replace);
 
-    submit_user_message(text, {}, "trigger:background-process");
+    // Completion is guidance for the originating inner loop, not a new human
+    // task. It can therefore join an active loop at its next safe boundary;
+    // if a verified supervisor is suspended, the host wake-up resumes that
+    // same loop and consumes this steer on entry.
+    if (body_->client) {
+        body_->client->submit_steer_message(
+            text, "trigger:background-process", info.process_id);
+    } else {
+        // Direct execute_tool() is supported without a resolvable model. In
+        // that case there is no active inner loop to steer, so preserve the
+        // legacy next-turn queue until a model client exists.
+        submit_user_message(text, {}, "trigger:background-process");
+    }
     if (sink_) sink_->on_turn_requested("trigger:background-process");
 }
 

@@ -457,6 +457,8 @@ void ChatController::ensure_agent(const std::string& model_display) {
     // Provider-facing client identity (HTTP User-Agent on LLM requests).
     cfg.user_agent = "daedalus-monkeybyte/" MONKEYBYTE_VERSION;
     cfg.stream = true;
+    // Experimental worker → verifier double agent loop (shared library).
+    cfg.verification_enabled = true;
     // §REQ-1 (daedalus 2b25f27): public kill switch for the messages flush
     // worker. Pin ON explicitly — session persistence must not silently
     // disappear if the upstream default ever flips.

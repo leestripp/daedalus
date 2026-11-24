@@ -63,6 +63,17 @@
 
 ### Added
 
+- **Experimental worker → verifier supervision, enabled in icarus and
+  MonkeyByte.** `AgentConfig::verification_enabled` opts embedders into a
+  second, independently prompted agent loop over the same model, tools, and
+  transcript. Exact verdicts control bounded correction rounds; missing or
+  malformed verdicts never count as approval. Required concurrent background
+  jobs suspend worker/verifier transitions until their completion is delivered,
+  while `detached=true` remains available for intentional long-lived services.
+  Hermetic regressions cover approvals, corrections, invalid verdicts, cache
+  prefixes, completion routing, and early-`Done` suppression; live turns passed
+  through both host applications.
+
 - **Refreshable Markdown previews in MonkeyByte.** The document header now has
   a **Refresh** button that re-reads the active Markdown file without closing
   its tab. Refreshes also apply the current theme and cache-bust local image

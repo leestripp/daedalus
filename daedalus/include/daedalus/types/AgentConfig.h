@@ -122,6 +122,21 @@ struct AgentConfig {
     // byte-static for server-side prompt caches.
     bool memory_in_prompt = true;
 
+    // Run the existing worker agent loop and then a second, verification-
+    // specific agent loop over the SAME conversation. If the verifier
+    // rejects the work, its findings stay in that conversation and the
+    // worker runs again. Only verifier approval completes the outer turn.
+    // Default false preserves the single-loop behaviour for embedders.
+    bool verification_enabled = false;
+    // Maximum worker→verifier rounds per outer turn (initial worker pass +
+    // first verification = round 1). Exhaustion ends with an error rather
+    // than silently treating an unverified result as approved.
+    int max_verification_rounds = 3;
+    // Optional host override for the verifier's role instructions. The
+    // library always appends the machine-readable verdict protocol. Empty =
+    // use the built-in independent code-verification instructions.
+    std::string verification_prompt;
+
     // §Phase 11: MCP server integration. Default = true (load MCP servers).
     // Set to false to completely disable MCP — no McpServerManager is
     // constructed, no MCP tools are available, no MCP status in the

@@ -53,6 +53,82 @@
         LOG_##level(_daedalus_msg.str());                    \
     } while (0)
 
+namespace {
+
+constexpr std::string_view kDefaultVerificationPrompt = R"(
+# Verification Agent
+You are the second agent in a two-agent worker/verifier loop. The first
+agent has completed a worker pass in the shared conversation above. Independently
+verify that work against the original instruction and the actual evidence.
+
+Inspect the relevant files and diff, and run appropriate builds, tests, or other
+checks with the available tools. Do not modify the implementation yourself.
+Do not trust the worker's summary when it conflicts with the evidence. Check for
+missing requirements, regressions, unrun or failed checks, and incomplete docs.
+Do not ask the boss or any human for guidance; the two agents must resolve the
+work autonomously. If changes are needed, give the worker precise, actionable
+findings. If everything is satisfactory, summarize the verified result and the
+checks you performed for the boss.
+)";
+
+constexpr std::string_view kVerificationVerdictProtocol = R"(
+# Required final verdict
+Your final response MUST start with exactly one of these first lines:
+
+VERDICT: APPROVED
+or
+VERDICT: CHANGES_REQUIRED
+
+Use APPROVED only when the work is complete and verified. Otherwise use
+CHANGES_REQUIRED and list the specific corrections the worker must make.
+)";
+
+constexpr std::string_view kWorkerCorrectionPrompt = R"(
+# Worker Agent Resumption
+You are again the first, worker agent. The immediately preceding verification
+agent response rejected the work and contains its required corrections. Address
+every finding in that response using the existing tools and worker loop. Do not
+ask the boss or any human for guidance. When the corrections are complete, report
+the work and evidence so the verification agent can inspect it again.
+)";
+
+constexpr std::string_view kWorkerInconclusivePrompt = R"(
+# Worker Agent Resumption
+You are again the first, worker agent. The preceding verification response did
+not follow the required verdict protocol, so it is not approval. Re-check your
+work against the original instruction, use any actionable findings in that
+response, correct deficiencies, and report fresh evidence for re-verification.
+Do not ask the boss or any human for guidance.
+)";
+
+std::string verification_role_prompt(const AppConfig& config) {
+    std::string prompt = config.verification_prompt.empty()
+        ? std::string(kDefaultVerificationPrompt)
+        : config.verification_prompt;
+    prompt += "\n\n";
+    prompt += kVerificationVerdictProtocol;
+    return prompt;
+}
+
+} // namespace
+
+VerificationVerdict parse_verification_verdict(std::string_view text) noexcept {
+    const size_t begin = text.find_first_not_of(" \t\r\n");
+    if (begin == std::string_view::npos) return VerificationVerdict::Invalid;
+    const size_t end = text.find('\n', begin);
+    std::string_view first_line = text.substr(begin, end - begin);
+    while (!first_line.empty()
+           && (first_line.back() == ' ' || first_line.back() == '\t'
+               || first_line.back() == '\r')) {
+        first_line.remove_suffix(1);
+    }
+    if (first_line == "VERDICT: APPROVED")
+        return VerificationVerdict::Approved;
+    if (first_line == "VERDICT: CHANGES_REQUIRED")
+        return VerificationVerdict::ChangesRequired;
+    return VerificationVerdict::Invalid;
+}
+
 // Replaces invalid UTF-8 bytes with a replacement character.
 // §B11/B28: state-machine fallback uses shared utf8_sanitize_replace_invalid
 // from Utf8Utils.h (which also fixes the B12 truncation bug).
@@ -1062,6 +1138,7 @@ std::string LLMClient::get_state_name(AgentState state) const {
         case AgentState::BUILD_TEST: return "BUILD_TEST";
         case AgentState::DONE: return "DONE";
         case AgentState::CANCELLED: return "CANCELLED";
+        case AgentState::WAITING: return "WAITING";
         default: return "UNKNOWN";
     }
 }
@@ -1080,6 +1157,19 @@ bool LLMClient::handle_set_state_result(const json& result) {
         result["state"].get<std::string>(), &ok);
     if (!ok) return false;
 
+    // Worker completion is not outer-turn completion when verification is
+    // enabled. AgentImpl publishes the final Done only after verifier approval.
+    if (new_state == daedalus::AgentState::Done && verification_turn_active_) {
+        LOG_INFO("State machine: inner agent Done held for verification");
+        return true;
+    }
+    dispatch_state_change(new_state);
+    LOG_INFO("State machine: set_status → "
+             + std::string(daedalus::to_string(new_state)));
+    return true;
+}
+
+void LLMClient::dispatch_state_change(daedalus::AgentState new_state) {
     if (state_change_cb_) {
         // Normal path: the owning AgentImpl updates its atomic public
         // state and fires AgentSink::on_state_change with the correct
@@ -1092,9 +1182,6 @@ bool LLMClient::handle_set_state_result(const json& result) {
         sink_->on_state_change(fallback_prev_public_state_, current);
         fallback_prev_public_state_ = current;
     }
-    LOG_INFO("State machine: set_status → "
-             + std::string(daedalus::to_string(new_state)));
-    return true;
 }
 
 // §COMPRESS-TOOL (2026-08-14): handle a `compress_context` tool result.
@@ -2283,7 +2370,9 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // §MSG-HEADERS: the provider-shaped message becomes ours here —
     // attach origin + receipt time before it enters the stored chain.
     // NOTE: push a COPY — `message` is read below (tool_calls dispatch).
-    Messages::stamp(message, "assistant");
+    Messages::stamp(message, verification_turn_active_
+        ? (verifier_loop_active_ ? "agent:verifier" : "agent:worker")
+        : "assistant");
     messages.push_back(message);
     // PERSIST-DIRTY: raw-reference push - keep the flush worker in the
     // loop so a crash/kill mid-turn doesn't lose the reply.
@@ -2420,6 +2509,8 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
                     : ToolHandler::execute_tool_call(
                         tool_call, *file_io_, progress_cb);
                 result["tool_name"] = function_name;
+                track_background_tool_result(
+                    function_name, args_for_display, result);
 
                 std::string status = result.value("status", "unknown");
                 LOG_INFO("Tool executed: " + function_name + " | Status: " + status);
@@ -2867,9 +2958,16 @@ void LLMClient::inject_context_stats(json& messages) {
         }
     }
 
+    // The active worker/verifier role shares the existing transient trailing
+    // system message. No internal user message or persistent extra system
+    // message is needed, and the preceding cacheable prefix stays untouched.
+    std::ostringstream tail;
+    if (!active_role_prompt_.empty()) tail << active_role_prompt_ << "\n\n";
+    tail << stats.str();
+
     // Strip any legacy embedded block, drop the previous transient
     // status message, and append this one last.
-    daedalus::context_status::upsert_context_status_message(messages, stats.str());
+    daedalus::context_status::upsert_context_status_message(messages, tail.str());
 }
 
 // Format: ![alt text](path_or_url)
@@ -3043,10 +3141,51 @@ void LLMClient::uninstall_crash_handlers() {
     // Accumulated assistant text goes to sink_->on_assistant_delta(text).
     // ===================================================================
 
-void LLMClient::submit_steer_message(std::string text, std::string source) {
+void LLMClient::track_background_tool_result(
+    std::string_view function_name, const json& arguments, const json& result) {
+    if (function_name != "execute_bash" || !result.is_object()) return;
+
+    const std::string status = result.value("status", "");
+    const std::string process_id = result.value("process_id", "");
+    if (status == "background" && !process_id.empty()) {
+        const bool detached = result.value("detached", false);
+        // Direct LLMClient users that never install a completion callback
+        // retain the legacy poll-only behaviour and cannot be suspended
+        // waiting for a notification that will never arrive.
+        if (!detached && ToolHandler::current_background_completion_handler()) {
+            {
+                std::lock_guard lock(steer_mutex_);
+                required_background_jobs_.insert(process_id);
+            }
+            LOG_INFO("[BACKGROUND] Tracking required job " + process_id);
+        }
+        return;
+    }
+
+    // Explicit cancellation has no natural-exit completion callback.
+    if (status == "success" && !process_id.empty()
+        && arguments.value("action", "") == "stop") {
+        std::lock_guard lock(steer_mutex_);
+        required_background_jobs_.erase(process_id);
+    }
+}
+
+bool LLMClient::has_required_background_jobs() {
+    // Natural exit removes the manager's process record, often BEFORE the
+    // agent finishes its current model cycle. Do not consult that registry
+    // here: only completion-steer consumption or explicit stop may clear an
+    // ID. Otherwise fast jobs incorrectly look complete before their output
+    // has entered the conversation.
+    std::lock_guard lock(steer_mutex_);
+    return !required_background_jobs_.empty();
+}
+
+void LLMClient::submit_steer_message(std::string text, std::string source,
+                                     std::string background_process_id) {
     std::lock_guard lock(steer_mutex_);
     pending_steer_messages_.push_back(
-        {std::move(text), source.empty() ? "user" : std::move(source)});
+        {std::move(text), source.empty() ? "user" : std::move(source),
+         std::move(background_process_id)});
 }
 
 size_t LLMClient::pending_steer_count() const noexcept {
@@ -3056,6 +3195,13 @@ size_t LLMClient::pending_steer_count() const noexcept {
 
 void LLMClient::clear_steer_messages() noexcept {
     std::lock_guard lock(steer_mutex_);
+    for (const auto& steer : pending_steer_messages_) {
+        if (!steer.background_process_id.empty()) {
+            // The host explicitly discarded this result; do not leave an
+            // unconsumable job ID blocking a later verified turn.
+            required_background_jobs_.erase(steer.background_process_id);
+        }
+    }
     pending_steer_messages_.clear();
 }
 
@@ -3068,13 +3214,21 @@ bool LLMClient::append_pending_steer_messages(json& messages) {
     }
 
     // SAFETY: callers invoke this only before a new model cycle or after
-    // run_agent_cycle() has returned ACT/BUILD_TEST. In the latter case the
-    // assistant's ENTIRE tool-call batch and all matching tool results have
-    // already been appended. A user message here cannot split a tool block.
+    // run_agent_cycle() has returned. At either boundary the assistant's
+    // ENTIRE tool-call batch and all matching tool results have already been
+    // appended. A user message here cannot split a tool block.
     for (auto& steer : pending) {
         json user_msg = {{"role", "user"}, {"content", std::move(steer.text)}};
         Messages::stamp(user_msg, steer.source);
         messages.push_back(std::move(user_msg));
+        if (!steer.background_process_id.empty()) {
+            {
+                std::lock_guard lock(steer_mutex_);
+                required_background_jobs_.erase(steer.background_process_id);
+            }
+            LOG_INFO("[BACKGROUND] Consumed completion for "
+                     + steer.background_process_id);
+        }
     }
     if (messages_) messages_->mark_dirty();
     return true;
@@ -3336,184 +3490,289 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
     last_cached_tokens_ = 0;
     consecutive_compress_count_ = 0;  // §BUG-COMPRESS-LOOP
 
-    bool agent_running = true;
     AgentState final_state = AgentState::DONE;
+    const int max_verification_rounds =
+        std::max(1, config_.max_verification_rounds);
+    const bool resume_suspended = config_.verification_enabled
+        && verification_suspended_.has_value();
+    verification_turn_active_ = config_.verification_enabled;
+    if (resume_suspended) {
+        verifier_loop_active_ = *verification_suspended_
+            == SuspendedVerificationPhase::Verifier;
+        // active_role_prompt_ and verification_round_ intentionally survive
+        // the WAITING return, so this is the SAME worker or verifier loop.
+        dispatch_state_change(verifier_loop_active_
+            ? daedalus::AgentState::Verifying : daedalus::AgentState::Acting);
+        LOG_INFO(verifier_loop_active_
+            ? "[BACKGROUND] Resuming suspended verifier loop"
+            : "[BACKGROUND] Resuming suspended worker loop");
+    } else {
+        verification_round_ = 0;
+        verifier_loop_active_ = false;
+        active_role_prompt_.clear();
+        verification_suspended_.reset();
+    }
 
     // Live tool definitions (re-fetched when MCP dirty flag flips).
     json tool_defs = json::parse(tool_filter_
         ? ToolHandler::get_tool_definitions_filtered(*tool_filter_)
         : ToolHandler::get_tool_definitions());
 
-    while (agent_running) {
-        // §Phase 5.1: cancel via cancel_source_ (fired by
-        // Agent::cancel()). Library no longer polls stdin.
-        if (cancel_source_.get_token().stop_requested()) {
-            std::ostringstream msg;
-            msg << "\n[INTERRUPTED] Agent execution halted by user.";
-            if (sink_) sink_->on_log(daedalus::LogLevel::Info, msg.str());
-            // §AutoCompress: honor a pending host compress request even
-            // though the turn ends CANCELLED before any cycle ran —
-            // otherwise a "cancel current work → compress_context()" host
-            // flow strands the request. We hold turn_mutex_, so the
-            // history is stable.
-            if (compress_requested_.exchange(false, std::memory_order_relaxed)) {
-                LOG_INFO("[COMPRESS] Host requested context compression (cancelled turn)...");
-                if (messages_) {
-                    messages_->set_messages(messages);
-                    (void)compress_now_unlocked();
+    // The existing loop below is one inner agent loop. With verification
+    // enabled, the outer supervisor runs it as worker, then verifier, and
+    // repeats that pair only when the verifier requests corrections.
+    for (;;) {
+        bool agent_running = true;
+        consecutive_same_status_count_ = 0;
+        last_status_only_state_.clear();
+
+        while (agent_running) {
+            // §Phase 5.1: cancel via cancel_source_ (fired by
+            // Agent::cancel()). Library no longer polls stdin.
+            if (cancel_source_.get_token().stop_requested()) {
+                std::ostringstream msg;
+                msg << "\n[INTERRUPTED] Agent execution halted by user.";
+                if (sink_) sink_->on_log(daedalus::LogLevel::Info, msg.str());
+                // §AutoCompress: honor a pending host compress request even
+                // though the turn ends CANCELLED before any cycle ran —
+                // otherwise a "cancel current work → compress_context()" host
+                // flow strands the request. We hold turn_mutex_, so the
+                // history is stable.
+                if (compress_requested_.exchange(false, std::memory_order_relaxed)) {
+                    LOG_INFO("[COMPRESS] Host requested context compression (cancelled turn)...");
+                    if (messages_) {
+                        messages_->set_messages(messages);
+                        (void)compress_now_unlocked();
+                    }
                 }
-            }
-            final_state = AgentState::CANCELLED;
-            break;
-        }
-
-        // §Phase 5.1: route the max-iterations diagnostic through the
-        // Logger / sink instead of std::cout.
-        if (iteration_count_ >= max_iterations_) {
-            std::ostringstream msg;
-            msg << "\n[WARNING] Maximum iterations (" << max_iterations_
-                << ") reached. Stopping agent to prevent infinite loops.";
-            if (sink_) sink_->on_log(daedalus::LogLevel::Warn, msg.str());
-            break;
-        }
-
-        iteration_count_++;
-        inject_context_stats(messages);
-
-        if (mcp_tools_refresh_pending_ ||
-            (mcp_manager_ && mcp_manager_->mcp_tools_dirty())) {
-            refresh_mcp_tools();
-            // §MCP-CONTROL-CORE fix: use the same ToolFilter-aware fetch
-            // as the initial tool_defs build (see below) — the unfiltered
-            // call let host-disabled tools leak back onto the wire after
-            // every MCP refresh.
-            tool_defs = json::parse(tool_filter_
-                ? ToolHandler::get_tool_definitions_filtered(*tool_filter_)
-                : ToolHandler::get_tool_definitions());
-        }
-
-        AgentState result_state = run_agent_cycle(api_url, messages, tool_defs);
-
-        // §STEER-MESSAGE: this is the safe mid-turn injection boundary.
-        // run_agent_cycle() has returned, its per-tool cleanup is complete,
-        // and for ACT/BUILD_TEST every result in the tool-call batch is in
-        // history. Do NOT move this into the per-tool loop: a user message
-        // between outstanding tool results violates provider chain rules.
-        if (result_state == AgentState::ACT
-            || result_state == AgentState::BUILD_TEST) {
-            append_pending_steer_messages(messages);
-        }
-
-        // Auto-compress at 90% threshold OR when the host asked for it via
-        // Agent::compress_context() (§AutoCompress).
-        bool at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
-        if (at_threshold) {
-            // §BUG-MEMORY-BLOAT: compression only rewrites NON-system
-            // messages. When the history is a handful of messages, the
-            // pressure comes from the system prompt (session memory dump,
-            // project docs, tool schemas) which compression can NEVER
-            // reduce — shredding the tiny history gains ~0 tokens and the
-            // threshold stays tripped, looping "Compressing" every cycle.
-            // Skip and keep working; the provider accepts the request.
-            const auto& hist = messages_->get_messages();
-            const size_t non_system =
-                (!hist.empty() && hist[0].value("role", "") == "system")
-                    ? hist.size() - 1
-                    : hist.size();
-            constexpr size_t kMinAutoCompressMessages = 10;
-            if (non_system < kMinAutoCompressMessages) {
-                LOG_WARNING("[COMPRESS] At 90% threshold but only " +
-                            std::to_string(non_system) +
-                            " non-system messages — context is dominated by "
-                            "the system prompt, which compression cannot "
-                            "reduce. Skipping auto-compress.");
-                at_threshold = false;
-            }
-        }
-        const bool host_requested =
-            compress_requested_.exchange(false, std::memory_order_relaxed);
-        if (at_threshold || host_requested) {
-            // §BUG-COMPRESS-LOOP: circuit breaker. Compression that cannot
-            // bring the context below the threshold used to retry forever —
-            // every attempt reset iteration_count_ (so the max-iterations
-            // guard never fired) and `continue`d, looping "Compressing"
-            // until the user cancelled. Each failed attempt also blocks up
-            // to ~210s in Messages::compress()'s internal retries. Allow
-            // kMaxConsecutiveCompressions attempts (a legitimate partial
-            // compress converges in 1-2: each success deletes ~70% of the
-            // remainder), then end the turn with a terminal error instead.
-            static constexpr int kMaxConsecutiveCompressions = 2;
-            ++consecutive_compress_count_;
-            if (consecutive_compress_count_ > kMaxConsecutiveCompressions) {
-                emit_error(daedalus::ErrorKind::Internal,
-                    "Context compression could not bring the conversation "
-                    "below the auto-compress threshold after " +
-                    std::to_string(kMaxConsecutiveCompressions) +
-                    " attempts — ending the turn instead of looping. The "
-                    "summary call may be failing, or the model's max context "
-                    "size may be set far smaller than the real window "
-                    "(check the model configuration); otherwise start a new "
-                    "chat.", /*will_retry=*/false);
-                final_state = AgentState::DONE;
+                final_state = AgentState::CANCELLED;
                 break;
             }
-            if (host_requested) {
-                LOG_INFO("[COMPRESS] Host requested context compression...");
-            } else {
-                LOG_INFO("[COMPRESS] Auto-triggering context compression at 90% threshold...");
+
+            // §Phase 5.1: route the max-iterations diagnostic through the
+            // Logger / sink instead of std::cout.
+            if (iteration_count_ >= max_iterations_) {
+                std::ostringstream msg;
+                msg << "\n[WARNING] Maximum iterations (" << max_iterations_
+                    << ") reached. Stopping agent to prevent infinite loops.";
+                if (sink_) sink_->on_log(daedalus::LogLevel::Warn, msg.str());
+                break;
             }
-            if (messages_) {
-                const size_t before_tokens = last_total_tokens_;
-                messages_->set_messages(messages);
-                auto compress_result = messages_->compress();
-                if (compress_result.outcome == CompressOutcome::Compressed) {
-                    messages_->replace_messages(compress_result.compressed_json);
-                    messages = messages_->get_messages();
-                    const size_t after_tokens = messages_->estimate_tokens();
-                    if (sink_) sink_->on_compaction(before_tokens, after_tokens);
-                    LOG_INFO("[CONTEXT] Compressed successfully. Continuing...");
-                } else if (compress_result.outcome == CompressOutcome::FallbackDeleted) {
-                    // §COMPRESS-REPORT: summary failed but the fallback
-                    // still reduced the context — report it so host
-                    // stats/UI stay in sync.
-                    messages = messages_->get_messages();
-                    const size_t after_tokens = messages_->estimate_tokens();
-                    if (sink_) sink_->on_compaction(before_tokens, after_tokens);
-                    LOG_WARNING("[COMPRESS] Summary failed; oldest messages "
-                                "deleted as fallback. Continuing...");
-                } else {
-                    // Nothing to compress, or summary failed AND the
-                    // history was too small to safely reduce — the
-                    // context is unchanged.
-                    LOG_ERROR("[COMPRESS] Failed - context unchanged");
+
+            iteration_count_++;
+            inject_context_stats(messages);
+
+            if (mcp_tools_refresh_pending_ ||
+                (mcp_manager_ && mcp_manager_->mcp_tools_dirty())) {
+                refresh_mcp_tools();
+                // §MCP-CONTROL-CORE fix: use the same ToolFilter-aware fetch
+                // as the initial tool_defs build (see below) — the unfiltered
+                // call let host-disabled tools leak back onto the wire after
+                // every MCP refresh.
+                tool_defs = json::parse(tool_filter_
+                    ? ToolHandler::get_tool_definitions_filtered(*tool_filter_)
+                    : ToolHandler::get_tool_definitions());
+            }
+
+            AgentState result_state = run_agent_cycle(api_url, messages, tool_defs);
+
+            // §STEER-MESSAGE: this is the safe mid-turn injection boundary.
+            // run_agent_cycle() has returned, its per-tool cleanup is complete,
+            // and for ACT/BUILD_TEST every result in the tool-call batch is in
+            // history. Do NOT move this into the per-tool loop: a user message
+            // between outstanding tool results violates provider chain rules.
+            const bool steer_appended = append_pending_steer_messages(messages);
+
+            // Auto-compress at 90% threshold OR when the host asked for it via
+            // Agent::compress_context() (§AutoCompress).
+            bool at_threshold = messages_ && messages_->should_compress(last_total_tokens_);
+            if (at_threshold) {
+                // §BUG-MEMORY-BLOAT: compression only rewrites NON-system
+                // messages. When the history is a handful of messages, the
+                // pressure comes from the system prompt (session memory dump,
+                // project docs, tool schemas) which compression can NEVER
+                // reduce — shredding the tiny history gains ~0 tokens and the
+                // threshold stays tripped, looping "Compressing" every cycle.
+                // Skip and keep working; the provider accepts the request.
+                const auto& hist = messages_->get_messages();
+                const size_t non_system =
+                    (!hist.empty() && hist[0].value("role", "") == "system")
+                        ? hist.size() - 1
+                        : hist.size();
+                constexpr size_t kMinAutoCompressMessages = 10;
+                if (non_system < kMinAutoCompressMessages) {
+                    LOG_WARNING("[COMPRESS] At 90% threshold but only " +
+                                std::to_string(non_system) +
+                                " non-system messages — context is dominated by "
+                                "the system prompt, which compression cannot "
+                                "reduce. Skipping auto-compress.");
+                    at_threshold = false;
                 }
             }
+            const bool host_requested =
+                compress_requested_.exchange(false, std::memory_order_relaxed);
+            if (at_threshold || host_requested) {
+                // §BUG-COMPRESS-LOOP: circuit breaker. Compression that cannot
+                // bring the context below the threshold used to retry forever —
+                // every attempt reset iteration_count_ (so the max-iterations
+                // guard never fired) and `continue`d, looping "Compressing"
+                // until the user cancelled. Each failed attempt also blocks up
+                // to ~210s in Messages::compress()'s internal retries. Allow
+                // kMaxConsecutiveCompressions attempts (a legitimate partial
+                // compress converges in 1-2: each success deletes ~70% of the
+                // remainder), then end the turn with a terminal error instead.
+                static constexpr int kMaxConsecutiveCompressions = 2;
+                ++consecutive_compress_count_;
+                if (consecutive_compress_count_ > kMaxConsecutiveCompressions) {
+                    emit_error(daedalus::ErrorKind::Internal,
+                        "Context compression could not bring the conversation "
+                        "below the auto-compress threshold after " +
+                        std::to_string(kMaxConsecutiveCompressions) +
+                        " attempts — ending the turn instead of looping. The "
+                        "summary call may be failing, or the model's max context "
+                        "size may be set far smaller than the real window "
+                        "(check the model configuration); otherwise start a new "
+                        "chat.", /*will_retry=*/false);
+                    final_state = AgentState::DONE;
+                    break;
+                }
+                if (host_requested) {
+                    LOG_INFO("[COMPRESS] Host requested context compression...");
+                } else {
+                    LOG_INFO("[COMPRESS] Auto-triggering context compression at 90% threshold...");
+                }
+                if (messages_) {
+                    const size_t before_tokens = last_total_tokens_;
+                    messages_->set_messages(messages);
+                    auto compress_result = messages_->compress();
+                    if (compress_result.outcome == CompressOutcome::Compressed) {
+                        messages_->replace_messages(compress_result.compressed_json);
+                        messages = messages_->get_messages();
+                        const size_t after_tokens = messages_->estimate_tokens();
+                        if (sink_) sink_->on_compaction(before_tokens, after_tokens);
+                        LOG_INFO("[CONTEXT] Compressed successfully. Continuing...");
+                    } else if (compress_result.outcome == CompressOutcome::FallbackDeleted) {
+                        // §COMPRESS-REPORT: summary failed but the fallback
+                        // still reduced the context — report it so host
+                        // stats/UI stay in sync.
+                        messages = messages_->get_messages();
+                        const size_t after_tokens = messages_->estimate_tokens();
+                        if (sink_) sink_->on_compaction(before_tokens, after_tokens);
+                        LOG_WARNING("[COMPRESS] Summary failed; oldest messages "
+                                    "deleted as fallback. Continuing...");
+                    } else {
+                        // Nothing to compress, or summary failed AND the
+                        // history was too small to safely reduce — the
+                        // context is unchanged.
+                        LOG_ERROR("[COMPRESS] Failed - context unchanged");
+                    }
+                }
+                iteration_count_ = 0;
+                // §CTX-ZERO-RESET: same seed after a compaction cycle — the
+                // estimate reflects the freshly reduced history rather than
+                // a bogus 0 for the post-compress status block.
+                last_total_tokens_ = messages_
+                    ? static_cast<int>(messages_->estimate_tokens()) : 0;
+                last_cached_tokens_ = 0;
+                continue;
+            }
+            // §BUG-COMPRESS-LOOP: this cycle completed below the threshold —
+            // the conversation is making progress again.
+            consecutive_compress_count_ = 0;
+
+            // §Phase 5.1: route through Logger.
+            if (result_state == AgentState::CANCELLED) {
+                LOG_INFO("[AGENT] Execution cancelled by user.");
+                final_state = AgentState::CANCELLED;
+                break;
+            }
+            if (result_state == AgentState::ACT || result_state == AgentState::BUILD_TEST) {
+                continue;
+            }
+            if (steer_appended && !last_terminal_error().has_value()) {
+                // A final response and a steer can cross at the cycle
+                // boundary. The new message is already in history, so this
+                // same inner agent must consume it before it may finish or
+                // hand over to the other agent.
+                LOG_INFO("[STEER] Completion arrived at final boundary; "
+                         "continuing the same inner loop");
+                continue;
+            }
+
+            if (config_.verification_enabled && has_required_background_jobs()) {
+                verification_suspended_ = verifier_loop_active_
+                    ? SuspendedVerificationPhase::Verifier
+                    : SuspendedVerificationPhase::Worker;
+                final_state = AgentState::WAITING;
+                dispatch_state_change(daedalus::AgentState::Verifying);
+                LOG_INFO("[BACKGROUND] Suspending "
+                         + std::string(verifier_loop_active_ ? "verifier" : "worker")
+                         + " with required background job(s) outstanding");
+                break;
+            }
+
+            LOG_INFO(verifier_loop_active_
+                ? "✓ Verification inner loop complete"
+                : (config_.verification_enabled
+                    ? "✓ Worker inner loop complete"
+                    : "✓ Task Complete"));
+            final_state = AgentState::DONE;
+            break;
+        }
+
+        if (final_state == AgentState::CANCELLED
+            || final_state == AgentState::WAITING
+            || !config_.verification_enabled || last_terminal_error().has_value()) {
+            break;
+        }
+
+        if (!verifier_loop_active_) {
+            ++verification_round_;
+            verifier_loop_active_ = true;
+            active_role_prompt_ = verification_role_prompt(config_);
             iteration_count_ = 0;
-            // §CTX-ZERO-RESET: same seed after a compaction cycle — the
-            // estimate reflects the freshly reduced history rather than
-            // a bogus 0 for the post-compress status block.
-            last_total_tokens_ = messages_
-                ? static_cast<int>(messages_->estimate_tokens()) : 0;
-            last_cached_tokens_ = 0;
+            dispatch_state_change(daedalus::AgentState::Verifying);
+            LOG_INFO("[VERIFY] Starting verification round "
+                     + std::to_string(verification_round_) + "/"
+                     + std::to_string(max_verification_rounds));
             continue;
         }
-        // §BUG-COMPRESS-LOOP: this cycle completed below the threshold —
-        // the conversation is making progress again.
-        consecutive_compress_count_ = 0;
 
-        // §Phase 5.1: route through Logger.
-        if (result_state == AgentState::CANCELLED) {
-            LOG_INFO("[AGENT] Execution cancelled by user.");
+        const VerificationVerdict verdict =
+            parse_verification_verdict(get_last_assistant_text());
+        if (verdict == VerificationVerdict::Approved) {
+            LOG_INFO("[VERIFY] Work approved");
+            break;
+        }
+
+        if (verification_round_ >= max_verification_rounds) {
+            emit_error(daedalus::ErrorKind::Internal,
+                "Verification did not approve the work after "
+                    + std::to_string(verification_round_)
+                    + " round(s). The turn is stopping without verification approval.",
+                /*will_retry=*/false);
             final_state = AgentState::CANCELLED;
             break;
         }
-        if (result_state == AgentState::ACT || result_state == AgentState::BUILD_TEST) {
-            continue;
-        }
 
-        LOG_INFO("✓ Task Complete");
-        final_state = AgentState::DONE;
-        break;
+        verifier_loop_active_ = false;
+        active_role_prompt_ = verdict == VerificationVerdict::ChangesRequired
+            ? std::string(kWorkerCorrectionPrompt)
+            : std::string(kWorkerInconclusivePrompt);
+        iteration_count_ = 0;
+        dispatch_state_change(daedalus::AgentState::Acting);
+        LOG_WARNING(verdict == VerificationVerdict::ChangesRequired
+            ? "[VERIFY] Corrections requested; returning to worker loop"
+            : "[VERIFY] Missing or invalid verdict; returning to worker loop");
+        continue;
+    } // outer worker/verifier supervisor
+
+    if (final_state != AgentState::WAITING) {
+        verification_turn_active_ = false;
+        verifier_loop_active_ = false;
+        active_role_prompt_.clear();
+        verification_round_ = 0;
+        verification_suspended_.reset();
     }
 
     // PERSIST-DIRTY: catch every early-return mutation (API-error
