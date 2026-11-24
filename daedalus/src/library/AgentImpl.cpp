@@ -779,8 +779,22 @@ void AgentImpl::submit_steer_message(std::string text, std::string source) {
     body_->client->submit_steer_message(std::move(text), std::move(source));
 }
 
+bool AgentImpl::verifier_active() const noexcept {
+    return body_->client && body_->client->verifier_active();
+}
+
+void AgentImpl::set_verification_enabled(bool enabled) noexcept {
+    cfg_.verification_enabled = enabled;
+    if (body_->client) body_->client->set_verification_enabled(enabled);
+}
+
 size_t AgentImpl::pending_steer_count() const noexcept {
     return body_->client ? body_->client->pending_steer_count() : 0;
+}
+
+size_t AgentImpl::pending_background_steer_count() const noexcept {
+    return body_->client
+        ? body_->client->pending_background_steer_count() : 0;
 }
 
 void AgentImpl::clear_steer_messages() noexcept {
@@ -1024,6 +1038,10 @@ void AgentImpl::run_one_turn(std::stop_token st)
     // sufficient work on its own; LLMClient drains it before the first cycle.
     const bool has_pending_steer =
         body_->client && body_->client->pending_steer_count() > 0;
+    const bool verifier_active =
+        body_->client && body_->client->verifier_active();
+    const bool has_pending_background_steer =
+        body_->client && body_->client->pending_background_steer_count() > 0;
     struct TurnActiveGuard {
         AgentImpl& agent;
         ~TurnActiveGuard() {
@@ -1037,10 +1055,17 @@ void AgentImpl::run_one_turn(std::stop_token st)
             // No queued normal or steer message — no-op.
             return;
         }
+        if (verifier_active && !has_pending_background_steer) {
+            // Neither normal input nor a deferred interactive steer can resume
+            // or join the verifier. Leave both queued until a real background
+            // completion resumes validation and the outer turn returns to the
+            // worker.
+            return;
+        }
         turn_active_ = true;
         // Steer-only continuation: LLMClient owns that separate queue, so
         // the normal queue's front()/join path is skipped entirely.
-        if (!pending_user_messages_.empty()) {
+        if (!verifier_active && !pending_user_messages_.empty()) {
             // §QUEUE-JOIN (2026-10-04): drain the WHOLE queue as ONE message.
             // Messages submitted while a turn was busy (a follow-up change, a
             // correction to an earlier queued item, ...) are the user's single

@@ -135,6 +135,9 @@ public:
 
     // signals (worker thread!)
     sigc::signal<void(ChatState)> state_changed;
+    // Worker thread: precise supervisor role changes, for disabling Steer
+    // and showing generic validation activity without exposing its output.
+    sigc::signal<void(bool)> verifier_active_changed;
     sigc::signal<void(std::string)> user_message_sent; // echo for the UI
     sigc::signal<void(std::string)> text_delta;        // assistant text chunk
     sigc::signal<void(std::string)> agent_summary;     // stop-tool summary (§7.3)

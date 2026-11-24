@@ -67,8 +67,14 @@ Do not trust the worker's summary when it conflicts with the evidence. Check for
 missing requirements, regressions, unrun or failed checks, and incomplete docs.
 Do not ask the boss or any human for guidance; the two agents must resolve the
 work autonomously. If changes are needed, give the worker precise, actionable
-findings. If everything is satisfactory, summarize the verified result and the
-checks you performed for the boss.
+findings.
+
+Your response is internal supervisor output, not a user-facing message. The
+worker already handles all user communication. Do not address the user, provide
+progress commentary, narrate your checks, call tell_user, or summarize approved
+work. Return only the required verdict; add concise worker instructions only
+when corrections or more work are required. Hosts display a generic validation
+activity indicator instead of your response.
 )";
 
 constexpr std::string_view kVerificationVerdictProtocol = R"(
@@ -81,6 +87,9 @@ VERDICT: CHANGES_REQUIRED
 
 Use APPROVED only when the work is complete and verified. Otherwise use
 CHANGES_REQUIRED and list the specific corrections the worker must make.
+This verdict and any corrections are internal agent-to-agent output. Never
+address or narrate to the user, and never call tell_user; the worker owns all
+user communication. Hosts show only generic validation activity for this phase.
 )";
 
 constexpr std::string_view kWorkerCorrectionPrompt = R"(
@@ -1610,8 +1619,12 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
     // When false the existing buffered JSON path is used unchanged.
     // §ProviderPlugins: the parser comes from the active provider plugin
     // (default: the classic MiniMaxSseParser behavior).
+    // Verification is an internal supervisor phase. Keep accumulating the
+    // response for history/verdict parsing, but do not stream its commentary
+    // or verdict to the user. Hosts show generic validation activity instead.
     auto sse_parser_holder = plugin_->create_stream_parser(
-        std::weak_ptr<daedalus::AgentSink>(sink_));
+        verifier_active() ? std::weak_ptr<daedalus::AgentSink>{}
+                          : std::weak_ptr<daedalus::AgentSink>(sink_));
     daedalus::ProviderStreamParser& sse_parser = *sse_parser_holder;
     std::function<void(std::string_view)> streaming_callback;
     // Lifecycle hooks for host UI spinners. started/finished guard ensures
@@ -2798,7 +2811,7 @@ AgentState LLMClient::run_agent_cycle(const std::string& api_url,
             // §Phase 9.11: skip the emit if the SSE stream already
             // delivered the text via deltas (otherwise the host sees
             // every fragment twice: once live-streamed, once here).
-            if (sink_ && !sse_parser.had_text_deltas()) {
+            if (sink_ && !verifier_active() && !sse_parser.had_text_deltas()) {
                 sink_->on_assistant_delta("\n" + content + "\n");
             } else if (sink_) {
                 // Already streamed live; nothing to re-emit.  Note this
@@ -3193,6 +3206,15 @@ size_t LLMClient::pending_steer_count() const noexcept {
     return pending_steer_messages_.size();
 }
 
+size_t LLMClient::pending_background_steer_count() const noexcept {
+    std::lock_guard lock(steer_mutex_);
+    return static_cast<size_t>(std::count_if(
+        pending_steer_messages_.begin(), pending_steer_messages_.end(),
+        [](const PendingSteerMessage& steer) {
+            return !steer.background_process_id.empty();
+        }));
+}
+
 void LLMClient::clear_steer_messages() noexcept {
     std::lock_guard lock(steer_mutex_);
     for (const auto& steer : pending_steer_messages_) {
@@ -3205,13 +3227,21 @@ void LLMClient::clear_steer_messages() noexcept {
     pending_steer_messages_.clear();
 }
 
-bool LLMClient::append_pending_steer_messages(json& messages) {
+bool LLMClient::append_pending_steer_messages(json& messages,
+                                               bool include_user_steers) {
     std::vector<PendingSteerMessage> pending;
     {
         std::lock_guard lock(steer_mutex_);
-        if (pending_steer_messages_.empty()) return false;
-        pending.swap(pending_steer_messages_);
+        std::vector<PendingSteerMessage> deferred;
+        for (auto& steer : pending_steer_messages_) {
+            if (include_user_steers || !steer.background_process_id.empty())
+                pending.push_back(std::move(steer));
+            else
+                deferred.push_back(std::move(steer));
+        }
+        pending_steer_messages_ = std::move(deferred);
     }
+    if (pending.empty()) return false;
 
     // SAFETY: callers invoke this only before a new model cycle or after
     // run_agent_cycle() has returned. At either boundary the assistant's
@@ -3460,11 +3490,6 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
         messages.push_back(std::move(user_msg));
     }
 
-    // §STEER-MESSAGE: a steer that arrived just after the previous turn's
-    // final boundary is safe to consume now, before this turn's first API
-    // request. AgentImpl permits an empty normal prompt for this case.
-    append_pending_steer_messages(messages);
-
     // PERSIST-DIRTY (2026-08-31): the pushes above went through the raw
     // json& reference, bypassing add_*() - mark the chain dirty so the
     // write-through flush worker persists the new turn promptly instead
@@ -3512,6 +3537,13 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
         active_role_prompt_.clear();
         verification_suspended_.reset();
     }
+
+    // A steer that arrived just after the previous turn's final boundary is
+    // safe to consume now, before this turn's first API request. On a verifier
+    // resume, only internal background completions are eligible; interactive
+    // guidance stays queued for the worker. AgentImpl permits an empty normal
+    // prompt for this case.
+    append_pending_steer_messages(messages, !verifier_active());
 
     // Live tool definitions (re-fetched when MCP dirty flag flips).
     json tool_defs = json::parse(tool_filter_
@@ -3581,7 +3613,8 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
             // and for ACT/BUILD_TEST every result in the tool-call batch is in
             // history. Do NOT move this into the per-tool loop: a user message
             // between outstanding tool results violates provider chain rules.
-            const bool steer_appended = append_pending_steer_messages(messages);
+            const bool steer_appended =
+                append_pending_steer_messages(messages, !verifier_active());
 
             // Auto-compress at 90% threshold OR when the host asked for it via
             // Agent::compress_context() (§AutoCompress).
@@ -3760,6 +3793,10 @@ AgentState LLMClient::run_one_turn(const std::string& user_message,
             ? std::string(kWorkerCorrectionPrompt)
             : std::string(kWorkerInconclusivePrompt);
         iteration_count_ = 0;
+        // Interactive steers are withheld throughout verification. Drain them
+        // at this role handoff so the correction worker consumes them on its
+        // FIRST request rather than producing an unguided extra response.
+        append_pending_steer_messages(messages, true);
         dispatch_state_change(daedalus::AgentState::Acting);
         LOG_WARNING(verdict == VerificationVerdict::ChangesRequired
             ? "[VERIFY] Corrections requested; returning to worker loop"

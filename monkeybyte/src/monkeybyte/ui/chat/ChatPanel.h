@@ -165,6 +165,7 @@ private:
     SpeechStreamSegmenter speech_stream_; // §CHIMPFLOW-STREAM
     std::map<std::string, ToolCard*> tool_cards_;
     bool processing_ = false;
+    bool verifier_active_ = false;
     bool updating_models_ = false;
     bool updating_thinking_ = false; // suppress emissions during refill
     // §7.3 — pinned-to-bottom tracking. The latch expresses USER intent

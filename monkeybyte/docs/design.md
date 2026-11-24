@@ -126,9 +126,10 @@ marshalled to GTK with dispatchers; widgets are only touched on the GTK main
 thread.
 
 The agent configuration is rebuilt when relevant provider/model, MCP, prompt,
-skill, or tool policy changes. The experimental worker → verifier supervisor is
-enabled; both roles use the selected model, tools, and shared transcript.
-A rebuild normally preserves the persisted
+skill, tool policy, or validation settings change. The worker → verifier
+supervisor is controlled by **Settings → Agent → Validation step** (default on),
+persisted as Daedalus's shared `verification_enabled` preference. Both roles use
+the selected model, tools, and shared transcript. A rebuild normally preserves the persisted
 conversation. `/clear`, the clear button, and workspace changes additionally
 wipe the persisted transcript and crash/temp mirrors so old messages cannot
 reappear on the next agent construction.
@@ -142,21 +143,28 @@ one model input, with image attachments concatenated and origin metadata
 retained. Never leave an idle submission without a driving turn.
 
 The composer has separate **Send** and **Steer** buttons. Send always uses the
-normal FIFO above. Steer is enabled only while processing and calls
-`Agent::submit_steer_message()` through its own synchronized queue. Daedalus
-injects it before the next model cycle, only after the current complete
+normal FIFO above, including during validation and background waits; it is
+never submitted to the verifier. Steer is enabled only while the worker is
+processing and calls `Agent::submit_steer_message()` through its own
+synchronized queue. Interactive steers remain deferred throughout verification
+and drain at the next correction-worker handoff or new worker turn. Daedalus
+injects them before the next worker model cycle, only after the current complete
 assistant tool-call batch and every matching result are committed. It never
 injects inside per-tool execution/cleanup or between results in a multi-tool
 batch. The worker includes `pending_steer_count()` in its final drain check,
-closing the submission-vs-Idle race. Background completions use the same safe
-steer boundary and can resume a verified supervisor suspended on required job
-output. While suspended, the host uses `ChatState::Waiting`: the activity strip
-keeps a spinner with `Waiting for background job…` rather than prematurely
-showing `Done`. Both normal and steer-only pending queues can start the resumed
-drain. Suspension does not emit `finished`, so loopback `chat.send` waits for
-final verification and stop-tool summaries remain pending until then.
-Cancellation and terminal errors clear uninjected steers; normal queued sends
-retain their existing semantics.
+closing the submission-vs-Idle race.
+
+Background completions use the same safe steer boundary and are the only
+pending steers allowed to resume a supervisor suspended on required job output.
+While suspended, the host uses `ChatState::Waiting`: the activity strip keeps a
+spinner with `Waiting for background job…` rather than prematurely showing
+`Done`. A completion wake finishes the suspended outer turn before draining any
+Send messages queued during the wait. Suspension does not emit `finished`, so
+loopback `chat.send` waits for final verification and stop-tool summaries remain
+pending until then. Verifier text is internal and never appears as chat output;
+the strip shows generic `Validating…` activity instead. Cancellation and
+terminal errors clear uninjected steers; normal queued sends retain their
+existing semantics.
 
 Stop cancels the current turn and clears later queued user intent. Cancellation
 still emits tool results for any interrupted tool-call

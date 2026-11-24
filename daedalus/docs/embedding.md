@@ -947,7 +947,7 @@ for the full field list. The most-used fields:
 | `api_key`, `api_host`, `chat_endpoint` | Optional overrides (skip settings lookup entirely). |
 | `auto_approve` | `std::optional<bool>`. Set: authoritative — `true` skips `request_command_approval`, `false` forces prompts (store ignored). Unset: legacy fallback to `SettingsStore::get_auto_approve()`. Runtime toggle: `Agent::set_auto_approve()`. |
 | `max_agent_iterations` | Hard cap for each worker/verifier inner loop. The agent stops when this is reached. |
-| `verification_enabled` | Default `false`. Opt in to a worker → verifier double loop over one shared transcript and the same model/tools. The verifier must issue exactly `VERDICT: APPROVED`; corrections return to the worker, and premature worker `Done` is suppressed. |
+| `verification_enabled` | Default `false`. Opt in to a worker → verifier double loop over one shared transcript and the same model/tools. The verifier must issue exactly `VERDICT: APPROVED`; corrections return to the worker, and premature worker `Done` is suppressed. Runtime toggle between outer turns: `Agent::set_verification_enabled()`. MonkeyByte and Icarus persist their shared host preference as `verification_enabled`, defaulting it to on. |
 | `max_verification_rounds` | Default `3`; values below `1` are treated as `1`. An initial worker pass plus its first verification is round 1. Exhaustion ends with an error, never implicit approval. |
 | `verification_prompt` | Optional host override for the verifier's role instructions. The exact-verdict protocol is always appended. Role text rides in the transient trailing system message, leaving the persistent base prompt/cache prefix stable. |
 | `memory_enabled` / `clear_memory` | Toggle persistence. |
@@ -1312,8 +1312,10 @@ input to an agent:
    synchronized and may be called from any thread; `run_one_turn()` itself
    remains confined to the host's single driving thread.
 
-   Background process completion is the library's own use of this queue.
-   It submits one `trigger:background-process` message and then calls
+   With verification enabled, normal input remains in this queue throughout
+   the verifier phase, including a verifier suspended for background output;
+   only a worker turn consumes it. Background process completion uses the
+   separate internal steer path and then calls
    `AgentSink::on_turn_requested(source)` on the process-monitor thread.
    Implement that callback to wake your normal scheduler. Call
    `run_one_turn()` on the usual driving thread when idle, or drain the
@@ -1338,6 +1340,15 @@ input to an agent:
    `Agent::clear_steer_messages()` discards uninjected guidance after cancel
    or failure so it cannot leak into an unrelated later task. Call
    `initialize()` before submitting a steer.
+
+   During the optional verifier phase, interactive steers stay queued for the
+   next correction-worker handoff or new worker turn. They never join the
+   verifier and cannot by themselves resume a suspended verifier.
+   `Agent::verifier_active()` lets hosts disable Steer and show generic
+   validation activity. `Agent::pending_background_steer_count()` distinguishes
+   real background completions, which may resume validation, from deferred user
+   guidance. Verifier assistant text is accumulated for verdict parsing but is
+   not emitted through `on_assistant_delta()`.
 
 3. **Pending queue management** — hosts can inspect and rewrite the
    NORMAL next-turn queue of not-yet-consumed user messages (e.g. a chat UI that shows

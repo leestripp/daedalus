@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -22,6 +23,7 @@
 
 #include "api/LLMClient.h"
 #include "core/BackgroundProcessManager.h"
+#include "daedalus/Agent.h"
 #include "daedalus/AgentSink.h"
 
 namespace fs = std::filesystem;
@@ -139,6 +141,10 @@ public:
         return requests_;
     }
 
+    // Runs on the server thread after a request is captured and before its
+    // response is sent. Tests use this to inject input at exact role borders.
+    std::function<void(size_t)> on_request;
+
 private:
     void loop() {
         while (running_.load()) {
@@ -186,6 +192,8 @@ private:
 
         // An unexpected extra supervisor iteration receives an invalid verdict,
         // which cannot be mistaken for approval and fails the request-count check.
+        if (on_request) on_request(seq);
+
         const json body = seq < responses_.size()
             ? responses_[seq]
             : text_response("unexpected extra request");
@@ -243,7 +251,11 @@ struct ErrorSink : daedalus::AgentSink {
                   bool will_retry) noexcept override {
         if (!will_retry) terminal_messages.emplace_back(message);
     }
+    void on_assistant_delta(std::string_view text) noexcept override {
+        assistant_output += text;
+    }
     std::vector<std::string> terminal_messages;
+    std::string assistant_output;
 };
 
 size_t user_message_count(const json& request) {
@@ -305,6 +317,53 @@ TEST_CASE("verification verdict parser accepts only the exact protocol") {
           == VerificationVerdict::Invalid);
 }
 
+TEST_CASE("validation can be switched off and on between public Agent turns") {
+    VerificationServer server({
+        text_response("single-loop first answer"),
+        text_response("supervised worker answer"),
+        text_response("VERDICT: APPROVED\nInternal only."),
+        text_response("single-loop final answer"),
+    });
+    ScratchDir scratch;
+    daedalus::AgentConfig config;
+    config.project_root = scratch.path;
+    config.daedalus_home = scratch.path / "home";
+    config.agent_name = "verification-toggle";
+    config.api_host = server.base_url();
+    config.api_key = "test-key";
+    config.model_name = "test-model";
+    config.explicit_model_wins = true;
+    config.chat_endpoint = "/v1/chat/completions";
+    config.auto_approve = true;
+    config.memory_enabled = false;
+    config.mcp_enabled = false;
+    config.session_auto_flush = false;
+    config.stream = false;
+    config.verification_enabled = false;
+    auto sink = std::make_shared<ErrorSink>();
+    daedalus::Agent agent(config, sink);
+    agent.initialize();
+
+    agent.submit_user_message("first", {}, "user:test");
+    agent.run_one_turn();
+    CHECK(server.requests().size() == 1);
+    CHECK(!agent.config().verification_enabled);
+
+    agent.set_verification_enabled(true);
+    agent.submit_user_message("second", {}, "user:test");
+    agent.run_one_turn();
+    CHECK(server.requests().size() == 3);
+    CHECK(agent.config().verification_enabled);
+
+    agent.set_verification_enabled(false);
+    agent.submit_user_message("third", {}, "user:test");
+    agent.run_one_turn();
+    const auto requests = server.requests();
+    REQUIRE(requests.size() == 4);
+    CHECK(request_contains(requests[3], "third"));
+    CHECK(sink->assistant_output.find("VERDICT:") == std::string::npos);
+}
+
 TEST_CASE("worker completion is followed by verifier approval") {
     VerificationServer server({
         text_response("worker completed the implementation"),
@@ -325,6 +384,8 @@ TEST_CASE("worker completion is followed by verifier approval") {
               "Verification Agent") != std::string::npos);
     CHECK(verification_messages.back().at("content").get<std::string>().find(
               "VERDICT: APPROVED") != std::string::npos);
+    CHECK(verification_messages.back().at("content").get<std::string>().find(
+              "worker owns all") != std::string::npos);
     CHECK(client.get_last_assistant_text().find("Verified the implementation")
           != std::string::npos);
 }
@@ -406,6 +467,86 @@ TEST_CASE("inner Done status is held until the verifier approves") {
 }
 
 
+TEST_CASE("a user steer submitted during approval stays queued for a worker turn") {
+    VerificationServer server({
+        text_response("worker completed the implementation"),
+        text_response("VERDICT: APPROVED\nInternal approval details."),
+        text_response("worker handled the follow-up"),
+        text_response("VERDICT: APPROVED\nFollow-up approved."),
+    });
+    ScratchDir scratch;
+    LLMClient client(make_config(server.base_url(), scratch.path));
+    auto sink = std::make_shared<ErrorSink>();
+    client.set_sink(sink);
+    std::atomic<bool> steer_submitted_in_verifier{false};
+    server.on_request = [&](size_t seq) {
+        if (seq == 1) {
+            steer_submitted_in_verifier.store(client.verifier_active());
+            client.submit_steer_message("worker-only follow-up", "user:test");
+        }
+    };
+    client.initialize();
+
+    CHECK(client.run_one_turn("implement the feature", "user:test")
+          == AgentState::DONE);
+    CHECK(steer_submitted_in_verifier.load());
+    CHECK(client.pending_steer_count() == 1);
+    CHECK(!client.verifier_active());
+    auto requests = server.requests();
+    REQUIRE(requests.size() == 2);
+    CHECK(!request_contains(requests[1], "worker-only follow-up"));
+    CHECK(sink->assistant_output.find("worker completed the implementation")
+          != std::string::npos);
+    CHECK(sink->assistant_output.find("VERDICT:") == std::string::npos);
+    CHECK(sink->assistant_output.find("Internal approval details")
+          == std::string::npos);
+
+    // This is the host's normal pending-steer drain. It starts a NEW outer
+    // turn, whose worker—not the prior verifier—consumes the guidance.
+    CHECK(client.run_one_turn("", "user:test") == AgentState::DONE);
+    CHECK(client.pending_steer_count() == 0);
+    requests = server.requests();
+    REQUIRE(requests.size() == 4);
+    CHECK(request_contains(requests[2], "worker-only follow-up"));
+    CHECK(sink->assistant_output.find("worker handled the follow-up")
+          != std::string::npos);
+    CHECK(sink->assistant_output.find("VERDICT:") == std::string::npos);
+}
+
+TEST_CASE("a user steer submitted during rejection reaches only the correction worker") {
+    VerificationServer server({
+        text_response("initial worker attempt"),
+        text_response("VERDICT: CHANGES_REQUIRED\nAdd the missing test."),
+        text_response("worker applied the correction and user guidance"),
+        text_response("VERDICT: APPROVED\nApproved internally."),
+    });
+    ScratchDir scratch;
+    LLMClient client(make_config(server.base_url(), scratch.path));
+    auto sink = std::make_shared<ErrorSink>();
+    client.set_sink(sink);
+    server.on_request = [&](size_t seq) {
+        if (seq == 1)
+            client.submit_steer_message("worker-only correction guidance",
+                                        "user:test");
+    };
+    client.initialize();
+
+    CHECK(client.run_one_turn("implement the feature", "user:test")
+          == AgentState::DONE);
+    CHECK(client.pending_steer_count() == 0);
+    const auto requests = server.requests();
+    REQUIRE(requests.size() == 4);
+    CHECK(!request_contains(requests[1], "worker-only correction guidance"));
+    CHECK(request_contains(requests[2], "worker-only correction guidance"));
+    CHECK(sink->assistant_output.find("initial worker attempt")
+          != std::string::npos);
+    CHECK(sink->assistant_output.find("worker applied the correction")
+          != std::string::npos);
+    CHECK(sink->assistant_output.find("VERDICT:") == std::string::npos);
+    CHECK(sink->assistant_output.find("Add the missing test")
+          == std::string::npos);
+}
+
 TEST_CASE("worker suspends for multiple required jobs and consumes both completions") {
     using namespace std::chrono_literals;
     CompletionRouteGuard cleanup_guard;
@@ -463,6 +604,82 @@ TEST_CASE("verifier suspends and resumes as verifier after its own background jo
     CHECK(requests[3].at("messages").back().at("role") == "system");
     CHECK(requests[3].at("messages").back().at("content")
               .get<std::string>().find("Verification Agent") != std::string::npos);
+}
+
+TEST_CASE("public Agent keeps normal Send input queued behind a suspended verifier") {
+    using namespace std::chrono_literals;
+    CompletionRouteGuard cleanup_guard;
+    VerificationServer server({
+        text_response("worker completed"),
+        bash_start_response("sleep 0.4; printf 'verifier-complete'", "call_verify"),
+        text_response("verifier is waiting for its check"),
+        text_response("VERDICT: APPROVED\nInternal approval."),
+        text_response("worker received the queued Send message"),
+        text_response("VERDICT: APPROVED\nQueued turn approved."),
+    });
+    ScratchDir scratch;
+    daedalus::AgentConfig config;
+    config.project_root = scratch.path;
+    config.daedalus_home = scratch.path / "home";
+    config.agent_name = "verification-queue";
+    config.api_host = server.base_url();
+    config.api_key = "test-key";
+    config.model_name = "test-model";
+    config.explicit_model_wins = true;
+    config.chat_endpoint = "/v1/chat/completions";
+    config.auto_approve = true;
+    config.memory_enabled = false;
+    config.mcp_enabled = false;
+    config.session_auto_flush = false;
+    config.stream = false;
+    config.verification_enabled = true;
+    auto sink = std::make_shared<ErrorSink>();
+    daedalus::Agent agent(config, sink);
+    agent.initialize();
+    agent.submit_user_message("implement the feature", {}, "user:test");
+    agent.run_one_turn();
+
+    REQUIRE(agent.state() == daedalus::AgentState::Verifying);
+    REQUIRE(agent.verifier_active());
+    REQUIRE(server.requests().size() == 3);
+
+    // Send while validation is waiting: without a background completion this
+    // is a no-op, not a verifier resume and not a verifier-bound user message.
+    agent.submit_user_message("normal Send queued during validation", {},
+                              "user:test");
+    agent.submit_steer_message("interactive steer queued during validation",
+                               "user:test");
+    CHECK(agent.pending_background_steer_count() == 0);
+    agent.run_one_turn();
+    CHECK(agent.pending_count() == 1);
+    CHECK(agent.pending_steer_count() == 1);
+    CHECK(server.requests().size() == 3);
+    CHECK(agent.verifier_active());
+
+    std::this_thread::sleep_for(650ms);
+    REQUIRE(agent.pending_steer_count() == 2);
+    REQUIRE(agent.pending_background_steer_count() == 1);
+    agent.run_one_turn();
+    CHECK(agent.pending_count() == 1);
+    CHECK(agent.pending_steer_count() == 1);
+    CHECK(!agent.verifier_active());
+    auto requests = server.requests();
+    REQUIRE(requests.size() == 4);
+    CHECK(request_contains(requests[3], "verifier-complete"));
+    CHECK(!request_contains(requests[3], "normal Send queued during validation"));
+
+    // The host's ordinary pending-count drain now starts a worker turn.
+    agent.run_one_turn();
+    CHECK(agent.pending_count() == 0);
+    requests = server.requests();
+    REQUIRE(requests.size() == 6);
+    CHECK(request_contains(requests[4], "normal Send queued during validation"));
+    CHECK(request_contains(requests[4], "interactive steer queued during validation"));
+    CHECK(!request_contains(requests[3], "interactive steer queued during validation"));
+    CHECK(agent.pending_steer_count() == 0);
+    CHECK(sink->assistant_output.find("worker received the queued Send message")
+          != std::string::npos);
+    CHECK(sink->assistant_output.find("VERDICT:") == std::string::npos);
 }
 
 TEST_CASE("detached long-lived services do not suspend verified completion") {

@@ -145,6 +145,22 @@ public:
     /// @brief Number of steer messages not yet injected into a model cycle.
     [[nodiscard]] size_t pending_steer_count() const noexcept;
 
+    /// @brief Number of uninjected background-process completion steers.
+    /// While verifier_active() is true, only these may resume validation;
+    /// ordinary user steers remain queued for the next worker turn.
+    [[nodiscard]] size_t pending_background_steer_count() const noexcept;
+
+    /// @brief True while the worker/verifier supervisor's second role runs.
+    /// Hosts must keep normal user input queued and disable interactive
+    /// steering in this phase. Background-completion steering remains valid.
+    /// Thread-safe; false before initialization and when verification is off.
+    [[nodiscard]] bool verifier_active() const noexcept;
+
+    /// @brief Enable/disable the optional worker/verifier supervisor.
+    /// Call between outer turns; the next turn uses the selected pipeline.
+    /// The host owns persistence for this runtime preference.
+    void set_verification_enabled(bool enabled) noexcept;
+
     /// @brief Drop uninjected steer messages (for example after cancellation).
     void clear_steer_messages() noexcept;
 

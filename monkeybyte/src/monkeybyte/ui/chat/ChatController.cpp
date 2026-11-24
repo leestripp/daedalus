@@ -4,6 +4,7 @@
 #include "monkeybyte/backend/Logger.h"
 #include "monkeybyte/backend/ModelBridge.h"
 #include "monkeybyte/ui/chat/AppUiTool.h"
+#include "monkeybyte/ui/chat/ChatDrainPolicy.h"
 #include "monkeybyte/ui/chat/WebFetchTool.h"
 #include "monkeybyte/ui/UiGuard.h"
 
@@ -186,6 +187,8 @@ public:
         // say why (auto 90% loop or manual /compress).
         if (to == daedalus::AgentState::Compressing)
             controller_.compacting.emit();
+        controller_.verifier_active_changed.emit(
+            controller_.agent_ && controller_.agent_->verifier_active());
         controller_.emit_stats();
     }
 
@@ -457,8 +460,9 @@ void ChatController::ensure_agent(const std::string& model_display) {
     // Provider-facing client identity (HTTP User-Agent on LLM requests).
     cfg.user_agent = "daedalus-monkeybyte/" MONKEYBYTE_VERSION;
     cfg.stream = true;
-    // Experimental worker → verifier double agent loop (shared library).
-    cfg.verification_enabled = true;
+    // Optional worker → verifier double agent loop (Settings → Agent).
+    cfg.verification_enabled =
+        registry.get_bool("verification_enabled", true);
     // §REQ-1 (daedalus 2b25f27): public kill switch for the messages flush
     // worker. Pin ON explicitly — session persistence must not silently
     // disappear if the upstream default ever flips.
@@ -563,7 +567,9 @@ bool ChatController::steer_message(const std::string& text) {
     // and the panel leaves the text in the composer for a normal Send.
     {
         std::lock_guard lock(state_mutex_);
-        if (!agent_ || state_ != ChatState::Processing) return false;
+        if (!agent_ || state_ != ChatState::Processing
+            || agent_->verifier_active())
+            return false;
         agent_->submit_steer_message(std::move(full), interactive_source());
     }
     user_message_sent.emit(text);
@@ -604,10 +610,15 @@ void ChatController::send_message(const std::string& text,
     // final empty-check, so a message can never strand between "queue
     // empty" and "gone Idle".
     bool mid_turn = false;
+    bool resume_suspended = false;
     {
         std::lock_guard lock(state_mutex_);
+        resume_suspended = text.empty() && state_ == ChatState::Waiting;
+        // A normal Send during a background wait stays queued. Only an
+        // agent-owned completion wake may resume a suspended verifier.
         mid_turn = state_ == ChatState::Processing ||
-                   state_ == ChatState::Cancelling;
+                   state_ == ChatState::Cancelling ||
+                   (state_ == ChatState::Waiting && !resume_suspended);
         if (text.empty()) turn_requested_ = true;
         else queued_messages_.push_back(std::move(full));
         if (!mid_turn) state_ = ChatState::Processing;
@@ -618,7 +629,8 @@ void ChatController::send_message(const std::string& text,
 
     if (turn_thread_.joinable()) turn_thread_.join();
     try {
-    turn_thread_ = std::jthread([this, model_display](std::stop_token) {
+    turn_thread_ = std::jthread(
+        [this, model_display, resume_suspended](std::stop_token) {
         std::string reason = "done";
         bool transitioned = false; // loop sets the resting state atomically
         try {
@@ -637,12 +649,29 @@ void ChatController::send_message(const std::string& text,
             // tasks still run. An error ends the drain instead of
             // hammering a failing backend; the remaining messages stay
             // queued and go FIRST on the next send, preserving FIFO.
-            for (;;) {
+            for (bool resume_first = resume_suspended;;) {
                 std::string next;
                 bool submit_next = false;
                 {
                     std::lock_guard lock(state_mutex_);
-                    if (reason != "error" && !queued_messages_.empty()) {
+                    const auto action = chat_drain::choose({
+                        .error = reason == "error",
+                        .waiting = reason == "waiting",
+                        .resume_first = resume_first,
+                        .turn_requested = turn_requested_,
+                        .queued_sends = queued_messages_.size(),
+                        .agent_sends = agent_ ? agent_->pending_count() : 0,
+                        .pending_steers = agent_ ? agent_->pending_steer_count() : 0,
+                        .background_steers = agent_
+                            ? agent_->pending_background_steer_count() : 0,
+                    });
+                    if (action == chat_drain::Action::ResumeSuspended) {
+                        // Finish the suspended outer turn before any Send
+                        // queued during its wait. In particular, never submit
+                        // normal user text into the suspended verifier.
+                        resume_first = false;
+                        turn_requested_ = false;
+                    } else if (action == chat_drain::Action::SubmitQueuedSend) {
                         submit_next = true;
                         next = std::move(queued_messages_.front());
                         queued_messages_.pop_front();
@@ -651,16 +680,17 @@ void ChatController::send_message(const std::string& text,
                                     std::move(queued_messages_.front());
                             queued_messages_.pop_front();
                         }
-                    } else if (reason != "error"
-                               && (turn_requested_
-                                   || (agent_ && agent_->pending_count() > 0)
-                                   || (agent_
-                                       && agent_->pending_steer_count() > 0))) {
+                    } else if (action == chat_drain::Action::RunPending) {
                         // The completion is already in daedalus's queue.
                         // Clearing the flag and checking it in this same
                         // critical section prevents a final-check/Idle race.
                         turn_requested_ = false;
                     } else {
+                        // A completion consumed earlier in the same drain can
+                        // leave this flag set after another job keeps the
+                        // supervisor waiting. The queue counts above are the
+                        // authoritative resume condition; clear the stale wake.
+                        if (reason == "waiting") turn_requested_ = false;
                         // Error cleanup shares the final state lock so a
                         // last-moment Steer either joins this cleanup or
                         // sees the terminal state and is rejected.

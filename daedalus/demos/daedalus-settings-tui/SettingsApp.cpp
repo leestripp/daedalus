@@ -269,6 +269,7 @@ int DumpSettings(daedalus::SettingsStore& store, std::ostream& out)
         << "  current_provider                 = " << store.get_current_provider() << "\n"
         << "  thinking_level                   = " << store.get_string("thinking_level", "default") << "\n"
         << "  auto_approve                     = " << (store.get_auto_approve() ? "true" : "false") << "\n"
+        << "  verification_enabled             = " << (store.get_bool("verification_enabled", true) ? "true" : "false") << "\n"
         << "  compression_ratio_percent        = " << store.get_compression_ratio_percent() << "\n"
         << "  second_brain_directory           = " << store.get_second_brain_directory().string() << "\n"
         << "  max_agent_iterations             = " << store.get_max_agent_iterations() << "\n"

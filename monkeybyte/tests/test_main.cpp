@@ -26,6 +26,7 @@
 #include "monkeybyte/ui/theme/ThemeManager.h"
 #include "monkeybyte/ui/HtmlView.h"
 #include "monkeybyte/ui/chat/AppUiTool.h"
+#include "monkeybyte/ui/chat/ChatDrainPolicy.h"
 #include "monkeybyte/ui/chat/Markdown.h"
 #include "monkeybyte/ui/chat/ScrollPin.h"
 #include "monkeybyte/ui/chat/UserCommands.h"
@@ -2380,6 +2381,59 @@ void test_scroll_pin_kinetic_cancel() {
     pump(20);
 }
 
+void test_chat_drain_policy() {
+    std::cout << "Chat drain policy\n";
+    using monkeybyte::chat_drain::Action;
+    using monkeybyte::chat_drain::Snapshot;
+    using monkeybyte::chat_drain::choose;
+
+    // Exact host sequence from the verifier regression: Send arrives while
+    // the verifier is Processing, then the verifier suspends on a required
+    // background job. The Send must stay in the host queue, not be submitted
+    // into the suspended verifier or prevent ChatState::Waiting.
+    Snapshot waiting{
+        .waiting = true,
+        .queued_sends = 1,
+    };
+    check(choose(waiting) == Action::Rest,
+          "waiting keeps a pre-wait Send queued and enters Waiting");
+
+    // If an external host path already put a normal message in daedalus's
+    // queue, pending_count() must not cause a no-op run_one_turn busy loop.
+    waiting.agent_sends = 1;
+    waiting.pending_steers = 1; // deferred interactive steer: also ineligible
+    check(choose(waiting) == Action::Rest,
+          "waiting ignores normal Agent queues and deferred user steers");
+
+    // The real completion resumes the SAME suspended outer turn first. Only
+    // after it returns Done may the queued Send become the next worker turn.
+    waiting.background_steers = 1;
+    waiting.pending_steers = 2;
+    check(choose(waiting) == Action::ResumeSuspended,
+          "background completion resumes before every queued Send");
+
+    Snapshot after_completion = waiting;
+    after_completion.waiting = false;
+    after_completion.agent_sends = 0;
+    after_completion.pending_steers = 1;
+    after_completion.background_steers = 0;
+    check(choose(after_completion) == Action::SubmitQueuedSend,
+          "completed verification drains the queued Send next");
+
+    Snapshot agent_only = after_completion;
+    agent_only.queued_sends = 0;
+    agent_only.agent_sends = 1;
+    check(choose(agent_only) == Action::RunPending,
+          "worker consumes an Agent-side queued Send after completion");
+
+    Snapshot ordinary{.turn_requested = true};
+    check(choose(ordinary) == Action::RunPending,
+          "ordinary completion wake retains existing behavior");
+    ordinary.error = true;
+    check(choose(ordinary) == Action::Rest,
+          "errors stop the drain regardless of pending work");
+}
+
 int main() {
     // giomm object wrapping (FileKind content-type queries) needs glibmm
     // initialized; in the app Gtk::Application does this for us.
@@ -2410,6 +2464,7 @@ int main() {
     test_markdown_to_html();
     test_file_icons();
     test_user_commands();
+    test_chat_drain_policy();
     test_html_to_text();
     test_fountain_zoom();
     test_markdown_preview_reload();

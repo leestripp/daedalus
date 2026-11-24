@@ -427,8 +427,6 @@ int main(int argc, char* argv[]) {
     cfg.clear_memory         = args.clear_memory_flag;
     cfg.worker_threads       = args.thread_count_override;
     cfg.max_agent_iterations = 600;
-    // Experimental worker → verifier double agent loop (shared library).
-    cfg.verification_enabled = true;
     cfg.stream              = args.stream_enabled;
     cfg.daedalus_home        = args.daedalus_home;
     cfg.agent_name          = args.agent_name;
@@ -510,6 +508,8 @@ int main(int argc, char* argv[]) {
         const std::string lvl = store.get_string("thinking_level");
         if (!lvl.empty())
             cfg.thinking_level = daedalus::thinking_level_from_string(lvl);
+        cfg.verification_enabled =
+            store.get_bool("verification_enabled", true);
     }
 
     daedalus::Agent agent(std::move(cfg), sink);
@@ -1455,6 +1455,16 @@ int main(int argc, char* argv[]) {
                     // set_thinking_level() takes effect on the next request.
                     agent.set_thinking_level(daedalus::thinking_level_from_string(
                         store.get_string("thinking_level", "default")));
+                    const bool verification_enabled =
+                        store.get_bool("verification_enabled", true);
+                    const bool verification_changed =
+                        verification_enabled != agent.config().verification_enabled;
+                    agent.set_verification_enabled(verification_enabled);
+                    if (verification_changed) {
+                        std::cout << "[SETTINGS] Validation step "
+                                  << (verification_enabled ? "enabled" : "disabled")
+                                  << " for the next turn.\n";
+                    }
                     bool provider_switched = false;
                     const std::string tui_provider =
                         store.get_current_provider();

@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.6.0] — 2026-11-24
+
+### Added
+
+- **Optional validation step in MonkeyByte and Icarus Agent settings.** The
+  shared `verification_enabled` preference defaults to on, preserving the
+  worker → verifier behavior introduced in 1.5.0. MonkeyByte rebuilds its agent
+  with the selected pipeline; Icarus applies changes to the next turn after
+  Settings closes. `Agent::set_verification_enabled()` provides the same runtime
+  control to other embedders.
+
+### Fixed
+
+- **Verifier input and output are now isolated from user interaction.** Normal
+  Send messages and interactive steers remain queued for the worker throughout
+  validation, including background waits and correction handoffs. Deferred user
+  steers cannot accidentally resume a suspended verifier; only real background
+  completions can do so. Verifier verdicts and reasoning no longer stream into
+  user-facing chat, its role prompt requires internal-only output, and MonkeyByte
+  shows a generic `Validating…` activity instead. Hermetic regressions cover
+  approval, rejection, suspended-verifier queueing, silent output, and switching
+  validation off/on between turns. Host drain-policy regressions also cover a
+  Send queued immediately before background suspension, preventing verifier-bound
+  submission and no-op retry loops.
+
 ## [Unreleased]
 
 ### Fixed

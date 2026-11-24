@@ -530,14 +530,26 @@ void ChatPanel::build_input() {
 void ChatPanel::wire_controller() {
     marshal<ChatState>(controller_->state_changed, [this](ChatState s) {
         set_processing(s == ChatState::Processing || s == ChatState::Cancelling);
-        steer_btn_.set_sensitive(s == ChatState::Processing);
+        if (s == ChatState::Idle || s == ChatState::Error)
+            verifier_active_ = false;
+        steer_btn_.set_sensitive(s == ChatState::Processing && !verifier_active_);
         // §7.6 — the strip mirrors the agent state at all times.
-        if (s == ChatState::Processing) show_activity("Thinking…");
+        if (s == ChatState::Processing)
+            show_activity(verifier_active_ ? "Validating…" : "Thinking…");
         else if (s == ChatState::Waiting)
             show_activity("Waiting for background job…");
         else if (s == ChatState::Cancelling) show_activity("Cancelling…");
         else if (s == ChatState::Error) stop_activity("Error");
         else stop_activity("Ready");
+    });
+
+    marshal<bool>(controller_->verifier_active_changed, [this](bool active) {
+        verifier_active_ = active;
+        steer_btn_.set_sensitive(processing_ && !active);
+        if (active)
+            show_activity("Validating…");
+        else if (controller_->state() == ChatState::Processing)
+            show_activity("Thinking…");
     });
 
     marshal<std::string>(controller_->user_message_sent, [this](std::string text) {
@@ -899,7 +911,8 @@ void ChatPanel::on_steer() {
     } else {
         // The turn may have ended between the click and submission. Keep the
         // composer intact so the user can send it as the next normal task.
-        show_error("The agent is no longer running. Use Send to start a new task.");
+        show_error("Steering is available only while the worker is running. "
+                   "Use Send to queue your message.");
     }
 }
 

@@ -57,6 +57,15 @@ size_t Agent::pending_steer_count() const noexcept
 {
     return impl_->pending_steer_count();
 }
+size_t Agent::pending_background_steer_count() const noexcept
+{
+    return impl_->pending_background_steer_count();
+}
+bool Agent::verifier_active() const noexcept { return impl_->verifier_active(); }
+void Agent::set_verification_enabled(bool enabled) noexcept
+{
+    impl_->set_verification_enabled(enabled);
+}
 void Agent::clear_steer_messages() noexcept { impl_->clear_steer_messages(); }
 void Agent::cancel() noexcept { impl_->cancel(); }
 size_t Agent::pending_count() const noexcept { return impl_->pending_count(); }

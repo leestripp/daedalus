@@ -2,7 +2,7 @@
 // demos/daedalus-settings-tui/AgentTab.cpp
 //
 // Agent tab: typed form over the kv_settings-backed agent options
-// (auto_approve, thinking_level, context-compression ratio, Second Brain path, size limits,
+// (auto_approve, validation step, thinking_level, context-compression ratio, Second Brain path, size limits,
 // MCP soft cap, current provider) plus the server_error retry/backoff group. Values are loaded
 // on open and written back with the "Save" button. Web-search provider
 // keys live on the Web Search tab (§WEB-SEARCH-CORE).
@@ -28,6 +28,7 @@ namespace {
 struct AgentState
 {
     bool auto_approve = false;
+    bool verification_enabled = true;
     std::string current_provider;
     std::string thinking_level;
     int compression_ratio_index = 3;  // 50/60/70/80/90 -> default 80
@@ -64,6 +65,8 @@ Component MakeAgentTab(AppContext& ctx)
 
     auto load = [&ctx, st] {
         st->auto_approve         = ctx.store.get_auto_approve();
+        st->verification_enabled =
+            ctx.store.get_bool("verification_enabled", true);
         st->current_provider     = ctx.store.get_current_provider();
         st->thinking_level       = ctx.store.get_string("thinking_level", "default");
         st->compression_ratio_index =
@@ -125,6 +128,7 @@ Component MakeAgentTab(AppContext& ctx)
             { st->form_error = "server_error max_retries_per_call must be a non-negative integer"; return; }
 
         ctx.store.set_auto_approve(st->auto_approve);
+        ctx.store.set_bool("verification_enabled", st->verification_enabled);
         ctx.store.set_current_provider(st->current_provider);
 
         // thinking_level has no typed setter and the library never reads
@@ -168,6 +172,8 @@ Component MakeAgentTab(AppContext& ctx)
     auto row_res_size   = FormRow("max_response_size", &st->max_response_size, false, save);
     auto row_soft_cap   = FormRow("mcp soft cap %", &st->soft_cap_percent, false, save);
     auto approve_check  = Checkbox("auto_approve (skip bash confirmations)", &st->auto_approve);
+    auto validation_check = Checkbox("validation step (worker/verifier)",
+                                     &st->verification_enabled);
 
     auto se_enabled_check = Checkbox("server_error retry enabled", &st->se_enabled);
     auto row_se_initial   = FormRow("initial_wait_seconds", &st->se_initial_wait, false, save);
@@ -179,7 +185,7 @@ Component MakeAgentTab(AppContext& ctx)
     auto btn_reload = Button(" Reload ", [load] { load(); }, ButtonOption::Border());
 
     auto form = Container::Vertical({
-        approve_check,
+        approve_check, validation_check,
         row_provider, row_thinking, row_compression, row_brain_dir, row_max_iter,
         row_tool_size, row_req_size, row_res_size,
         row_soft_cap,
@@ -188,13 +194,15 @@ Component MakeAgentTab(AppContext& ctx)
     });
 
     return Renderer(form,
-        [st, approve_check, row_provider, row_thinking, row_compression, row_brain_dir, row_max_iter,
+        [st, approve_check, validation_check, row_provider, row_thinking, row_compression, row_brain_dir, row_max_iter,
          row_tool_size, row_req_size, row_res_size, row_soft_cap, se_enabled_check, row_se_initial,
          row_se_max, row_se_backoff, row_se_retries, btn_save, btn_reload] {
             Elements rows;
             rows.push_back(text(" agent settings ") | bold);
             rows.push_back(separator());
             rows.push_back(approve_check->Render());
+            rows.push_back(validation_check->Render());
+            rows.push_back(text("  Independent verifier; its verdict stays internal.") | dim);
             rows.push_back(row_provider->Render());
             rows.push_back(row_thinking->Render());
             rows.push_back(row_compression->Render());

@@ -93,7 +93,10 @@ public:
                              std::string source);
     void submit_steer_message(std::string text, std::string source);
     [[nodiscard]] size_t pending_steer_count() const noexcept;
+    [[nodiscard]] size_t pending_background_steer_count() const noexcept;
     void clear_steer_messages() noexcept;
+    [[nodiscard]] bool verifier_active() const noexcept;
+    void set_verification_enabled(bool enabled) noexcept;
     [[nodiscard]] size_t pending_count() const noexcept {
         // §QUEUE-MUTEX (2026-09-10): internally synchronized — any thread.
         std::lock_guard<std::mutex> lk(pending_mutex_);

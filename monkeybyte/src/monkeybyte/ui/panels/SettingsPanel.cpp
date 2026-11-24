@@ -1370,6 +1370,18 @@ Gtk::Widget* SettingsPanel::build_agent_tab() {
         [this](bool on) {
             services_.store.set("agent.auto_approve", on ? "1" : "0");
         }));
+    box->append(*make_toggle_row(
+        "Validation step",
+        "Run a separate verifier after the worker. Verifier output stays "
+        "internal; only generic validation activity is shown.",
+        registry.get_bool("verification_enabled", true),
+        [this](bool on) {
+            ui_guard("validation step", [&] {
+                daedalus::SettingsStore::instance()
+                    .set_bool("verification_enabled", on);
+            });
+            signal_agent_config_changed_.emit();
+        }));
 
     // ── CONTEXT COMPRESSION: the oldest selected percentage is
     // summarized; the newest remainder stays verbatim. Daedalus adjusts

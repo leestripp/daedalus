@@ -191,10 +191,12 @@ private:
     mutable std::mutex steer_mutex_;
     std::vector<PendingSteerMessage> pending_steer_messages_;
 
-    // Append a snapshot of the steer queue to the stored conversation.
+    // Append eligible steer messages to the stored conversation.
     // Called by run_one_turn() before its first cycle and after a complete
-    // non-terminal tool cycle (all results already committed).
-    bool append_pending_steer_messages(json& messages);
+    // cycle (all results already committed). Background completions remain
+    // eligible in either role; user guidance is deferred while the verifier
+    // is active so only the worker consumes it.
+    bool append_pending_steer_messages(json& messages, bool include_user_steers);
 
     // §TURN-ERROR (2026-09-10, MonkeyByte BUG-4): the last terminal
     // (will_retry=false) error of the current/most recent turn. Terminal
@@ -267,7 +269,7 @@ private:
     // transient trailing system message. The persistent base system prompt
     // and preceding conversation remain byte-stable for provider caching.
     bool verification_turn_active_ = false;
-    bool verifier_loop_active_ = false;
+    std::atomic<bool> verifier_loop_active_{false};
     std::string active_role_prompt_;
     int verification_round_ = 0;
     enum class SuspendedVerificationPhase : std::uint8_t { Worker, Verifier };
@@ -572,7 +574,18 @@ public:
     void submit_steer_message(std::string text, std::string source = "user",
                               std::string background_process_id = {});
     [[nodiscard]] size_t pending_steer_count() const noexcept;
+    [[nodiscard]] size_t pending_background_steer_count() const noexcept;
     void clear_steer_messages() noexcept;
+    // True only while the second, verifier role owns the supervisor loop.
+    // Thread-safe so hosts can disable user steering during verification.
+    [[nodiscard]] bool verifier_active() const noexcept {
+        return verifier_loop_active_.load(std::memory_order_acquire);
+    }
+    // Host settings call this between outer turns. The next run_one_turn()
+    // starts with the selected single-worker or worker/verifier pipeline.
+    void set_verification_enabled(bool enabled) noexcept {
+        config_.verification_enabled = enabled;
+    }
 
     /// §READ-IMAGE-CORE follow-up (2026-08-10): queue host-supplied image
     /// attachments for the next chat request. Shares the read_image
