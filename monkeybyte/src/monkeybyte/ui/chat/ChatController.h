@@ -26,7 +26,7 @@ struct AppServices;
 class PanelSink;
 
 // §7.6 — agent lifecycle state machine.
-enum class ChatState { Idle, Processing, Cancelling, Error };
+enum class ChatState { Idle, Processing, Waiting, Cancelling, Error };
 
 // One tool call's lifecycle data (§7.3).
 struct ToolInfo {
@@ -198,9 +198,11 @@ private:
     // §QUEUE-JOIN (2026-10-04) — the drain loop joins the whole queue into ONE
     // message per submit + run_one_turn, in FIFO order.
     std::deque<std::string> queued_messages_;
-    // Set by a background-completion wake while the worker is busy. The
-    // final drain check consumes it together with Agent::pending_count(),
-    // closing the completion-vs-Idle race.
+    // Set by a background-completion wake while the worker is busy. Waiting
+    // means the supervisor suspended on required output and the turn thread
+    // has returned; a wake starts a fresh drain through send_message("").
+    // The final drain check consumes it together with Agent::pending_count()
+    // and Agent::pending_steer_count(), closing the completion-vs-Idle race.
     bool turn_requested_ = false;
 };
 

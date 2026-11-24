@@ -4,6 +4,15 @@
 
 ### Fixed
 
+- **MonkeyByte no longer displays `Done` while a verified worker is suspended
+  for required background output.** The chat host now exposes an explicit
+  waiting state with a spinner and `Waiting for background job…`, resumes for
+  steer-only completion wakes, and emits `finished` only after the outer
+  worker/verifier turn actually ends. `chat.send` therefore remains blocked
+  during the wait, and stop-tool summaries are retained until final completion.
+  A real clean BlendEd build exercised the full suspend → completion trigger →
+  resumed worker → independent approval sequence successfully.
+
 - **MonkeyByte's minute Git fetch no longer leaks one zombie per poll.** Git
   automatically launched `git maintenance run --auto --quiet --detach` after
   every fetch; that detached grandchild was orphaned and became permanent under

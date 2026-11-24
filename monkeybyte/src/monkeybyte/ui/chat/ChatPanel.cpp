@@ -533,6 +533,8 @@ void ChatPanel::wire_controller() {
         steer_btn_.set_sensitive(s == ChatState::Processing);
         // §7.6 — the strip mirrors the agent state at all times.
         if (s == ChatState::Processing) show_activity("Thinking…");
+        else if (s == ChatState::Waiting)
+            show_activity("Waiting for background job…");
         else if (s == ChatState::Cancelling) show_activity("Cancelling…");
         else if (s == ChatState::Error) stop_activity("Error");
         else stop_activity("Ready");

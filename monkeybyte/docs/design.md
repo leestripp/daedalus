@@ -150,8 +150,13 @@ injects inside per-tool execution/cleanup or between results in a multi-tool
 batch. The worker includes `pending_steer_count()` in its final drain check,
 closing the submission-vs-Idle race. Background completions use the same safe
 steer boundary and can resume a verified supervisor suspended on required job
-output. Cancellation and terminal errors clear
-uninjected steers; normal queued sends retain their existing semantics.
+output. While suspended, the host uses `ChatState::Waiting`: the activity strip
+keeps a spinner with `Waiting for background job…` rather than prematurely
+showing `Done`. Both normal and steer-only pending queues can start the resumed
+drain. Suspension does not emit `finished`, so loopback `chat.send` waits for
+final verification and stop-tool summaries remain pending until then.
+Cancellation and terminal errors clear uninjected steers; normal queued sends
+retain their existing semantics.
 
 Stop cancels the current turn and clears later queued user intent. Cancellation
 still emits tool results for any interrupted tool-call
@@ -316,7 +321,11 @@ recolours with the active CSS foreground without a host package dependency.
 MonkeyByte is non-unique: separate instances can edit separate workspaces.
 Settings databases and dconf tolerate multiple processes. Only the first
 instance normally owns control port 17878. Running two agents on the same
-workspace is unsupported because they share `.daedalus/` state.
+workspace is unsupported because they share `.daedalus/` state. A temporary
+working directory and unique control port are NOT sufficient live-test
+isolation: shared settings can restore the user's last workspace. Automated
+instances must isolate their settings home, select an explicit temporary
+workspace, and verify that workspace before any `chat.send`.
 
 Changing workspace cancels any in-flight agent turn before replacing
 workspace/agent state. Never retarget `FileService` or the chat controller

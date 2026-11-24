@@ -540,7 +540,8 @@ void ChatController::ensure_agent(const std::string& model_display) {
 }
 
 void ChatController::run_pending_turn() {
-    if (agent_ && agent_->pending_count() > 0) {
+    if (agent_ && (agent_->pending_count() > 0
+                   || agent_->pending_steer_count() > 0)) {
         send_message("", active_model_display_);
     }
 }
@@ -575,7 +576,8 @@ void ChatController::send_message(const std::string& text,
     // the queued completion, so this path schedules work without submitting
     // a second copy or displaying a user bubble.
     const bool agent_turn = text.empty() && agent_
-                            && agent_->pending_count() > 0;
+                            && (agent_->pending_count() > 0
+                                || agent_->pending_steer_count() > 0);
     if (text.empty() && !agent_turn) return; // §12.3
     if (model_display.empty()) {
         error_message.emit("No model selected. Add one in Settings → Models.");
@@ -669,8 +671,9 @@ void ChatController::send_message(const std::string& text,
                         // send either landed in the queue before this
                         // (drained above) or sees Idle/Error after it
                         // (and spawns a fresh thread). Nothing strands.
-                        state_ = reason == "error" ? ChatState::Error
-                                                   : ChatState::Idle;
+                        state_ = reason == "error"   ? ChatState::Error
+                                 : reason == "waiting" ? ChatState::Waiting
+                                                       : ChatState::Idle;
                         transitioned = true;
                     }
                 }
@@ -682,7 +685,8 @@ void ChatController::send_message(const std::string& text,
                 // "Cancelling…" and every Stop press would keep re-firing
                 // the cancel of a turn the user now wants to watch/interrupt
                 // on its own terms.
-                if (state() == ChatState::Cancelling)
+                if (state() == ChatState::Cancelling
+                    || state() == ChatState::Waiting)
                     set_state(ChatState::Processing);
                 // §MSG-HEADERS — interactive origin, stamped into the
                 // message's `_meta` when the turn consumes the queue.
@@ -692,7 +696,14 @@ void ChatController::send_message(const std::string& text,
                 }
                 agent_->run_one_turn();
                 const auto s = agent_->state();
-                if (s == daedalus::AgentState::Cancelled) {
+                if (s == daedalus::AgentState::Verifying) {
+                    // The verified supervisor suspended on required
+                    // background output. This is NOT outer-turn completion:
+                    // keep chat.send blocked and surface an explicit waiting
+                    // state until on_turn_requested resumes the same loop.
+                    reason = "waiting";
+                }
+                else if (s == daedalus::AgentState::Cancelled) {
                     reason = "cancelled";
                     // §STOP-BTN-FIX: drop messages queued behind the
                     // cancelled turn. The pre-2026-10 behavior ran them
@@ -752,12 +763,17 @@ void ChatController::send_message(const std::string& text,
             error_message.emit(e.what());
         }
         // §7.3 — the stop-tool summary closes the turn: emit it after every
-        // tool/text event so its bubble appends below all tool cards.
-        if (auto summary = sink_->take_stop_summary(); !summary.empty())
-            agent_summary.emit(std::move(summary));
-        emit_stats(); // §8 — final numbers before the turn closes
-        const ChatState rest =
-            reason == "error" ? ChatState::Error : ChatState::Idle;
+        // tool/text event so its bubble appends below all tool cards. A
+        // suspended supervisor has not closed its outer turn yet; retain the
+        // summary for the eventual completion instead of consuming it here.
+        if (reason != "waiting") {
+            if (auto summary = sink_->take_stop_summary(); !summary.empty())
+                agent_summary.emit(std::move(summary));
+        }
+        emit_stats(); // §8 — final numbers before the turn closes or waits
+        const ChatState rest = reason == "error"   ? ChatState::Error
+                               : reason == "waiting" ? ChatState::Waiting
+                                                     : ChatState::Idle;
         if (!transitioned) {
             // Exception path: the loop's atomic transition never ran.
             std::lock_guard lock(state_mutex_);
@@ -766,7 +782,10 @@ void ChatController::send_message(const std::string& text,
             state_ = rest;
         }
         state_changed.emit(rest);
-        finished.emit(reason);
+        // Waiting is a suspension, not a finished turn. In particular the
+        // chat.send nested main-loop wait must stay alive until verification
+        // eventually approves or rejects the work.
+        if (reason != "waiting") finished.emit(reason);
     });
     } catch (const std::system_error& e) { // jthread spawn failed
         Logger::instance().error(std::string("send_message: ") + e.what());
